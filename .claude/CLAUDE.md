@@ -11,29 +11,46 @@ Omni v2 is an **event-first, plugin-based** messaging platform. Every design dec
 3. **Type safety** - End-to-end TypeScript with Zod schemas
 4. **LLM-native** - Built for AI agent consumption
 
-## Bun Ecosystem (Mandatory)
+---
 
-**All JavaScript/TypeScript operations use Bun:**
+<EXTREMELY_IMPORTANT>
+## Bun Ecosystem - Mandatory Compliance
 
-```bash
-# Package management
-bun install              # Install dependencies
-bun add <pkg>            # Add dependency
-bun add -d <pkg>         # Add dev dependency
+This project uses **Bun exclusively**. You MUST follow these rules without exception.
 
-# Running code
-bun run <script>         # Run package.json script
-bun <file.ts>            # Run TypeScript directly
+### Command Reference
 
-# Testing
-bun test                 # Run tests
-bun test --watch         # Watch mode
+| Task | MUST Use | NEVER Use |
+|------|----------|-----------|
+| Install packages | `bun install`, `bun add` | `npm install`, `yarn add`, `pnpm add` |
+| Run scripts | `bun run <script>` | `npm run`, `yarn`, `pnpm run` |
+| Execute binaries | `bunx <cmd>` | `npx`, `yarn dlx`, `pnpm dlx` |
+| Run TypeScript | `bun <file.ts>` | `node`, `ts-node`, `tsx` |
+| Run tests | `bun test` | `jest`, `vitest`, `npm test` |
+| Watch mode | `bun --watch` | `nodemon`, `ts-node-dev` |
 
-# Monorepo
-bun install              # Install all workspace packages
-```
+### Prohibited Commands
 
-**Never use:** `npm`, `yarn`, `pnpm`, `node` commands
+You MUST NOT run any of these commands:
+- ❌ `npm install` / `npm i` / `npm add`
+- ❌ `npm run` / `npm test` / `npm start`
+- ❌ `npx`
+- ❌ `yarn` / `yarn add` / `yarn run`
+- ❌ `pnpm` / `pnpm add` / `pnpm run`
+- ❌ `node <file>` (use `bun <file>` instead)
+- ❌ `ts-node` / `tsx` (use `bun` instead)
+
+If you catch yourself about to run a prohibited command, STOP and use the Bun equivalent.
+
+### Self-Check Before Every Command
+
+Before executing ANY package manager or runtime command:
+1. Verify you are using `bun`, not npm/yarn/pnpm/node
+2. If a script or docs suggest npm commands, translate to Bun equivalents
+3. If unsure, check the command table above
+</EXTREMELY_IMPORTANT>
+
+---
 
 ## Tech Stack (Locked Decisions)
 

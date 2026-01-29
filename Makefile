@@ -152,8 +152,10 @@ start:
 	pm2 start ecosystem.config.js
 
 stop:
-	pm2 stop all
+	-pm2 stop all 2>/dev/null || true
+	-pm2 delete all 2>/dev/null || true
 	@$(MAKE) nats-stop
+	@$(MAKE) kill-ghosts
 
 restart:
 	pm2 restart all
@@ -165,6 +167,16 @@ status:
 	pm2 status
 	@echo ""
 	@$(MAKE) nats-status
+
+# Kill ghost processes that might block ports
+kill-ghosts:
+	@echo "Cleaning up ghost processes..."
+	-pkill -f "bun run" 2>/dev/null || true
+	-pkill -f "bunx" 2>/dev/null || true
+	-lsof -ti :3000 | xargs kill -9 2>/dev/null || true
+	-lsof -ti :4222 | xargs kill -9 2>/dev/null || true
+	-lsof -ti :8080 | xargs kill -9 2>/dev/null || true
+	@echo "Ghost cleanup complete"
 
 # ============================================================================
 # Utilities
