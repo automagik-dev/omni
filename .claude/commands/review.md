@@ -18,7 +18,8 @@ Provide final verdict on forged wishes. Validate, verify, and either approve or 
 1. Ask which wish to review (or detect from context)
 2. Read: .wishes/<slug>/<slug>-wish.md
 3. Verify status is REVIEW
-4. Load acceptance criteria and validation commands
+4. Extract beads ID from wish document (Beads: <id>)
+5. Load acceptance criteria and validation commands
 ```
 
 ### 2. VALIDATE
@@ -50,7 +51,20 @@ Review dimensions:
 
 ### 5. RECORD
 
-Update wish document with verdict:
+Update wish document with verdict AND close beads if SHIP:
+
+```bash
+# If SHIP verdict:
+bd close <beads-id>
+bd sync
+# Update wish status to SHIPPED
+
+# If FIX-FIRST verdict:
+# Keep beads open, update wish status to FIX-FIRST
+
+# If BLOCKED verdict:
+# Keep beads open, update wish status to BLOCKED
+```
 
 ```markdown
 ---

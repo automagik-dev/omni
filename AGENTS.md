@@ -37,12 +37,26 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 ## Beads Issue Tracking
 
 ```bash
-bd ready                              # Find available work
+# Finding work
+bd ready                              # Show ready issues (no blockers)
+bd list                               # List all open issues
 bd show <id>                          # View issue details
+
+# Creating issues
+bd create "title" --type feature      # Create feature issue
+bd create "title" --type bug          # Create bug issue
+bd create "title" --type task         # Create task issue
+bd q "quick title"                    # Quick capture (outputs ID only)
+
+# Working on issues
 bd update <id> --status in_progress   # Claim work
 bd close <id>                         # Complete work
-bd sync                               # Sync with git
+
+# Syncing
+bd sync                               # Export to JSONL (sync with git)
 ```
+
+**Issue types:** `task`, `bug`, `feature`, `chore`, `epic`
 
 ## Agent Hierarchy
 
@@ -127,7 +141,7 @@ git merge feat/<session>
 
 1. **File issues for remaining work**
    ```bash
-   bd add "Remaining task description"
+   bd create "Remaining task description" --type task
    ```
 
 2. **Run quality gates** (if code changed)

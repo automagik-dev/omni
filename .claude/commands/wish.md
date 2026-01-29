@@ -62,12 +62,32 @@ Create execution groups (max 3):
 - `make typecheck`
 ```
 
-### 5. SAVE
+### 5. SAVE & TRACK
 
-Create the wish document:
-- Directory: `.wishes/<slug>/`
-- File: `<slug>-wish.md`
-- Status: DRAFT
+Create the wish document AND beads issue:
+
+```bash
+# 1. Create wish directory and document
+mkdir -p .wishes/<slug>/
+# Write <slug>-wish.md with Status: DRAFT
+
+# 2. Create beads issue to track the wish
+bd create "<slug>: <title>" --type feature --description "See .wishes/<slug>/<slug>-wish.md"
+
+# 3. Note the beads ID in the wish document
+```
+
+**Wish document header:**
+```markdown
+# WISH: <Title>
+
+> <One-line description>
+
+**Status:** DRAFT
+**Created:** <Date>
+**Author:** WISH Agent
+**Beads:** <beads-id>
+```
 
 ## Output
 
@@ -77,6 +97,7 @@ When complete, inform the user:
 Wish documented: .wishes/<slug>/<slug>-wish.md
 
 Status: DRAFT
+Beads: <beads-id> (open)
 
 When ready to execute, run /forge
 ```
@@ -87,3 +108,4 @@ When ready to execute, run /forge
 - Never skip discovery
 - Always define scope boundaries
 - Max 3 execution groups per wish
+- Always create a beads issue to track the wish

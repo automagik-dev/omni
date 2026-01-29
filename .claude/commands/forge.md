@@ -43,7 +43,8 @@ When `--spawn` is present:
 # 1. Determine wish and groups
 WISH_PATH=".wishes/<slug>/<slug>-wish.md"
 WISH_SLUG="<slug>"
-BEADS_ID=$(bd add "feat: $WISH_SLUG" --json | jq -r '.id')
+# Get beads ID from wish document (created by /wish)
+BEADS_ID=$(grep "Beads:" "$WISH_PATH" | awk '{print $2}')
 
 # 2. For each group (or specified --group):
 GROUP="A"
@@ -86,8 +87,9 @@ When no `--spawn`:
 1. Ask which wish to forge (or use $ARGUMENTS path)
 2. Read: .wishes/<slug>/<slug>-wish.md
 3. Verify status is DRAFT or APPROVED
-4. Update status to FORGING
-5. Update beads: bd update <id> --status in_progress
+4. Extract beads ID from wish document (Beads: <id>)
+5. Update status to FORGING
+6. Update beads: bd update <beads-id> --status in_progress
 ```
 
 If `--group` specified, only load that group.
