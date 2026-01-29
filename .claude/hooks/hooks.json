@@ -1,0 +1,7 @@
+[
+  {
+    "type": "stop",
+    "agent": "./hooks/wish-validator.md",
+    "description": "Auto-validate wish documents after creation/modification"
+  }
+]
