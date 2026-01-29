@@ -64,7 +64,7 @@ dev-services: ensure-nats
 		cp .env.example .env; \
 	fi
 	@echo "Starting managed services..."
-	pm2 start ecosystem.config.cjs --env development || true
+	@set -a && . ./.env && set +a && pm2 start ecosystem.config.cjs || true
 	@sleep 2
 	@$(MAKE) status
 
@@ -145,7 +145,7 @@ ensure-nats:
 # ============================================================================
 
 start: ensure-nats
-	pm2 start ecosystem.config.cjs
+	@set -a && . ./.env && set +a && pm2 start ecosystem.config.cjs
 
 stop:
 	-pm2 stop all 2>/dev/null || true
