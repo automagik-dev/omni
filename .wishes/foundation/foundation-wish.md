@@ -2,7 +2,7 @@
 
 > Initialize Bun monorepo with core packages and local dev infrastructure
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-01-29
 **Author:** WISH Agent
 
@@ -283,3 +283,39 @@ bd add "feat: project foundation setup"
 2. **channel-sdk** - Plugin SDK for channels
 3. **nats-integration** - Event bus implementation
 4. **cli-setup** - LLM-optimized CLI
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-01-29
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `bun install` completes | PASS | 91 packages installed |
+| Workspace packages linked | PASS | `@omni/core`, `@omni/db` in `bun pm ls` |
+| Core package typechecks | PASS | `tsc --noEmit` exit 0 |
+| Core exports work | PASS | events, schemas, types, errors, ids present |
+| DB package typechecks | PASS | `tsc --noEmit` exit 0 |
+| `.env.example` present | PASS | All variables documented |
+| PM2 ecosystem works | PASS | pgserve + nats online |
+| `make dev-services` works | PASS | Services start via PM2 |
+| `make check` passes | PASS | typecheck + lint + test all pass |
+| NATS binary installer | PASS | `scripts/ensure-nats.sh` downloads v2.10.24 |
+
+### Findings
+
+| Severity | Finding |
+|----------|---------|
+| LOW | Minor formatting in ecosystem.config.cjs (auto-fixed) |
+
+### Recommendation
+
+**SHIP** - All acceptance criteria pass. Foundation ready for parallel development.
+
+**Next steps:**
+1. Push to remote
+2. Start next wish (api-setup or channel-sdk)
