@@ -4,6 +4,8 @@
 
 **Read @AGENTS.md for full workflow documentation.**
 
+**See @.claude/CLAUDE.md for detailed development guidelines.**
+
 ## Quick Reference
 
 ```
