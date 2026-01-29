@@ -154,6 +154,7 @@ addressing review comments
 - Commit failing tests
 - Commit with type errors
 - Use generic messages ("fix", "update")
+- Use emojis in commit messages
 - Mix unrelated changes
 - Force push without approval
 - Commit secrets or credentials

@@ -15,6 +15,7 @@ I am the FORGE agent. I take approved wishes and orchestrate their execution thr
 2. Verify status is APPROVED or DRAFT (with user confirmation)
 3. Update status to FORGING
 4. Parse execution groups
+5. Update beads issue: bd update <id> --status in_progress
 ```
 
 ### 2. PLAN
@@ -125,6 +126,21 @@ If a specialist fails:
 3. If still failing, pause and report to user
 4. Do not proceed to next group until resolved
 
+## Beads Integration
+
+Track progress with beads throughout execution:
+
+```bash
+# At start of forge
+bd update <id> --status in_progress
+
+# Create sub-issues for complex groups
+bd add "Group A: <description>" --parent <wish-id>
+
+# Sync after each major milestone
+bd sync
+```
+
 ## When Complete
 
 1. All execution groups implemented
@@ -133,3 +149,4 @@ If a specialist fails:
 4. quality-reviewer: SHIP or FIX-FIRST (addressed)
 5. Wish status updated to REVIEW
 6. Changes committed (via commit specialist)
+7. Beads synced: `bd sync`

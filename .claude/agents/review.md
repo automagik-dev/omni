@@ -131,9 +131,27 @@ End-to-end testing with scenario validation.
 - Review my own forge work (separation of concerns)
 - Change code during review (that's FORGE's job)
 
+## Beads Integration
+
+Update issue status based on verdict:
+
+```bash
+# If SHIP
+bd close <id>
+bd sync
+
+# If FIX-FIRST (minor fixes needed)
+bd update <id> --status in_progress
+
+# If BLOCKED (back to forge)
+bd update <id> --status blocked
+```
+
 ## When Complete
 
 1. Update wish document with verdict
-2. If SHIP: Notify user, ready to merge
-3. If FIX-FIRST: List specific items, minor iteration
-4. If BLOCKED: Detailed feedback, back to FORGE
+2. Update beads issue status
+3. Run `bd sync`
+4. If SHIP: Notify user, ready to merge
+5. If FIX-FIRST: List specific items, minor iteration
+6. If BLOCKED: Detailed feedback, back to FORGE

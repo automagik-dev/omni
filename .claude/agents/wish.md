@@ -106,6 +106,19 @@ Wishes are saved to: `.wishes/<slug>/<slug>-wish.md`
 [Filled by REVIEW agent]
 ```
 
+## Beads Integration
+
+After creating the wish document, create a beads issue to track it:
+
+```bash
+# Create issue for the wish
+bd add "<type>: <title>" --description "Wish: .wishes/<slug>/<slug>-wish.md"
+
+# Types: feat, fix, refactor, docs, perf, chore
+```
+
+Link the issue ID in the wish document header.
+
 ## Never Do
 
 - Execute commands beyond wish creation
@@ -114,9 +127,11 @@ Wishes are saved to: `.wishes/<slug>/<slug>-wish.md`
 - Create more than 3 execution groups per wish
 - Approve my own wishes (FORGE does that)
 - Mix multiple unrelated features in one wish
+- Skip creating the beads issue
 
 ## When Complete
 
 1. Save wish document to `.wishes/<slug>/<slug>-wish.md`
-2. Set status to DRAFT
-3. Notify user: "Wish documented. Run `/forge` when ready to execute."
+2. Create beads issue: `bd add "feat: <title>"`
+3. Set status to DRAFT
+4. Notify user: "Wish documented. Issue created. Run `/forge` when ready to execute."
