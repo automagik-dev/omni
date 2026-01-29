@@ -17,16 +17,21 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 
 ```bash
 # Planning
-/wish                    # Start planning a feature
+/wish                         # Start planning a feature
 
-# Execution
-/forge                   # Execute an approved wish
+# Execution (inline)
+/forge                        # Execute in current session
+
+# Execution (spawned sessions)
+/forge --spawn                # Spawn tmux session with worktree
+/forge --spawn --parallel     # Parallel sessions per group
+/forge --spawn --group A      # Spawn only group A
 
 # Validation
-/review                  # Final validation
+/review                       # Final validation
 
 # Decisions
-/council                 # Get council review on architecture
+/council                      # Get council review on architecture
 ```
 
 ## Beads Issue Tracking
@@ -72,6 +77,47 @@ bd sync                               # Sync with git
 ## Wish Document Location
 
 Wishes are stored in: `.wishes/<slug>/<slug>-wish.md`
+
+## Parallel Execution (Spawn Mode)
+
+Forge can spawn isolated tmux sessions with git worktrees for parallel work.
+
+**When to spawn:**
+- Multiple groups can run in parallel
+- Want isolated environment per task
+- Long-running tasks you want to monitor
+
+**How it works:**
+```bash
+/forge --spawn --parallel
+```
+
+This creates for each group:
+1. Git worktree at `~/.worktrees/omni-v2/<slug>-<group>-<id>/`
+2. Tmux session named `<slug>-<group>-<id>`
+3. Claude session executing that group's tasks
+
+**Managing spawned sessions:**
+```bash
+tmux ls                           # List all sessions
+tmux attach -t <session>          # Attach to session
+tmux capture-pane -t <session> -p # See session output
+tmux kill-session -t <session>    # Kill session
+```
+
+**Cleanup after wish ships:**
+```bash
+git worktree remove ~/.worktrees/omni-v2/<session>
+tmux kill-session -t <session>
+git merge feat/<session>
+```
+
+**If you ARE a spawned session:**
+- You're in a worktree, not main repo
+- Execute your assigned group only
+- Commit to your feature branch
+- Close your beads issue when done
+- Exit when complete
 
 ## Landing the Plane (Session Completion)
 
