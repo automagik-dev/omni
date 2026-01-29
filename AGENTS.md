@@ -54,9 +54,17 @@ bd close <id>                         # Complete work
 
 # Syncing
 bd sync                               # Export to JSONL (sync with git)
+
+# Dependencies
+bd dep add <issue> <blocker>          # Issue depends on blocker
+bd dep list <id>                      # List dependencies
+bd blocked                            # Show all blocked issues
+bd graph --all                        # Visualize dependency tree
 ```
 
 **Issue types:** `task`, `bug`, `feature`, `chore`, `epic`
+
+**Dependency flow:** When a blocker is closed, dependent issues become ready.
 
 ## Agent Hierarchy
 
