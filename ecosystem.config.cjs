@@ -23,9 +23,13 @@ if (pgserveManaged) {
   apps.push({
     name: 'pgserve',
     script: 'bunx',
-    args: ['pgserve', '--port', process.env.PGSERVE_PORT || '8432', '--data', process.env.PGSERVE_DATA || './.pgserve-data'].join(
-      ' ',
-    ),
+    args: [
+      'pgserve',
+      '--port',
+      process.env.PGSERVE_PORT || '8432',
+      '--data',
+      process.env.PGSERVE_DATA || './.pgserve-data',
+    ].join(' '),
     cwd: __dirname,
     env: {
       NODE_ENV: 'development',
