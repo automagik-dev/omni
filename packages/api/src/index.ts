@@ -156,19 +156,20 @@ async function main() {
     });
 
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      console.log('\nShutting down gracefully...');
+    const shutdown = () => {
+      console.log('\nShutting down...');
       server.close(() => {
-        process.exit(0);
+        console.log('Server closed');
       });
-    });
+      // Force exit after 3 seconds if graceful shutdown fails
+      setTimeout(() => {
+        console.log('Force exiting...');
+        process.exit(0);
+      }, 3000).unref();
+    };
 
-    process.on('SIGTERM', () => {
-      console.log('\nShutting down gracefully...');
-      server.close(() => {
-        process.exit(0);
-      });
-    });
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   }
 }
 
