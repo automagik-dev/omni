@@ -42,11 +42,30 @@ function findMonorepoRoot(startDir: string): string | null {
  * Get the monorepo packages directory
  */
 function getMonorepoPackagesDir(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const monorepoRoot = findMonorepoRoot(currentDir);
+  // Try strategies in order of reliability:
+  // 1. Environment variable (explicit)
+  // 2. Current working directory (most reliable in practice)
+  // 3. Module location (fallback)
+
+  // Strategy 1: Check environment variable
+  if (process.env.OMNI_PACKAGES_DIR) {
+    return process.env.OMNI_PACKAGES_DIR;
+  }
+
+  // Strategy 2: Walk up from current working directory (prefer this)
+  let monorepoRoot = findMonorepoRoot(process.cwd());
+
+  // Strategy 3: Walk up from module location (fallback)
+  if (!monorepoRoot) {
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    monorepoRoot = findMonorepoRoot(moduleDir);
+  }
 
   if (!monorepoRoot) {
-    throw new Error('Could not find monorepo root (no turbo.json found)');
+    throw new Error(
+      'Could not find monorepo root (no turbo.json found). ' +
+        'Ensure you run from repo root or set OMNI_PACKAGES_DIR env var.',
+    );
   }
 
   return join(monorepoRoot, 'packages');
