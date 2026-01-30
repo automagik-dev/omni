@@ -12,6 +12,7 @@ export {
   loadChannelPlugins,
   getPlugin,
   getAllPlugins,
+  autoReconnectInstances,
   type LoadPluginsOptions,
   type LoadPluginsResult,
 } from './loader';
@@ -20,7 +21,7 @@ export {
 export { createLogger } from './logger';
 
 // Storage
-export { getPluginStorage, InMemoryPluginStorage } from './storage';
+export { getPluginStorage, setStorageDatabase, DatabasePluginStorage, InMemoryPluginStorage } from './storage';
 
 // QR code handling
 export {

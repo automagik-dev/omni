@@ -18,6 +18,7 @@ import type { Database } from '@omni/db';
 
 import { createPluginContext } from './context';
 import { createLogger } from './logger';
+import { setStorageDatabase } from './storage';
 
 const logger = createLogger({ module: 'plugin-loader' });
 
@@ -97,6 +98,9 @@ export interface LoadPluginsResult {
 export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<LoadPluginsResult> {
   const { packagesDir = getMonorepoPackagesDir(), eventBus, db } = options;
 
+  // Set database for persistent storage BEFORE creating plugin contexts
+  setStorageDatabase(db);
+
   logger.info('Starting channel plugin discovery', { packagesDir });
 
   // Discover and register plugins
@@ -157,4 +161,64 @@ export async function getPlugin(id: string): Promise<ChannelPlugin | undefined> 
 export async function getAllPlugins(): Promise<ChannelPlugin[]> {
   const { channelRegistry } = await import('@omni/channel-sdk');
   return channelRegistry.getAll();
+}
+
+/**
+ * Auto-reconnect previously active instances on startup
+ *
+ * Queries the database for instances with isActive=true and reconnects them.
+ */
+export async function autoReconnectInstances(db: Database): Promise<{
+  attempted: number;
+  succeeded: number;
+  failed: number;
+}> {
+  const { instances } = await import('@omni/db');
+  const { eq } = await import('drizzle-orm');
+  const { channelRegistry } = await import('@omni/channel-sdk');
+
+  // Find all active instances
+  const activeInstances = await db.select().from(instances).where(eq(instances.isActive, true));
+
+  logger.info('Auto-reconnecting instances', { count: activeInstances.length });
+
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const instance of activeInstances) {
+    try {
+      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+      if (!plugin) {
+        logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
+        failed++;
+        continue;
+      }
+
+      // Reconnect the instance (uses stored auth state from database)
+      await plugin.connect(instance.id, {
+        instanceId: instance.id,
+        credentials: {}, // Auth state loaded from database storage
+        options: {},
+      });
+
+      logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
+      succeeded++;
+    } catch (error) {
+      logger.error('Failed to reconnect instance', {
+        instanceId: instance.id,
+        name: instance.name,
+        error: String(error),
+      });
+
+      // Mark instance as inactive since reconnection failed
+      await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
+      failed++;
+    }
+  }
+
+  return {
+    attempted: activeInstances.length,
+    succeeded,
+    failed,
+  };
 }

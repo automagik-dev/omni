@@ -9,7 +9,7 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, connectEventBus } from '@omni/core';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 import { createApp } from './app';
-import { loadChannelPlugins, setupConnectionListener, setupMessageListener, setupQrCodeListener } from './plugins';
+import { autoReconnectInstances, loadChannelPlugins, setupConnectionListener, setupMessageListener, setupQrCodeListener } from './plugins';
 
 // Runtime detection
 const isBun = typeof Bun !== 'undefined';
@@ -83,6 +83,18 @@ async function main() {
 
       if (result.failed > 0) {
         console.warn(`${result.failed} channel plugin(s) failed to load`);
+      }
+
+      // Auto-reconnect previously active instances
+      if (result.loaded > 0) {
+        console.log('Auto-reconnecting active instances...');
+        const reconnectResult = await autoReconnectInstances(db);
+        if (reconnectResult.attempted > 0) {
+          console.log(
+            `Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances` +
+              (reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : ''),
+          );
+        }
       }
     } catch (error) {
       console.error('Failed to load channel plugins:', error);

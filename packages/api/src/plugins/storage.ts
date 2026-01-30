@@ -1,22 +1,164 @@
 /**
- * In-memory storage implementation for plugins
+ * Database-backed storage implementation for plugins
  *
- * Simple storage that plugins can use for QR codes, auth state, etc.
- * For production, this should be replaced with Redis or similar.
+ * Persists plugin data (auth state, credentials, etc.) to PostgreSQL.
+ * Data survives API restarts.
  */
 
 import type { PluginStorage } from '@omni/channel-sdk';
+import type { Database } from '@omni/db';
+import { pluginStorage } from '@omni/db';
+import { and, eq, gt, like, or, sql } from 'drizzle-orm';
 
-interface StoredValue {
-  value: unknown;
-  expiresAt?: number;
+/**
+ * Database-backed storage for plugin data
+ *
+ * Uses PostgreSQL for persistence across API restarts.
+ */
+export class DatabasePluginStorage implements PluginStorage {
+  private readonly prefix: string;
+
+  constructor(
+    private readonly db: Database,
+    private readonly pluginId: string,
+  ) {
+    this.prefix = `plugin:${pluginId}:`;
+  }
+
+  private getFullKey(key: string): string {
+    return `${this.prefix}${key}`;
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    const fullKey = this.getFullKey(key);
+
+    const result = await this.db
+      .select()
+      .from(pluginStorage)
+      .where(
+        and(
+          eq(pluginStorage.pluginId, this.pluginId),
+          eq(pluginStorage.key, fullKey),
+          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+        ),
+      )
+      .limit(1);
+
+    const row = result[0];
+    if (!row) return null;
+
+    try {
+      return JSON.parse(row.value) as T;
+    } catch {
+      return row.value as unknown as T;
+    }
+  }
+
+  async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
+    const fullKey = this.getFullKey(key);
+    const serializedValue = typeof value === 'string' ? value : JSON.stringify(value);
+    const expiresAt = ttlMs ? new Date(Date.now() + ttlMs) : null;
+
+    await this.db
+      .insert(pluginStorage)
+      .values({
+        pluginId: this.pluginId,
+        key: fullKey,
+        value: serializedValue,
+        expiresAt,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [pluginStorage.pluginId, pluginStorage.key],
+        set: {
+          value: serializedValue,
+          expiresAt,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const fullKey = this.getFullKey(key);
+
+    const result = await this.db
+      .delete(pluginStorage)
+      .where(and(eq(pluginStorage.pluginId, this.pluginId), eq(pluginStorage.key, fullKey)))
+      .returning({ id: pluginStorage.id });
+
+    return result.length > 0;
+  }
+
+  async has(key: string): Promise<boolean> {
+    const fullKey = this.getFullKey(key);
+
+    const result = await this.db
+      .select({ id: pluginStorage.id })
+      .from(pluginStorage)
+      .where(
+        and(
+          eq(pluginStorage.pluginId, this.pluginId),
+          eq(pluginStorage.key, fullKey),
+          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+        ),
+      )
+      .limit(1);
+
+    return result.length > 0;
+  }
+
+  async keys(pattern?: string): Promise<string[]> {
+    const prefixPattern = `${this.prefix}%`;
+
+    let query = this.db
+      .select({ key: pluginStorage.key })
+      .from(pluginStorage)
+      .where(
+        and(
+          eq(pluginStorage.pluginId, this.pluginId),
+          like(pluginStorage.key, prefixPattern),
+          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+        ),
+      );
+
+    const results = await query;
+
+    // Remove prefix from keys
+    let keys = results.map((r) => r.key.slice(this.prefix.length));
+
+    // Filter by pattern if provided
+    if (pattern) {
+      const regex = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`);
+      keys = keys.filter((k) => regex.test(k));
+    }
+
+    return keys;
+  }
+
+  /**
+   * Clean up expired entries (can be called periodically)
+   */
+  async cleanupExpired(): Promise<number> {
+    const result = await this.db
+      .delete(pluginStorage)
+      .where(
+        and(
+          eq(pluginStorage.pluginId, this.pluginId),
+          gt(sql`${pluginStorage.expiresAt}`, sql`NULL`),
+          sql`${pluginStorage.expiresAt} < NOW()`,
+        ),
+      )
+      .returning({ id: pluginStorage.id });
+
+    return result.length;
+  }
 }
 
 /**
- * In-memory storage for plugin data
+ * In-memory storage fallback (for testing or when DB is unavailable)
  */
 export class InMemoryPluginStorage implements PluginStorage {
-  private data = new Map<string, StoredValue>();
+  private data = new Map<string, { value: unknown; expiresAt?: number }>();
   private readonly prefix: string;
 
   constructor(pluginId: string) {
@@ -27,28 +169,21 @@ export class InMemoryPluginStorage implements PluginStorage {
     return `${this.prefix}${key}`;
   }
 
-  private isExpired(stored: StoredValue): boolean {
-    return stored.expiresAt !== undefined && Date.now() > stored.expiresAt;
-  }
-
   async get<T>(key: string): Promise<T | null> {
     const stored = this.data.get(this.getKey(key));
     if (!stored) return null;
-
-    if (this.isExpired(stored)) {
+    if (stored.expiresAt && Date.now() > stored.expiresAt) {
       this.data.delete(this.getKey(key));
       return null;
     }
-
     return stored.value as T;
   }
 
   async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
-    const stored: StoredValue = {
+    this.data.set(this.getKey(key), {
       value,
       expiresAt: ttlMs ? Date.now() + ttlMs : undefined,
-    };
-    this.data.set(this.getKey(key), stored);
+    });
   }
 
   async delete(key: string): Promise<boolean> {
@@ -58,12 +193,10 @@ export class InMemoryPluginStorage implements PluginStorage {
   async has(key: string): Promise<boolean> {
     const stored = this.data.get(this.getKey(key));
     if (!stored) return false;
-
-    if (this.isExpired(stored)) {
+    if (stored.expiresAt && Date.now() > stored.expiresAt) {
       this.data.delete(this.getKey(key));
       return false;
     }
-
     return true;
   }
 
@@ -72,24 +205,17 @@ export class InMemoryPluginStorage implements PluginStorage {
     const now = Date.now();
 
     for (const [key, stored] of this.data.entries()) {
-      // Skip expired entries
       if (stored.expiresAt && now > stored.expiresAt) {
         this.data.delete(key);
         continue;
       }
-
-      // Check if key matches prefix
       if (!key.startsWith(this.prefix)) continue;
 
-      // Get key without prefix
       const keyWithoutPrefix = key.slice(this.prefix.length);
-
-      // Check pattern if provided
       if (pattern) {
         const regex = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`);
         if (!regex.test(keyWithoutPrefix)) continue;
       }
-
       result.push(keyWithoutPrefix);
     }
 
@@ -98,17 +224,30 @@ export class InMemoryPluginStorage implements PluginStorage {
 }
 
 /**
- * Global storage instances keyed by plugin ID
+ * Storage factory - creates appropriate storage based on available resources
  */
-const storageInstances = new Map<string, InMemoryPluginStorage>();
+let globalDb: Database | null = null;
+
+export function setStorageDatabase(db: Database): void {
+  globalDb = db;
+}
+
+const storageInstances = new Map<string, PluginStorage>();
 
 /**
  * Get or create storage for a plugin
+ *
+ * Uses DatabasePluginStorage if database is available, falls back to InMemory
  */
 export function getPluginStorage(pluginId: string): PluginStorage {
   let storage = storageInstances.get(pluginId);
   if (!storage) {
-    storage = new InMemoryPluginStorage(pluginId);
+    if (globalDb) {
+      storage = new DatabasePluginStorage(globalDb, pluginId);
+    } else {
+      console.warn(`[Storage] Database not available, using in-memory storage for plugin: ${pluginId}`);
+      storage = new InMemoryPluginStorage(pluginId);
+    }
     storageInstances.set(pluginId, storage);
   }
   return storage;

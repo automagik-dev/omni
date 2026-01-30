@@ -617,6 +617,35 @@ export const chatIdMappings = pgTable(
 );
 
 // ============================================================================
+// PLUGIN STORAGE
+// ============================================================================
+
+/**
+ * Key-value storage for plugin data (auth state, credentials, etc.).
+ * Persists across API restarts.
+ */
+export const pluginStorage = pgTable(
+  'plugin_storage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    pluginId: varchar('plugin_id', { length: 100 }).notNull(),
+    key: varchar('key', { length: 500 }).notNull(),
+    value: text('value').notNull(), // JSON serialized
+    expiresAt: timestamp('expires_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pluginKeyIdx: uniqueIndex('plugin_storage_plugin_key_idx').on(table.pluginId, table.key),
+    pluginIdx: index('plugin_storage_plugin_idx').on(table.pluginId),
+    expiresAtIdx: index('plugin_storage_expires_at_idx').on(table.expiresAt),
+  }),
+);
+
+export type PluginStorageRow = typeof pluginStorage.$inferSelect;
+export type NewPluginStorageRow = typeof pluginStorage.$inferInsert;
+
+// ============================================================================
 // RELATIONS
 // ============================================================================
 
