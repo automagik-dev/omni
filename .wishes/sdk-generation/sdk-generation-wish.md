@@ -33,7 +33,7 @@ Reference: `docs/sdk/auto-generation.md`, `docs/sdk/typescript-sdk.md`
 
 | ID | Type | Description |
 |----|------|-------------|
-| **ASM-1** | Assumption | API is running with OpenAPI spec at `/api/v2/openapi.json` |
+| **ASM-1** | Assumption | OpenAPI spec is exported from `packages/api/src/routes/openapi.ts` |
 | **ASM-2** | Assumption | Spec is accurate enough to generate usable SDK |
 | **DEC-1** | Decision | `openapi-typescript` for type generation |
 | **DEC-2** | Decision | `openapi-fetch` for type-safe HTTP client |
@@ -161,17 +161,13 @@ bun -e "import { createOmniClient } from './packages/sdk/src'; console.log(typeo
 // scripts/generate-sdk.ts
 import { $ } from 'bun';
 import { mkdirSync, writeFileSync } from 'fs';
+// Direct import - single source of truth, no server needed
+import { openApiSpec } from '../packages/api/src/routes/openapi';
 
 async function main() {
-  console.log('Fetching OpenAPI spec...');
-
-  // Fetch from running API or use static file
-  const specUrl = process.env.API_URL || 'http://localhost:8881';
-  const res = await fetch(`${specUrl}/api/v2/openapi.json`);
-  const spec = await res.json();
-
+  console.log('Exporting OpenAPI spec...');
   mkdirSync('dist', { recursive: true });
-  writeFileSync('dist/openapi.json', JSON.stringify(spec, null, 2));
+  writeFileSync('dist/openapi.json', JSON.stringify(openApiSpec, null, 2));
 
   console.log('Generating TypeScript types...');
   await $`bunx openapi-typescript dist/openapi.json -o packages/sdk/src/types.generated.ts`;
