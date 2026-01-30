@@ -1,10 +1,9 @@
 /**
- * Error handling middleware
+ * Error handling middleware and onError handler
  */
 
 import { ERROR_CODES, NotFoundError, OmniError, ValidationError } from '@omni/core';
-import type { Context } from 'hono';
-import { createMiddleware } from 'hono/factory';
+import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import type { ApiErrorResponse, AppVariables } from '../types';
@@ -145,6 +144,7 @@ function handleUnknownError(c: Context, error: unknown): Response {
 
 /**
  * Route error to appropriate handler
+ * Note: Check specific error types BEFORE their parent types
  */
 function routeError(c: Context, error: unknown): Response {
   if (error instanceof ZodError) {
@@ -153,27 +153,31 @@ function routeError(c: Context, error: unknown): Response {
   if (error instanceof HTTPException) {
     return handleHTTPException(c, error);
   }
-  if (error instanceof OmniError) {
-    return handleOmniError(c, error);
-  }
+  // Check specific OmniError subtypes BEFORE generic OmniError
   if (error instanceof NotFoundError) {
     return handleNotFoundError(c, error);
   }
   if (error instanceof ValidationError) {
     return handleValidationError(c, error);
   }
+  if (error instanceof OmniError) {
+    return handleOmniError(c, error);
+  }
   return handleUnknownError(c, error);
 }
 
 /**
- * Error handling middleware
+ * Error handler for use with app.onError()
+ * This is the recommended way to handle errors in Hono
  */
-export const errorMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    const requestId = c.get('requestId') ?? 'unknown';
-    console.error(`[${requestId}] Error:`, error);
-    return routeError(c, error);
-  }
-});
+export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c) => {
+  const requestId = c.get('requestId') ?? 'unknown';
+  console.error(`[${requestId}] Error:`, error);
+  return routeError(c, error);
+};
+
+/**
+ * Legacy middleware export for backwards compatibility
+ * @deprecated Use errorHandler with app.onError() instead
+ */
+export const errorMiddleware = errorHandler;

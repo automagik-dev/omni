@@ -12,7 +12,7 @@ import { timing } from 'hono/timing';
 
 import { authMiddleware } from './middleware/auth';
 import { createContextMiddleware } from './middleware/context';
-import { errorMiddleware } from './middleware/error';
+import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
@@ -39,8 +39,10 @@ export function createApp(db: Database, eventBus: EventBus | null = null) {
     }),
   );
   app.use('*', secureHeaders());
-  app.use('*', errorMiddleware);
   app.use('*', createContextMiddleware(db, eventBus));
+
+  // Error handler - must be registered with onError, not as middleware
+  app.onError(errorHandler);
 
   // Health routes (no auth required)
   app.route('/api/v2', healthRoutes);
