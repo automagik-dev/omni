@@ -60,22 +60,28 @@ export async function printQrCodeToTerminal(qrCode: string, instanceId: string):
 
   try {
     // Dynamic import qrcode-terminal
-    const qrTerminal = await import('qrcode-terminal');
+    // For CommonJS modules imported with dynamic import in Node.js,
+    // the module object itself is what we need
+    const qrTerminalModule = await import('qrcode-terminal');
+    const qrTerminal = (qrTerminalModule as any).default || qrTerminalModule;
 
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log(`║  WhatsApp QR Code for instance: ${instanceId.padEnd(25)} ║`);
     console.log('║  Scan with your phone to connect                           ║');
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
+    // qrcode-terminal exports a generate function
     qrTerminal.generate(qrCode, { small: true });
 
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║  QR code also available via GET /instances/:id/qr          ║');
     console.log('╚════════════════════════════════════════════════════════════╝\n');
-  } catch (_error) {
-    // If qrcode-terminal isn't installed, just log the raw QR
+  } catch (error) {
+    // If qrcode-terminal isn't installed or import fails, just log the raw QR
     console.log(`\n[QR Code for ${instanceId}]: ${qrCode.substring(0, 50)}...`);
-    console.log('Install qrcode-terminal for visual QR display: bun add qrcode-terminal\n');
+    if (error instanceof Error && process.env.DEBUG) {
+      console.debug(`[QR Terminal Error]: ${error.message}`);
+    }
   }
 }
 
