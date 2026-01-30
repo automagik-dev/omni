@@ -21,7 +21,7 @@ const apps = [];
 
 if (pgserveManaged) {
   apps.push({
-    name: 'pgserve',
+    name: 'omni-v2-pgserve',
     script: 'bunx',
     args: [
       'pgserve',
@@ -45,7 +45,7 @@ if (natsManaged) {
   const natsServerPath = path.join(__dirname, 'bin', 'nats-server');
 
   apps.push({
-    name: 'nats',
+    name: 'omni-v2-nats',
     script: natsServerPath,
     args: ['-js', '-p', process.env.NATS_PORT || '4222'].join(' '),
     cwd: __dirname,
