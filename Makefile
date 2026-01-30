@@ -11,8 +11,11 @@
 help:
 	@echo "Omni v2 - Development Commands"
 	@echo ""
+	@echo "Quick Start:"
+	@echo "  make setup         One-command setup: install + services + dev (RECOMMENDED)"
+	@echo ""
 	@echo "Development:"
-	@echo "  make install       Install all dependencies"
+	@echo "  make install       Install deps + .env + init database"
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
 	@echo "  make dev-services  Start pgserve + nats via PM2"
@@ -51,8 +54,42 @@ help:
 # Development
 # ============================================================================
 
-install:
+install: _install-deps _setup-env _init-db
+	@echo ""
+	@echo "✓ Installation complete!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Start services:  make dev-services"
+	@echo "  2. Start API:       make dev-api"
+	@echo "  3. In another terminal:"
+	@echo "     make dev"
+
+_install-deps:
+	@echo "Installing dependencies..."
 	bun install
+
+_setup-env:
+	@if [ ! -f .env ]; then \
+		echo "Creating .env from .env.example..."; \
+		cp .env.example .env; \
+		echo "✓ .env created"; \
+	else \
+		echo "✓ .env already exists"; \
+	fi
+
+_init-db: _setup-env
+	@echo "Initializing database schema..."
+	@set -a && . ./.env && set +a && \
+	cd packages/db && \
+	bun x drizzle-kit push --force 2>/dev/null && \
+	echo "✓ Database schema initialized" || \
+	echo "⚠️  Database initialization skipped (PostgreSQL may not be running yet)"
+
+# Complete setup: install + services + start all
+setup: install dev-services
+	@echo ""
+	@echo "✓ Setup complete! Starting development..."
+	bun run dev
 
 # Start dev services (PM2) then run turbo dev
 dev: dev-services
