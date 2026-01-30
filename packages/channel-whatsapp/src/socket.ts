@@ -6,7 +6,8 @@
  */
 
 import type { AuthenticationState, WASocket } from '@whiskeysockets/baileys';
-import makeWASocket from '@whiskeysockets/baileys';
+import makeWASocket, { fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import NodeCache from 'node-cache';
 import pino from 'pino';
 
 /**
@@ -48,15 +49,31 @@ function createLogger(level: string) {
  * @param config - Socket configuration
  * @returns Configured WASocket instance
  */
-export function createSocket(config: SocketConfig): WASocket {
+export async function createSocket(config: SocketConfig): Promise<WASocket> {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  const logger = createLogger(mergedConfig.logLevel || 'warn');
+
+  // Get latest Baileys version for compatibility
+  const { version } = await fetchLatestBaileysVersion();
+
+  // Create message retry counter cache
+  const msgRetryCounterCache = new NodeCache();
+
+  // Wrap keys with caching layer
+  const wrappedKeys = makeCacheableSignalKeyStore(mergedConfig.auth.keys, logger);
 
   return makeWASocket({
-    auth: mergedConfig.auth,
+    version,
+    logger,
+    auth: {
+      creds: mergedConfig.auth.creds,
+      keys: wrappedKeys,
+    },
+    msgRetryCounterCache,
     printQRInTerminal: mergedConfig.printQRInTerminal,
-    logger: createLogger(mergedConfig.logLevel || 'warn'),
     mobile: mergedConfig.mobile,
     browser: mergedConfig.browser,
+    generateHighQualityLinkPreview: true,
   });
 }
 
@@ -117,8 +134,8 @@ export class SocketManager {
   /**
    * Create and store a socket for an instance
    */
-  create(instanceId: string, config: SocketConfig): WASocket {
-    const sock = createSocket(config);
+  async create(instanceId: string, config: SocketConfig): Promise<WASocket> {
+    const sock = await createSocket(config);
     this.sockets.set(instanceId, sock);
     return sock;
   }

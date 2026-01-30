@@ -107,7 +107,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
 
     // Create Baileys socket using wrapper
-    const sock = createSocket({
+    const sock = await createSocket({
       auth: state,
       printQRInTerminal: this.pluginConfig.printQRInTerminal,
       logLevel: this.pluginConfig.logLevel,
