@@ -29,7 +29,7 @@ export interface SocketConfig {
  * Default socket configuration
  */
 const DEFAULT_CONFIG: Partial<SocketConfig> = {
-  printQRInTerminal: false,
+  printQRInTerminal: true,
   logLevel: 'debug',
   browser: ['Omni', 'Chrome', '120.0.0'],
   mobile: false,
