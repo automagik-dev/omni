@@ -43,6 +43,6 @@
     }
   },
   "files": {
-    "ignore": ["node_modules", "dist", ".turbo", "*.min.js", ".pgserve-data", "bin"]
+    "ignore": ["node_modules", "dist", ".turbo", "*.min.js", ".pgserve-data", "bin", "*.generated.ts"]
   }
 }
