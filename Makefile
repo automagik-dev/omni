@@ -97,8 +97,9 @@ dev: dev-services
 
 # Start just the API (assumes services already running)
 # Note: Uses Node.js runtime (tsx) instead of Bun for WhatsApp Baileys WebSocket compatibility
+# OMNI_PACKAGES_DIR is passed explicitly to ensure correct plugin directory
 dev-api:
-	@set -a && . ./.env && npx tsx watch --clear-screen packages/api/src/index.ts
+	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages npx tsx watch --clear-screen packages/api/src/index.ts
 
 # Start managed services via PM2 (reads *_MANAGED from .env)
 dev-services: ensure-nats
