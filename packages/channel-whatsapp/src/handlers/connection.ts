@@ -36,6 +36,20 @@ const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
 const reconnectAttempts = new Map<string, number>();
 
 /**
+ * Track QR code generation attempts per instance
+ * After MAX_QR_ATTEMPTS, we clear auth state and start fresh
+ */
+const qrCodeAttempts = new Map<string, number>();
+const MAX_QR_ATTEMPTS = 3;
+
+/**
+ * Track connection timeouts per instance
+ * If QR is scanned but connection hangs, we detect it
+ */
+const connectionTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+const CONNECTION_TIMEOUT_MS = 45_000; // 45 seconds after QR to connect
+
+/**
  * Calculate exponential backoff delay
  */
 function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
@@ -45,10 +59,75 @@ function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
 
 /**
  * Handle QR code event
+ * Tracks QR attempts and triggers auth state reset after MAX_QR_ATTEMPTS
+ *
+ * @returns true if this QR should be used, false if auth was cleared (will reconnect)
  */
-async function handleQrCode(plugin: WhatsAppPlugin, instanceId: string, qr: string): Promise<void> {
+async function handleQrCode(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  qr: string,
+  clearAuthAndReconnect: () => Promise<void>,
+): Promise<boolean> {
+  // Increment QR attempts
+  const attempts = (qrCodeAttempts.get(instanceId) || 0) + 1;
+  qrCodeAttempts.set(instanceId, attempts);
+
+  // Log QR attempt
+  console.log(`[WhatsApp] QR code ${attempts}/${MAX_QR_ATTEMPTS} for instance ${instanceId}`);
+
+  // Check if we've exceeded max attempts
+  if (attempts >= MAX_QR_ATTEMPTS) {
+    console.log(`[WhatsApp] Max QR attempts reached for ${instanceId}, clearing auth state and restarting...`);
+    qrCodeAttempts.delete(instanceId);
+    clearConnectionTimeout(instanceId);
+
+    // Clear auth and reconnect fresh
+    await clearAuthAndReconnect();
+    return false;
+  }
+
+  // Emit QR code
   const expiresAt = new Date(Date.now() + 60 * 1000);
   await plugin.handleQrCode(instanceId, qr, expiresAt);
+
+  // Set connection timeout - if not connected within timeout, something is wrong
+  setConnectionTimeout(instanceId, plugin, clearAuthAndReconnect);
+
+  return true;
+}
+
+/**
+ * Set a timeout to detect hung connections after QR scan
+ */
+function setConnectionTimeout(
+  instanceId: string,
+  plugin: WhatsAppPlugin,
+  clearAuthAndReconnect: () => Promise<void>,
+): void {
+  // Clear existing timeout
+  clearConnectionTimeout(instanceId);
+
+  const timeout = setTimeout(async () => {
+    const attempts = qrCodeAttempts.get(instanceId) || 0;
+    if (attempts > 0) {
+      console.log(`[WhatsApp] Connection timeout for ${instanceId} after QR scan, will generate new QR...`);
+      // Don't clear auth yet, just let it retry with a new QR
+    }
+  }, CONNECTION_TIMEOUT_MS);
+
+  connectionTimeouts.set(instanceId, timeout);
+}
+
+/**
+ * Clear connection timeout for an instance
+ */
+function clearConnectionTimeout(instanceId: string): void {
+  const timeout = connectionTimeouts.get(instanceId);
+  if (timeout) {
+    clearTimeout(timeout);
+    connectionTimeouts.delete(instanceId);
+  }
 }
 
 /**
@@ -118,7 +197,12 @@ async function handleConnectionClose(
  * Handle connection open event
  */
 async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, sock: WASocket): Promise<void> {
+  // Clear all tracking state on successful connection
   reconnectAttempts.delete(instanceId);
+  qrCodeAttempts.delete(instanceId);
+  clearConnectionTimeout(instanceId);
+
+  console.log(`[WhatsApp] Connection opened for ${instanceId}`);
   await plugin.handleConnected(instanceId, sock);
 }
 
@@ -129,22 +213,29 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
  * @param plugin - WhatsApp plugin instance (for emitting events)
  * @param instanceId - Instance identifier
  * @param onReconnect - Callback to trigger reconnection
+ * @param clearAuthAndReconnect - Callback to clear auth state and reconnect fresh
  */
 export function setupConnectionHandlers(
   sock: WASocket,
   plugin: WhatsAppPlugin,
   instanceId: string,
   onReconnect: () => Promise<void>,
+  clearAuthAndReconnect: () => Promise<void>,
   config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): void {
   sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      await handleQrCode(plugin, instanceId, qr);
+      const shouldContinue = await handleQrCode(plugin, instanceId, qr, clearAuthAndReconnect);
+      if (!shouldContinue) {
+        // Auth was cleared and reconnect triggered, socket will be replaced
+        return;
+      }
     }
 
     if (connection === 'close') {
+      clearConnectionTimeout(instanceId);
       await handleConnectionClose(plugin, instanceId, lastDisconnect, config, onReconnect);
     }
 
@@ -160,4 +251,21 @@ export function setupConnectionHandlers(
  */
 export function resetReconnectAttempts(instanceId: string): void {
   reconnectAttempts.delete(instanceId);
+}
+
+/**
+ * Reset all connection tracking state for an instance
+ * Call this when manually disconnecting or logging out
+ */
+export function resetConnectionState(instanceId: string): void {
+  reconnectAttempts.delete(instanceId);
+  qrCodeAttempts.delete(instanceId);
+  clearConnectionTimeout(instanceId);
+}
+
+/**
+ * Get current QR attempt count for an instance
+ */
+export function getQrAttemptCount(instanceId: string): number {
+  return qrCodeAttempts.get(instanceId) || 0;
 }

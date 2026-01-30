@@ -18,7 +18,7 @@ import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
-import { resetReconnectAttempts, setupConnectionHandlers } from './handlers/connection';
+import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
 import { toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
@@ -116,8 +116,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Save credentials on update
     sock.ev.on('creds.update', saveCreds);
 
-    // Set up connection handlers with reconnection callback
-    setupConnectionHandlers(sock, this, instanceId, () => this.createConnection(instanceId, config));
+    // Set up connection handlers with reconnection and auth-clear callbacks
+    setupConnectionHandlers(
+      sock,
+      this,
+      instanceId,
+      () => this.createConnection(instanceId, config),
+      async () => {
+        // Clear auth and reconnect fresh - this is called after MAX_QR_ATTEMPTS
+        await clearAuthState(this.storage, instanceId);
+        this.sockets.delete(instanceId);
+        await this.createConnection(instanceId, config);
+      },
+    );
 
     // Set up message handlers
     setupMessageHandlers(sock, this, instanceId);
@@ -137,8 +148,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       return;
     }
 
-    // Reset reconnection attempts (don't auto-reconnect after manual disconnect)
-    resetReconnectAttempts(instanceId);
+    // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
+    resetConnectionState(instanceId);
 
     // Close socket with logout
     await closeSocket(sock, true);
