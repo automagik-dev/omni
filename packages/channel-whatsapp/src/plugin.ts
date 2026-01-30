@@ -14,14 +14,15 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import makeWASocket, { type WASocket, type WAMessage, type AnyMessageContent } from '@whiskeysockets/baileys';
-import pino from 'pino';
+import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { resetReconnectAttempts, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
 import { toJid } from './jid';
+import { buildMessageContent } from './senders/builders';
+import { closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
 /**
@@ -90,21 +91,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Create a new Baileys connection
+   * Create a new Baileys connection using socket wrapper
    */
   private async createConnection(instanceId: string, config: InstanceConfig): Promise<void> {
     // Storage-backed auth state
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
 
-    // Create Baileys socket
-    const sock = makeWASocket({
+    // Create Baileys socket using wrapper
+    const sock = createSocket({
       auth: state,
-      printQRInTerminal: this.pluginConfig.printQRInTerminal ?? false,
-      logger: this.createBaileysLogger(),
-      // Mobile flag for web multi-device
-      mobile: false,
-      // Browser identification
-      browser: ['Omni', 'Chrome', '120.0.0'],
+      printQRInTerminal: this.pluginConfig.printQRInTerminal,
+      logLevel: this.pluginConfig.logLevel,
     });
 
     // Save credentials on update
@@ -134,15 +131,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Reset reconnection attempts (don't auto-reconnect after manual disconnect)
     resetReconnectAttempts(instanceId);
 
-    try {
-      // Graceful logout
-      await sock.logout();
-    } catch {
-      // Ignore logout errors - socket might already be closed
-    }
-
-    // Close socket
-    sock.end(undefined);
+    // Close socket with logout
+    await closeSocket(sock, true);
     this.sockets.delete(instanceId);
 
     // Emit disconnected event
@@ -173,7 +163,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     try {
       // Build message content based on type
-      const content = this.buildMessageContent(message);
+      const content = this.buildContent(message);
 
       // Send with optional reply
       const result = await sock.sendMessage(
@@ -225,96 +215,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Build Baileys message content from OutgoingMessage
+   * Delegates to external builder for reduced complexity.
    */
-  private buildMessageContent(message: OutgoingMessage): AnyMessageContent {
-    const { content } = message;
-
-    switch (content.type) {
-      case 'text':
-        return { text: content.text || '' };
-
-      case 'image':
-        return {
-          image: { url: content.mediaUrl || '' },
-          caption: content.caption,
-          mimetype: content.mimeType,
-        };
-
-      case 'audio': {
-        // Check if it's a voice note (ptt = push to talk)
-        const isPtt = content.mimeType?.includes('ogg') || (message.metadata?.ptt as boolean) === true;
-        return {
-          audio: { url: content.mediaUrl || '' },
-          mimetype: content.mimeType || 'audio/ogg; codecs=opus',
-          ptt: isPtt,
-        };
-      }
-
-      case 'video':
-        return {
-          video: { url: content.mediaUrl || '' },
-          caption: content.caption,
-          mimetype: content.mimeType,
-        };
-
-      case 'document':
-        return {
-          document: { url: content.mediaUrl || '' },
-          mimetype: content.mimeType || 'application/octet-stream',
-          fileName: content.filename || 'document',
-        };
-
-      case 'sticker':
-        return {
-          sticker: { url: content.mediaUrl || '' },
-        };
-
-      case 'location':
-        if (!content.location) {
-          throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Location content missing location data');
-        }
-        return {
-          location: {
-            degreesLatitude: content.location.latitude,
-            degreesLongitude: content.location.longitude,
-            name: content.location.name,
-            address: content.location.address,
-          },
-        };
-
-      case 'contact':
-        if (!content.contact) {
-          throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Contact content missing contact data');
-        }
-        return {
-          contacts: {
-            contacts: [
-              {
-                displayName: content.contact.name,
-                vcard: this.buildVCard(content.contact),
-              },
-            ],
-          },
-        };
-
-      case 'reaction':
-        if (!content.targetMessageId) {
-          throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Reaction content missing target message ID');
-        }
-        return {
-          react: {
-            text: content.emoji || '',
-            key: {
-              remoteJid: toJid(message.to),
-              id: content.targetMessageId,
-              fromMe: true, // Assume reacting to own messages by default
-            },
-          },
-        };
-
-      default:
-        throw new WhatsAppError(ErrorCode.SEND_FAILED, `Unsupported content type: ${content.type}`);
-    }
+  private buildContent(message: OutgoingMessage) {
+    return buildMessageContent(message, this.buildVCard.bind(this));
   }
 
   /**
@@ -619,14 +523,5 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not connected`);
     }
     return sock;
-  }
-
-  /**
-   * Create a Pino logger for Baileys
-   */
-  private createBaileysLogger() {
-    return pino({
-      level: this.pluginConfig.logLevel || 'warn',
-    });
   }
 }

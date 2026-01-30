@@ -2,7 +2,7 @@
 
 > Complete WhatsApp integration via Baileys with full message types, presence, typing, and QR auth.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-01-29
 **Updated:** 2026-01-30
 **Author:** WISH Agent
@@ -103,16 +103,16 @@ Reference:
 **Goal:** Working WhatsApp plugin with connection, QR auth, and text messaging.
 
 **Deliverables:**
-- [ ] `packages/channel-whatsapp/package.json` with Baileys dependency
-- [ ] `packages/channel-whatsapp/tsconfig.json` extending root
-- [ ] `packages/channel-whatsapp/src/index.ts` - Default export
-- [ ] `packages/channel-whatsapp/src/plugin.ts` - WhatsAppPlugin extends BaseChannelPlugin
-- [ ] `packages/channel-whatsapp/src/socket.ts` - Baileys socket wrapper
-- [ ] `packages/channel-whatsapp/src/auth.ts` - Storage-backed auth state adapter
-- [ ] `packages/channel-whatsapp/src/jid.ts` - JID normalization utilities
-- [ ] `packages/channel-whatsapp/src/handlers/connection.ts` - Connection event handlers
-- [ ] `packages/channel-whatsapp/src/handlers/messages.ts` - Message handlers
-- [ ] Text send/receive working
+- [x] `packages/channel-whatsapp/package.json` with Baileys dependency
+- [x] `packages/channel-whatsapp/tsconfig.json` extending root
+- [x] `packages/channel-whatsapp/src/index.ts` - Default export
+- [x] `packages/channel-whatsapp/src/plugin.ts` - WhatsAppPlugin extends BaseChannelPlugin
+- [x] `packages/channel-whatsapp/src/socket.ts` - Baileys socket wrapper
+- [x] `packages/channel-whatsapp/src/auth.ts` - Storage-backed auth state adapter
+- [x] `packages/channel-whatsapp/src/jid.ts` - JID normalization utilities
+- [x] `packages/channel-whatsapp/src/handlers/connection.ts` - Connection event handlers
+- [x] `packages/channel-whatsapp/src/handlers/messages.ts` - Message handlers
+- [x] Text send/receive working
 
 **WhatsApp Capabilities Declaration:**
 ```typescript
@@ -144,15 +144,15 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
 ```
 
 **Acceptance Criteria:**
-- [ ] Plugin exports `default` and is auto-discovered
-- [ ] `connect(instanceId, config)` starts Baileys socket
-- [ ] QR code emitted via `emitQrCode()` when waiting for scan
-- [ ] `emitInstanceConnected()` called on successful auth
-- [ ] `disconnect(instanceId)` gracefully closes socket
-- [ ] `sendMessage()` sends text and returns `SendResult`
-- [ ] Incoming text messages trigger `emitMessageReceived()`
-- [ ] Auth state persists across restarts
-- [ ] Reconnection handles network issues
+- [x] Plugin exports `default` and is auto-discovered
+- [x] `connect(instanceId, config)` starts Baileys socket
+- [x] QR code emitted via `emitQrCode()` when waiting for scan
+- [x] `emitInstanceConnected()` called on successful auth
+- [x] `disconnect(instanceId)` gracefully closes socket
+- [x] `sendMessage()` sends text and returns `SendResult`
+- [x] Incoming text messages trigger `emitMessageReceived()`
+- [x] Auth state persists across restarts
+- [x] Reconnection handles network issues
 
 **Validation:**
 ```bash
@@ -173,25 +173,25 @@ curl -X POST http://localhost:8881/api/v2/instances \
 **Goal:** Full media support including reactions, location, contacts.
 
 **Deliverables:**
-- [ ] `packages/channel-whatsapp/src/handlers/media.ts` - Media receive handler
-- [ ] `packages/channel-whatsapp/src/senders/media.ts` - Media sending
-- [ ] `packages/channel-whatsapp/src/senders/reaction.ts` - Reaction sending
-- [ ] `packages/channel-whatsapp/src/senders/location.ts` - Location sending
-- [ ] `packages/channel-whatsapp/src/senders/contact.ts` - Contact vCard sending
-- [ ] `packages/channel-whatsapp/src/senders/sticker.ts` - Sticker sending
-- [ ] `packages/channel-whatsapp/src/utils/download.ts` - Media download helper
+- [x] `packages/channel-whatsapp/src/handlers/media.ts` - Media receive handler
+- [x] `packages/channel-whatsapp/src/senders/media.ts` - Media sending
+- [x] `packages/channel-whatsapp/src/senders/reaction.ts` - Reaction sending
+- [x] `packages/channel-whatsapp/src/senders/location.ts` - Location sending
+- [x] `packages/channel-whatsapp/src/senders/contact.ts` - Contact vCard sending
+- [x] `packages/channel-whatsapp/src/senders/sticker.ts` - Sticker sending
+- [x] `packages/channel-whatsapp/src/utils/download.ts` - Media download helper
 
 **Acceptance Criteria:**
-- [ ] Can send images with captions
-- [ ] Can send audio (regular and voice notes with ptt flag)
-- [ ] Can send video
-- [ ] Can send documents with filename
-- [ ] Can send stickers
-- [ ] Can send reactions to messages
-- [ ] Can send location
-- [ ] Can send contact vCards
-- [ ] Can receive all above types and emit correct events
-- [ ] Media download helper fetches binary from Baileys
+- [x] Can send images with captions
+- [x] Can send audio (regular and voice notes with ptt flag)
+- [x] Can send video
+- [x] Can send documents with filename
+- [x] Can send stickers
+- [x] Can send reactions to messages
+- [x] Can send location
+- [x] Can send contact vCards
+- [x] Can receive all above types and emit correct events
+- [x] Media download helper fetches binary from Baileys
 
 **Validation:**
 ```bash
@@ -206,10 +206,10 @@ bun test packages/channel-whatsapp/src/__tests__/reaction.test.ts
 **Goal:** Typing indicators, presence, read receipts, message status.
 
 **Deliverables:**
-- [ ] `packages/channel-whatsapp/src/presence.ts` - Presence management
-- [ ] `packages/channel-whatsapp/src/typing.ts` - Typing indicator with auto-pause
-- [ ] `packages/channel-whatsapp/src/receipts.ts` - Read receipt sending
-- [ ] `packages/channel-whatsapp/src/handlers/status.ts` - Message status updates
+- [x] `packages/channel-whatsapp/src/presence.ts` - Presence management
+- [x] `packages/channel-whatsapp/src/typing.ts` - Typing indicator with auto-pause
+- [x] `packages/channel-whatsapp/src/receipts.ts` - Read receipt sending
+- [x] `packages/channel-whatsapp/src/handlers/status.ts` - Message status updates
 
 **Typing Indicator Pattern:**
 ```typescript
@@ -225,13 +225,13 @@ async sendTyping(instanceId: string, chatId: string, duration = 3000): Promise<v
 ```
 
 **Acceptance Criteria:**
-- [ ] `sendTyping(instanceId, chatId, duration)` shows typing
-- [ ] Typing auto-pauses after duration
-- [ ] Presence updates (online/offline) work
-- [ ] `markAsRead(instanceId, chatId, messageId)` sends read receipt
-- [ ] Message status updates (sent → delivered → read) emit events
-- [ ] `emitMessageDelivered()` called on delivery
-- [ ] `emitMessageRead()` called on read receipt
+- [x] `sendTyping(instanceId, chatId, duration)` shows typing
+- [x] Typing auto-pauses after duration
+- [x] Presence updates (online/offline) work
+- [x] `markAsRead(instanceId, chatId, messageId)` sends read receipt
+- [x] Message status updates (sent → delivered → read) emit events
+- [x] `emitMessageDelivered()` called on delivery
+- [x] `emitMessageRead()` called on read receipt
 
 **Validation:**
 ```bash

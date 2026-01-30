@@ -45,3 +45,6 @@ export {
   sendMultiContactMessage,
   type ContactData,
 } from './contact';
+
+// Unified content builder
+export { buildMessageContent } from './builders';

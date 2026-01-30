@@ -37,6 +37,54 @@ export class WhatsAppError extends Error {
 }
 
 /**
+ * HTTP status code to error mapping
+ */
+const statusCodeErrors: Record<number, { code: ErrorCodeType; retryable: boolean }> = {
+  429: { code: ErrorCode.RATE_LIMITED, retryable: true },
+  401: { code: ErrorCode.AUTH_FAILED, retryable: false },
+  403: { code: ErrorCode.AUTH_FAILED, retryable: false },
+};
+
+/**
+ * Error message patterns to error mapping
+ */
+const messagePatterns: Array<{ patterns: string[]; code: ErrorCodeType; retryable: boolean }> = [
+  { patterns: ['rate', 'limit'], code: ErrorCode.RATE_LIMITED, retryable: true },
+  { patterns: ['not connected', 'disconnected'], code: ErrorCode.NOT_CONNECTED, retryable: true },
+  { patterns: ['auth', 'login'], code: ErrorCode.AUTH_FAILED, retryable: false },
+];
+
+/**
+ * Map Boom error to WhatsApp error using lookup table
+ */
+function mapBoomError(error: Boom): WhatsAppError {
+  const statusCode = error.output?.statusCode;
+  const message = error.output?.payload?.message || error.message;
+
+  if (statusCode !== undefined && statusCodeErrors[statusCode]) {
+    const { code, retryable } = statusCodeErrors[statusCode];
+    return new WhatsAppError(code, message, retryable);
+  }
+
+  return new WhatsAppError(ErrorCode.UNKNOWN, message, statusCode !== undefined && statusCode >= 500);
+}
+
+/**
+ * Map Error to WhatsApp error using pattern matching
+ */
+function mapGenericError(error: Error): WhatsAppError {
+  const message = error.message.toLowerCase();
+
+  for (const { patterns, code, retryable } of messagePatterns) {
+    if (patterns.some((pattern) => message.includes(pattern))) {
+      return new WhatsAppError(code, error.message, retryable);
+    }
+  }
+
+  return new WhatsAppError(ErrorCode.UNKNOWN, error.message, false);
+}
+
+/**
  * Map Baileys/Boom errors to WhatsApp errors
  */
 export function mapBaileysError(error: unknown): WhatsAppError {
@@ -45,40 +93,11 @@ export function mapBaileysError(error: unknown): WhatsAppError {
   }
 
   if (error instanceof Boom) {
-    const statusCode = error.output?.statusCode;
-    const message = error.output?.payload?.message || error.message;
-
-    // Rate limiting
-    if (statusCode === 429) {
-      return new WhatsAppError(ErrorCode.RATE_LIMITED, message, true);
-    }
-
-    // Authentication errors
-    if (statusCode === 401 || statusCode === 403) {
-      return new WhatsAppError(ErrorCode.AUTH_FAILED, message, false);
-    }
-
-    // Other errors
-    return new WhatsAppError(ErrorCode.UNKNOWN, message, statusCode !== undefined && statusCode >= 500);
+    return mapBoomError(error);
   }
 
   if (error instanceof Error) {
-    // Check for common error patterns
-    const message = error.message.toLowerCase();
-
-    if (message.includes('rate') || message.includes('limit')) {
-      return new WhatsAppError(ErrorCode.RATE_LIMITED, error.message, true);
-    }
-
-    if (message.includes('not connected') || message.includes('disconnected')) {
-      return new WhatsAppError(ErrorCode.NOT_CONNECTED, error.message, true);
-    }
-
-    if (message.includes('auth') || message.includes('login')) {
-      return new WhatsAppError(ErrorCode.AUTH_FAILED, error.message, false);
-    }
-
-    return new WhatsAppError(ErrorCode.UNKNOWN, error.message, false);
+    return mapGenericError(error);
   }
 
   return new WhatsAppError(ErrorCode.UNKNOWN, String(error), false);

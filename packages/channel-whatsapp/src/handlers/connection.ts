@@ -44,6 +44,85 @@ function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
 }
 
 /**
+ * Handle QR code event
+ */
+async function handleQrCode(plugin: WhatsAppPlugin, instanceId: string, qr: string): Promise<void> {
+  const expiresAt = new Date(Date.now() + 60 * 1000);
+  await plugin.handleQrCode(instanceId, qr, expiresAt);
+}
+
+/**
+ * Schedule a reconnection attempt with backoff
+ */
+function scheduleReconnect(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  attempt: number,
+  config: ReconnectConfig,
+  onReconnect: () => Promise<void>,
+): void {
+  const delay = getBackoffDelay(attempt, config);
+
+  setTimeout(async () => {
+    try {
+      await onReconnect();
+    } catch (reconnectError) {
+      plugin.handleConnectionError(
+        instanceId,
+        reconnectError instanceof Error ? reconnectError.message : 'Reconnection failed',
+        true,
+      );
+    }
+  }, delay);
+}
+
+/**
+ * Handle connection close event
+ */
+async function handleConnectionClose(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  lastDisconnect: { error?: Error } | undefined,
+  config: ReconnectConfig,
+  onReconnect: () => Promise<void>,
+): Promise<void> {
+  const error = lastDisconnect?.error as Boom | undefined;
+  const statusCode = error?.output?.statusCode;
+  const reason = error?.output?.payload?.message || 'Unknown error';
+  const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+  if (!shouldReconnect) {
+    reconnectAttempts.delete(instanceId);
+    await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
+    return;
+  }
+
+  const attempts = reconnectAttempts.get(instanceId) || 0;
+
+  if (attempts >= config.maxRetries) {
+    reconnectAttempts.delete(instanceId);
+    await plugin.handleDisconnected(
+      instanceId,
+      `Max reconnection attempts (${config.maxRetries}) exceeded: ${reason}`,
+      false,
+    );
+    return;
+  }
+
+  reconnectAttempts.set(instanceId, attempts + 1);
+  await plugin.handleReconnecting(instanceId, attempts + 1, config.maxRetries);
+  scheduleReconnect(plugin, instanceId, attempts, config, onReconnect);
+}
+
+/**
+ * Handle connection open event
+ */
+async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, sock: WASocket): Promise<void> {
+  reconnectAttempts.delete(instanceId);
+  await plugin.handleConnected(instanceId, sock);
+}
+
+/**
  * Set up connection event handlers for a Baileys socket
  *
  * @param sock - Baileys WASocket instance
@@ -58,68 +137,19 @@ export function setupConnectionHandlers(
   onReconnect: () => Promise<void>,
   config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): void {
-  // Connection update handler
   sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // QR code generated - emit for client to display
     if (qr) {
-      // QR codes typically expire after 60 seconds
-      const expiresAt = new Date(Date.now() + 60 * 1000);
-      await plugin.handleQrCode(instanceId, qr, expiresAt);
+      await handleQrCode(plugin, instanceId, qr);
     }
 
-    // Connection state changed
     if (connection === 'close') {
-      const error = lastDisconnect?.error as Boom | undefined;
-      const statusCode = error?.output?.statusCode;
-      const reason = error?.output?.payload?.message || 'Unknown error';
-
-      // Determine if we should reconnect
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      if (shouldReconnect) {
-        const attempts = reconnectAttempts.get(instanceId) || 0;
-
-        if (attempts < config.maxRetries) {
-          // Schedule reconnection with exponential backoff
-          const delay = getBackoffDelay(attempts, config);
-          reconnectAttempts.set(instanceId, attempts + 1);
-
-          await plugin.handleReconnecting(instanceId, attempts + 1, config.maxRetries);
-
-          setTimeout(async () => {
-            try {
-              await onReconnect();
-            } catch (reconnectError) {
-              // Reconnection failed - will be handled by next connection.update
-              plugin.handleConnectionError(
-                instanceId,
-                reconnectError instanceof Error ? reconnectError.message : 'Reconnection failed',
-                true,
-              );
-            }
-          }, delay);
-        } else {
-          // Max retries exceeded - give up
-          reconnectAttempts.delete(instanceId);
-          await plugin.handleDisconnected(
-            instanceId,
-            `Max reconnection attempts (${config.maxRetries}) exceeded: ${reason}`,
-            false,
-          );
-        }
-      } else {
-        // Logged out - don't reconnect
-        reconnectAttempts.delete(instanceId);
-        await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
-      }
+      await handleConnectionClose(plugin, instanceId, lastDisconnect, config, onReconnect);
     }
 
     if (connection === 'open') {
-      // Successfully connected - reset reconnect counter
-      reconnectAttempts.delete(instanceId);
-      await plugin.handleConnected(instanceId, sock);
+      await handleConnectionOpen(plugin, instanceId, sock);
     }
   });
 }

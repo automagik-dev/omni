@@ -66,5 +66,16 @@ export type { DownloadResult, DetectedMedia } from './utils/download';
 // Senders
 export * from './senders';
 
+// Socket utilities
+export {
+  createSocket,
+  closeSocket,
+  isSocketConnected,
+  getSocketUser,
+  getSocketUserName,
+  SocketManager,
+} from './socket';
+export type { SocketConfig } from './socket';
+
 // Types
 export type { WhatsAppConfig } from './plugin';

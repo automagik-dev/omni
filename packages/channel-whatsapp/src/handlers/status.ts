@@ -19,6 +19,38 @@ export interface StatusUpdate {
 }
 
 /**
+ * Emit plugin event for a status update
+ */
+async function emitStatusEvent(plugin: WhatsAppPlugin, instanceId: string, statusUpdate: StatusUpdate): Promise<void> {
+  const { status, messageId, chatId } = statusUpdate;
+
+  if (status === 'delivered') {
+    await plugin.handleMessageDelivered(instanceId, messageId, chatId);
+  } else if (status === 'read' || status === 'played') {
+    await plugin.handleMessageRead(instanceId, messageId, chatId);
+  }
+}
+
+/**
+ * Handle a single message update
+ */
+async function handleUpdate(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  update: WAMessageUpdate,
+  onStatusUpdate?: (update: StatusUpdate) => void,
+): Promise<void> {
+  const statusUpdate = processStatusUpdate(update);
+  if (!statusUpdate) return;
+
+  await emitStatusEvent(plugin, instanceId, statusUpdate);
+
+  if (onStatusUpdate) {
+    onStatusUpdate(statusUpdate);
+  }
+}
+
+/**
  * Set up message status handlers
  *
  * Listens for message.update events and emits delivery/read receipts.
@@ -31,34 +63,7 @@ export function setupStatusHandlers(
 ): void {
   sock.ev.on('messages.update', async (updates: WAMessageUpdate[]) => {
     for (const update of updates) {
-      const { key, update: msgUpdate } = update;
-
-      // Skip if no status update
-      if (msgUpdate.status === undefined || msgUpdate.status === null) {
-        continue;
-      }
-
-      const chatId = key.remoteJid || '';
-      const messageId = key.id || '';
-      const status = mapStatusCode(msgUpdate.status as number);
-      const timestamp = Date.now();
-
-      // Emit appropriate event based on status
-      if (status === 'delivered') {
-        await plugin.handleMessageDelivered(instanceId, messageId, chatId);
-      } else if (status === 'read' || status === 'played') {
-        await plugin.handleMessageRead(instanceId, messageId, chatId);
-      }
-
-      // Call optional callback
-      if (onStatusUpdate) {
-        onStatusUpdate({
-          messageId,
-          chatId,
-          status,
-          timestamp,
-        });
-      }
+      await handleUpdate(plugin, instanceId, update, onStatusUpdate);
     }
   });
 }
