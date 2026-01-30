@@ -175,6 +175,36 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Request a pairing code for phone number authentication
+   * Alternative to QR code scanning
+   *
+   * @param instanceId - Instance to pair
+   * @param phoneNumber - Phone number in international format (e.g., +5511999999999)
+   * @returns The pairing code to enter on WhatsApp mobile
+   */
+  async requestPairingCode(instanceId: string, phoneNumber: string): Promise<string> {
+    const sock = this.sockets.get(instanceId);
+    if (!sock) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not connected. Call connect() first.`);
+    }
+
+    // Normalize phone number - remove non-digits except leading +
+    const normalized = phoneNumber.replace(/[^\d]/g, '');
+    if (!normalized || normalized.length < 10) {
+      throw new WhatsAppError(ErrorCode.INVALID_PHONE, `Invalid phone number: ${phoneNumber}`);
+    }
+
+    try {
+      const code = await sock.requestPairingCode(normalized);
+      this.logger.info('Pairing code requested', { instanceId, phoneNumber: `${normalized.slice(0, 4)}****` });
+      return code;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new WhatsAppError(ErrorCode.PAIRING_FAILED, `Failed to request pairing code: ${message}`);
+    }
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {

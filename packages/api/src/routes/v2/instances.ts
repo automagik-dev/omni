@@ -230,6 +230,71 @@ instancesRoutes.get('/:id/qr', async (c) => {
   });
 });
 
+// Pairing code schema
+const pairingCodeSchema = z.object({
+  phoneNumber: z.string().min(10).max(20).describe('Phone number in international format (e.g., +5511999999999)'),
+});
+
+/**
+ * POST /instances/:id/pair - Request pairing code for phone authentication
+ *
+ * Alternative to QR code scanning. The instance must be connected (in connecting state)
+ * before requesting a pairing code.
+ */
+instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (c) => {
+  const id = c.req.param('id');
+  const { phoneNumber } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!instance.channel.startsWith('whatsapp')) {
+    return c.json(
+      { error: { code: 'INVALID_OPERATION', message: 'Pairing code only available for WhatsApp instances' } },
+      400,
+    );
+  }
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json(
+      { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+      400,
+    );
+  }
+
+  // Check if plugin supports pairing code (WhatsApp specific)
+  if (!('requestPairingCode' in plugin)) {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'This plugin does not support pairing codes' } },
+      400,
+    );
+  }
+
+  try {
+    const code = await (plugin as any).requestPairingCode(id, phoneNumber);
+    return c.json({
+      data: {
+        code,
+        phoneNumber: phoneNumber.replace(/(\d{4})(\d+)(\d{2})/, '$1****$3'),
+        message: 'Enter this code on your WhatsApp mobile app: Settings > Linked Devices > Link with phone number',
+        expiresIn: 60, // seconds
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json(
+      { error: { code: 'PAIRING_FAILED', message } },
+      500,
+    );
+  }
+});
+
 /**
  * POST /instances/:id/connect - Connect instance
  *
