@@ -3,9 +3,11 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
+import type { ChannelPlugin } from '@omni/channel-sdk';
 import { ChannelTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { getQrCode } from '../../plugins/qr-store';
 import type { AppVariables } from '../../types';
 
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
@@ -76,8 +78,31 @@ instancesRoutes.get('/:id', async (c) => {
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
+  // Create the database record first
   const instance = await services.instances.create(data);
+
+  // Get the channel plugin and trigger connection
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(data.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        // Trigger plugin connection - this will start QR code generation for WhatsApp
+        await plugin.connect(instance.id, {
+          instanceId: instance.id,
+          credentials: {},
+          options: {},
+        });
+        console.log(`[Instances] Triggered connection for instance ${instance.id} via ${data.channel}`);
+      } catch (error) {
+        console.error(`[Instances] Failed to connect instance ${instance.id}:`, error);
+        // Don't fail the request - instance is created, connection can be retried
+      }
+    } else {
+      console.warn(`[Instances] No plugin found for channel: ${data.channel}`);
+    }
+  }
 
   return c.json({ data: instance }, 201);
 });
@@ -101,6 +126,22 @@ instancesRoutes.patch('/:id', zValidator('json', updateInstanceSchema), async (c
 instancesRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  // Disconnect via channel plugin first
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        await plugin.disconnect(id);
+      } catch (error) {
+        console.error(`[Instances] Failed to disconnect instance ${id} before delete:`, error);
+        // Continue with deletion anyway
+      }
+    }
+  }
 
   await services.instances.delete(id);
 
@@ -113,20 +154,38 @@ instancesRoutes.delete('/:id', async (c) => {
 instancesRoutes.get('/:id/status', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
   const instance = await services.instances.getById(id);
 
-  // TODO: Get actual connection status from channel plugin
+  // Get actual connection status from channel plugin
+  let connectionState = 'unknown';
+  let statusMessage: string | undefined;
+
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        const status = await plugin.getStatus(id);
+        connectionState = status.state;
+        statusMessage = status.message;
+      } catch {
+        connectionState = 'error';
+        statusMessage = 'Failed to get status from plugin';
+      }
+    }
+  }
+
   return c.json({
     data: {
       instanceId: instance.id,
-      isConnected: instance.isActive,
+      state: connectionState,
+      isConnected: connectionState === 'connected',
       connectedAt: null,
       profileName: instance.profileName,
       profilePicUrl: instance.profilePicUrl,
       ownerIdentifier: instance.ownerIdentifier,
-      lastError: null,
-      lastErrorAt: null,
+      message: statusMessage,
     },
   });
 });
@@ -147,12 +206,24 @@ instancesRoutes.get('/:id/qr', async (c) => {
     );
   }
 
-  // TODO: Get actual QR from channel plugin
+  // Get QR code from store
+  const stored = getQrCode(id);
+
+  if (!stored) {
+    return c.json({
+      data: {
+        qr: null,
+        expiresAt: null,
+        message: 'No QR code available. Instance may already be connected or connection not initiated.',
+      },
+    });
+  }
+
   return c.json({
     data: {
-      qr: null,
-      expiresAt: null,
-      message: 'QR code generation not implemented yet',
+      qr: stored.code,
+      expiresAt: stored.expiresAt.toISOString(),
+      message: 'Scan with WhatsApp to connect',
     },
   });
 });
@@ -163,10 +234,42 @@ instancesRoutes.get('/:id/qr', async (c) => {
 instancesRoutes.post('/:id/connect', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
-  const _instance = await services.instances.getById(id);
+  const instance = await services.instances.getById(id);
 
-  // TODO: Trigger actual connection via channel plugin
+  // Trigger connection via channel plugin
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        await plugin.connect(id, {
+          instanceId: id,
+          credentials: {},
+          options: {},
+        });
+      } catch (error) {
+        return c.json(
+          {
+            error: {
+              code: 'CONNECTION_FAILED',
+              message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          },
+          500,
+        );
+      }
+    } else {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+        400,
+      );
+    }
+  } else {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  // Update database
   const updated = await services.instances.update(id, { isActive: true });
 
   return c.json({
@@ -184,11 +287,25 @@ instancesRoutes.post('/:id/connect', async (c) => {
 instancesRoutes.post('/:id/disconnect', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
-  const _instance = await services.instances.getById(id);
+  const instance = await services.instances.getById(id);
 
-  // TODO: Trigger actual disconnection via channel plugin
-  const _updated = await services.instances.update(id, { isActive: false });
+  // Trigger disconnection via channel plugin
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        await plugin.disconnect(id);
+      } catch (error) {
+        console.error(`[Instances] Failed to disconnect instance ${id}:`, error);
+        // Continue anyway - update database state
+      }
+    }
+  }
+
+  // Update database
+  await services.instances.update(id, { isActive: false });
 
   return c.json({ success: true });
 });
@@ -199,10 +316,44 @@ instancesRoutes.post('/:id/disconnect', async (c) => {
 instancesRoutes.post('/:id/restart', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
   const instance = await services.instances.getById(id);
 
-  // TODO: Trigger actual restart via channel plugin
+  // Restart via channel plugin: disconnect then connect
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin) {
+      try {
+        // Disconnect first
+        await plugin.disconnect(id);
+        // Then reconnect
+        await plugin.connect(id, {
+          instanceId: id,
+          credentials: {},
+          options: {},
+        });
+      } catch (error) {
+        return c.json(
+          {
+            error: {
+              code: 'RESTART_FAILED',
+              message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          },
+          500,
+        );
+      }
+    } else {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+        400,
+      );
+    }
+  } else {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
   return c.json({
     data: {
       instanceId: instance.id,
@@ -218,10 +369,30 @@ instancesRoutes.post('/:id/restart', async (c) => {
 instancesRoutes.post('/:id/logout', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
-  const _instance = await services.instances.getById(id);
+  const instance = await services.instances.getById(id);
 
-  // TODO: Clear session via channel plugin
+  // Logout via channel plugin (clears auth state)
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin && 'logout' in plugin && typeof plugin.logout === 'function') {
+      try {
+        await (plugin as ChannelPlugin & { logout: (id: string) => Promise<void> }).logout(id);
+      } catch (error) {
+        console.error(`[Instances] Failed to logout instance ${id}:`, error);
+      }
+    } else if (plugin) {
+      // Fall back to disconnect
+      try {
+        await plugin.disconnect(id);
+      } catch (error) {
+        console.error(`[Instances] Failed to disconnect instance ${id} during logout:`, error);
+      }
+    }
+  }
+
+  // Update database
   await services.instances.update(id, { isActive: false });
 
   return c.json({
@@ -234,49 +405,39 @@ instancesRoutes.post('/:id/logout', async (c) => {
  * GET /instances/supported-channels - List supported channel types
  */
 instancesRoutes.get('/supported-channels', async (c) => {
+  const channelRegistry = c.get('channelRegistry');
+
+  // Get loaded plugins from registry
+  const loadedPlugins = channelRegistry ? channelRegistry.getAll() : [];
+
+  // Build dynamic list from loaded plugins
+  const loadedChannels = loadedPlugins.map((plugin) => ({
+    id: plugin.id,
+    name: plugin.name,
+    version: plugin.version,
+    loaded: true as const,
+    capabilities: plugin.capabilities,
+  }));
+
+  // Add static entries for channels that aren't loaded
+  const loadedIds = new Set(loadedPlugins.map((p) => p.id));
+
+  const staticChannels = [
+    {
+      id: 'whatsapp-cloud' as const,
+      name: 'WhatsApp Business Cloud',
+      description: 'Official WhatsApp Business API',
+      loaded: false as const,
+    },
+    { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
+    { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
+    { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
+  ];
+
+  const unloadedChannels = staticChannels.filter((ch) => !loadedIds.has(ch.id));
+
   return c.json({
-    items: [
-      {
-        id: 'whatsapp-baileys',
-        name: 'WhatsApp (Baileys)',
-        description: 'Unofficial WhatsApp via Baileys library',
-        requiresQr: true,
-        supportsOAuth: false,
-        capabilities: ['text', 'image', 'audio', 'video', 'document', 'sticker', 'reaction', 'location', 'contact'],
-      },
-      {
-        id: 'whatsapp-cloud',
-        name: 'WhatsApp Business Cloud',
-        description: 'Official WhatsApp Business API',
-        requiresQr: false,
-        supportsOAuth: true,
-        capabilities: ['text', 'image', 'audio', 'video', 'document', 'sticker', 'reaction', 'location', 'contact'],
-      },
-      {
-        id: 'discord',
-        name: 'Discord',
-        description: 'Discord bot integration',
-        requiresQr: false,
-        supportsOAuth: true,
-        capabilities: ['text', 'image', 'audio', 'video', 'document', 'reaction'],
-      },
-      {
-        id: 'slack',
-        name: 'Slack',
-        description: 'Slack bot integration',
-        requiresQr: false,
-        supportsOAuth: true,
-        capabilities: ['text', 'image', 'document', 'reaction'],
-      },
-      {
-        id: 'telegram',
-        name: 'Telegram',
-        description: 'Telegram bot integration',
-        requiresQr: false,
-        supportsOAuth: false,
-        capabilities: ['text', 'image', 'audio', 'video', 'document', 'sticker', 'reaction', 'location', 'contact'],
-      },
-    ],
+    items: [...loadedChannels, ...unloadedChannels],
   });
 });
 

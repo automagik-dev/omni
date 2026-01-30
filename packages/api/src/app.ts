@@ -2,6 +2,7 @@
  * Hono application setup
  */
 
+import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { Hono } from 'hono';
@@ -22,7 +23,11 @@ import type { AppVariables } from './types';
 /**
  * Create the Hono application
  */
-export function createApp(db: Database, eventBus: EventBus | null = null) {
+export function createApp(
+  db: Database,
+  eventBus: EventBus | null = null,
+  channelRegistry: ChannelRegistry | null = null,
+) {
   const app = new Hono<{ Variables: AppVariables }>();
 
   // Global middleware
@@ -39,7 +44,7 @@ export function createApp(db: Database, eventBus: EventBus | null = null) {
     }),
   );
   app.use('*', secureHeaders());
-  app.use('*', createContextMiddleware(db, eventBus));
+  app.use('*', createContextMiddleware(db, eventBus, channelRegistry));
 
   // Error handler - must be registered with onError, not as middleware
   app.onError(errorHandler);

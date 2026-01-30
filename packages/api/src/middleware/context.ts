@@ -1,7 +1,8 @@
 /**
- * Context middleware - injects db, eventBus, and services into context
+ * Context middleware - injects db, eventBus, channelRegistry, and services into context
  */
 
+import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { createMiddleware } from 'hono/factory';
@@ -16,9 +17,13 @@ function generateRequestId(): string {
 }
 
 /**
- * Create context middleware with database and optional event bus
+ * Create context middleware with database, event bus, and channel registry
  */
-export function createContextMiddleware(db: Database, eventBus: EventBus | null) {
+export function createContextMiddleware(
+  db: Database,
+  eventBus: EventBus | null,
+  channelRegistry: ChannelRegistry | null = null,
+) {
   // Create services once
   const services = createServices(db, eventBus);
 
@@ -32,6 +37,9 @@ export function createContextMiddleware(db: Database, eventBus: EventBus | null)
 
     // Set event bus
     c.set('eventBus', eventBus);
+
+    // Set channel registry
+    c.set('channelRegistry', channelRegistry);
 
     // Set services
     c.set('services', services);

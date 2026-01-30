@@ -2,6 +2,7 @@
  * API type definitions
  */
 
+import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import type { Services } from './services';
@@ -23,6 +24,7 @@ export interface ApiKeyData {
 export interface AppVariables {
   db: Database;
   eventBus: EventBus | null;
+  channelRegistry: ChannelRegistry | null;
   services: Services;
   apiKey?: ApiKeyData;
   requestId: string;
