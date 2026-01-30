@@ -2,7 +2,7 @@
 
 > Implement the EventBus with NATS JetStream for multi-instance event-driven architecture.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Author:** WISH Agent
 **Beads:** omni-v2-6p2

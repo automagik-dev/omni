@@ -25,6 +25,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "nats": "^2.29.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -1,30 +1,88 @@
 /**
  * Event type definitions for the Omni event system
+ *
+ * Supports three namespaces:
+ * - Core events: Typed, maintained in @omni/core (message.*, instance.*, etc.)
+ * - Custom events: User-defined, runtime registered (custom.*)
+ * - System events: Internal operations (system.*)
  */
 
 import type { ChannelType, ContentType } from '../types/channel';
 
 /**
- * All event types in the system
+ * Core event types - typed and maintained in @omni/core
  */
-export const EVENT_TYPES = [
+export const CORE_EVENT_TYPES = [
+  // Message lifecycle
   'message.received',
   'message.sent',
   'message.delivered',
   'message.read',
   'message.failed',
+  // Media processing
   'media.received',
   'media.processed',
+  // Identity management
   'identity.created',
   'identity.linked',
+  'identity.merged',
   'identity.unlinked',
+  // Instance lifecycle
   'instance.connected',
   'instance.disconnected',
+  'instance.qr_code',
+  // Access control
   'access.allowed',
   'access.denied',
 ] as const;
 
-export type EventType = (typeof EVENT_TYPES)[number];
+export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
+
+/**
+ * Custom events - user-defined, runtime registered
+ * Pattern: custom.{namespace}.{action}
+ * Examples:
+ *   custom.webhook.github.push
+ *   custom.cron.daily_report
+ *   custom.trigger.vip_alert
+ */
+export type CustomEventType = `custom.${string}`;
+
+/**
+ * System events - internal operations
+ * Pattern: system.{operation}
+ * Examples:
+ *   system.dead_letter
+ *   system.replay.started
+ *   system.health.degraded
+ */
+export type SystemEventType = `system.${string}`;
+
+/**
+ * All event types: core + custom + system
+ */
+export type EventType = CoreEventType | CustomEventType | SystemEventType;
+
+/**
+ * Check if an event type is a core event
+ */
+export function isCoreEvent(type: string): type is CoreEventType {
+  return (CORE_EVENT_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Check if an event type is a custom event
+ */
+export function isCustomEvent(type: string): type is CustomEventType {
+  return type.startsWith('custom.');
+}
+
+/**
+ * Check if an event type is a system event
+ */
+export function isSystemEvent(type: string): type is SystemEventType {
+  return type.startsWith('system.');
+}
 
 /**
  * Base event structure
@@ -137,6 +195,14 @@ export interface IdentityLinkedPayload {
   confidence: number;
 }
 
+export interface IdentityMergedPayload {
+  targetPersonId: string;
+  sourcePersonId: string;
+  mergedIdentityIds: string[];
+  reason: 'same_phone' | 'same_email' | 'admin_linked' | 'user_claimed';
+  mergedBy?: string;
+}
+
 export interface IdentityUnlinkedPayload {
   personId: string;
   platformIdentityId: string;
@@ -161,6 +227,13 @@ export interface InstanceDisconnectedPayload {
   willReconnect: boolean;
 }
 
+export interface InstanceQrCodePayload {
+  instanceId: string;
+  channelType: ChannelType;
+  qrCode: string;
+  expiresAt: number;
+}
+
 /**
  * Access event payloads
  */
@@ -181,7 +254,7 @@ export interface AccessDeniedPayload {
 }
 
 /**
- * Event type map for type-safe event handling
+ * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
   'message.received': MessageReceivedPayload;
@@ -193,14 +266,21 @@ export interface EventPayloadMap {
   'media.processed': MediaProcessedPayload;
   'identity.created': IdentityCreatedPayload;
   'identity.linked': IdentityLinkedPayload;
+  'identity.merged': IdentityMergedPayload;
   'identity.unlinked': IdentityUnlinkedPayload;
   'instance.connected': InstanceConnectedPayload;
   'instance.disconnected': InstanceDisconnectedPayload;
+  'instance.qr_code': InstanceQrCodePayload;
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
 }
 
 /**
- * Typed event helper
+ * Typed event helper for core events
  */
-export type TypedOmniEvent<T extends EventType> = OmniEvent<T, EventPayloadMap[T]>;
+export type TypedOmniEvent<T extends CoreEventType> = OmniEvent<T, EventPayloadMap[T]>;
+
+/**
+ * Generic payload for custom/system events (validated at runtime via registry)
+ */
+export type GenericEventPayload = Record<string, unknown>;
