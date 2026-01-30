@@ -2,8 +2,9 @@
 
 > Complete WhatsApp integration via Baileys with full message types, presence, typing, and QR auth.
 
-**Status:** DRAFT
+**Status:** APPROVED
 **Created:** 2026-01-29
+**Updated:** 2026-01-30
 **Author:** WISH Agent
 **Beads:** omni-v2-aqp
 
@@ -13,7 +14,21 @@
 
 WhatsApp via Baileys is the primary channel. Must support everything Baileys can do: text, media, reactions, presence, typing indicators, read receipts, and QR code authentication.
 
+**What channel-sdk shipped (now available):**
+- `BaseChannelPlugin` abstract class with event helpers
+- `ChannelCapabilities` declaration (16 capability flags)
+- `InstanceManager` for connection state tracking
+- `PluginContext` with eventBus, storage, logger, config, db
+- Event emitters: `emitMessageReceived`, `emitMessageSent`, `emitInstanceConnected`, `emitQrCode`, etc.
+- Auto-discovery via `packages/channel-*` scanner
+
+**What nats-events shipped (now available):**
+- `NatsEventBus` with publish/subscribe
+- Hierarchical subjects: `{eventType}.{channelType}.{instanceId}`
+- All 7 streams created automatically
+
 Reference:
+- `packages/channel-sdk/src/base/BaseChannelPlugin.ts`
 - `docs/architecture/plugin-system.md`
 - `docs/migration/v1-features-analysis.md`
 
@@ -23,12 +38,19 @@ Reference:
 
 | ID | Type | Description |
 |----|------|-------------|
-| **ASM-1** | Assumption | Channel SDK exists with plugin interface |
-| **ASM-2** | Assumption | EventBus is working |
-| **DEC-1** | Decision | Baileys directly (not Evolution API) |
-| **DEC-2** | Decision | Multi-device auth state stored locally |
-| **DEC-3** | Decision | JID handling built into plugin |
-| **DEC-4** | Decision | Full "feel alive" features: typing, presence, read receipts |
+| **ASM-1** | Assumption | `@omni/channel-sdk` shipped with BaseChannelPlugin, InstanceManager |
+| **ASM-2** | Assumption | `@omni/core/events` has NatsEventBus working |
+| **ASM-3** | Assumption | Database available via PluginContext for auth state storage |
+| **DEC-1** | Decision | Baileys directly (not Evolution API or Cloud API) |
+| **DEC-2** | Decision | Auth state stored via PluginStorage (key-value, not local files) |
+| **DEC-3** | Decision | Extend `BaseChannelPlugin` for automatic event helpers |
+| **DEC-4** | Decision | JID normalization built into plugin (`toJid()`, `toGroupJid()`) |
+| **DEC-5** | Decision | Full "feel alive" features: typing, presence, read receipts |
+| **DEC-6** | Decision | Connection map: `Map<string, WASocket>` for multi-instance |
+| **DEC-7** | Decision | Reconnect with exponential backoff (max 5 retries, then stop - manual reconnect required) |
+| **DEC-8** | Decision | Media: download locally, emit with local path (future: proper fileStorage integration) |
+| **RISK-1** | Risk | Baileys is unofficial - may break. Mitigate by abstraction layer |
+| **RISK-2** | Risk | WhatsApp rate limits - mitigate with debounce/delay config |
 
 ---
 
@@ -36,191 +58,385 @@ Reference:
 
 ### IN SCOPE
 
-**Message Types:**
-- [ ] Text messages (send/receive)
-- [ ] Images with captions
-- [ ] Audio (regular and voice notes)
-- [ ] Video
-- [ ] Documents
-- [ ] Stickers
-- [ ] Reactions
-- [ ] Location
-- [ ] Contacts
-- [ ] Polls
+**Message Types (Group A):**
+- Text messages (send/receive)
+- Images with captions
+- Audio (regular and voice notes - ptt flag)
+- Video
+- Documents with filename
+- Stickers
 
-**"Feel Alive" Features:**
-- [ ] Typing indicators (send when processing)
-- [ ] Presence (online/offline/composing)
-- [ ] Read receipts (mark as read)
-- [ ] Message status updates (sent/delivered/read)
+**Message Types (Group B):**
+- Reactions (send/receive)
+- Location
+- Contacts (vCard)
+- Reply/quote messages
 
 **Instance Management:**
-- [ ] QR code generation for auth
-- [ ] Multi-device session management
-- [ ] Reconnection handling
-- [ ] Logout/session clear
+- QR code generation for auth (emit `instance.qr_code`)
+- Multi-device session persistence
+- Reconnection with exponential backoff
+- Graceful logout/session clear
+- Profile picture and name fetch
 
-**Other:**
-- [ ] Profile picture fetch
-- [ ] Contact sync
-- [ ] Chat history sync
-- [ ] Group support
-- [ ] Broadcast lists
+**"Feel Alive" Features (Group C):**
+- Typing indicators (`sendTyping`)
+- Presence updates (online/offline/composing)
+- Read receipts (mark as read)
+- Message status callbacks (sent/delivered/read)
 
 ### OUT OF SCOPE
 
-- WhatsApp Cloud API (future wish)
-- WhatsApp Business features (catalogs, etc.)
+- WhatsApp Cloud API (future wish: `channel-whatsapp-cloud`)
+- WhatsApp Business features (catalogs, product messages)
 - Voice/video calls
+- Polls (limited Baileys support, defer)
+- Groups (defer to group-management wish - focus on 1:1 first)
+- Broadcast lists (defer)
+- Chat history sync (defer - focus on real-time)
+- Contact sync (defer)
 
 ---
 
-## Execution Group A: Core Plugin
+## Execution Group A: Core Plugin & Text Messaging
 
-**Goal:** Basic WhatsApp plugin with connection and text messaging.
+**Goal:** Working WhatsApp plugin with connection, QR auth, and text messaging.
 
 **Deliverables:**
-- [ ] `packages/channel-whatsapp/package.json`
-- [ ] `packages/channel-whatsapp/tsconfig.json`
-- [ ] `packages/channel-whatsapp/src/plugin.ts` - Main plugin class
-- [ ] `packages/channel-whatsapp/src/connection.ts` - Baileys connection management
-- [ ] `packages/channel-whatsapp/src/auth.ts` - Auth state management
-- [ ] `packages/channel-whatsapp/src/handlers/message.ts` - Message handlers
+- [ ] `packages/channel-whatsapp/package.json` with Baileys dependency
+- [ ] `packages/channel-whatsapp/tsconfig.json` extending root
+- [ ] `packages/channel-whatsapp/src/index.ts` - Default export
+- [ ] `packages/channel-whatsapp/src/plugin.ts` - WhatsAppPlugin extends BaseChannelPlugin
+- [ ] `packages/channel-whatsapp/src/socket.ts` - Baileys socket wrapper
+- [ ] `packages/channel-whatsapp/src/auth.ts` - Storage-backed auth state adapter
+- [ ] `packages/channel-whatsapp/src/jid.ts` - JID normalization utilities
+- [ ] `packages/channel-whatsapp/src/handlers/connection.ts` - Connection event handlers
+- [ ] `packages/channel-whatsapp/src/handlers/messages.ts` - Message handlers
 - [ ] Text send/receive working
-- [ ] QR code generation
+
+**WhatsApp Capabilities Declaration:**
+```typescript
+export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
+  canSendText: true,
+  canSendMedia: true,
+  canSendReaction: true,
+  canSendTyping: true,
+  canReceiveReadReceipts: true,
+  canReceiveDeliveryReceipts: true,
+  canEditMessage: false,  // WhatsApp doesn't support edit
+  canDeleteMessage: true,
+  canReplyToMessage: true,
+  canForwardMessage: true,
+  canSendContact: true,
+  canSendLocation: true,
+  canSendSticker: true,
+  canHandleGroups: false,  // Defer to future wish
+  canHandleBroadcast: false,
+  maxMessageLength: 65536,
+  supportedMediaTypes: [
+    { mimeType: 'image/*', maxSize: 16 * 1024 * 1024 },
+    { mimeType: 'audio/*', maxSize: 16 * 1024 * 1024 },
+    { mimeType: 'video/*', maxSize: 64 * 1024 * 1024 },
+    { mimeType: 'application/*', maxSize: 100 * 1024 * 1024 },
+  ],
+  maxFileSize: 100 * 1024 * 1024, // 100MB
+};
+```
 
 **Acceptance Criteria:**
-- [ ] Plugin implements ChannelPlugin interface
-- [ ] Can connect via QR code scan
-- [ ] Can send text messages
-- [ ] Can receive text messages (emits `message.received`)
-- [ ] Connection survives restarts (persistent auth)
+- [ ] Plugin exports `default` and is auto-discovered
+- [ ] `connect(instanceId, config)` starts Baileys socket
+- [ ] QR code emitted via `emitQrCode()` when waiting for scan
+- [ ] `emitInstanceConnected()` called on successful auth
+- [ ] `disconnect(instanceId)` gracefully closes socket
+- [ ] `sendMessage()` sends text and returns `SendResult`
+- [ ] Incoming text messages trigger `emitMessageReceived()`
+- [ ] Auth state persists across restarts
+- [ ] Reconnection handles network issues
 
 **Validation:**
 ```bash
 bun test packages/channel-whatsapp
-# Manual: scan QR, send test message
+# Manual: start API, create instance, scan QR, send test message
+make dev-api
+curl -X POST http://localhost:8881/api/v2/instances \
+  -H "x-api-key: test-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Test WA", "channelType": "whatsapp-baileys"}'
+# Observe QR in logs, scan with phone
 ```
 
 ---
 
-## Execution Group B: Full Message Types
+## Execution Group B: Media & Rich Messages
 
-**Goal:** Support all message types and media.
+**Goal:** Full media support including reactions, location, contacts.
 
 **Deliverables:**
-- [ ] `packages/channel-whatsapp/src/handlers/media.ts` - Media handling
-- [ ] `packages/channel-whatsapp/src/handlers/reaction.ts` - Reactions
-- [ ] `packages/channel-whatsapp/src/handlers/location.ts` - Location
-- [ ] `packages/channel-whatsapp/src/handlers/contact.ts` - Contacts
-- [ ] `packages/channel-whatsapp/src/handlers/poll.ts` - Polls
-- [ ] `packages/channel-whatsapp/src/senders/` - All message type senders
+- [ ] `packages/channel-whatsapp/src/handlers/media.ts` - Media receive handler
+- [ ] `packages/channel-whatsapp/src/senders/media.ts` - Media sending
+- [ ] `packages/channel-whatsapp/src/senders/reaction.ts` - Reaction sending
+- [ ] `packages/channel-whatsapp/src/senders/location.ts` - Location sending
+- [ ] `packages/channel-whatsapp/src/senders/contact.ts` - Contact vCard sending
+- [ ] `packages/channel-whatsapp/src/senders/sticker.ts` - Sticker sending
+- [ ] `packages/channel-whatsapp/src/utils/download.ts` - Media download helper
 
 **Acceptance Criteria:**
-- [ ] Can send/receive images with captions
-- [ ] Can send/receive audio (including voice notes)
-- [ ] Can send/receive video
-- [ ] Can send/receive documents
-- [ ] Can send/receive stickers
-- [ ] Can send/receive reactions
-- [ ] Can send/receive location
-- [ ] Can send/receive contacts
+- [ ] Can send images with captions
+- [ ] Can send audio (regular and voice notes with ptt flag)
+- [ ] Can send video
+- [ ] Can send documents with filename
+- [ ] Can send stickers
+- [ ] Can send reactions to messages
+- [ ] Can send location
+- [ ] Can send contact vCards
+- [ ] Can receive all above types and emit correct events
+- [ ] Media download helper fetches binary from Baileys
 
 **Validation:**
 ```bash
-# Integration tests with mock
-bun test packages/channel-whatsapp/test/media.test.ts
+bun test packages/channel-whatsapp/src/__tests__/media.test.ts
+bun test packages/channel-whatsapp/src/__tests__/reaction.test.ts
 ```
 
 ---
 
 ## Execution Group C: Feel Alive Features
 
-**Goal:** Typing, presence, and status updates.
+**Goal:** Typing indicators, presence, read receipts, message status.
 
 **Deliverables:**
 - [ ] `packages/channel-whatsapp/src/presence.ts` - Presence management
-- [ ] `packages/channel-whatsapp/src/typing.ts` - Typing indicators
-- [ ] `packages/channel-whatsapp/src/receipts.ts` - Read receipts
-- [ ] `packages/channel-whatsapp/src/status.ts` - Message status tracking
-- [ ] Debounce configuration support
-- [ ] Message splitting with delays
+- [ ] `packages/channel-whatsapp/src/typing.ts` - Typing indicator with auto-pause
+- [ ] `packages/channel-whatsapp/src/receipts.ts` - Read receipt sending
+- [ ] `packages/channel-whatsapp/src/handlers/status.ts` - Message status updates
 
-**Acceptance Criteria:**
-- [ ] `sendTyping(instanceId, chatId)` shows typing indicator
-- [ ] Typing sent automatically when processing messages
-- [ ] Presence updates emitted via events
-- [ ] Read receipts work (mark chat as read)
-- [ ] Message status (sent → delivered → read) tracked
-- [ ] Debounce modes work: disabled, fixed, randomized
-- [ ] Message splitting on `\n\n` with configurable delays
-
-**Validation:**
-```bash
-# Test typing indicator
-bun run packages/channel-whatsapp/test/typing-test.ts
-# Test debounce
-bun run packages/channel-whatsapp/test/debounce-test.ts
-```
-
----
-
-## Technical Notes
-
-### Baileys Setup
-
+**Typing Indicator Pattern:**
 ```typescript
-import makeWASocket, {
-  useMultiFileAuthState,
-  DisconnectReason
-} from '@whiskeysockets/baileys';
-
-const { state, saveCreds } = await useMultiFileAuthState(`./data/auth/${instanceId}`);
-const sock = makeWASocket({
-  auth: state,
-  printQRInTerminal: false,
-});
-sock.ev.on('creds.update', saveCreds);
-```
-
-### JID Handling
-
-```typescript
-// Normalize phone to JID
-function toJid(phone: string): string {
-  const cleaned = phone.replace(/\D/g, '');
-  return `${cleaned}@s.whatsapp.net`;
-}
-
-// Group JID
-function toGroupJid(groupId: string): string {
-  return `${groupId}@g.us`;
-}
-```
-
-### Typing Indicator
-
-```typescript
-async sendTyping(instanceId: string, chatId: string, duration = 3000) {
+async sendTyping(instanceId: string, chatId: string, duration = 3000): Promise<void> {
   const sock = this.getSocket(instanceId);
-  await sock.sendPresenceUpdate('composing', chatId);
-  setTimeout(() => {
-    sock.sendPresenceUpdate('paused', chatId);
+  await sock.sendPresenceUpdate('composing', this.toJid(chatId));
+
+  // Auto-pause after duration
+  setTimeout(async () => {
+    await sock.sendPresenceUpdate('paused', this.toJid(chatId));
   }, duration);
 }
 ```
 
-### Debounce Configuration
+**Acceptance Criteria:**
+- [ ] `sendTyping(instanceId, chatId, duration)` shows typing
+- [ ] Typing auto-pauses after duration
+- [ ] Presence updates (online/offline) work
+- [ ] `markAsRead(instanceId, chatId, messageId)` sends read receipt
+- [ ] Message status updates (sent → delivered → read) emit events
+- [ ] `emitMessageDelivered()` called on delivery
+- [ ] `emitMessageRead()` called on read receipt
+
+**Validation:**
+```bash
+bun test packages/channel-whatsapp/src/__tests__/typing.test.ts
+bun test packages/channel-whatsapp/src/__tests__/receipts.test.ts
+```
+
+---
+
+## Technical Design
+
+### File Structure
+
+```
+packages/channel-whatsapp/
+├── package.json
+├── tsconfig.json
+├── src/
+│   ├── index.ts                # Default export (plugin instance)
+│   ├── plugin.ts               # WhatsAppPlugin class
+│   ├── socket.ts               # Baileys socket wrapper
+│   ├── auth.ts                 # Database-backed auth adapter
+│   ├── jid.ts                  # JID utilities
+│   ├── presence.ts             # Presence management
+│   ├── typing.ts               # Typing indicators
+│   ├── receipts.ts             # Read receipts
+│   ├── handlers/
+│   │   ├── connection.ts       # Connection events
+│   │   ├── messages.ts         # Incoming messages
+│   │   ├── media.ts            # Media messages
+│   │   └── status.ts           # Message status updates
+│   ├── senders/
+│   │   ├── text.ts             # Text sending
+│   │   ├── media.ts            # Media sending
+│   │   ├── reaction.ts         # Reactions
+│   │   ├── location.ts         # Location
+│   │   ├── contact.ts          # Contacts
+│   │   └── sticker.ts          # Stickers
+│   └── utils/
+│       ├── download.ts         # Media download
+│       └── errors.ts           # Error mapping
+└── src/__tests__/
+    ├── plugin.test.ts
+    ├── jid.test.ts
+    ├── media.test.ts
+    ├── typing.test.ts
+    └── receipts.test.ts
+```
+
+### Plugin Implementation Skeleton
 
 ```typescript
-interface MessagingConfig {
-  debounceMode: 'disabled' | 'fixed' | 'randomized';
-  debounceMs?: number;        // For fixed
-  debounceMinMs?: number;     // For randomized
-  debounceMaxMs?: number;     // For randomized
-  enableAutoSplit: boolean;
-  splitDelayMinMs: number;
-  splitDelayMaxMs: number;
+// packages/channel-whatsapp/src/plugin.ts
+import { BaseChannelPlugin } from '@omni/channel-sdk';
+import type { ChannelCapabilities } from '@omni/channel-sdk';
+import type { InstanceConfig, ConnectionStatus, OutgoingMessage, SendResult } from '@omni/channel-sdk';
+import makeWASocket, { WASocket } from '@whiskeysockets/baileys';
+import { WHATSAPP_CAPABILITIES } from './capabilities';
+import { createStorageAuthState } from './auth';
+import { toJid } from './jid';
+import { setupConnectionHandlers } from './handlers/connection';
+import { setupMessageHandlers } from './handlers/messages';
+
+export class WhatsAppPlugin extends BaseChannelPlugin {
+  readonly id = 'whatsapp-baileys' as const;
+  readonly name = 'WhatsApp (Baileys)';
+  readonly version = '1.0.0';
+  readonly capabilities = WHATSAPP_CAPABILITIES;
+
+  private sockets = new Map<string, WASocket>();
+
+  protected async onInitialize(context: PluginContext): Promise<void> {
+    // Plugin-specific initialization
+    this.logger.info('WhatsApp plugin ready');
+  }
+
+  async connect(instanceId: string, config: InstanceConfig): Promise<void> {
+    // Storage-backed auth state (uses PluginStorage key-value interface)
+    const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
+
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      logger: this.createBaileysLogger(),
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    setupConnectionHandlers(sock, this, instanceId);
+    setupMessageHandlers(sock, this, instanceId);
+
+    this.sockets.set(instanceId, sock);
+    this.updateInstanceStatus(instanceId, config, { state: 'connecting', since: new Date() });
+  }
+
+  async disconnect(instanceId: string): Promise<void> {
+    const sock = this.sockets.get(instanceId);
+    if (sock) {
+      await sock.logout();
+      sock.end(undefined);
+      this.sockets.delete(instanceId);
+    }
+    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(message.to);
+
+    // Dispatch based on content type
+    // ... implementation
+  }
+
+  async sendTyping(instanceId: string, chatId: string, duration = 3000): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    await sock.sendPresenceUpdate('composing', toJid(chatId));
+    setTimeout(() => sock.sendPresenceUpdate('paused', toJid(chatId)), duration);
+  }
+
+  private getSocket(instanceId: string): WASocket {
+    const sock = this.sockets.get(instanceId);
+    if (!sock) throw new Error(`Instance ${instanceId} not connected`);
+    return sock;
+  }
+}
+```
+
+### JID Utilities
+
+```typescript
+// packages/channel-whatsapp/src/jid.ts
+
+export function toJid(identifier: string): string {
+  // Already a JID?
+  if (identifier.includes('@')) return identifier;
+
+  // Clean phone number
+  const cleaned = identifier.replace(/\D/g, '');
+  return `${cleaned}@s.whatsapp.net`;
+}
+
+export function toGroupJid(groupId: string): string {
+  if (groupId.includes('@g.us')) return groupId;
+  return `${groupId}@g.us`;
+}
+
+export function fromJid(jid: string): { phone: string; isGroup: boolean } {
+  const isGroup = jid.endsWith('@g.us');
+  const phone = jid.split('@')[0];
+  return { phone, isGroup };
+}
+```
+
+### Auth State Management (Storage-backed)
+
+```typescript
+// packages/channel-whatsapp/src/auth.ts
+import type { AuthenticationState, SignalDataTypeMap } from '@whiskeysockets/baileys';
+import { initAuthCreds } from '@whiskeysockets/baileys';
+import type { PluginStorage } from '@omni/channel-sdk';
+
+/**
+ * Create storage-backed auth state (uses PluginStorage key-value interface)
+ * Keys: `auth:${instanceId}:creds`, `auth:${instanceId}:keys:${type}:${id}`
+ */
+export async function createStorageAuthState(
+  storage: PluginStorage,
+  instanceId: string
+): Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }> {
+  const credsKey = `auth:${instanceId}:creds`;
+  const keyPrefix = `auth:${instanceId}:keys`;
+
+  // Load existing creds or create new
+  const existingCreds = await storage.get<string>(credsKey);
+  const creds = existingCreds ? JSON.parse(existingCreds) : initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data: Record<string, SignalDataTypeMap[typeof type]> = {};
+          for (const id of ids) {
+            const value = await storage.get<string>(`${keyPrefix}:${type}:${id}`);
+            if (value) data[id] = JSON.parse(value);
+          }
+          return data;
+        },
+        set: async (data) => {
+          for (const [type, entries] of Object.entries(data)) {
+            for (const [id, value] of Object.entries(entries || {})) {
+              if (value) {
+                await storage.set(`${keyPrefix}:${type}:${id}`, JSON.stringify(value));
+              } else {
+                await storage.delete(`${keyPrefix}:${type}:${id}`);
+              }
+            }
+          }
+        },
+      },
+    },
+    saveCreds: async () => {
+      await storage.set(credsKey, JSON.stringify(creds));
+    },
+  };
 }
 ```
 
@@ -228,18 +444,57 @@ interface MessagingConfig {
 
 ## Dependencies
 
-- `@whiskeysockets/baileys`
-- `@omni/channel-sdk`
-- `@omni/core`
+**NPM:**
+- `@whiskeysockets/baileys` - WhatsApp Web client
+- `qrcode-terminal` - For CLI QR display (dev only)
+
+**Internal:**
+- `@omni/channel-sdk` - BaseChannelPlugin, types
+- `@omni/core` - Events, schemas
 
 ---
 
 ## Depends On
 
-- `channel-sdk`
-- `nats-events`
+- `channel-sdk` (SHIPPED)
+- `nats-events` (SHIPPED)
+- `sdk-generation` (SHIPPED) - For testing via SDK
 
 ## Enables
 
 - Full WhatsApp messaging capability
-- Media processing pipeline
+- Media processing pipeline testing
+- Integration test baseline for other channels
+- SDK validation with real channel
+
+---
+
+## Testing Strategy
+
+**Unit Tests:**
+- JID utilities (pure functions)
+- Message content mapping
+- Capability validation
+
+**Integration Tests (require mock Baileys):**
+- Connection lifecycle
+- Message send/receive flow
+- Event emission verification
+
+**Manual Validation:**
+- Scan QR code
+- Send/receive messages
+- Test all media types
+- Verify typing indicators
+
+---
+
+## Questions Resolved
+
+1. **Evolution API vs Baileys direct?** → Baileys direct (more control, no extra dependency)
+2. **Store auth where?** → PluginStorage (key-value backed by DB, not local files)
+3. **Handle rate limits?** → Defer to debounce config, can add later
+4. **Groups in scope?** → No, defer to separate wish. Focus on 1:1 messaging first
+5. **Voice/video calls?** → Out of scope (Baileys support limited)
+6. **Media handling?** → Download locally, emit with local path (future: proper fileStorage)
+7. **Reconnection after max retries?** → Stop and require manual reconnect
