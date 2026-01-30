@@ -4,7 +4,8 @@
  * Discovers and loads channel plugins from the packages directory.
  */
 
-import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type ChannelPlugin,
@@ -21,14 +22,34 @@ import { createLogger } from './logger';
 const logger = createLogger({ module: 'plugin-loader' });
 
 /**
+ * Find the monorepo root by walking up until we find turbo.json
+ */
+function findMonorepoRoot(startDir: string): string | null {
+  let current = startDir;
+  const root = dirname(current);
+
+  while (current !== root) {
+    if (existsSync(join(current, 'turbo.json'))) {
+      return current;
+    }
+    current = dirname(current);
+  }
+
+  return null;
+}
+
+/**
  * Get the monorepo packages directory
- * Resolves from the API package location to the monorepo root packages/
  */
 function getMonorepoPackagesDir(): string {
-  // This file is at packages/api/src/plugins/loader.ts
-  // Going up: plugins -> src -> api -> packages
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(currentDir, '..', '..', '..');
+  const monorepoRoot = findMonorepoRoot(currentDir);
+
+  if (!monorepoRoot) {
+    throw new Error('Could not find monorepo root (no turbo.json found)');
+  }
+
+  return join(monorepoRoot, 'packages');
 }
 
 export interface LoadPluginsOptions {
