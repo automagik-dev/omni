@@ -87,6 +87,12 @@ export async function setupQrCodeListener(eventBus: EventBus): Promise<void> {
     await eventBus.subscribe('instance.qr_code', async (event) => {
       const { instanceId, qrCode, expiresAt } = event.payload;
 
+      console.log('\n╔════════════════════════════════════════════════════════════╗');
+      console.log('║  WhatsApp QR Code Generated                                 ║');
+      console.log(`║  Instance: ${instanceId.padEnd(49)} ║`);
+      console.log(`║  Expires: ${new Date(expiresAt).toISOString().padEnd(50)} ║`);
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+
       // Store the QR code
       storeQrCode(instanceId, qrCode, new Date(expiresAt));
 
