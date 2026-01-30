@@ -2,7 +2,7 @@
 
 > Implement the Hono + tRPC HTTP API server with full CRUD operations, OpenAPI spec generation, and real-time WebSocket support.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Author:** WISH Agent
 **Beads:** omni-v2-xtv

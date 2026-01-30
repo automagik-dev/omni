@@ -1,0 +1,42 @@
+{
+  "name": "@omni/api",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./app": {
+      "types": "./src/app.ts",
+      "default": "./src/app.ts"
+    },
+    "./trpc": {
+      "types": "./src/trpc/index.ts",
+      "default": "./src/trpc/index.ts"
+    }
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@hono/swagger-ui": "^0.4.1",
+    "@hono/trpc-server": "^0.3.2",
+    "@hono/zod-openapi": "^0.18.3",
+    "@hono/zod-validator": "^0.4.3",
+    "@omni/core": "workspace:*",
+    "@omni/db": "workspace:*",
+    "@trpc/server": "^11.0.0-rc.608",
+    "drizzle-orm": "^0.38.4",
+    "hono": "^4.6.17",
+    "nats": "^2.29.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "bun-types": "^1.1.42",
+    "typescript": "^5.7.3"
+  }
+}
