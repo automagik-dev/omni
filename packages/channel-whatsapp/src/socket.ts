@@ -6,9 +6,14 @@
  */
 
 import type { AuthenticationState, WASocket } from '@whiskeysockets/baileys';
-import makeWASocket, { fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+// Use default import with fallback for different module systems
+import baiLeysModule from '@whiskeysockets/baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';
+
+// Extract exports with fallback for different bundlers/runtimes
+const makeWASocket = (baiLeysModule as any).default || (baiLeysModule as any).makeWASocket;
+const { fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = baiLeysModule as any;
 
 /**
  * Socket configuration options

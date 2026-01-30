@@ -2,6 +2,7 @@
  * @omni/api - HTTP API Server
  *
  * Entry point for the Omni v2 API server.
+ * Supports both Bun and Node.js runtimes.
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
@@ -9,6 +10,9 @@ import { type EventBus, connectEventBus } from '@omni/core';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 import { createApp } from './app';
 import { loadChannelPlugins, setupConnectionListener, setupMessageListener, setupQrCodeListener } from './plugins';
+
+// Runtime detection
+const isBun = typeof Bun !== 'undefined';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
@@ -94,12 +98,66 @@ async function main() {
   console.log(`API server listening on http://${HOST}:${PORT}`);
   console.log(`Health check: http://${HOST}:${PORT}/api/v2/health`);
 
-  Bun.serve({
-    port: PORT,
-    hostname: HOST,
-    fetch: app.fetch,
-    idleTimeout: 120,
-  });
+  if (isBun) {
+    // Use Bun's native server
+    Bun.serve({
+      port: PORT,
+      hostname: HOST,
+      fetch: app.fetch,
+      idleTimeout: 120,
+    });
+  } else {
+    // Use Node.js HTTP server
+    const http = await import('http');
+    const server = http.createServer(
+      (req: any, res: any) => {
+        // Wrap Node.js request/response in Hono's interface
+        const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+        const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
+          method: req.method,
+          headers: req.headers,
+          ...(hasBody && { body: req, duplex: 'half' } as any),
+        });
+
+        return app.fetch(fetchRequest)
+          .then(async (response) => {
+            res.writeHead(response.status, {
+              ...Object.fromEntries(response.headers),
+              'Content-Type': response.headers.get('Content-Type') || 'application/json',
+            });
+            if (response.body) {
+              res.end(await response.text());
+            } else {
+              res.end();
+            }
+          })
+          .catch((error) => {
+            console.error('Request error:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Internal server error' }));
+          });
+      }
+    );
+
+    server.listen(PORT, HOST, () => {
+      // Server started
+    });
+
+    // Handle graceful shutdown
+    process.on('SIGINT', () => {
+      console.log('\nShutting down gracefully...');
+      server.close(() => {
+        process.exit(0);
+      });
+    });
+
+    process.on('SIGTERM', () => {
+      console.log('\nShutting down gracefully...');
+      server.close(() => {
+        process.exit(0);
+      });
+    });
+  }
 }
 
 // Run

@@ -49,8 +49,18 @@ const consoleLogger: Logger = {
  */
 export async function loadChannelPlugin(path: string, logger: Logger = consoleLogger): Promise<LoadResult> {
   try {
+    // Resolve the actual entry point
+    let entryPath: string = path;
+
+    // If path is a directory, try to find the entry point
+    if (!path.endsWith('.ts') && !path.endsWith('.js')) {
+      // Default to src/index.ts for directory paths
+      entryPath = `${path}/src/index.ts`;
+      logger.debug(`Resolving plugin entry point from directory`, { path, entryPath });
+    }
+
     // Import the module
-    const module = await import(path);
+    const module = await import(entryPath);
 
     // Try to find the plugin export
     let plugin: unknown;

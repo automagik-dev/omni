@@ -7,7 +7,11 @@
 
 import type { PluginStorage } from '@omni/channel-sdk';
 import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '@whiskeysockets/baileys';
-import { initAuthCreds, proto } from '@whiskeysockets/baileys';
+import { initAuthCreds } from '@whiskeysockets/baileys';
+
+// proto may not be available in all Baileys versions/runtimes (especially with tsx)
+// When unavailable, proto deserialization will be skipped - this is non-critical for initial connection
+let proto: any = undefined;
 
 /**
  * Buffer JSON replacer for serialization
@@ -65,8 +69,8 @@ const PROTO_MESSAGE_TYPES: SignalDataType[] = ['app-state-sync-key', 'app-state-
  * Deserialize a signal data value based on its type
  */
 function deserializeSignalData<T extends SignalDataType>(type: T, data: unknown): SignalDataTypeMap[T] {
-  if (PROTO_MESSAGE_TYPES.includes(type) && data && typeof data === 'object') {
-    // For protobuf types, we need to reconstruct them
+  if (PROTO_MESSAGE_TYPES.includes(type) && data && typeof data === 'object' && proto) {
+    // For protobuf types, we need to reconstruct them (proto must be available)
     if (type === 'app-state-sync-key') {
       return proto.Message.AppStateSyncKeyData.fromObject(
         data as Record<string, unknown>,

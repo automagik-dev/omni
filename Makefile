@@ -96,8 +96,9 @@ dev: dev-services
 	bun run dev
 
 # Start just the API (assumes services already running)
+# Note: Uses Node.js runtime (tsx) instead of Bun for WhatsApp Baileys WebSocket compatibility
 dev-api:
-	@set -a && . ./.env && set +a && bun --watch packages/api/src/index.ts
+	@set -a && . ./.env && set +a && npx tsx watch --clear-screen packages/api/src/index.ts
 
 # Start managed services via PM2 (reads *_MANAGED from .env)
 dev-services: ensure-nats
