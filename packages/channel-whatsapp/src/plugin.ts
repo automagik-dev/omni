@@ -22,18 +22,40 @@ import { resetConnectionState, setupConnectionHandlers } from './handlers/connec
 import { setupMessageHandlers } from './handlers/messages';
 import { toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
-import { closeSocket, createSocket } from './socket';
+import { closeSocket, createSocket, DEFAULT_SOCKET_CONFIG, type SocketConfig } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
 /**
- * WhatsApp plugin configuration
+ * WhatsApp connection options - passed per instance
+ * All options have sensible defaults and can be overridden
  */
-export interface WhatsAppConfig {
-  /** Enable QR code terminal output (development only) */
+export interface WhatsAppConnectionOptions {
+  /** Enable QR code terminal output (default: true) */
   printQRInTerminal?: boolean;
-  /** Custom Baileys logger level */
-  logLevel?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
+  /** Baileys logger level (default: 'warn') */
+  logLevel?: SocketConfig['logLevel'];
+  /** Browser identification (default: ['Omni', 'Chrome', '120.0.0']) */
+  browser?: [string, string, string];
+  /** Mobile mode (default: false) */
+  mobile?: boolean;
+  /** Connection timeout in ms (default: 60000) */
+  connectTimeoutMs?: number;
+  /** Query timeout in ms (default: 60000) */
+  defaultQueryTimeoutMs?: number;
+  /** Keep alive interval in ms (default: 25000) */
+  keepAliveIntervalMs?: number;
+  /** Sync full message history (default: true) */
+  syncFullHistory?: boolean;
+  /** Generate high quality link previews (default: true) */
+  generateHighQualityLinkPreview?: boolean;
+  /** Mark online when connecting (default: true) */
+  markOnlineOnConnect?: boolean;
 }
+
+/**
+ * WhatsApp plugin configuration (global defaults)
+ */
+export interface WhatsAppConfig extends WhatsAppConnectionOptions {}
 
 /**
  * WhatsApp Channel Plugin
@@ -106,11 +128,25 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Storage-backed auth state
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
 
+    // Merge socket options: defaults <- plugin config <- instance options
+    const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
+    const socketOptions: Partial<SocketConfig> = {
+      // Plugin-level defaults
+      ...this.pluginConfig,
+      // Instance-specific overrides
+      ...instanceOptions,
+    };
+
+    this.logger.debug('Creating socket with options', {
+      instanceId,
+      syncFullHistory: socketOptions.syncFullHistory ?? DEFAULT_SOCKET_CONFIG.syncFullHistory,
+      connectTimeoutMs: socketOptions.connectTimeoutMs ?? DEFAULT_SOCKET_CONFIG.connectTimeoutMs,
+    });
+
     // Create Baileys socket using wrapper
     const sock = await createSocket({
       auth: state,
-      printQRInTerminal: this.pluginConfig.printQRInTerminal,
-      logLevel: this.pluginConfig.logLevel,
+      ...socketOptions,
     });
 
     // Save credentials on update

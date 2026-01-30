@@ -17,28 +17,53 @@ const { fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = baiLeysModule
 
 /**
  * Socket configuration options
+ * All options except 'auth' have sensible defaults and can be overridden per-instance
  */
 export interface SocketConfig {
-  /** Authentication state from storage */
+  /** Authentication state from storage (required) */
   auth: AuthenticationState;
-  /** Enable QR code terminal output (development only) */
+
+  // === Display Options ===
+  /** Enable QR code terminal output (default: true in dev) */
   printQRInTerminal?: boolean;
-  /** Pino logger level */
+  /** Pino logger level (default: 'warn') */
   logLevel?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
-  /** Browser identification [name, browser, version] */
+
+  // === Connection Options ===
+  /** Browser identification [name, browser, version] (default: ['Omni', 'Chrome', '120.0.0']) */
   browser?: [string, string, string];
-  /** Mobile flag for web multi-device */
+  /** Mobile flag for web multi-device (default: false) */
   mobile?: boolean;
+  /** Connection timeout in ms (default: 60000) */
+  connectTimeoutMs?: number;
+  /** Default query timeout in ms (default: 60000) */
+  defaultQueryTimeoutMs?: number;
+  /** Keep alive interval in ms (default: 25000) */
+  keepAliveIntervalMs?: number;
+
+  // === Sync Options ===
+  /** Sync full message history on connect (default: true) */
+  syncFullHistory?: boolean;
+  /** Generate high quality link previews (default: true) */
+  generateHighQualityLinkPreview?: boolean;
+  /** Mark messages as online when sending read receipts (default: true) */
+  markOnlineOnConnect?: boolean;
 }
 
 /**
- * Default socket configuration
+ * Default socket configuration values
  */
-const DEFAULT_CONFIG: Partial<SocketConfig> = {
+export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
   printQRInTerminal: true,
-  logLevel: 'debug',
+  logLevel: 'warn',
   browser: ['Omni', 'Chrome', '120.0.0'],
   mobile: false,
+  connectTimeoutMs: 60_000,
+  defaultQueryTimeoutMs: 60_000,
+  keepAliveIntervalMs: 25_000,
+  syncFullHistory: true,
+  generateHighQualityLinkPreview: true,
+  markOnlineOnConnect: true,
 };
 
 /**
@@ -51,12 +76,13 @@ function createLogger(level: string) {
 /**
  * Create a new Baileys WASocket with the given configuration
  *
- * @param config - Socket configuration
+ * @param config - Socket configuration (auth required, others have defaults)
  * @returns Configured WASocket instance
  */
 export async function createSocket(config: SocketConfig): Promise<WASocket> {
-  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-  const logger = createLogger(mergedConfig.logLevel || 'warn');
+  // Merge with defaults - user config takes precedence
+  const mergedConfig = { ...DEFAULT_SOCKET_CONFIG, ...config };
+  const logger = createLogger(mergedConfig.logLevel);
 
   // Get latest Baileys version for compatibility
   const { version } = await fetchLatestBaileysVersion();
@@ -65,27 +91,26 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
   const msgRetryCounterCache = new NodeCache();
 
   // Wrap keys with caching layer
-  const wrappedKeys = makeCacheableSignalKeyStore(mergedConfig.auth.keys, logger);
+  const wrappedKeys = makeCacheableSignalKeyStore(config.auth.keys, logger);
 
   return makeWASocket({
     version,
     logger,
     auth: {
-      creds: mergedConfig.auth.creds,
+      creds: config.auth.creds,
       keys: wrappedKeys,
     },
     msgRetryCounterCache,
+    // All options below are configurable per-instance
     printQRInTerminal: mergedConfig.printQRInTerminal,
     mobile: mergedConfig.mobile,
     browser: mergedConfig.browser,
-    generateHighQualityLinkPreview: true,
-    // Sync full message history (needed for history fetching)
-    syncFullHistory: true,
-    // Increase timeouts to prevent premature disconnects
-    connectTimeoutMs: 60_000,
-    defaultQueryTimeoutMs: 60_000,
-    // Keep connection alive
-    keepAliveIntervalMs: 25_000,
+    generateHighQualityLinkPreview: mergedConfig.generateHighQualityLinkPreview,
+    syncFullHistory: mergedConfig.syncFullHistory,
+    connectTimeoutMs: mergedConfig.connectTimeoutMs,
+    defaultQueryTimeoutMs: mergedConfig.defaultQueryTimeoutMs,
+    keepAliveIntervalMs: mergedConfig.keepAliveIntervalMs,
+    markOnlineOnConnect: mergedConfig.markOnlineOnConnect,
   });
 }
 
