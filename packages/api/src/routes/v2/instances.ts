@@ -88,11 +88,13 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     const plugin = channelRegistry.get(data.channel as Parameters<typeof channelRegistry.get>[0]);
     if (plugin) {
       try {
-        // Trigger plugin connection - this will start QR code generation for WhatsApp
+        // Trigger plugin connection with forceNewQr for fresh QR code
         await plugin.connect(instance.id, {
           instanceId: instance.id,
           credentials: {},
-          options: {},
+          options: {
+            forceNewQr: true,
+          },
         });
         console.log(`[Instances] Triggered connection for instance ${instance.id} via ${data.channel}`);
       } catch (error) {
@@ -230,9 +232,13 @@ instancesRoutes.get('/:id/qr', async (c) => {
 
 /**
  * POST /instances/:id/connect - Connect instance
+ *
+ * Query params:
+ * - forceNewQr: true - Clear auth state and force fresh QR code (for re-authentication)
  */
 instancesRoutes.post('/:id/connect', async (c) => {
   const id = c.req.param('id');
+  const forceNewQr = c.req.query('forceNewQr') === 'true';
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -246,7 +252,9 @@ instancesRoutes.post('/:id/connect', async (c) => {
         await plugin.connect(id, {
           instanceId: id,
           credentials: {},
-          options: {},
+          options: {
+            forceNewQr,
+          },
         });
       } catch (error) {
         return c.json(
@@ -312,9 +320,13 @@ instancesRoutes.post('/:id/disconnect', async (c) => {
 
 /**
  * POST /instances/:id/restart - Restart instance
+ *
+ * Query params:
+ * - forceNewQr: true - Clear auth state and force fresh QR code (for re-authentication)
  */
 instancesRoutes.post('/:id/restart', async (c) => {
   const id = c.req.param('id');
+  const forceNewQr = c.req.query('forceNewQr') === 'true';
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -331,7 +343,9 @@ instancesRoutes.post('/:id/restart', async (c) => {
         await plugin.connect(id, {
           instanceId: id,
           credentials: {},
-          options: {},
+          options: {
+            forceNewQr,
+          },
         });
       } catch (error) {
         return c.json(

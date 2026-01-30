@@ -74,8 +74,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param config - Instance configuration (credentials not needed for QR auth)
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
-    // Check if already connected
-    if (this.sockets.has(instanceId)) {
+    // If forcing new QR, disconnect existing socket and clear auth state
+    if (config.options?.forceNewQr === true) {
+      const existingSocket = this.sockets.get(instanceId);
+      if (existingSocket) {
+        await closeSocket(existingSocket, false);
+        this.sockets.delete(instanceId);
+      }
+      await clearAuthState(this.storage, instanceId);
+      this.logger.info('Cleared auth state for fresh QR', { instanceId });
+    } else if (this.sockets.has(instanceId)) {
+      // Check if already connected (only if not forcing new QR)
       this.logger.warn('Instance already connected', { instanceId });
       return;
     }

@@ -29,6 +29,7 @@ if (pgserveManaged) {
       process.env.PGSERVE_PORT || '8432',
       '--data',
       process.env.PGSERVE_DATA || './.pgserve-data',
+      '--no-cluster',
     ].join(' '),
     cwd: __dirname,
     env: {
