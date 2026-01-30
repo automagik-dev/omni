@@ -2,8 +2,9 @@
 
 > Auto-generate TypeScript SDK from OpenAPI spec with full type safety and excellent DX.
 
-**Status:** DRAFT
+**Status:** APPROVED
 **Created:** 2026-01-29
+**Updated:** 2026-01-30
 **Author:** WISH Agent
 **Beads:** omni-v2-0cy
 
@@ -11,9 +12,20 @@
 
 ## Context
 
-The SDK is auto-generated from OpenAPI. Define schemas once in Zod, get types and client for free. SDK consumers get full autocomplete and type safety.
+The API is shipped with a hand-written OpenAPI spec at `/api/v2/openapi.json`. This wish generates a TypeScript SDK from that spec, giving external consumers type-safe API access with full autocomplete.
 
-Reference: `docs/sdk/auto-generation.md`
+**Current state (shipped with api-setup):**
+- OpenAPI 3.1 spec at `/api/v2/openapi.json`
+- Swagger UI at `/api/v2/docs`
+- Routes: instances, messages, events, persons, access, settings, providers
+- Auth: `x-api-key` header
+
+**What this wish delivers:**
+- `packages/sdk/` with generated types and client
+- Nice wrapper class: `createOmniClient({ baseUrl, apiKey })`
+- Full IDE autocomplete: `omni.instances.list()`, `omni.messages.send()`
+
+Reference: `docs/sdk/auto-generation.md`, `docs/sdk/typescript-sdk.md`
 
 ---
 
@@ -22,10 +34,12 @@ Reference: `docs/sdk/auto-generation.md`
 | ID | Type | Description |
 |----|------|-------------|
 | **ASM-1** | Assumption | API is running with OpenAPI spec at `/api/v2/openapi.json` |
+| **ASM-2** | Assumption | Spec is accurate enough to generate usable SDK |
 | **DEC-1** | Decision | `openapi-typescript` for type generation |
-| **DEC-2** | Decision | `openapi-fetch` for type-safe client |
-| **DEC-3** | Decision | Wrapper class for nice DX (omni.instances.list()) |
-| **DEC-4** | Decision | Event types also exported for NATS subscribers |
+| **DEC-2** | Decision | `openapi-fetch` for type-safe HTTP client |
+| **DEC-3** | Decision | Wrapper class for nice DX (`omni.instances.list()`) |
+| **DEC-4** | Decision | No CI/CD initially - local scripts only |
+| **RISK-1** | Risk | Hand-written spec may drift from implementation - mitigate by testing SDK against live API |
 
 ---
 
@@ -33,66 +47,66 @@ Reference: `docs/sdk/auto-generation.md`
 
 ### IN SCOPE
 
-- `packages/sdk/` package
-- OpenAPI spec extraction script
-- Type generation from spec
-- Type-safe fetch client generation
-- Nice wrapper class (`createOmniClient`)
-- Event type exports (for NATS subscribers)
-- JSDoc from Zod `.describe()`
-- Example usage
-- Published to npm
+- `packages/sdk/` package structure
+- Type generation from OpenAPI spec
+- `openapi-fetch` client setup
+- Wrapper class with resource namespaces
+- Error handling with typed errors
+- Basic usage examples in README
+- Generation script: `bun run generate:sdk`
 
 ### OUT OF SCOPE
 
-- Python SDK (future, via openapi-generator)
-- Go SDK (future, via openapi-generator)
-- WebSocket client wrapper (future enhancement)
+- CI/CD automation (future wish)
+- npm publishing (future wish)
+- Python/Go SDKs (future wish)
+- WebSocket client for real-time events (future wish)
+- Migrating to `@hono/zod-openapi` for auto-generation (separate wish)
 
 ---
 
-## Execution Group A: Type Generation
+## Execution Group A: Package Setup & Type Generation
 
-**Goal:** Generate TypeScript types from OpenAPI spec.
+**Goal:** Create SDK package and generate TypeScript types from OpenAPI spec.
 
 **Deliverables:**
-- [ ] `packages/sdk/package.json`
+- [ ] `packages/sdk/package.json` with dependencies
 - [ ] `packages/sdk/tsconfig.json`
+- [ ] `packages/sdk/src/types.generated.ts` - Generated from spec
 - [ ] `scripts/generate-sdk.ts` - Generation script
-- [ ] `packages/sdk/src/types.generated.ts` - Generated types
-- [ ] `packages/sdk/src/events.ts` - Event type re-exports
-- [ ] Build script in package.json
+- [ ] Root `package.json` script: `generate:sdk`
 
 **Acceptance Criteria:**
-- [ ] `bun run generate:sdk` extracts OpenAPI spec
-- [ ] Types generated match API schemas exactly
-- [ ] JSDoc comments preserved from Zod `.describe()`
-- [ ] Event types exported for NATS consumers
+- [ ] `bun run generate:sdk` fetches spec and generates types
+- [ ] Generated types match API schemas (Instance, Event, Person, etc.)
+- [ ] Package compiles with `bun run build`
 
 **Validation:**
 ```bash
 bun run generate:sdk
-cat packages/sdk/src/types.generated.ts | head -100
+cat packages/sdk/src/types.generated.ts | head -50
+cd packages/sdk && bun run build
 ```
 
 ---
 
 ## Execution Group B: Client Wrapper
 
-**Goal:** Create nice DX wrapper around generated types.
+**Goal:** Create developer-friendly wrapper around generated types.
 
 **Deliverables:**
-- [ ] `packages/sdk/src/client.ts` - Main client class
+- [ ] `packages/sdk/src/client.ts` - OmniClient class
+- [ ] `packages/sdk/src/errors.ts` - Typed error classes
 - [ ] `packages/sdk/src/index.ts` - Public exports
-- [ ] Method wrappers for all endpoints
-- [ ] Error handling
-- [ ] Auth middleware
+- [ ] Resource namespaces: instances, messages, events, persons, access, settings, providers
 
 **Acceptance Criteria:**
 - [ ] `createOmniClient({ baseUrl, apiKey })` creates client
-- [ ] `omni.instances.list()` returns typed response
+- [ ] `omni.instances.list()` returns typed paginated response
+- [ ] `omni.instances.get(id)` returns typed Instance
+- [ ] `omni.instances.create(data)` sends POST with typed body
 - [ ] `omni.messages.send({ instanceId, to, text })` works
-- [ ] Errors are properly typed and thrown
+- [ ] Errors thrown as `OmniApiError` with code, message, details
 - [ ] Full autocomplete in IDEs
 
 **Validation:**
@@ -106,37 +120,35 @@ const omni = createOmniClient({
 
 // Should have full autocomplete
 const instances = await omni.instances.list();
-await omni.messages.send({
-  instanceId: instances.items[0].id,
-  to: '+1234567890',
-  text: 'Hello!',
-});
+const instance = await omni.instances.get(instances.items[0].id);
 ```
 
 ---
 
-## Execution Group C: CI/CD & Publishing
+## Execution Group C: Testing & Documentation
 
-**Goal:** Automate generation and publishing.
+**Goal:** Verify SDK works against live API and document usage.
 
 **Deliverables:**
-- [ ] `.github/workflows/sdk.yml` - CI workflow
-- [ ] Auto-regenerate on schema changes
-- [ ] Auto-publish to npm on release
-- [ ] Version sync with API
+- [ ] `packages/sdk/src/__tests__/client.test.ts` - Integration tests
+- [ ] `packages/sdk/README.md` - Usage documentation
+- [ ] Export from monorepo: add to turbo.json if needed
 
 **Acceptance Criteria:**
-- [ ] Push to main with schema changes triggers regeneration
-- [ ] SDK version matches API version
-- [ ] Published to npm as `@omni/sdk`
-- [ ] README with usage examples
+- [ ] Tests pass against running API
+- [ ] README shows installation and basic usage
+- [ ] All public types exported
 
 **Validation:**
 ```bash
-# Simulate CI
-bun run generate:sdk
-bun run build
-bun run test
+# Start API
+make dev-api &
+
+# Run SDK tests
+cd packages/sdk && bun test
+
+# Check exports
+bun -e "import { createOmniClient } from './packages/sdk/src'; console.log(typeof createOmniClient)"
 ```
 
 ---
@@ -148,78 +160,102 @@ bun run test
 ```typescript
 // scripts/generate-sdk.ts
 import { $ } from 'bun';
+import { mkdirSync, writeFileSync } from 'fs';
 
-// 1. Generate OpenAPI spec from code
-await $`bun run packages/api/src/openapi-export.ts > dist/openapi.json`;
+async function main() {
+  console.log('Fetching OpenAPI spec...');
 
-// 2. Generate types
-await $`bunx openapi-typescript dist/openapi.json -o packages/sdk/src/types.generated.ts`;
+  // Fetch from running API or use static file
+  const specUrl = process.env.API_URL || 'http://localhost:8881';
+  const res = await fetch(`${specUrl}/api/v2/openapi.json`);
+  const spec = await res.json();
 
-// 3. Build SDK
-await $`cd packages/sdk && bun run build`;
+  mkdirSync('dist', { recursive: true });
+  writeFileSync('dist/openapi.json', JSON.stringify(spec, null, 2));
+
+  console.log('Generating TypeScript types...');
+  await $`bunx openapi-typescript dist/openapi.json -o packages/sdk/src/types.generated.ts`;
+
+  console.log('Done!');
+}
+
+main().catch(console.error);
 ```
 
 ### Client Structure
 
 ```typescript
 // packages/sdk/src/client.ts
+import createClient, { type Middleware } from 'openapi-fetch';
+import type { paths } from './types.generated';
+import { OmniApiError } from './errors';
+
+export interface OmniClientConfig {
+  baseUrl: string;
+  apiKey: string;
+}
+
 export function createOmniClient(config: OmniClientConfig) {
+  const authMiddleware: Middleware = {
+    async onRequest({ request }) {
+      request.headers.set('x-api-key', config.apiKey);
+      return request;
+    },
+  };
+
   const client = createClient<paths>({ baseUrl: config.baseUrl });
-  client.use(authMiddleware(config.apiKey));
+  client.use(authMiddleware);
 
   return {
     instances: {
-      list: (params?) => client.GET('/api/v2/instances', { params }),
-      get: (id) => client.GET('/api/v2/instances/{id}', { params: { path: { id } } }),
-      create: (data) => client.POST('/api/v2/instances', { body: data }),
-      // ...
+      list: async (params?) => {
+        const { data, error } = await client.GET('/api/v2/instances', { params: { query: params } });
+        if (error) throw OmniApiError.from(error);
+        return data;
+      },
+      get: async (id: string) => {
+        const { data, error } = await client.GET('/api/v2/instances/{id}', { params: { path: { id } } });
+        if (error) throw OmniApiError.from(error);
+        return data;
+      },
+      create: async (body) => {
+        const { data, error } = await client.POST('/api/v2/instances', { body });
+        if (error) throw OmniApiError.from(error);
+        return data;
+      },
+      // ... more methods
     },
     messages: {
-      send: (data) => client.POST('/api/v2/messages', { body: data }),
-      // ...
+      send: async (body) => {
+        const { data, error } = await client.POST('/api/v2/messages', { body });
+        if (error) throw OmniApiError.from(error);
+        return data;
+      },
     },
-    events: {
-      list: (params?) => client.GET('/api/v2/events', { params }),
-      // ...
-    },
-    // ...
+    // ... other resources
+
+    // Raw client for advanced usage
+    raw: client,
   };
 }
-```
-
-### Event Types Export
-
-```typescript
-// packages/sdk/src/events.ts
-// Re-export event types for NATS consumers
-
-export type {
-  MessageReceivedEvent,
-  MessageSentEvent,
-  MessageStatusEvent,
-  IdentityResolvedEvent,
-  MediaProcessedEvent,
-  ChannelConnectedEvent,
-  ChannelDisconnectedEvent,
-} from '@omni/core/events';
 ```
 
 ---
 
 ## Dependencies
 
-- `openapi-typescript`
-- `openapi-fetch`
-- `@omni/core` (for event types)
+- `openapi-typescript` - Type generation
+- `openapi-fetch` - Type-safe HTTP client
 
 ---
 
 ## Depends On
 
-- `api-setup` (for OpenAPI spec)
+- `api-setup` ✅ (SHIPPED)
 
 ## Enables
 
 - Type-safe API consumption
 - External integrations
-- CLI implementation
+- CLI implementation (`packages/cli`)
+- Future: Python/Go SDKs via openapi-generator
