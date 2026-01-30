@@ -104,8 +104,28 @@ export class AccessService {
    * Check if access is allowed for a user
    */
   async checkAccess(instanceId: string, platformUserId: string, _channel: string): Promise<CheckAccessResult> {
-    // Get all applicable rules, ordered by priority (highest first)
-    const rules = await this.db
+    const rules = await this.getApplicableRules(instanceId);
+    const matchingRule = rules.find((rule) => this.ruleMatches(rule, platformUserId));
+
+    if (!matchingRule) {
+      return { allowed: true, reason: 'No matching rule, default allow' };
+    }
+
+    const allowed = matchingRule.ruleType === 'allow';
+    await this.publishAccessEvent(instanceId, platformUserId, matchingRule, allowed);
+
+    return {
+      allowed,
+      rule: matchingRule,
+      reason: matchingRule.reason ?? (allowed ? 'Allowed by rule' : 'Denied by rule'),
+    };
+  }
+
+  /**
+   * Get all applicable rules for an instance
+   */
+  private async getApplicableRules(instanceId: string): Promise<AccessRule[]> {
+    return this.db
       .select()
       .from(accessRules)
       .where(
@@ -116,44 +136,34 @@ export class AccessService {
         ),
       )
       .orderBy(desc(accessRules.priority));
+  }
 
-    // Find first matching rule
-    for (const rule of rules) {
-      if (this.ruleMatches(rule, platformUserId)) {
-        const allowed = rule.ruleType === 'allow';
+  /**
+   * Publish access event (allowed or denied)
+   */
+  private async publishAccessEvent(
+    instanceId: string,
+    platformUserId: string,
+    rule: AccessRule,
+    allowed: boolean,
+  ): Promise<void> {
+    if (!this.eventBus) return;
 
-        // Publish access event
-        if (this.eventBus) {
-          if (allowed) {
-            await this.eventBus.publish('access.allowed', {
-              instanceId,
-              platformUserId,
-              ruleId: rule.id,
-            });
-          } else {
-            await this.eventBus.publish('access.denied', {
-              instanceId,
-              platformUserId,
-              ruleId: rule.id,
-              reason: rule.reason ?? 'Denied by rule',
-              action: rule.action === 'silent_block' ? 'silent_block' : 'block',
-            });
-          }
-        }
-
-        return {
-          allowed,
-          rule,
-          reason: rule.reason ?? (allowed ? 'Allowed by rule' : 'Denied by rule'),
-        };
-      }
+    if (allowed) {
+      await this.eventBus.publish('access.allowed', {
+        instanceId,
+        platformUserId,
+        ruleId: rule.id,
+      });
+    } else {
+      await this.eventBus.publish('access.denied', {
+        instanceId,
+        platformUserId,
+        ruleId: rule.id,
+        reason: rule.reason ?? 'Denied by rule',
+        action: rule.action === 'silent_block' ? 'silent_block' : 'block',
+      });
     }
-
-    // No rule matched - default allow
-    return {
-      allowed: true,
-      reason: 'No matching rule, default allow',
-    };
   }
 
   /**

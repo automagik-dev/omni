@@ -56,25 +56,61 @@ interface LogMessage {
 }
 
 /**
+ * Subscription options
+ */
+interface LogSubscriptionOptions {
+  services: string[];
+  level: LogLevel;
+  search?: string;
+}
+
+// Log level ordering for filtering
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warning: 2,
+  error: 3,
+};
+
+/**
+ * Check if a subscriber should receive a log based on their filter settings
+ */
+function shouldReceiveLog(sub: LogSubscriptionOptions, log: LogMessage): boolean {
+  // Check service filter
+  if (!sub.services.includes('*') && !sub.services.includes(log.service)) {
+    return false;
+  }
+
+  // Check log level filter (show this level and above)
+  if (LOG_LEVEL_ORDER[log.level] < LOG_LEVEL_ORDER[sub.level]) {
+    return false;
+  }
+
+  // Check search filter
+  if (sub.search && !log.message.toLowerCase().includes(sub.search.toLowerCase())) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Safely send a message to a WebSocket
+ */
+function sendToSocket(ws: unknown, data: string): void {
+  try {
+    const socket = ws as { send?: (data: string) => void };
+    socket?.send?.(data);
+  } catch (error) {
+    console.error('[WS Logs] Error sending log:', error);
+  }
+}
+
+/**
  * Create WebSocket logs handler
  */
 export function createLogsWebSocketHandler(_db: Database) {
-  const subscriptions = new Map<
-    unknown,
-    {
-      services: string[];
-      level: LogLevel;
-      search?: string;
-    }
-  >();
-
-  // Log level ordering for filtering
-  const logLevelOrder: Record<LogLevel, number> = {
-    debug: 0,
-    info: 1,
-    warning: 2,
-    error: 3,
-  };
+  const subscriptions = new Map<unknown, LogSubscriptionOptions>();
 
   return {
     /**
@@ -139,30 +175,11 @@ export function createLogsWebSocketHandler(_db: Database) {
      * Broadcast a log entry to relevant subscribers
      */
     broadcast(log: LogMessage): void {
+      const payload = JSON.stringify(log);
+
       for (const [ws, sub] of subscriptions) {
-        // Check service filter
-        if (!sub.services.includes('*') && !sub.services.includes(log.service)) {
-          continue;
-        }
-
-        // Check log level filter (show this level and above)
-        if (logLevelOrder[log.level] < logLevelOrder[sub.level]) {
-          continue;
-        }
-
-        // Check search filter
-        if (sub.search && !log.message.toLowerCase().includes(sub.search.toLowerCase())) {
-          continue;
-        }
-
-        // Send log
-        try {
-          const socket = ws as { send?: (data: string) => void };
-          if (socket?.send) {
-            socket.send(JSON.stringify(log));
-          }
-        } catch (error) {
-          console.error('[WS Logs] Error sending log:', error);
+        if (shouldReceiveLog(sub, log)) {
+          sendToSocket(ws, payload);
         }
       }
     },

@@ -3,6 +3,7 @@
  */
 
 import { ERROR_CODES, NotFoundError, OmniError, ValidationError } from '@omni/core';
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
@@ -55,90 +56,124 @@ function formatZodError(error: ZodError): ApiErrorResponse {
 }
 
 /**
+ * Handle ZodError
+ */
+function handleZodError(c: Context, error: ZodError): Response {
+  return c.json(formatZodError(error), 400);
+}
+
+/**
+ * Handle HTTPException from Hono
+ */
+function handleHTTPException(c: Context, error: HTTPException): Response {
+  return c.json(
+    {
+      error: {
+        code: error.status >= 500 ? 'INTERNAL_ERROR' : 'HTTP_ERROR',
+        message: error.message,
+      },
+    },
+    error.status,
+  );
+}
+
+/**
+ * Handle OmniError (our typed errors)
+ */
+function handleOmniError(c: Context, error: OmniError): Response {
+  const status = ERROR_STATUS_MAP[error.code] ?? 500;
+  const response: ApiErrorResponse = {
+    error: {
+      code: error.code,
+      message: error.message,
+      details: error.context,
+    },
+  };
+  return c.json(response, status);
+}
+
+/**
+ * Handle NotFoundError
+ */
+function handleNotFoundError(c: Context, error: NotFoundError): Response {
+  return c.json(
+    {
+      error: {
+        code: 'NOT_FOUND',
+        message: error.message,
+        details: {
+          resourceType: error.resourceType,
+          resourceId: error.resourceId,
+        },
+      },
+    },
+    404,
+  );
+}
+
+/**
+ * Handle ValidationError
+ */
+function handleValidationError(c: Context, error: ValidationError): Response {
+  return c.json(
+    {
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: error.message,
+        details: { fields: error.fields },
+      },
+    },
+    400,
+  );
+}
+
+/**
+ * Handle unknown errors
+ */
+function handleUnknownError(c: Context, error: unknown): Response {
+  const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+  return c.json(
+    {
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: process.env.NODE_ENV === 'production' ? 'Internal server error' : message,
+      },
+    },
+    500,
+  );
+}
+
+/**
+ * Route error to appropriate handler
+ */
+function routeError(c: Context, error: unknown): Response {
+  if (error instanceof ZodError) {
+    return handleZodError(c, error);
+  }
+  if (error instanceof HTTPException) {
+    return handleHTTPException(c, error);
+  }
+  if (error instanceof OmniError) {
+    return handleOmniError(c, error);
+  }
+  if (error instanceof NotFoundError) {
+    return handleNotFoundError(c, error);
+  }
+  if (error instanceof ValidationError) {
+    return handleValidationError(c, error);
+  }
+  return handleUnknownError(c, error);
+}
+
+/**
  * Error handling middleware
  */
 export const errorMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   try {
     await next();
   } catch (error) {
-    // Log the error
     const requestId = c.get('requestId') ?? 'unknown';
     console.error(`[${requestId}] Error:`, error);
-
-    // Handle Zod validation errors
-    if (error instanceof ZodError) {
-      return c.json(formatZodError(error), 400);
-    }
-
-    // Handle Hono HTTP exceptions
-    if (error instanceof HTTPException) {
-      return c.json(
-        {
-          error: {
-            code: error.status >= 500 ? 'INTERNAL_ERROR' : 'HTTP_ERROR',
-            message: error.message,
-          },
-        },
-        error.status,
-      );
-    }
-
-    // Handle OmniError (our typed errors)
-    if (error instanceof OmniError) {
-      const status = ERROR_STATUS_MAP[error.code] ?? 500;
-      const response: ApiErrorResponse = {
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.context,
-        },
-      };
-
-      return c.json(response, status);
-    }
-
-    // Handle NotFoundError specifically
-    if (error instanceof NotFoundError) {
-      return c.json(
-        {
-          error: {
-            code: 'NOT_FOUND',
-            message: error.message,
-            details: {
-              resourceType: error.resourceType,
-              resourceId: error.resourceId,
-            },
-          },
-        },
-        404,
-      );
-    }
-
-    // Handle ValidationError specifically
-    if (error instanceof ValidationError) {
-      return c.json(
-        {
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: error.message,
-            details: { fields: error.fields },
-          },
-        },
-        400,
-      );
-    }
-
-    // Handle unknown errors
-    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-
-    return c.json(
-      {
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: process.env.NODE_ENV === 'production' ? 'Internal server error' : message,
-        },
-      },
-      500,
-    );
+    return routeError(c, error);
   }
 });

@@ -53,18 +53,61 @@ interface ChatUpdateMessage {
 }
 
 /**
+ * Subscription options
+ */
+interface SubscriptionOptions {
+  chatId?: string;
+  includeTyping: boolean;
+  includePresence: boolean;
+  includeReadReceipts: boolean;
+}
+
+/**
+ * Check if a subscriber should receive an update based on their filter settings
+ */
+function shouldReceiveUpdate(sub: SubscriptionOptions, update: ChatUpdateMessage): boolean {
+  // Check chat filter
+  if (sub.chatId && sub.chatId !== update.chatId) {
+    return false;
+  }
+
+  // Check type-specific filters
+  const typeFilters: Record<ChatUpdateType, keyof SubscriptionOptions | null> = {
+    'chat.typing': 'includeTyping',
+    'chat.presence': 'includePresence',
+    'chat.read': 'includeReadReceipts',
+    'message.new': null,
+    'message.status': null,
+    'message.deleted': null,
+    'message.edited': null,
+    'media.processed': null,
+  };
+
+  const filterKey = typeFilters[update.type];
+  if (filterKey && !sub[filterKey]) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Safely send a message to a WebSocket
+ */
+function sendToSocket(ws: unknown, data: string, instanceId: string): void {
+  try {
+    const socket = ws as { send?: (data: string) => void };
+    socket?.send?.(data);
+  } catch (error) {
+    console.error(`[WS Chats ${instanceId}] Error sending update:`, error);
+  }
+}
+
+/**
  * Create WebSocket chat handler
  */
 export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | null, instanceId: string) {
-  const subscriptions = new Map<
-    unknown,
-    {
-      chatId?: string;
-      includeTyping: boolean;
-      includePresence: boolean;
-      includeReadReceipts: boolean;
-    }
-  >();
+  const subscriptions = new Map<unknown, SubscriptionOptions>();
 
   return {
     /**
@@ -72,7 +115,6 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
      */
     open(ws: unknown): void {
       console.log(`[WS Chats ${instanceId}] Client connected`);
-      // Initialize with default subscription options
       subscriptions.set(ws, {
         includeTyping: true,
         includePresence: true,
@@ -123,25 +165,11 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
      * Broadcast a chat update to relevant subscribers
      */
     broadcast(update: ChatUpdateMessage): void {
+      const payload = JSON.stringify(update);
+
       for (const [ws, sub] of subscriptions) {
-        // Check if this client should receive this update
-        if (sub.chatId && sub.chatId !== update.chatId) {
-          continue;
-        }
-
-        // Filter by update type
-        if (update.type === 'chat.typing' && !sub.includeTyping) continue;
-        if (update.type === 'chat.presence' && !sub.includePresence) continue;
-        if (update.type === 'chat.read' && !sub.includeReadReceipts) continue;
-
-        // Send update
-        try {
-          const socket = ws as { send?: (data: string) => void };
-          if (socket?.send) {
-            socket.send(JSON.stringify(update));
-          }
-        } catch (error) {
-          console.error(`[WS Chats ${instanceId}] Error sending update:`, error);
+        if (shouldReceiveUpdate(sub, update)) {
+          sendToSocket(ws, payload, instanceId);
         }
       }
     },

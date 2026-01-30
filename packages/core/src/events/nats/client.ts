@@ -213,9 +213,9 @@ export class NatsEventBus implements EventBus {
     }
 
     // Encode and publish
-    this.ensureConnected();
+    const js = this.requireJetStream();
     const data = this.sc.encode(JSON.stringify(event));
-    const ack = await this.js!.publish(subject, data);
+    const ack = await js.publish(subject, data);
 
     return {
       id: eventId,
@@ -333,7 +333,8 @@ export class NatsEventBus implements EventBus {
     handler: GenericEventHandler,
     options: SubscribeOptions,
   ): Promise<Subscription> {
-    this.ensureConnected();
+    const js = this.requireJetStream();
+    const jsm = this.requireJetStreamManager();
 
     // Determine which stream to subscribe to
     let streamName: string;
@@ -352,13 +353,13 @@ export class NatsEventBus implements EventBus {
     const consumerName = options.durable ?? generateConsumerName(pattern);
 
     // Add consumer to stream
-    await this.jsm!.consumers.add(streamName, {
+    await jsm.consumers.add(streamName, {
       ...consumerConfig,
       name: consumerName,
     });
 
     // Get consumer
-    const consumer = await this.js!.consumers.get(streamName, consumerName);
+    const consumer = await js.consumers.get(streamName, consumerName);
 
     // Start consuming
     const messages = await consumer.consume();
@@ -443,6 +444,30 @@ export class NatsEventBus implements EventBus {
     if (!this.isConnected()) {
       throw new Error('Not connected to NATS. Call connect() first.');
     }
+  }
+
+  /**
+   * Get guaranteed connected JetStream client
+   * Throws if not connected
+   */
+  private requireJetStream(): JetStreamClient {
+    this.ensureConnected();
+    if (!this.js) {
+      throw new Error('JetStream not initialized');
+    }
+    return this.js;
+  }
+
+  /**
+   * Get guaranteed connected JetStream manager
+   * Throws if not connected
+   */
+  private requireJetStreamManager(): JetStreamManager {
+    this.ensureConnected();
+    if (!this.jsm) {
+      throw new Error('JetStreamManager not initialized');
+    }
+    return this.jsm;
   }
 
   /**

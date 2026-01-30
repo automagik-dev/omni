@@ -133,7 +133,26 @@ export class PersonService {
    * Link two identities to the same person
    */
   async linkIdentities(identityAId: string, identityBId: string): Promise<Person> {
-    // Get both identities
+    const [identityA, identityB] = await this.fetchIdentityPair(identityAId, identityBId);
+
+    // If both already belong to the same person, nothing to do
+    if (identityA.personId && identityA.personId === identityB.personId) {
+      return this.getById(identityA.personId);
+    }
+
+    const targetPersonId = await this.resolveLinkTarget(identityA, identityB, identityAId, identityBId);
+    await this.publishLinkEvents(targetPersonId, identityAId, identityBId);
+
+    return this.getById(targetPersonId);
+  }
+
+  /**
+   * Fetch a pair of identities and validate they exist
+   */
+  private async fetchIdentityPair(
+    identityAId: string,
+    identityBId: string,
+  ): Promise<[PlatformIdentity, PlatformIdentity]> {
     const [identityAResult, identityBResult] = await Promise.all([
       this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityAId)).limit(1),
       this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityBId)).limit(1),
@@ -142,98 +161,91 @@ export class PersonService {
     const identityA = identityAResult[0];
     const identityB = identityBResult[0];
 
-    if (!identityA) {
-      throw new NotFoundError('PlatformIdentity', identityAId);
-    }
-    if (!identityB) {
-      throw new NotFoundError('PlatformIdentity', identityBId);
-    }
+    if (!identityA) throw new NotFoundError('PlatformIdentity', identityAId);
+    if (!identityB) throw new NotFoundError('PlatformIdentity', identityBId);
 
+    return [identityA, identityB];
+  }
+
+  /**
+   * Resolve which person should be the link target and perform the linking
+   */
+  private async resolveLinkTarget(
+    identityA: PlatformIdentity,
+    identityB: PlatformIdentity,
+    identityAId: string,
+    identityBId: string,
+  ): Promise<string> {
     const personIdA = identityA.personId;
     const personIdB = identityB.personId;
 
-    // If both already belong to the same person, nothing to do
-    if (personIdA && personIdA === personIdB) {
-      return this.getById(personIdA);
-    }
-
-    // Determine which person to keep (prefer one with more data)
-    let targetPersonId: string;
-
+    // Both have persons - merge B into A
     if (personIdA && personIdB) {
-      // Merge: move all identities from B's person to A's person
       await this.db
         .update(platformIdentities)
         .set({ personId: personIdA, linkedBy: 'manual', updatedAt: new Date() })
         .where(eq(platformIdentities.personId, personIdB));
-
-      // Delete the orphaned person
       await this.db.delete(persons).where(eq(persons.id, personIdB));
+      return personIdA;
+    }
 
-      targetPersonId = personIdA;
-    } else if (personIdA) {
-      // Link identity B to A's person
+    // Only A has a person - link B to A's person
+    if (personIdA) {
       await this.db
         .update(platformIdentities)
         .set({ personId: personIdA, linkedBy: 'manual', updatedAt: new Date() })
         .where(eq(platformIdentities.id, identityBId));
+      return personIdA;
+    }
 
-      targetPersonId = personIdA;
-    } else if (personIdB) {
-      // Link identity A to B's person
+    // Only B has a person - link A to B's person
+    if (personIdB) {
       await this.db
         .update(platformIdentities)
         .set({ personId: personIdB, linkedBy: 'manual', updatedAt: new Date() })
         .where(eq(platformIdentities.id, identityAId));
-
-      targetPersonId = personIdB;
-    } else {
-      // Neither has a person - create one
-      const [newPerson] = await this.db.insert(persons).values({}).returning();
-
-      if (!newPerson) {
-        throw new Error('Failed to create person');
-      }
-
-      await this.db
-        .update(platformIdentities)
-        .set({ personId: newPerson.id, linkedBy: 'manual', updatedAt: new Date() })
-        .where(or(eq(platformIdentities.id, identityAId), eq(platformIdentities.id, identityBId)));
-
-      targetPersonId = newPerson.id;
+      return personIdB;
     }
 
-    if (this.eventBus) {
-      // Get the identity details for proper event payloads
-      const [linkedIdentityA, linkedIdentityB] = await Promise.all([
-        this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityAId)).limit(1),
-        this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityBId)).limit(1),
-      ]);
+    // Neither has a person - create one
+    const [newPerson] = await this.db.insert(persons).values({}).returning();
+    if (!newPerson) throw new Error('Failed to create person');
 
-      if (linkedIdentityA[0]) {
-        await this.eventBus.publish('identity.linked', {
-          personId: targetPersonId,
-          platformIdentityId: identityAId,
-          channelType: linkedIdentityA[0].channel,
-          platformUserId: linkedIdentityA[0].platformUserId,
-          linkedBy: 'manual',
-          confidence: 100,
-        });
-      }
+    await this.db
+      .update(platformIdentities)
+      .set({ personId: newPerson.id, linkedBy: 'manual', updatedAt: new Date() })
+      .where(or(eq(platformIdentities.id, identityAId), eq(platformIdentities.id, identityBId)));
 
-      if (linkedIdentityB[0]) {
-        await this.eventBus.publish('identity.linked', {
-          personId: targetPersonId,
-          platformIdentityId: identityBId,
-          channelType: linkedIdentityB[0].channel,
-          platformUserId: linkedIdentityB[0].platformUserId,
-          linkedBy: 'manual',
-          confidence: 100,
-        });
-      }
-    }
+    return newPerson.id;
+  }
 
-    return this.getById(targetPersonId);
+  /**
+   * Publish identity.linked events for both identities
+   */
+  private async publishLinkEvents(targetPersonId: string, identityAId: string, identityBId: string): Promise<void> {
+    if (!this.eventBus) return;
+
+    const [linkedIdentityA, linkedIdentityB] = await Promise.all([
+      this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityAId)).limit(1),
+      this.db.select().from(platformIdentities).where(eq(platformIdentities.id, identityBId)).limit(1),
+    ]);
+
+    const publishForIdentity = async (identity: PlatformIdentity | undefined, identityId: string) => {
+      if (!identity) return;
+      await this.eventBus?.publish('identity.linked', {
+        personId: targetPersonId,
+        platformIdentityId: identityId,
+        channelType: identity.channel,
+        platformUserId: identity.platformUserId,
+        linkedBy: 'manual',
+        confidence: 100,
+      });
+    };
+
+    await Promise.all([
+      publishForIdentity(linkedIdentityA[0], identityAId),
+      publishForIdentity(linkedIdentityB[0], identityBId),
+    ]);
   }
 
   /**
