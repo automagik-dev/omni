@@ -2,7 +2,7 @@
 
 > Plugin SDK for building channel integrations with full lifecycle management, multi-instance support, and event publishing helpers.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Updated:** 2026-01-30
 **Author:** WISH Agent

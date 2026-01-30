@@ -1,0 +1,35 @@
+{
+  "name": "@omni/channel-sdk",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types/index.ts",
+      "default": "./src/types/index.ts"
+    },
+    "./base": {
+      "types": "./src/base/index.ts",
+      "default": "./src/base/index.ts"
+    },
+    "./discovery": {
+      "types": "./src/discovery/index.ts",
+      "default": "./src/discovery/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@omni/core": "workspace:*"
+  },
+  "devDependencies": {
+    "bun-types": "^1.1.42",
+    "typescript": "^5.7.3"
+  }
+}

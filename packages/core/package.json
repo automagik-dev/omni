@@ -11,6 +11,10 @@
       "types": "./src/events/index.ts",
       "default": "./src/events/index.ts"
     },
+    "./events/nats": {
+      "types": "./src/events/nats/index.ts",
+      "default": "./src/events/nats/index.ts"
+    },
     "./schemas": {
       "types": "./src/schemas/index.ts",
       "default": "./src/schemas/index.ts"
