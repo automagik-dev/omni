@@ -156,16 +156,47 @@ async function main() {
     });
 
     // Handle graceful shutdown
-    const shutdown = () => {
-      console.log('\nShutting down...');
-      server.close(() => {
-        console.log('Server closed');
-      });
-      // Force exit after 3 seconds if graceful shutdown fails
-      setTimeout(() => {
-        console.log('Force exiting...');
+    let isShuttingDown = false;
+    const shutdown = async () => {
+      if (isShuttingDown) return;
+      isShuttingDown = true;
+
+      console.log('\nShutting down gracefully...');
+
+      // Force exit after 10 seconds if graceful shutdown fails
+      const forceExitTimer = setTimeout(() => {
+        console.log('Force exiting (timeout)...');
+        process.exit(1);
+      }, 10000);
+      forceExitTimer.unref();
+
+      try {
+        // 1. Stop accepting new connections
+        server.close(() => {
+          console.log('[Shutdown] HTTP server closed');
+        });
+
+        // 2. Disconnect all WhatsApp instances and destroy plugins
+        if (globalChannelRegistry) {
+          console.log('[Shutdown] Disconnecting all channel instances...');
+          await globalChannelRegistry.destroyAll();
+          console.log('[Shutdown] All channel plugins destroyed');
+        }
+
+        // 3. Close NATS event bus (drains subscriptions)
+        if (globalEventBus) {
+          console.log('[Shutdown] Closing NATS connection...');
+          await globalEventBus.close();
+          console.log('[Shutdown] NATS connection closed');
+        }
+
+        console.log('[Shutdown] Graceful shutdown complete');
+        clearTimeout(forceExitTimer);
         process.exit(0);
-      }, 3000).unref();
+      } catch (error) {
+        console.error('[Shutdown] Error during graceful shutdown:', error);
+        process.exit(1);
+      }
     };
 
     process.on('SIGINT', shutdown);
