@@ -12,7 +12,8 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "turbo test",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "generate:sdk": "bun scripts/generate-sdk.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

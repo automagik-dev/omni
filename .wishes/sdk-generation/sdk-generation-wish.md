@@ -2,7 +2,7 @@
 
 > Auto-generate TypeScript SDK from OpenAPI spec with full type safety and excellent DX.
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Updated:** 2026-01-30
 **Author:** WISH Agent
