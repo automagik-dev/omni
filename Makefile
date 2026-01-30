@@ -60,7 +60,7 @@ dev: dev-services
 
 # Start just the API (assumes services already running)
 dev-api:
-	@set -a && . ./.env && set +a && cd packages/api && bun --watch src/index.ts
+	@set -a && . ./.env && set +a && bun --watch packages/api/src/index.ts
 
 # Start managed services via PM2 (reads *_MANAGED from .env)
 dev-services: ensure-nats
