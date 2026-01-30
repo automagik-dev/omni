@@ -15,6 +15,16 @@ export const CONTENT_TYPES = [
   'contact',
   'location',
   'reaction',
+  // Extended types for WhatsApp
+  'poll',
+  'poll_update',
+  'event',
+  'live_location',
+  'product',
+  // Meta types (message lifecycle)
+  'edit',
+  'delete',
+  'unknown',
 ] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 

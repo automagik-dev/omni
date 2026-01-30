@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "omni-v2",
+      "dependencies": {
+        "qrcode-terminal": "^0.12.0",
+      },
       "devDependencies": {
         "@biomejs/biome": "^1.9.4",
         "bun-types": "^1.1.42",

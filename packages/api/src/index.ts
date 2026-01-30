@@ -119,8 +119,8 @@ async function main() {
           ...(hasBody && { body: req, duplex: 'half' } as any),
         });
 
-        return app.fetch(fetchRequest)
-          .then(async (response) => {
+        return Promise.resolve(app.fetch(fetchRequest))
+          .then(async (response: Response) => {
             res.writeHead(response.status, {
               ...Object.fromEntries(response.headers),
               'Content-Type': response.headers.get('Content-Type') || 'application/json',
@@ -131,7 +131,7 @@ async function main() {
               res.end();
             }
           })
-          .catch((error) => {
+          .catch((error: Error) => {
             console.error('Request error:', error);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Internal server error' }));

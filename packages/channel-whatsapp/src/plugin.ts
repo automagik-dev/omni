@@ -421,6 +421,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       filename?: string;
       location?: { latitude: number; longitude: number; name?: string; address?: string };
       contact?: { name: string; phone?: string };
+      // Extended content fields
+      poll?: { name: string; options: string[]; selectableCount?: number };
+      pollVotes?: string[];
+      event?: { name: string; description?: string; location?: string; startTime?: Date; endTime?: Date };
+      product?: { id: string; title?: string; description?: string; price?: string; currency?: string; imageUrl?: string };
+      targetMessageId?: string;
+      editedText?: string;
     },
     replyToId: string | undefined,
     rawMessage: WAMessage,
@@ -430,6 +437,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (isFromMe) {
       return;
     }
+
+    // Build extended raw payload with structured content data
+    const extendedPayload: Record<string, unknown> = {
+      ...(rawMessage as unknown as Record<string, unknown>),
+    };
+
+    // Add structured extended fields if present
+    if (content.poll) extendedPayload.poll = content.poll;
+    if (content.pollVotes) extendedPayload.pollVotes = content.pollVotes;
+    if (content.event) extendedPayload.event = content.event;
+    if (content.product) extendedPayload.product = content.product;
+    if (content.location) extendedPayload.location = content.location;
+    if (content.contact) extendedPayload.contact = content.contact;
+    if (content.targetMessageId) extendedPayload.targetMessageId = content.targetMessageId;
 
     await this.emitMessageReceived({
       instanceId,
@@ -443,7 +464,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         mimeType: content.mimeType,
       },
       replyToId,
-      rawPayload: rawMessage as unknown as Record<string, unknown>,
+      rawPayload: extendedPayload,
     });
   }
 
@@ -501,6 +522,66 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       chatId,
       readAt: Date.now(),
     });
+  }
+
+  /**
+   * Handle message edited
+   * @internal
+   */
+  async handleMessageEdited(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    newText: string,
+  ): Promise<void> {
+    // Emit as a special message.received event with type 'edit'
+    await this.emitMessageReceived({
+      instanceId,
+      externalId: `${externalId}-edit-${Date.now()}`,
+      chatId,
+      from: chatId,
+      content: {
+        type: 'edit',
+        text: newText,
+      },
+      rawPayload: {
+        editedMessageId: externalId,
+        newText,
+        editedAt: Date.now(),
+      },
+    });
+
+    this.logger.debug('Message edited', { instanceId, externalId, chatId, newText: newText.substring(0, 50) });
+  }
+
+  /**
+   * Handle message deleted (revoked)
+   * @internal
+   */
+  async handleMessageDeleted(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    fromMe: boolean,
+  ): Promise<void> {
+    // Emit as a special message.received event with type 'delete'
+    await this.emitMessageReceived({
+      instanceId,
+      externalId: `${externalId}-delete-${Date.now()}`,
+      chatId,
+      from: chatId,
+      content: {
+        type: 'delete',
+        text: fromMe ? 'Message deleted by sender' : 'Message deleted',
+      },
+      rawPayload: {
+        deletedMessageId: externalId,
+        deletedAt: Date.now(),
+        deletedByMe: fromMe,
+      },
+    });
+
+    this.logger.debug('Message deleted', { instanceId, externalId, chatId, fromMe });
   }
 
   /**

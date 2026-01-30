@@ -24,5 +24,8 @@
   "packageManager": "bun@1.1.42",
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
   }
 }

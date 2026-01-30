@@ -2,6 +2,11 @@
  * Message event handlers for Baileys socket
  *
  * Handles incoming messages and converts them to Omni format.
+ * Supports all WhatsApp message types including:
+ * - Basic: text, image, audio, video, document, sticker
+ * - Interactive: reaction, location, live_location, contact
+ * - Extended: poll, poll_update, event, product
+ * - Lifecycle: edit, delete
  */
 
 import type { ContentType } from '@omni/core/types';
@@ -31,6 +36,33 @@ interface ExtractedContent {
     name: string;
     phone?: string;
   };
+  // Poll-specific fields
+  poll?: {
+    name: string;
+    options: string[];
+    selectableCount?: number;
+  };
+  pollVotes?: string[];
+  // Event/calendar specific fields
+  event?: {
+    name: string;
+    description?: string;
+    location?: string;
+    startTime?: Date;
+    endTime?: Date;
+  };
+  // Product-specific fields
+  product?: {
+    id: string;
+    title?: string;
+    description?: string;
+    price?: string;
+    currency?: string;
+    imageUrl?: string;
+  };
+  // Edit-specific fields
+  editedText?: string;
+  editedMessageId?: string;
 }
 
 type MessageContent = proto.IMessage;
@@ -118,10 +150,151 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       targetMessageId: m.reactionMessage?.key?.id ?? undefined,
     }),
   },
+  // Poll creation message
+  {
+    check: (m) => !!m.pollCreationMessage || !!m.pollCreationMessageV3,
+    extract: (m) => {
+      const poll = m.pollCreationMessage || m.pollCreationMessageV3;
+      return {
+        type: 'poll' as ContentType,
+        text: poll?.name ?? undefined,
+        poll: {
+          name: poll?.name ?? '',
+          options: poll?.options?.map((o: { optionName?: string | null }) => o.optionName ?? '') ?? [],
+          selectableCount: poll?.selectableOptionsCount ?? undefined,
+        },
+      };
+    },
+  },
+  // Poll update (vote) message
+  {
+    check: (m) => !!m.pollUpdateMessage,
+    extract: (m) => ({
+      type: 'poll_update' as ContentType,
+      targetMessageId: m.pollUpdateMessage?.pollCreationMessageKey?.id ?? undefined,
+      // Note: votes are encrypted, need decryption with original poll message
+      pollVotes: [],
+    }),
+  },
+  // Event/calendar message (scheduled events)
+  {
+    check: (m) => !!m.eventMessage,
+    extract: (m) => ({
+      type: 'event' as ContentType,
+      text: m.eventMessage?.name ?? undefined,
+      event: {
+        name: m.eventMessage?.name ?? '',
+        description: m.eventMessage?.description ?? undefined,
+        location: m.eventMessage?.location?.name ?? undefined,
+        startTime: m.eventMessage?.startTime
+          ? new Date(Number(m.eventMessage.startTime) * 1000)
+          : undefined,
+      },
+    }),
+  },
+  // Live location sharing
+  {
+    check: (m) => !!m.liveLocationMessage,
+    extract: (m) => ({
+      type: 'live_location' as ContentType,
+      location: {
+        latitude: m.liveLocationMessage?.degreesLatitude ?? 0,
+        longitude: m.liveLocationMessage?.degreesLongitude ?? 0,
+        name: m.liveLocationMessage?.caption ?? undefined,
+      },
+      text: m.liveLocationMessage?.caption ?? undefined,
+    }),
+  },
+  // Product message (for business accounts)
+  {
+    check: (m) => !!m.productMessage,
+    extract: (m) => ({
+      type: 'product' as ContentType,
+      text: m.productMessage?.product?.productId ?? undefined,
+      product: {
+        id: m.productMessage?.product?.productId ?? '',
+        title: m.productMessage?.product?.title ?? undefined,
+        description: m.productMessage?.product?.description ?? undefined,
+        price: m.productMessage?.product?.priceAmount1000
+          ? String(Number(m.productMessage.product.priceAmount1000) / 1000)
+          : undefined,
+        currency: m.productMessage?.product?.currencyCode ?? undefined,
+        imageUrl: m.productMessage?.product?.productImageCount
+          ? m.productMessage?.product?.productImage?.url ?? undefined
+          : undefined,
+      },
+    }),
+  },
+  // Protocol message (edits, deletes handled separately)
+  {
+    check: (m) => !!m.protocolMessage,
+    extract: (m) => {
+      const proto = m.protocolMessage;
+      // Message edit
+      if (proto?.type === 14 || proto?.editedMessage) {
+        return {
+          type: 'edit' as ContentType,
+          targetMessageId: proto?.key?.id ?? undefined,
+          editedText: proto?.editedMessage?.conversation ||
+            proto?.editedMessage?.extendedTextMessage?.text ||
+            undefined,
+        };
+      }
+      // Message delete (revoke)
+      if (proto?.type === 0) {
+        return {
+          type: 'delete' as ContentType,
+          targetMessageId: proto?.key?.id ?? undefined,
+        };
+      }
+      return null;
+    },
+  },
+  // Template button reply
+  {
+    check: (m) => !!m.templateButtonReplyMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.templateButtonReplyMessage?.selectedDisplayText ?? m.templateButtonReplyMessage?.selectedId ?? undefined,
+    }),
+  },
+  // List response message
+  {
+    check: (m) => !!m.listResponseMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.listResponseMessage?.title ?? m.listResponseMessage?.singleSelectReply?.selectedRowId ?? undefined,
+    }),
+  },
+  // Buttons response message
+  {
+    check: (m) => !!m.buttonsResponseMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.buttonsResponseMessage?.selectedDisplayText ?? m.buttonsResponseMessage?.selectedButtonId ?? undefined,
+    }),
+  },
 ];
 
 /**
+ * Fallback extractor for unknown message types
+ * Captures the message with type 'unknown' and includes raw keys for debugging
+ */
+function extractUnknownContent(message: MessageContent): ExtractedContent {
+  // Get all keys that have truthy values (actual message content)
+  const messageKeys = Object.keys(message).filter(
+    (k) => message[k as keyof MessageContent] && k !== 'messageContextInfo',
+  );
+
+  return {
+    type: 'unknown' as ContentType,
+    text: `Unhandled message type: ${messageKeys.join(', ')}`,
+  };
+}
+
+/**
  * Extract content from a Baileys message using handler map
+ * Falls back to 'unknown' type for unrecognized messages to ensure nothing is lost
  */
 function extractContent(msg: WAMessage): ExtractedContent | null {
   const message = msg.message;
@@ -129,11 +302,13 @@ function extractContent(msg: WAMessage): ExtractedContent | null {
 
   for (const { check, extract } of contentExtractors) {
     if (check(message)) {
-      return extract(message);
+      const result = extract(message);
+      if (result) return result;
     }
   }
 
-  return null;
+  // Fallback: capture unknown message types so they're not lost
+  return extractUnknownContent(message);
 }
 
 /**
@@ -183,6 +358,7 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   const { id: senderId } = fromJid(isFromMe(msg) ? chatId : msg.key.participant || chatId);
   const replyToId = getReplyToId(msg);
 
+  // Handle reactions specially (they reference another message)
   if (content.type === 'reaction') {
     await plugin.handleReactionReceived(
       instanceId,
@@ -196,6 +372,29 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
     return;
   }
 
+  // Handle edit messages via protocol message
+  if (content.type === 'edit' && content.targetMessageId) {
+    await plugin.handleMessageEdited(
+      instanceId,
+      content.targetMessageId,
+      chatId,
+      content.editedText || content.text || '',
+    );
+    return;
+  }
+
+  // Handle delete messages via protocol message
+  if (content.type === 'delete' && content.targetMessageId) {
+    await plugin.handleMessageDeleted(
+      instanceId,
+      content.targetMessageId,
+      chatId,
+      isFromMe(msg),
+    );
+    return;
+  }
+
+  // Pass all content fields including extended ones (poll, event, product, etc.)
   await plugin.handleMessageReceived(instanceId, externalId, chatId, senderId, content, replyToId, msg, isFromMe(msg));
 }
 
@@ -244,14 +443,65 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
 
   sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
+      // Handle delivery/read status updates
       if (update.update.status) {
         await processStatusUpdate(plugin, instanceId, update.key, update.update.status);
+      }
+
+      // Handle message edits
+      if (update.update.message) {
+        const editedContent = update.update.message;
+        const newText =
+          editedContent.conversation ||
+          editedContent.extendedTextMessage?.text ||
+          editedContent.imageMessage?.caption ||
+          editedContent.videoMessage?.caption ||
+          null;
+
+        if (newText) {
+          await plugin.handleMessageEdited(
+            instanceId,
+            update.key.id || '',
+            update.key.remoteJid || '',
+            newText,
+          );
+        }
       }
     }
   });
 
-  sock.ev.on('messages.delete', async (_deletion) => {
-    // Handle deleted messages if needed in the future
+  sock.ev.on('messages.delete', async (deletion) => {
+    // Handle message deletions (revoke)
+    if ('keys' in deletion) {
+      // Batch deletion
+      for (const key of deletion.keys) {
+        await plugin.handleMessageDeleted(
+          instanceId,
+          key.id || '',
+          key.remoteJid || '',
+          key.fromMe || false,
+        );
+      }
+    }
+  });
+
+  // Handle message reactions (separate from upsert for updates to existing reactions)
+  sock.ev.on('messages.reaction', async (reactions) => {
+    for (const { key, reaction } of reactions) {
+      const chatId = key.remoteJid || '';
+      const messageId = key.id || '';
+      const { id: senderId } = fromJid(reaction.key?.participant || reaction.key?.remoteJid || chatId);
+
+      await plugin.handleReactionReceived(
+        instanceId,
+        reaction.key?.id || messageId,
+        chatId,
+        senderId,
+        reaction.text || '',
+        messageId,
+        reaction.key?.fromMe || false,
+      );
+    }
   });
 }
 
