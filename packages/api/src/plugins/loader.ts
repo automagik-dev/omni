@@ -26,9 +26,9 @@ const logger = createLogger({ module: 'plugin-loader' });
  */
 function getMonorepoPackagesDir(): string {
   // This file is at packages/api/src/plugins/loader.ts
-  // We need to go up 4 levels to reach packages/
+  // Going up: plugins -> src -> api -> packages
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(currentDir, '..', '..', '..', '..');
+  return resolve(currentDir, '..', '..', '..');
 }
 
 export interface LoadPluginsOptions {
