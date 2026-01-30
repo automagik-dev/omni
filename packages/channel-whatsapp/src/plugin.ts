@@ -30,8 +30,6 @@ import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
  * All options have sensible defaults and can be overridden
  */
 export interface WhatsAppConnectionOptions {
-  /** Enable QR code terminal output (default: true) */
-  printQRInTerminal?: boolean;
   /** Baileys logger level (default: 'warn') */
   logLevel?: SocketConfig['logLevel'];
   /** Browser identification (default: ['Omni', 'Chrome', '120.0.0']) */

@@ -37,10 +37,17 @@ const reconnectAttempts = new Map<string, number>();
 
 /**
  * Track QR code generation attempts per instance
- * After MAX_QR_ATTEMPTS, we clear auth state and start fresh
+ * Only counts QR codes that expire without being scanned (not connection errors)
+ * After MAX_QR_ATTEMPTS expired QRs, we clear auth state and start fresh
  */
 const qrCodeAttempts = new Map<string, number>();
 const MAX_QR_ATTEMPTS = 3;
+
+/**
+ * Track if current QR has been displayed (for expiry counting)
+ * We only increment QR counter when a displayed QR expires
+ */
+const activeQrCodes = new Map<string, { code: string; displayedAt: number }>();
 
 /**
  * Track connection timeouts per instance
@@ -59,7 +66,7 @@ function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
 
 /**
  * Handle QR code event
- * Tracks QR attempts and triggers auth state reset after MAX_QR_ATTEMPTS
+ * Tracks QR attempts and triggers auth state reset after MAX_QR_ATTEMPTS expired QRs
  *
  * @returns true if this QR should be used, false if auth was cleared (will reconnect)
  */
@@ -69,12 +76,22 @@ async function handleQrCode(
   qr: string,
   clearAuthAndReconnect: () => Promise<void>,
 ): Promise<boolean> {
-  // Increment QR attempts
-  const attempts = (qrCodeAttempts.get(instanceId) || 0) + 1;
-  qrCodeAttempts.set(instanceId, attempts);
+  // Check if previous QR expired (new QR received = previous one expired or wasn't scanned)
+  const previousQr = activeQrCodes.get(instanceId);
+  if (previousQr) {
+    // Previous QR existed and now we got a new one = it expired/failed
+    const attempts = (qrCodeAttempts.get(instanceId) || 0) + 1;
+    qrCodeAttempts.set(instanceId, attempts);
+    console.log(`[WhatsApp] QR code expired, attempt ${attempts}/${MAX_QR_ATTEMPTS} for instance ${instanceId}`);
+  } else {
+    // First QR code for this connection attempt
+    console.log(`[WhatsApp] QR code generated for instance ${instanceId}`);
+  }
 
-  // Log QR attempt
-  console.log(`[WhatsApp] QR code ${attempts}/${MAX_QR_ATTEMPTS} for instance ${instanceId}`);
+  // Track this QR as active
+  activeQrCodes.set(instanceId, { code: qr, displayedAt: Date.now() });
+
+  const attempts = qrCodeAttempts.get(instanceId) || 0;
 
   // Check if we've exceeded max attempts
   if (attempts >= MAX_QR_ATTEMPTS) {
@@ -170,8 +187,13 @@ async function handleConnectionClose(
   const reason = error?.output?.payload?.message || 'Unknown error';
   const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
+  // Clear active QR - connection error is NOT a QR expiry
+  // This prevents counting connection errors as QR failures
+  activeQrCodes.delete(instanceId);
+
   if (!shouldReconnect) {
     reconnectAttempts.delete(instanceId);
+    qrCodeAttempts.delete(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
     return;
   }
@@ -180,6 +202,7 @@ async function handleConnectionClose(
 
   if (attempts >= config.maxRetries) {
     reconnectAttempts.delete(instanceId);
+    qrCodeAttempts.delete(instanceId);
     await plugin.handleDisconnected(
       instanceId,
       `Max reconnection attempts (${config.maxRetries}) exceeded: ${reason}`,
@@ -200,6 +223,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Clear all tracking state on successful connection
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
+  activeQrCodes.delete(instanceId);
   clearConnectionTimeout(instanceId);
 
   console.log(`[WhatsApp] Connection opened for ${instanceId}`);
@@ -260,6 +284,7 @@ export function resetReconnectAttempts(instanceId: string): void {
 export function resetConnectionState(instanceId: string): void {
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
+  activeQrCodes.delete(instanceId);
   clearConnectionTimeout(instanceId);
 }
 

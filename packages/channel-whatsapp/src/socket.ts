@@ -23,8 +23,6 @@ export interface SocketConfig {
   auth: AuthenticationState;
 
   // === Display Options ===
-  /** Enable QR code terminal output (default: true in dev) */
-  printQRInTerminal?: boolean;
   /** Pino logger level (default: 'warn') */
   logLevel?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
@@ -53,7 +51,6 @@ export interface SocketConfig {
  * Default socket configuration values
  */
 export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
-  printQRInTerminal: true,
   logLevel: 'warn',
   browser: ['Omni', 'Chrome', '120.0.0'],
   mobile: false,
@@ -101,7 +98,7 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     },
     msgRetryCounterCache,
     // All options below are configurable per-instance
-    printQRInTerminal: mergedConfig.printQRInTerminal,
+    // Note: printQRInTerminal is deprecated in Baileys v7 - we handle QR via connection.update event
     mobile: mergedConfig.mobile,
     browser: mergedConfig.browser,
     generateHighQualityLinkPreview: mergedConfig.generateHighQualityLinkPreview,
