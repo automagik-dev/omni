@@ -79,6 +79,13 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     mobile: mergedConfig.mobile,
     browser: mergedConfig.browser,
     generateHighQualityLinkPreview: true,
+    // Fix for "Stream Errored (conflict)" - https://github.com/WhiskeySockets/Baileys/issues/2094
+    syncFullHistory: false,
+    // Increase timeouts to prevent premature disconnects
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
+    // Keep connection alive
+    keepAliveIntervalMs: 25_000,
   });
 }
 
