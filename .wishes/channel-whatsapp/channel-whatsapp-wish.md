@@ -2,7 +2,7 @@
 
 > Complete WhatsApp integration via Baileys with full message types, presence, typing, and QR auth.
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Updated:** 2026-01-30
 **Author:** WISH Agent
