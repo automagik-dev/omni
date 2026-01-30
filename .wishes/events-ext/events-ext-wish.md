@@ -11,9 +11,13 @@
 
 ## Context
 
-The core EventBus (`nats-events`) provides the infrastructure for publishing and subscribing to events. This wish builds the **extensibility layer** on top:
+The core EventBus (`nats-events`) provides the infrastructure for publishing and subscribing to events, including:
+- **In-memory EventRegistry** (`@omni/core/events/nats/registry.ts`) for runtime schema validation
+- **SystemEventSchemas** with dead_letter, replay.*, health.* schemas predefined
 
-1. **Advanced Event Registry** - Database-backed schema storage, versioning, discovery
+This wish builds the **extensibility layer** on top:
+
+1. **Persistent Event Registry** - Database-backed schema storage, versioning, discovery API
 2. **External Event Sources** - Webhooks, cron triggers, manual triggers
 3. **Event Automations** - Rule-based "when X happens, do Y" system
 
@@ -40,11 +44,12 @@ Reference: `docs/architecture/event-system.md`
 
 ### IN SCOPE
 
-**Event Registry:**
-- Database-backed event schema storage
+**Persistent Event Registry (extends @omni/core EventRegistry):**
+- Database-backed event schema storage (upgrade from in-memory)
 - Schema versioning (breaking change detection)
-- Event discovery API (list all event types)
+- Event discovery API (list all event types including core)
 - Schema validation on publish (optional, configurable)
+- Sync between in-memory registry and database on startup
 
 **External Event Sources:**
 - Webhook receiver endpoint (`POST /webhooks/:source`)
@@ -68,16 +73,22 @@ Reference: `docs/architecture/event-system.md`
 
 ---
 
-## Execution Group A: Advanced Event Registry
+## Execution Group A: Persistent Event Registry
 
-**Goal:** Database-backed event registry with discovery and validation.
+**Goal:** Extend the in-memory EventRegistry (`@omni/core/events/nats/registry.ts`) with database persistence.
+
+**Existing (from nats-events):**
+- `EventRegistry` class with `register()`, `validate()`, `list()`, `listByNamespace()`
+- `eventRegistry` singleton instance
+- `createEventSchema()` helper
+- `SystemEventSchemas` (dead_letter, replay.started, replay.completed, health.degraded)
 
 **Deliverables:**
-- [ ] `packages/core/src/events/registry/index.ts` - Registry service
-- [ ] `packages/core/src/events/registry/storage.ts` - Database storage
+- [ ] `packages/core/src/events/registry/storage.ts` - Database persistence layer
 - [ ] `packages/core/src/db/schema/event-registry.ts` - Database table
+- [ ] Sync mechanism: load schemas from DB on startup, write to DB on register
 - [ ] Schema versioning with compatibility checks
-- [ ] Event discovery API endpoint
+- [ ] Event discovery API endpoint (tRPC route)
 
 **Database Schema:**
 ```typescript

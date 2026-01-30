@@ -130,8 +130,7 @@ bun run typecheck
 - [ ] `packages/channel-sdk/src/base/BaseChannelPlugin.ts` - Abstract base class
 - [ ] `packages/channel-sdk/src/base/ChannelRegistry.ts` - Plugin registry
 - [ ] `packages/channel-sdk/src/base/HealthChecker.ts` - Health check runner
-- [ ] `packages/channel-sdk/src/helpers/events.ts` - Event emitter helpers
-- [ ] `packages/channel-sdk/src/helpers/subjects.ts` - Subject builder helpers
+- [ ] `packages/channel-sdk/src/helpers/events.ts` - Event emitter helpers (uses buildSubject from @omni/core)
 - [ ] `packages/channel-sdk/src/helpers/typing.ts` - Typing indicator helpers
 - [ ] `packages/channel-sdk/src/helpers/presence.ts` - Presence helpers
 - [ ] `packages/channel-sdk/src/helpers/message.ts` - Message formatting helpers
@@ -180,18 +179,15 @@ protected async emitMediaReceived(params: {
 
 **Subject Builder Helpers:**
 ```typescript
-// packages/channel-sdk/src/helpers/subjects.ts
-
-export function buildChannelSubject(
-  eventType: string,
-  channelType: ChannelType,
-  instanceId: string
-): string {
-  return `${eventType}.${channelType}.${instanceId}`;
-}
+// Re-export from @omni/core/events/nats (already implemented in nats-events)
+import { buildSubject, buildSubscribePattern, parseSubject } from '@omni/core/events/nats';
 
 // Used internally by BaseChannelPlugin
 // Channels don't call this directly - they use emitX() helpers
+//
+// Example:
+// buildSubject('message.received', 'whatsapp-baileys', 'wa-001')
+// → 'message.received.whatsapp-baileys.wa-001'
 ```
 
 **Acceptance Criteria:**
@@ -259,8 +255,7 @@ packages/channel-sdk/
 │   │   ├── ChannelRegistry.ts      # Plugin registry
 │   │   └── HealthChecker.ts        # Health monitoring
 │   ├── helpers/
-│   │   ├── events.ts               # Event emitter helpers
-│   │   ├── subjects.ts             # Subject builders
+│   │   ├── events.ts               # Event emitter helpers (uses @omni/core)
 │   │   ├── typing.ts               # Typing indicators
 │   │   ├── presence.ts             # Presence normalization
 │   │   └── message.ts              # Message formatting
@@ -314,7 +309,8 @@ abstract class BaseChannelPlugin implements ChannelPlugin {
    * Subject: message.received.{this.id}.{instanceId}
    */
   protected async emitMessageReceived(params: MessageReceivedParams): Promise<void> {
-    const subject = buildChannelSubject('message.received', this.id, params.instanceId);
+    // Uses buildSubject from @omni/core/events/nats
+    const subject = buildSubject('message.received', this.id, params.instanceId);
 
     await this.eventBus.publish('message.received', {
       messageId: params.messageId ?? generateId('msg'),
@@ -340,7 +336,7 @@ abstract class BaseChannelPlugin implements ChannelPlugin {
     instanceId: string,
     metadata?: Record<string, unknown>
   ): Promise<void> {
-    const subject = buildChannelSubject('instance.connected', this.id, instanceId);
+    const subject = buildSubject('instance.connected', this.id, instanceId);
 
     await this.eventBus.publish('instance.connected', {
       instanceId,

@@ -13,6 +13,13 @@
 
 Once the core EventBus is running (`nats-events` wish), we need operational tooling to handle failures, debug issues, and monitor system health. This wish covers the "day 2" operations capabilities.
 
+**Existing from nats-events:**
+- `SystemEventSchemas.deadLetter` - schema for dead letter events (`system.dead_letter`)
+- `SystemEventSchemas.replayStarted` - schema for replay start events
+- `SystemEventSchemas.replayCompleted` - schema for replay completion events
+- `SystemEventSchemas.healthDegraded` - schema for health alerts
+- SYSTEM stream configured for `system.>` events
+
 Reference: `docs/architecture/event-system.md`
 
 ---
@@ -86,7 +93,7 @@ export const deadLetterEvents = pgTable('dead_letter_events', {
 - [ ] Can list dead letters by event type, time range
 - [ ] Can retry a specific dead letter event
 - [ ] Can mark dead letter as resolved (manual resolution)
-- [ ] System event emitted: `system.dead_letter`
+- [ ] Uses `SystemEventSchemas.deadLetter` from `@omni/core/events/nats` for `system.dead_letter` events
 
 **Validation:**
 ```bash
