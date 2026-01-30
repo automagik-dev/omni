@@ -4,12 +4,13 @@
  * Discovers and loads channel plugins from the packages directory.
  */
 
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   type ChannelPlugin,
   type ChannelRegistry,
   type DiscoveryResult,
   discoverAndRegisterPlugins,
-  getDefaultPackagesDir,
 } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -18,6 +19,17 @@ import { createPluginContext } from './context';
 import { createLogger } from './logger';
 
 const logger = createLogger({ module: 'plugin-loader' });
+
+/**
+ * Get the monorepo packages directory
+ * Resolves from the API package location to the monorepo root packages/
+ */
+function getMonorepoPackagesDir(): string {
+  // This file is at packages/api/src/plugins/loader.ts
+  // We need to go up 4 levels to reach packages/
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  return resolve(currentDir, '..', '..', '..', '..');
+}
 
 export interface LoadPluginsOptions {
   /** Directory containing channel-* packages */
@@ -43,7 +55,7 @@ export interface LoadPluginsResult {
  * Load and initialize all channel plugins
  */
 export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<LoadPluginsResult> {
-  const { packagesDir = getDefaultPackagesDir(), eventBus, db } = options;
+  const { packagesDir = getMonorepoPackagesDir(), eventBus, db } = options;
 
   logger.info('Starting channel plugin discovery', { packagesDir });
 
