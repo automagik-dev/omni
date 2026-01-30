@@ -32,3 +32,6 @@ export {
   setupConnectionListener,
   setupMessageListener,
 } from './qr-store';
+
+// Instance monitoring and robustness
+export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';

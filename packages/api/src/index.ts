@@ -9,7 +9,14 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, connectEventBus } from '@omni/core';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 import { createApp } from './app';
-import { autoReconnectInstances, loadChannelPlugins, setupConnectionListener, setupMessageListener, setupQrCodeListener } from './plugins';
+import {
+  InstanceMonitor,
+  loadChannelPlugins,
+  reconnectWithPool,
+  setupConnectionListener,
+  setupMessageListener,
+  setupQrCodeListener,
+} from './plugins';
 
 // Runtime detection
 const isBun = typeof Bun !== 'undefined';
@@ -23,6 +30,7 @@ const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 // Global references for plugin system
 let globalEventBus: EventBus | null = null;
 let globalChannelRegistry: ChannelRegistry | null = null;
+let globalInstanceMonitor: InstanceMonitor | null = null;
 
 /**
  * Get the global channel registry
@@ -36,6 +44,13 @@ export function getChannelRegistry(): ChannelRegistry | null {
  */
 export function getEventBus(): EventBus | null {
   return globalEventBus;
+}
+
+/**
+ * Get the global instance monitor
+ */
+export function getInstanceMonitor(): InstanceMonitor | null {
+  return globalInstanceMonitor;
 }
 
 async function main() {
@@ -85,16 +100,28 @@ async function main() {
         console.warn(`${result.failed} channel plugin(s) failed to load`);
       }
 
-      // Auto-reconnect previously active instances
+      // Auto-reconnect previously active instances with connection pooling
       if (result.loaded > 0) {
         console.log('Auto-reconnecting active instances...');
-        const reconnectResult = await autoReconnectInstances(db);
+        const reconnectResult = await reconnectWithPool(db, result.registry, {
+          maxConcurrent: 3,
+          delayBetweenMs: 500,
+        });
         if (reconnectResult.attempted > 0) {
           console.log(
             `Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances` +
               (reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : ''),
           );
         }
+
+        // Start instance monitor for health checks and auto-reconnection
+        globalInstanceMonitor = new InstanceMonitor(db, result.registry, {
+          healthCheckIntervalMs: 30_000, // Check every 30 seconds
+          maxConcurrentReconnects: 3,
+          autoReconnect: true,
+        });
+        globalInstanceMonitor.start();
+        console.log('Instance monitor started');
       }
     } catch (error) {
       console.error('Failed to load channel plugins:', error);
@@ -176,14 +203,21 @@ async function main() {
           console.log('[Shutdown] HTTP server closed');
         });
 
-        // 2. Disconnect all WhatsApp instances and destroy plugins
+        // 2. Stop instance monitor (prevents reconnection attempts during shutdown)
+        if (globalInstanceMonitor) {
+          console.log('[Shutdown] Stopping instance monitor...');
+          globalInstanceMonitor.stop();
+          console.log('[Shutdown] Instance monitor stopped');
+        }
+
+        // 3. Disconnect all WhatsApp instances and destroy plugins
         if (globalChannelRegistry) {
           console.log('[Shutdown] Disconnecting all channel instances...');
           await globalChannelRegistry.destroyAll();
           console.log('[Shutdown] All channel plugins destroyed');
         }
 
-        // 3. Close NATS event bus (drains subscriptions)
+        // 4. Close NATS event bus (drains subscriptions)
         if (globalEventBus) {
           console.log('[Shutdown] Closing NATS connection...');
           await globalEventBus.close();
