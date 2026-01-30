@@ -1,7 +1,7 @@
 # Omni v2 Makefile
 # Universal Event-Driven Omnichannel Platform
 
-.PHONY: help install dev dev-services dev-stop build clean \
+.PHONY: help install dev dev-api dev-services dev-stop build clean \
         test test-watch typecheck lint format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats start stop restart logs status \
@@ -13,7 +13,8 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make install       Install all dependencies"
-	@echo "  make dev           Start dev services + watch mode"
+	@echo "  make dev           Start services + API in watch mode"
+	@echo "  make dev-api       Start just the API (services must be running)"
 	@echo "  make dev-services  Start pgserve + nats via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
@@ -56,6 +57,10 @@ install:
 # Start dev services (PM2) then run turbo dev
 dev: dev-services
 	bun run dev
+
+# Start just the API (assumes services already running)
+dev-api:
+	cd packages/api && bun --watch src/index.ts
 
 # Start managed services via PM2 (reads *_MANAGED from .env)
 dev-services: ensure-nats
@@ -162,6 +167,8 @@ status:
 	@pm2 list 2>/dev/null || echo "PM2 not running"
 	@echo ""
 	@echo "Service URLs:"
+	@echo "  API:        http://localhost:$${API_PORT:-8881}"
+	@echo "  Swagger:    http://localhost:$${API_PORT:-8881}/api/v2/docs"
 	@echo "  PostgreSQL: localhost:$${PGSERVE_PORT:-8432}"
 	@echo "  NATS:       localhost:$${NATS_PORT:-4222}"
 
