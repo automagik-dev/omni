@@ -2,7 +2,7 @@
 
 > Implement the EventBus with NATS JetStream for multi-instance event-driven architecture.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-01-29
 **Author:** WISH Agent
 **Beads:** omni-v2-6p2
@@ -404,3 +404,77 @@ Update existing code:
 1. Rename `instance.connected` payload field if needed (already correct)
 2. Ensure all event metadata includes `instanceId` AND `channelType`
 3. Update any hardcoded subject strings to use `buildSubject()`
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-01-30
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+#### Group A: Core EventBus
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `NatsEventBus` implements `EventBus` interface | PASS | `client.ts:74` - `class NatsEventBus implements EventBus` |
+| All 7 streams created automatically on connect | PASS | `streams.ts:13-21` - STREAM_NAMES with 7 entries; `ensureStreams()` at line 114 |
+| `publish()` builds hierarchical subject from event + metadata | PASS | `client.ts:207-213` - `buildSubject(type, metadata.channelType, metadata.instanceId)` |
+| `publish()` returns ack with sequence number | PASS | `client.ts:220-224` - Returns `{ id, sequence: ack.seq, stream }` |
+| Auto-reconnects on connection loss | PASS | `client.ts:107-110` - `reconnect: true`, max 10 retries, exponential backoff in `calculateReconnectDelay()` |
+| Graceful shutdown with `drain()` | PASS | `client.ts:405-408` - `await this.nc.drain()` |
+| Can publish to `custom.*` namespace | PASS | `publishGeneric()` at `client.ts:163-175` accepts `EventType` including `CustomEventType` |
+| Can publish to `system.*` namespace | PASS | Same as above - `EventType = CoreEventType \| CustomEventType \| SystemEventType` |
+
+#### Group B: Subscriptions & Consumers
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Subscribe to specific event pattern | PASS | `subscribePattern()` at `client.ts:248-254` |
+| Subscribe to channel type with wildcards | PASS | `subjects.ts:54-87` - `buildSubscribePattern()` supports wildcards |
+| Subscribe to domain with wildcards | PASS | Tests in `subjects.test.ts:28-58` verify patterns |
+| Queue groups for load balancing | PASS | `consumer.ts:63-64` - `config.deliver_group = queue` |
+| Durable consumers survive restarts | PASS | `consumer.ts:57-59` - `config.durable_name = durable` |
+| Failed handlers retry with backoff | PASS | `subscription.ts:108-111` - `calculateBackoffDelay()` + `msg.nak(delay)` |
+| `subscribeValidated()` with Zod schema | PASS | `subscription.ts:176-202` - `createValidatedSubscription()` |
+
+### Quality Assessment
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| **Type Safety** | EXCELLENT | Zero `any` types found in implementation. Strong generics: `EventHandler<T extends CoreEventType>`, `TypedOmniEvent<T>`, `EventPayloadMap` type mapping. Template literal types for `custom.${string}` and `system.${string}` |
+| **Test Quality** | EXCELLENT | 76 tests across 5 files, 184 assertions. No NATS mocking - tests validate pure functions (subjects, streams, consumer config, registry). Integration test available for real NATS. |
+| **Security** | PASS | No obvious vulnerabilities. Credentials handled via config, not hardcoded. |
+| **Code Quality** | EXCELLENT | Clean separation of concerns. Well-documented JSDoc. No code duplication. |
+
+### Findings
+
+**MINOR Issues (non-blocking):**
+
+1. **Lint warnings in `client.ts`**: 3 non-null assertions (`this.js!`, `this.jsm!`) at lines 218, 355, 361. These are safe post-`ensureConnected()` but lint warns. Low severity.
+
+2. **Lint warnings elsewhere**: 5 complexity warnings in `packages/api/` files (not part of this wish scope).
+
+### Test Analysis
+
+Tests do NOT mock NATS internals. Instead they test:
+- Pure functions: `buildSubject()`, `parseSubject()`, `matchesPattern()`, `buildSubscribePattern()`
+- Configuration builders: `buildConsumerConfig()`, `calculateBackoffDelay()`
+- Stream routing: `getStreamForEventType()`, `getStreamForPattern()`
+- Registry logic: `EventRegistry.register()`, `.validate()`, `.list()`
+
+The tests verify real behavior of the utility functions. Integration tests with real NATS are available via `scripts/test-events-integration.ts`.
+
+### Recommendation
+
+**SHIP** - All acceptance criteria pass. Implementation is solid with:
+- Strong TypeScript typing throughout (no `any`)
+- Comprehensive test coverage (76 tests, 184 assertions)
+- Clean architecture matching the wish design
+- All 7 streams properly configured
+- Hierarchical subjects working as designed
+- Registry for custom/system events operational
+
+The minor lint warnings about non-null assertions are acceptable given the code flow guarantees connection state via `ensureConnected()` calls.
