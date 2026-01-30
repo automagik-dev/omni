@@ -4,6 +4,7 @@
 
 **Status:** DRAFT
 **Created:** 2026-01-29
+**Updated:** 2026-01-30
 **Author:** WISH Agent
 **Beads:** omni-v2-5v7
 
@@ -13,7 +14,18 @@
 
 The Channel SDK defines how channels plug into Omni. Every channel (WhatsApp, Discord, Slack, etc.) implements this interface. The SDK handles lifecycle, health checks, and event publishing with proper hierarchical subjects.
 
-**Multi-Instance Architecture:** Each channel type can have multiple instances (e.g., 3 WhatsApp accounts, 2 Discord bots). The SDK must make it easy to publish events with the correct `{channelType}.{instanceId}` hierarchy.
+**Multi-Instance Architecture:** Each channel type can have multiple instances (e.g., 3 WhatsApp accounts, 2 Discord bots). The SDK provides helpers for publishing events with the correct `{eventType}.{channelType}.{instanceId}` hierarchy.
+
+**What nats-events shipped:**
+- `EventBus` interface with `publish()`, `publishGeneric()`, `subscribe()`, `subscribePattern()`
+- `buildSubject()`, `buildSubscribePattern()`, `parseSubject()` from `@omni/core/events/nats`
+- Event payload types: `MessageReceivedPayload`, `InstanceConnectedPayload`, etc.
+- 17 core event types in `EventPayloadMap`
+
+**Existing in @omni/core:**
+- Basic `ChannelPlugin` interface in `types/channel.ts` (needs enhancement)
+- `ChannelType`, `ContentType`, `MessageContent` types
+- Event types and payload interfaces
 
 Reference: `docs/architecture/plugin-system.md`
 
@@ -23,13 +35,15 @@ Reference: `docs/architecture/plugin-system.md`
 
 | ID | Type | Description |
 |----|------|-------------|
-| **ASM-1** | Assumption | EventBus interface available from `@omni/core` |
+| **ASM-1** | Assumption | `nats-events` wish shipped (EventBus, subjects, payloads available) |
+| **ASM-2** | Assumption | `@omni/core/types/channel.ts` has basic ChannelPlugin interface |
 | **DEC-1** | Decision | Full lifecycle: initialize → connect → ready → disconnect → destroy |
 | **DEC-2** | Decision | Auto-discovery of `packages/channel-*` |
-| **DEC-3** | Decision | BaseChannelPlugin base class with event helpers |
-| **DEC-4** | Decision | PluginContext provides eventBus, storage, logger, config, db |
+| **DEC-3** | Decision | `BaseChannelPlugin` base class with event helpers |
+| **DEC-4** | Decision | `PluginContext` provides eventBus, storage, logger, config, db |
 | **DEC-5** | Decision | Use `instance.*` events for instance lifecycle (not `channel.*`) |
-| **DEC-6** | Decision | SDK provides subject builders for hierarchical patterns |
+| **DEC-6** | Decision | SDK re-exports subject builders from `@omni/core/events/nats` |
+| **DEC-7** | Decision | Event emitter helpers map to existing `EventPayloadMap` types |
 
 ---
 
@@ -38,80 +52,180 @@ Reference: `docs/architecture/plugin-system.md`
 ### IN SCOPE
 
 - `packages/channel-sdk/` package
-- `ChannelPlugin` interface with full lifecycle
+- `ChannelPlugin` interface with full lifecycle (extends existing basic interface)
 - `ChannelCapabilities` declaration (what a channel can do)
 - `PluginContext` with all dependencies
 - `BaseChannelPlugin` base class with event publishing helpers
 - `ChannelRegistry` for plugin management
-- **Subject builder helpers** for hierarchical event subjects
 - **Event emitter helpers** (emitMessageReceived, emitInstanceConnected, etc.)
+- **Re-export subject builders** from `@omni/core/events/nats`
 - Auto-discovery mechanism
 - Per-plugin health checks
 - Typing indicator helpers (`sendTyping`)
-- Presence helpers
+- Instance state management
 
 ### OUT OF SCOPE
 
 - Specific channel implementations (separate wishes)
 - Hot-reload in dev mode (future enhancement)
-- EventBus implementation (see `nats-events` wish)
+- EventBus implementation (shipped in `nats-events`)
+- New event types (use existing from `@omni/core/events/types`)
 
 ---
 
 ## Event Publishing Pattern
 
-Channels publish events using hierarchical subjects for multi-instance filtering:
+Channels publish events using hierarchical subjects for multi-instance filtering.
+
+**BaseChannelPlugin provides these helpers:**
 
 ```typescript
-// Subject pattern: {event}.{channelType}.{instanceId}
+// Emits: message.received.{this.id}.{instanceId}
+// Payload type: MessageReceivedPayload from @omni/core
+protected async emitMessageReceived(params: {
+  instanceId: string;
+  externalId: string;
+  chatId: string;
+  from: string;
+  content: { type: ContentType; text?: string; mediaUrl?: string; mimeType?: string };
+  replyToId?: string;
+  rawPayload?: Record<string, unknown>;
+}): Promise<void>;
 
-// When a WhatsApp instance wa-001 receives a message:
-await this.emitMessageReceived({
-  instanceId: 'wa-001',
-  // ... payload
-});
-// → Publishes to subject: message.received.whatsapp.wa-001
+// Emits: instance.connected.{this.id}.{instanceId}
+// Payload type: InstanceConnectedPayload from @omni/core
+protected async emitInstanceConnected(
+  instanceId: string,
+  metadata?: { profileName?: string; profilePicUrl?: string; ownerIdentifier?: string }
+): Promise<void>;
 
-// When a Discord instance dc-002 connects:
-await this.emitInstanceConnected({
-  instanceId: 'dc-002',
-  // ... payload
-});
-// → Publishes to subject: instance.connected.discord.dc-002
+// Emits: instance.disconnected.{this.id}.{instanceId}
+// Payload type: InstanceDisconnectedPayload from @omni/core
+protected async emitInstanceDisconnected(
+  instanceId: string,
+  reason?: string,
+  willReconnect?: boolean
+): Promise<void>;
+
+// Emits: instance.qr_code.{this.id}.{instanceId}
+// Payload type: InstanceQrCodePayload from @omni/core
+protected async emitQrCode(
+  instanceId: string,
+  qrCode: string,
+  expiresAt: Date
+): Promise<void>;
+
+// Emits: media.received.{this.id}.{instanceId}
+// Payload type: MediaReceivedPayload from @omni/core
+protected async emitMediaReceived(params: {
+  instanceId: string;
+  eventId: string;
+  mediaId: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  duration?: number;
+}): Promise<void>;
+
+// Emits: message.sent.{this.id}.{instanceId}
+// Payload type: MessageSentPayload from @omni/core
+protected async emitMessageSent(params: {
+  instanceId: string;
+  externalId: string;
+  chatId: string;
+  to: string;
+  content: { type: ContentType; text?: string; mediaUrl?: string };
+  replyToId?: string;
+}): Promise<void>;
+
+// Emits: message.failed.{this.id}.{instanceId}
+// Payload type: MessageFailedPayload from @omni/core
+protected async emitMessageFailed(params: {
+  instanceId: string;
+  externalId?: string;
+  chatId: string;
+  error: string;
+  errorCode?: string;
+  retryable: boolean;
+}): Promise<void>;
 ```
 
-### Event Types Used by Channels
+**Subject builders (re-exported from @omni/core):**
 
-| Event | Subject Pattern | When |
-|-------|-----------------|------|
-| `message.received` | `message.received.{channel}.{instance}` | Incoming message |
-| `message.sent` | `message.sent.{channel}.{instance}` | Outgoing message delivered |
-| `message.failed` | `message.failed.{channel}.{instance}` | Send failed |
-| `instance.connected` | `instance.connected.{channel}.{instance}` | Instance connected |
-| `instance.disconnected` | `instance.disconnected.{channel}.{instance}` | Instance disconnected |
-| `instance.qr_requested` | `instance.qr_requested.{channel}.{instance}` | QR code needed (WhatsApp) |
-| `media.received` | `media.received.{channel}.{instance}` | Media attachment received |
+```typescript
+import { buildSubject, buildSubscribePattern, parseSubject } from '@omni/channel-sdk';
+
+// Build full subject for publishing
+buildSubject('message.received', 'whatsapp-baileys', 'wa-001')
+// → 'message.received.whatsapp-baileys.wa-001'
+
+// Build pattern for subscribing
+buildSubscribePattern({ eventType: 'message.received', channelType: 'whatsapp-baileys' })
+// → 'message.received.whatsapp-baileys.>'
+```
 
 ---
 
-## Execution Group A: Core Interfaces
+## Execution Group A: Core Interfaces & Types
 
-**Goal:** Define the plugin interface, capabilities, and event types.
+**Goal:** Define the enhanced plugin interface, capabilities, and context types.
 
 **Deliverables:**
 - [ ] `packages/channel-sdk/package.json`
 - [ ] `packages/channel-sdk/tsconfig.json`
-- [ ] `packages/channel-sdk/src/types/plugin.ts` - ChannelPlugin interface
+- [ ] `packages/channel-sdk/src/types/plugin.ts` - Enhanced ChannelPlugin interface
 - [ ] `packages/channel-sdk/src/types/capabilities.ts` - ChannelCapabilities
 - [ ] `packages/channel-sdk/src/types/context.ts` - PluginContext
-- [ ] `packages/channel-sdk/src/types/events.ts` - Channel event payload types
+- [ ] `packages/channel-sdk/src/types/instance.ts` - InstanceConfig, ConnectionStatus
+- [ ] `packages/channel-sdk/src/types/messaging.ts` - OutgoingMessage, SendResult
 - [ ] `packages/channel-sdk/src/types/index.ts` - Re-exports
 
+**Enhanced ChannelPlugin Interface:**
+```typescript
+import type { EventBus } from '@omni/core/events';
+import type { ChannelType } from '@omni/core/types/channel';
+
+interface ChannelPlugin {
+  // Identity
+  readonly id: ChannelType;
+  readonly name: string;
+  readonly version: string;
+  readonly capabilities: ChannelCapabilities;
+
+  // Lifecycle
+  initialize(context: PluginContext): Promise<void>;
+  destroy(): Promise<void>;
+
+  // Instance management
+  connect(instanceId: string, config: InstanceConfig): Promise<void>;
+  disconnect(instanceId: string): Promise<void>;
+  getStatus(instanceId: string): Promise<ConnectionStatus>;
+
+  // Messaging
+  sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult>;
+  sendTyping?(instanceId: string, chatId: string, duration?: number): Promise<void>;
+
+  // Health
+  getHealth(): Promise<HealthStatus>;
+}
+```
+
+**PluginContext:**
+```typescript
+interface PluginContext {
+  eventBus: EventBus;
+  storage: PluginStorage;
+  logger: Logger;
+  config: GlobalConfig;
+  db: Database;
+}
+```
+
 **Acceptance Criteria:**
-- [ ] ChannelPlugin interface has: initialize, connect, disconnect, destroy, sendMessage, sendTyping
+- [ ] ChannelPlugin interface has: initialize, destroy, connect, disconnect, sendMessage, getStatus
 - [ ] ChannelCapabilities declares: canSendText, canSendMedia, canSendReaction, canSendTyping, etc.
 - [ ] PluginContext provides: eventBus, storage, logger, config, db
-- [ ] Event payload types match `@omni/core` event definitions
+- [ ] Types are compatible with `@omni/core` event payloads
 - [ ] Types are exported and usable by channel implementations
 
 **Validation:**
@@ -124,80 +238,107 @@ bun run typecheck
 
 ## Execution Group B: Base Implementation & Event Helpers
 
-**Goal:** Provide reusable base class with event publishing helpers.
+**Goal:** Provide reusable base class with event publishing helpers that use existing @omni/core types.
 
 **Deliverables:**
 - [ ] `packages/channel-sdk/src/base/BaseChannelPlugin.ts` - Abstract base class
 - [ ] `packages/channel-sdk/src/base/ChannelRegistry.ts` - Plugin registry
 - [ ] `packages/channel-sdk/src/base/HealthChecker.ts` - Health check runner
-- [ ] `packages/channel-sdk/src/helpers/events.ts` - Event emitter helpers (uses buildSubject from @omni/core)
+- [ ] `packages/channel-sdk/src/base/InstanceManager.ts` - Instance state tracking
+- [ ] `packages/channel-sdk/src/helpers/events.ts` - Event emitter helpers
 - [ ] `packages/channel-sdk/src/helpers/typing.ts` - Typing indicator helpers
-- [ ] `packages/channel-sdk/src/helpers/presence.ts` - Presence helpers
 - [ ] `packages/channel-sdk/src/helpers/message.ts` - Message formatting helpers
-- [ ] `packages/channel-sdk/src/index.ts` - Main exports
+- [ ] `packages/channel-sdk/src/index.ts` - Main exports + re-exports from @omni/core
 
-**Event Emitter Helpers:**
+**BaseChannelPlugin Implementation:**
 ```typescript
-// BaseChannelPlugin provides these helpers:
+import { buildSubject } from '@omni/core/events/nats';
+import type { EventBus, MessageReceivedPayload, InstanceConnectedPayload } from '@omni/core/events';
 
-// Emits: message.received.{this.id}.{instanceId}
-protected async emitMessageReceived(params: {
-  instanceId: string;
-  externalMessageId: string;
-  sender: SenderInfo;
-  content: MessageContent;
+abstract class BaseChannelPlugin implements ChannelPlugin {
+  abstract readonly id: ChannelType;
   // ...
-}): Promise<void>;
 
-// Emits: instance.connected.{this.id}.{instanceId}
-protected async emitInstanceConnected(
-  instanceId: string,
-  metadata?: ConnectionMetadata
-): Promise<void>;
+  protected eventBus!: EventBus;
+  protected logger!: Logger;
+  protected instances = new Map<string, InstanceState>();
 
-// Emits: instance.disconnected.{this.id}.{instanceId}
-protected async emitInstanceDisconnected(
-  instanceId: string,
-  reason: DisconnectReason,
-  error?: string
-): Promise<void>;
+  async initialize(context: PluginContext): Promise<void> {
+    this.eventBus = context.eventBus;
+    this.logger = context.logger.child({ plugin: this.id });
+    // ...
+    await this.onInitialize(context);
+  }
 
-// Emits: instance.qr_requested.{this.id}.{instanceId}
-protected async emitQrCode(
-  instanceId: string,
-  qrCode: string,
-  expiresAt?: Date
-): Promise<void>;
+  /**
+   * Emit message.received event with hierarchical subject.
+   * Uses MessageReceivedPayload type from @omni/core
+   */
+  protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<void> {
+    const subject = buildSubject('message.received', this.id, params.instanceId);
 
-// Emits: media.received.{this.id}.{instanceId}
-protected async emitMediaReceived(params: {
-  instanceId: string;
-  messageId: string;
-  media: MediaInfo;
-}): Promise<void>;
+    await this.eventBus.publish('message.received', {
+      externalId: params.externalId,
+      chatId: params.chatId,
+      from: params.from,
+      content: params.content,
+      replyToId: params.replyToId,
+      rawPayload: params.rawPayload,
+    } satisfies MessageReceivedPayload, {
+      subject,
+      instanceId: params.instanceId,
+      channelType: this.id,
+    });
+  }
+
+  /**
+   * Emit instance.connected event.
+   * Uses InstanceConnectedPayload type from @omni/core
+   */
+  protected async emitInstanceConnected(
+    instanceId: string,
+    metadata?: { profileName?: string; profilePicUrl?: string; ownerIdentifier?: string }
+  ): Promise<void> {
+    const subject = buildSubject('instance.connected', this.id, instanceId);
+
+    await this.eventBus.publish('instance.connected', {
+      instanceId,
+      channelType: this.id,
+      profileName: metadata?.profileName,
+      profilePicUrl: metadata?.profilePicUrl,
+      ownerIdentifier: metadata?.ownerIdentifier,
+    } satisfies InstanceConnectedPayload, { subject });
+  }
+
+  // ... more helpers matching EventPayloadMap types
+}
 ```
 
-**Subject Builder Helpers:**
+**Re-exports in index.ts:**
 ```typescript
-// Re-export from @omni/core/events/nats (already implemented in nats-events)
-import { buildSubject, buildSubscribePattern, parseSubject } from '@omni/core/events/nats';
+// Re-export subject builders for channel developers
+export { buildSubject, buildSubscribePattern, parseSubject } from '@omni/core/events/nats';
 
-// Used internally by BaseChannelPlugin
-// Channels don't call this directly - they use emitX() helpers
-//
-// Example:
-// buildSubject('message.received', 'whatsapp-baileys', 'wa-001')
-// → 'message.received.whatsapp-baileys.wa-001'
+// Re-export event types for reference
+export type {
+  MessageReceivedPayload,
+  MessageSentPayload,
+  InstanceConnectedPayload,
+  InstanceDisconnectedPayload,
+  InstanceQrCodePayload,
+  MediaReceivedPayload,
+} from '@omni/core/events';
 ```
 
 **Acceptance Criteria:**
-- [ ] BaseChannelPlugin handles common lifecycle (logging, event subscription)
-- [ ] Event helpers automatically build hierarchical subjects
+- [ ] BaseChannelPlugin handles common lifecycle (logging, instance tracking)
+- [ ] Event helpers automatically build hierarchical subjects using `buildSubject()`
+- [ ] Event helpers produce payloads matching `EventPayloadMap` types (compile-time verified)
 - [ ] Event helpers include proper metadata (correlationId, timestamp, source)
 - [ ] ChannelRegistry can register, get, list plugins
 - [ ] Health checks run on interval and report status
-- [ ] `sendTyping` helper abstracts channel-specific typing
-- [ ] Presence helper normalizes presence across channels
+- [ ] InstanceManager tracks connection state per instance
+- [ ] Re-exports make subject builders available to channel implementations
 
 **Validation:**
 ```bash
@@ -206,30 +347,70 @@ bun test packages/channel-sdk
 
 ---
 
-## Execution Group C: Auto-Discovery
+## Execution Group C: Auto-Discovery & Integration
 
-**Goal:** Automatically discover and load channel plugins.
+**Goal:** Automatically discover and load channel plugins at startup.
 
 **Deliverables:**
 - [ ] `packages/channel-sdk/src/discovery/scanner.ts` - Scan for channel-* packages
 - [ ] `packages/channel-sdk/src/discovery/loader.ts` - Dynamic import plugins
 - [ ] `packages/channel-sdk/src/discovery/validator.ts` - Validate plugin structure
-- [ ] Integration with API startup
+- [ ] Integration hook for API startup
+
+**Scanner:**
+```typescript
+import { readdir } from 'fs/promises';
+import { join } from 'path';
+
+export async function scanChannelPackages(packagesDir: string): Promise<string[]> {
+  const entries = await readdir(packagesDir, { withFileTypes: true });
+  return entries
+    .filter(e => e.isDirectory() && e.name.startsWith('channel-') && e.name !== 'channel-sdk')
+    .map(e => join(packagesDir, e.name));
+}
+```
+
+**Loader:**
+```typescript
+export async function loadChannelPlugin(path: string): Promise<ChannelPlugin | null> {
+  try {
+    const module = await import(path);
+    const PluginClass = module.default ?? module.plugin;
+
+    if (!PluginClass) {
+      logger.warn(`No plugin export found in ${path}`);
+      return null;
+    }
+
+    const plugin: ChannelPlugin = typeof PluginClass === 'function'
+      ? new PluginClass()
+      : PluginClass;
+
+    validatePluginInterface(plugin);
+    return plugin;
+  } catch (error) {
+    logger.error(`Failed to load plugin: ${path}`, error);
+    return null;
+  }
+}
+```
 
 **Acceptance Criteria:**
-- [ ] Scanner finds all `packages/channel-*` directories
-- [ ] Loader imports plugins dynamically
+- [ ] Scanner finds all `packages/channel-*` directories (excluding channel-sdk)
+- [ ] Loader imports plugins dynamically (supports default export and named export)
 - [ ] Invalid plugins are logged but don't crash startup
 - [ ] Plugins are registered in ChannelRegistry on startup
-- [ ] Each plugin's channel type is validated
+- [ ] Each plugin's channel type is validated against `CHANNEL_TYPES`
+- [ ] Integration with API startup loads plugins before routes are registered
 
 **Validation:**
 ```bash
 # Create a mock channel, verify it's discovered
-mkdir -p packages/channel-mock
-# ... create minimal plugin
+mkdir -p packages/channel-mock/src
+echo 'export default { id: "mock", name: "Mock", version: "0.1.0", capabilities: {} }' > packages/channel-mock/src/index.ts
 bun run packages/api/src/index.ts
 # Should log: "Discovered channel: mock"
+rm -rf packages/channel-mock
 ```
 
 ---
@@ -243,21 +424,22 @@ packages/channel-sdk/
 ├── package.json
 ├── tsconfig.json
 ├── src/
-│   ├── index.ts                    # Main exports
+│   ├── index.ts                    # Main exports + re-exports from @omni/core
 │   ├── types/
 │   │   ├── index.ts
-│   │   ├── plugin.ts               # ChannelPlugin interface
+│   │   ├── plugin.ts               # ChannelPlugin interface (enhanced)
 │   │   ├── capabilities.ts         # ChannelCapabilities
 │   │   ├── context.ts              # PluginContext
-│   │   └── events.ts               # Event payload types
+│   │   ├── instance.ts             # InstanceConfig, ConnectionStatus
+│   │   └── messaging.ts            # OutgoingMessage, SendResult
 │   ├── base/
 │   │   ├── BaseChannelPlugin.ts    # Abstract base class
 │   │   ├── ChannelRegistry.ts      # Plugin registry
-│   │   └── HealthChecker.ts        # Health monitoring
+│   │   ├── HealthChecker.ts        # Health monitoring
+│   │   └── InstanceManager.ts      # Instance state tracking
 │   ├── helpers/
-│   │   ├── events.ts               # Event emitter helpers (uses @omni/core)
+│   │   ├── events.ts               # Event emitter param types
 │   │   ├── typing.ts               # Typing indicators
-│   │   ├── presence.ts             # Presence normalization
 │   │   └── message.ts              # Message formatting
 │   └── discovery/
 │       ├── scanner.ts              # Package scanner
@@ -265,90 +447,28 @@ packages/channel-sdk/
 │       └── validator.ts            # Plugin validator
 └── test/
     ├── base.test.ts
-    └── helpers.test.ts
+    ├── helpers.test.ts
+    └── discovery.test.ts
 ```
 
-### ChannelPlugin Interface
+### Relationship with @omni/core
 
-```typescript
-interface ChannelPlugin {
-  // Identity
-  readonly id: ChannelType;        // 'whatsapp', 'discord', etc.
-  readonly name: string;
-  readonly version: string;
-  readonly capabilities: ChannelCapabilities;
-
-  // Lifecycle
-  initialize(context: PluginContext): Promise<void>;
-  connect(instanceId: string, config: InstanceConfig): Promise<void>;
-  disconnect(instanceId: string): Promise<void>;
-  destroy(): Promise<void>;
-
-  // Messaging
-  sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult>;
-  sendTyping?(instanceId: string, chatId: string, duration?: number): Promise<void>;
-
-  // Status
-  getStatus(instanceId: string): Promise<ConnectionStatus>;
-  getHealth(): Promise<HealthStatus>;
-}
 ```
+@omni/core
+├── types/channel.ts      # ChannelType, ContentType, basic ChannelPlugin
+├── events/types.ts       # EventPayloadMap, MessageReceivedPayload, etc.
+├── events/bus.ts         # EventBus interface
+└── events/nats/          # buildSubject, buildSubscribePattern
 
-### BaseChannelPlugin (Event Publishing)
+@omni/channel-sdk
+├── types/                # Enhanced ChannelPlugin, PluginContext, Capabilities
+├── base/                 # BaseChannelPlugin with event helpers
+├── helpers/              # Param types for emit helpers
+└── discovery/            # Auto-loading infrastructure
 
-```typescript
-abstract class BaseChannelPlugin implements ChannelPlugin {
-  abstract readonly id: ChannelType;
-  // ...
-
-  protected eventBus!: EventBus;
-  protected logger!: Logger;
-
-  /**
-   * Emit message.received event with hierarchical subject.
-   * Subject: message.received.{this.id}.{instanceId}
-   */
-  protected async emitMessageReceived(params: MessageReceivedParams): Promise<void> {
-    // Uses buildSubject from @omni/core/events/nats
-    const subject = buildSubject('message.received', this.id, params.instanceId);
-
-    await this.eventBus.publish('message.received', {
-      messageId: params.messageId ?? generateId('msg'),
-      externalMessageId: params.externalMessageId,
-      instanceId: params.instanceId,
-      channelType: this.id,
-      sender: params.sender,
-      content: params.content,
-      conversationId: params.conversationId,
-      platformTimestamp: params.timestamp,
-      rawPayload: params.rawPayload,
-    }, {
-      subject,  // Hierarchical subject for filtering
-      correlationId: generateCorrelationId(),
-    });
-  }
-
-  /**
-   * Emit instance.connected event.
-   * Subject: instance.connected.{this.id}.{instanceId}
-   */
-  protected async emitInstanceConnected(
-    instanceId: string,
-    metadata?: Record<string, unknown>
-  ): Promise<void> {
-    const subject = buildSubject('instance.connected', this.id, instanceId);
-
-    await this.eventBus.publish('instance.connected', {
-      instanceId,
-      channelType: this.id,
-      profileName: metadata?.profileName,
-      profilePicUrl: metadata?.profilePicUrl,
-      ownerIdentifier: metadata?.ownerIdentifier,
-    }, { subject });
-  }
-
-  // ... more helpers
-}
+Re-exports from channel-sdk:
+  - buildSubject, buildSubscribePattern, parseSubject (from @omni/core)
+  - Event payload types (from @omni/core)
 ```
 
 ---
@@ -356,17 +476,16 @@ abstract class BaseChannelPlugin implements ChannelPlugin {
 ## Dependencies
 
 **NPM:**
-- (none - pure TypeScript interfaces)
+- (none - pure TypeScript)
 
 **Internal:**
-- `@omni/core` - EventBus interface, event types, schemas
+- `@omni/core` - EventBus interface, event types, subject builders, ChannelType
 
 ---
 
 ## Depends On
 
-- None (can be built in parallel with `nats-events`)
-- Uses EventBus interface from `@omni/core` (already exists)
+- `nats-events` wish (SHIPPED) - EventBus, subject builders, event payload types
 
 ## Enables
 
@@ -379,7 +498,18 @@ abstract class BaseChannelPlugin implements ChannelPlugin {
 ## Migration Notes
 
 When implementing channels:
-1. Extend `BaseChannelPlugin` instead of implementing `ChannelPlugin` directly
-2. Use `emitMessageReceived()`, `emitInstanceConnected()` helpers (not raw eventBus.publish)
-3. The helpers automatically build hierarchical subjects
-4. `instanceId` and `channelType` are always included in metadata
+
+1. **Extend BaseChannelPlugin** instead of implementing `ChannelPlugin` directly
+2. **Use emitX() helpers** - they build correct subjects and ensure type-safe payloads:
+   ```typescript
+   // Good - uses helper
+   await this.emitMessageReceived({ instanceId, externalId, chatId, from, content });
+
+   // Avoid - manual publish requires more boilerplate
+   await this.eventBus.publish('message.received', payload, { subject });
+   ```
+3. **Import subject builders from channel-sdk** for consistency:
+   ```typescript
+   import { buildSubject, buildSubscribePattern } from '@omni/channel-sdk';
+   ```
+4. **instanceId and channelType** are always included automatically by helpers
