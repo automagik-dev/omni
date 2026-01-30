@@ -57,6 +57,12 @@ const connectionTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const CONNECTION_TIMEOUT_MS = 45_000; // 45 seconds after QR to connect
 
 /**
+ * Track if instance has ever been authenticated (had successful connection)
+ * If not authenticated, we DON'T auto-reconnect on errors - user needs to scan QR
+ */
+const authenticatedInstances = new Set<string>();
+
+/**
  * Calculate exponential backoff delay
  */
 function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
@@ -185,19 +191,33 @@ async function handleConnectionClose(
   const error = lastDisconnect?.error as Boom | undefined;
   const statusCode = error?.output?.statusCode;
   const reason = error?.output?.payload?.message || 'Unknown error';
-  const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+  const wasLoggedOut = statusCode === DisconnectReason.loggedOut;
 
   // Clear active QR - connection error is NOT a QR expiry
-  // This prevents counting connection errors as QR failures
   activeQrCodes.delete(instanceId);
 
-  if (!shouldReconnect) {
+  // If logged out, clear everything
+  if (wasLoggedOut) {
     reconnectAttempts.delete(instanceId);
     qrCodeAttempts.delete(instanceId);
+    authenticatedInstances.delete(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
     return;
   }
 
+  // Check if this instance was ever authenticated
+  const wasAuthenticated = authenticatedInstances.has(instanceId);
+
+  // If NEVER authenticated (still waiting for QR scan), DON'T auto-reconnect
+  // The 515 errors during QR phase are normal - WhatsApp is just refreshing the connection
+  if (!wasAuthenticated) {
+    console.log(`[WhatsApp] Connection closed during QR phase for ${instanceId}: ${reason}`);
+    console.log(`[WhatsApp] Waiting for manual retry or QR scan...`);
+    await plugin.handleDisconnected(instanceId, `Connection closed: ${reason}. Please reconnect manually.`, false);
+    return;
+  }
+
+  // Instance WAS authenticated before - try to auto-reconnect
   const attempts = reconnectAttempts.get(instanceId) || 0;
 
   if (attempts >= config.maxRetries) {
@@ -225,6 +245,9 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   qrCodeAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
   clearConnectionTimeout(instanceId);
+
+  // Mark as authenticated - now we CAN auto-reconnect if disconnected later
+  authenticatedInstances.add(instanceId);
 
   console.log(`[WhatsApp] Connection opened for ${instanceId}`);
   await plugin.handleConnected(instanceId, sock);
@@ -285,6 +308,7 @@ export function resetConnectionState(instanceId: string): void {
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
+  authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
 }
 
