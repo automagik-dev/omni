@@ -55,6 +55,7 @@ Discord is a first-class channel. This implementation follows the **exact patter
 - [ ] Plugin structure matching WhatsApp (plugin.ts, handlers/, senders/)
 - [ ] Token-based authentication (stored in PluginStorage)
 - [ ] Text messages (send/receive)
+- [ ] Direct Messages (DMs) support
 - [ ] Attachments (images, files up to 25MB)
 - [ ] Replies
 - [ ] Typing indicators
@@ -67,21 +68,29 @@ Discord is a first-class channel. This implementation follows the **exact patter
 - [ ] Mentions (@user, @role, @channel)
 - [ ] Message editing/deleting
 - [ ] Thread support (create, reply in thread)
+- [ ] Stickers (send/receive)
+- [ ] Polls (create, receive votes)
 
-**Slash Commands (Group C):**
-- [ ] Register commands per guild
-- [ ] Handle command interactions
-- [ ] Defer to automations (events-ext) for complex flows
+**Interactive Components (Group C):**
+- [ ] Buttons (action buttons in messages)
+- [ ] Select Menus (dropdown selections)
+- [ ] Modals/Forms (text input dialogs)
+- [ ] Slash commands (register, handle)
+- [ ] Context menu commands (right-click actions)
+- [ ] Autocomplete for command options
+
+**Discord Webhooks (Group C):**
+- [ ] Create Discord webhooks
+- [ ] Send via Discord webhooks (for external integrations)
 
 ### OUT OF SCOPE
 
-- Voice channels (future)
+- Voice channels (future wish)
 - Stage channels (future)
 - Forum channels (future)
 - Scheduled events (future)
 - Moderation (kick/ban/timeout) - defer to separate wish
 - Guild management events (member join/leave) - defer
-- Components (buttons, select menus) - defer to slash commands enhancement
 
 ---
 
@@ -89,7 +98,7 @@ Discord is a first-class channel. This implementation follows the **exact patter
 
 **Goal:** Discord plugin with same structure as WhatsApp - connection, text messaging, events.
 
-**File Structure (mirrors WhatsApp):**
+**File Structure (extends WhatsApp pattern):**
 ```
 packages/channel-discord/
 ├── src/
@@ -102,19 +111,41 @@ packages/channel-discord/
 │   ├── handlers/
 │   │   ├── index.ts
 │   │   ├── connection.ts     # ready, disconnect, reconnect
-│   │   ├── messages.ts       # messageCreate parsing
-│   │   └── all-events.ts     # typing, presence
+│   │   ├── messages.ts       # messageCreate, update, delete
+│   │   ├── reactions.ts      # reaction add/remove
+│   │   ├── interactions.ts   # buttons, menus, modals, commands
+│   │   └── all-events.ts     # typing, presence, threads
 │   ├── senders/
 │   │   ├── index.ts
 │   │   ├── builders.ts       # Unified content builder
 │   │   ├── text.ts           # Text message
-│   │   └── media.ts          # Attachments
+│   │   ├── media.ts          # Attachments
+│   │   ├── embeds.ts         # Embed builder
+│   │   ├── sticker.ts        # Sticker sending
+│   │   ├── poll.ts           # Poll creation
+│   │   └── reaction.ts       # Reaction add/remove
+│   ├── components/
+│   │   ├── index.ts
+│   │   ├── buttons.ts        # Button builder
+│   │   ├── select-menus.ts   # Select menu builder
+│   │   └── modals.ts         # Modal builder
+│   ├── commands/
+│   │   ├── index.ts
+│   │   ├── slash.ts          # Slash command registration
+│   │   ├── context.ts        # Context menu commands
+│   │   └── types.ts          # Command type definitions
+│   ├── webhooks/
+│   │   ├── index.ts
+│   │   └── discord-webhooks.ts  # Discord webhook management
 │   └── utils/
 │       ├── errors.ts         # mapDiscordError()
-│       └── snowflake.ts      # ID validation
+│       ├── snowflake.ts      # ID validation
+│       └── chunking.ts       # Message chunking
 ├── __tests__/
 │   ├── plugin.test.ts
 │   ├── handlers.test.ts
+│   ├── components.test.ts
+│   ├── commands.test.ts
 │   └── fixtures/
 ├── package.json
 └── tsconfig.json
@@ -133,21 +164,43 @@ packages/channel-discord/
 - [ ] `capabilities.ts` - Discord capabilities declaration
 - [ ] Unit tests
 
-**Discord.js Client Setup:**
+**Discord.js Client Setup (all intents for full capability):**
 ```typescript
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
 export function createClient(): Client {
   return new Client({
     intents: [
+      // Core
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.DirectMessages,
+
+      // Reactions
+      GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.DirectMessageReactions,
+
+      // Typing
+      GatewayIntentBits.GuildMessageTyping,
+      GatewayIntentBits.DirectMessageTyping,
+
+      // Presence (for user status)
+      GatewayIntentBits.GuildPresences,
+
+      // Members (for mentions, user info)
+      GatewayIntentBits.GuildMembers,
+
+      // Polls
+      GatewayIntentBits.GuildMessagePolls,
+      GatewayIntentBits.DirectMessagePolls,
     ],
     partials: [
       Partials.Message,
       Partials.Channel,
+      Partials.Reaction,
+      Partials.User,
+      Partials.GuildMember,
     ],
   });
 }
@@ -175,13 +228,15 @@ make typecheck
 
 ## Execution Group B: Rich Features
 
-**Goal:** Embeds, reactions, message editing, threads.
+**Goal:** Embeds, reactions, threads, stickers, polls, message operations.
 
 **Deliverables:**
 - [ ] `senders/embeds.ts` - Embed builder and sender
 - [ ] `senders/reaction.ts` - Add/remove reactions
+- [ ] `senders/sticker.ts` - Sticker sending
+- [ ] `senders/poll.ts` - Poll creation
 - [ ] `handlers/reactions.ts` - Reaction event handlers
-- [ ] `handlers/messages.ts` - Update for edit/delete events
+- [ ] `handlers/messages.ts` - Update for edit/delete/poll events
 - [ ] Thread support in message sending
 - [ ] Message editing support
 - [ ] Mention parsing (@user, @role, @channel)
@@ -194,109 +249,247 @@ export function buildEmbed(options: EmbedOptions): EmbedBuilder {
     .setDescription(options.description)
     .setColor(options.color ?? 0x5865F2);
 
-  if (options.fields) {
-    embed.addFields(options.fields);
-  }
-  if (options.thumbnail) {
-    embed.setThumbnail(options.thumbnail);
-  }
-  if (options.image) {
-    embed.setImage(options.image);
-  }
-  if (options.footer) {
-    embed.setFooter({ text: options.footer });
-  }
+  if (options.fields) embed.addFields(options.fields);
+  if (options.thumbnail) embed.setThumbnail(options.thumbnail);
+  if (options.image) embed.setImage(options.image);
+  if (options.footer) embed.setFooter({ text: options.footer });
 
   return embed;
 }
 ```
 
+**Poll Builder:**
+```typescript
+export function buildPoll(options: PollOptions): PollData {
+  return {
+    question: { text: options.question },
+    answers: options.answers.map((a, i) => ({
+      answer_id: i + 1,
+      poll_media: { text: a }
+    })),
+    duration: options.durationHours ?? 24,
+    allow_multiselect: options.multiSelect ?? false,
+  };
+}
+```
+
 **Acceptance Criteria:**
 - [ ] Can send embeds with title, description, fields, images, footer
-- [ ] Can add reactions to messages
-- [ ] Can remove reactions from messages
-- [ ] messageReactionAdd → emitMessageReceived (type: 'reaction')
-- [ ] messageReactionRemove → event emission
-- [ ] Can edit sent messages
-- [ ] Can delete messages
-- [ ] messageUpdate → event emission
-- [ ] messageDelete → event emission
+- [ ] Can add/remove reactions to messages
+- [ ] messageReactionAdd/Remove → event emission
+- [ ] Can edit/delete sent messages
+- [ ] messageUpdate/Delete → event emission
 - [ ] Thread creation and replies work
 - [ ] Mentions parsed correctly in incoming messages
+- [ ] Can send stickers by ID
+- [ ] Can receive sticker messages
+- [ ] Can create polls with options
+- [ ] Poll vote events captured
 
 **Validation:**
 ```bash
 bun test packages/channel-discord/__tests__/embeds.test.ts
 bun test packages/channel-discord/__tests__/reactions.test.ts
+bun test packages/channel-discord/__tests__/polls.test.ts
 ```
 
 ---
 
-## Execution Group C: Slash Commands
+## Execution Group C: Interactive Components & Commands
 
-**Goal:** Register and handle slash commands, emit as events for automation integration.
+**Goal:** Full interactivity - buttons, menus, modals, slash commands, context menus.
 
 **Deliverables:**
-- [ ] `commands/register.ts` - Command registration via REST API
-- [ ] `commands/handler.ts` - interactionCreate handler
-- [ ] `commands/types.ts` - Slash command type definitions
-- [ ] Update `plugin.ts` with command registration on connect
-- [ ] Emit `custom.discord.command` events for automation
+- [ ] `components/buttons.ts` - Button builder
+- [ ] `components/select-menus.ts` - Select menu builder
+- [ ] `components/modals.ts` - Modal/form builder
+- [ ] `commands/slash.ts` - Slash command registration
+- [ ] `commands/context.ts` - Context menu commands (right-click)
+- [ ] `handlers/interactions.ts` - All interaction handlers
+- [ ] `webhooks/discord-webhooks.ts` - Discord webhook management
+- [ ] API endpoints for responding to interactions
 
-**Command Registration:**
+**Component Builders:**
 ```typescript
-import { REST, Routes, SlashCommandBuilder } from 'discord.js';
+// Buttons
+export function buildButton(options: ButtonOptions): ButtonBuilder {
+  return new ButtonBuilder()
+    .setCustomId(options.customId)
+    .setLabel(options.label)
+    .setStyle(options.style ?? ButtonStyle.Primary)
+    .setDisabled(options.disabled ?? false);
+}
 
-export async function registerCommands(
-  token: string,
-  clientId: string,
-  guildId: string,
-  commands: SlashCommandBuilder[]
-): Promise<void> {
-  const rest = new REST().setToken(token);
-  await rest.put(
-    Routes.applicationGuildCommands(clientId, guildId),
-    { body: commands.map(c => c.toJSON()) }
+// Select Menu
+export function buildSelectMenu(options: SelectMenuOptions): StringSelectMenuBuilder {
+  return new StringSelectMenuBuilder()
+    .setCustomId(options.customId)
+    .setPlaceholder(options.placeholder)
+    .addOptions(options.options.map(o => ({
+      label: o.label,
+      value: o.value,
+      description: o.description,
+    })));
+}
+
+// Modal
+export function buildModal(options: ModalOptions): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(options.customId)
+    .setTitle(options.title);
+
+  const inputs = options.fields.map(f =>
+    new TextInputBuilder()
+      .setCustomId(f.customId)
+      .setLabel(f.label)
+      .setStyle(f.multiline ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(f.required ?? true)
   );
+
+  modal.addComponents(
+    inputs.map(i => new ActionRowBuilder<TextInputBuilder>().addComponents(i))
+  );
+
+  return modal;
 }
 ```
 
-**Command Handling:**
+**Interaction Handler (unified):**
 ```typescript
-// Emit as event for automation to handle
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  // Emit event instead of handling directly
-  await plugin.emitCustomEvent('custom.discord.command', {
+  const base = {
     instanceId,
-    commandName: interaction.commandName,
-    options: interaction.options.data,
     userId: interaction.user.id,
     channelId: interaction.channelId,
     guildId: interaction.guildId,
-    // Include interaction ID for deferred responses
     interactionId: interaction.id,
     interactionToken: interaction.token,
-  });
+  };
 
-  // Defer reply - automation will respond via API
-  await interaction.deferReply();
+  // Slash commands
+  if (interaction.isChatInputCommand()) {
+    await plugin.emitCustomEvent('custom.discord.slash_command', {
+      ...base,
+      commandName: interaction.commandName,
+      options: interaction.options.data,
+    });
+    await interaction.deferReply();
+  }
+
+  // Context menu (right-click)
+  if (interaction.isContextMenuCommand()) {
+    await plugin.emitCustomEvent('custom.discord.context_menu', {
+      ...base,
+      commandName: interaction.commandName,
+      targetId: interaction.targetId,
+      targetType: interaction.targetType,
+    });
+    await interaction.deferReply();
+  }
+
+  // Button click
+  if (interaction.isButton()) {
+    await plugin.emitCustomEvent('custom.discord.button', {
+      ...base,
+      customId: interaction.customId,
+      messageId: interaction.message.id,
+    });
+    await interaction.deferUpdate();
+  }
+
+  // Select menu
+  if (interaction.isStringSelectMenu()) {
+    await plugin.emitCustomEvent('custom.discord.select_menu', {
+      ...base,
+      customId: interaction.customId,
+      values: interaction.values,
+    });
+    await interaction.deferUpdate();
+  }
+
+  // Modal submit
+  if (interaction.isModalSubmit()) {
+    await plugin.emitCustomEvent('custom.discord.modal_submit', {
+      ...base,
+      customId: interaction.customId,
+      fields: Object.fromEntries(
+        interaction.fields.fields.map(f => [f.customId, f.value])
+      ),
+    });
+    await interaction.deferReply();
+  }
+
+  // Autocomplete
+  if (interaction.isAutocomplete()) {
+    await plugin.emitCustomEvent('custom.discord.autocomplete', {
+      ...base,
+      commandName: interaction.commandName,
+      focusedOption: interaction.options.getFocused(true),
+    });
+    // Autocomplete needs immediate response - handle via callback
+  }
 });
 ```
 
+**API Endpoints for Responding:**
+```typescript
+// Respond to deferred interaction
+POST /api/v2/discord/:instanceId/interactions/:interactionId/respond
+{
+  "token": "interaction_token",
+  "content": "Response text",
+  "embeds": [...],
+  "components": [...],
+  "ephemeral": false
+}
+
+// Show modal (for button/select interactions)
+POST /api/v2/discord/:instanceId/interactions/:interactionId/modal
+{
+  "token": "interaction_token",
+  "modal": { "customId": "...", "title": "...", "fields": [...] }
+}
+
+// Autocomplete response
+POST /api/v2/discord/:instanceId/interactions/:interactionId/autocomplete
+{
+  "token": "interaction_token",
+  "choices": [{ "name": "Option 1", "value": "opt1" }]
+}
+```
+
+**Discord Webhooks:**
+```typescript
+// Create webhook for a channel
+POST /api/v2/discord/:instanceId/webhooks
+{ "channelId": "...", "name": "Omni Bot" }
+
+// Send via Discord webhook (useful for external integrations)
+POST /api/v2/discord/:instanceId/webhooks/:webhookId/send
+{ "content": "...", "username": "Custom Name", "avatarUrl": "..." }
+```
+
 **Acceptance Criteria:**
-- [ ] Commands registered on bot connect (per guild or global)
-- [ ] interactionCreate → emits `custom.discord.command` event
-- [ ] Command options parsed and included in event payload
-- [ ] Interaction deferred for async response
-- [ ] API endpoint to respond to deferred interaction
-- [ ] Commands configurable via instance settings
+- [ ] Can send messages with buttons
+- [ ] Button clicks → `custom.discord.button` event
+- [ ] Can send messages with select menus
+- [ ] Select menu choices → `custom.discord.select_menu` event
+- [ ] Can show modals in response to button/command
+- [ ] Modal submissions → `custom.discord.modal_submit` event
+- [ ] Slash commands registered per guild
+- [ ] Slash commands → `custom.discord.slash_command` event
+- [ ] Context menu commands work (right-click user/message)
+- [ ] Autocomplete works for command options
+- [ ] API endpoints respond to deferred interactions
+- [ ] Can create Discord webhooks for channels
+- [ ] Can send via Discord webhooks
 
 **Validation:**
 ```bash
+bun test packages/channel-discord/__tests__/components.test.ts
 bun test packages/channel-discord/__tests__/commands.test.ts
-# Manual: trigger /ask command, verify event emitted
+bun test packages/channel-discord/__tests__/webhooks.test.ts
+# Manual: click button, verify event emitted and response works
 ```
 
 ---
@@ -391,23 +584,53 @@ export function mapDiscordError(error: unknown): OmniError {
 
 ```typescript
 export const DISCORD_CAPABILITIES: ChannelCapabilities = {
+  // Core messaging
   canSendText: true,
   canSendMedia: true,
   canSendReaction: true,
   canSendTyping: true,
-  canReceiveReadReceipts: false,  // Discord doesn't have read receipts
-  canReceiveDeliveryReceipts: false,
   canEditMessage: true,
   canDeleteMessage: true,
   canReplyToMessage: true,
+
+  // Rich content
+  canSendEmbed: true,           // Discord-specific
+  canSendSticker: true,
+  canSendPoll: true,            // Discord-specific
+
+  // Interactive components
+  canSendButtons: true,         // Discord-specific
+  canSendSelectMenu: true,      // Discord-specific
+  canShowModal: true,           // Discord-specific
+  canUseSlashCommands: true,    // Discord-specific
+  canUseContextMenu: true,      // Discord-specific
+
+  // Channels
+  canHandleGroups: true,        // Guilds/servers
+  canHandleDMs: true,           // Direct messages
+  canHandleThreads: true,
+
+  // Discord webhooks
+  canCreateWebhooks: true,      // Discord-specific
+  canSendViaWebhook: true,      // Discord-specific
+
+  // Not supported
+  canReceiveReadReceipts: false,
+  canReceiveDeliveryReceipts: false,
   canForwardMessage: false,
   canSendContact: false,
   canSendLocation: false,
-  canSendSticker: true,
-  canHandleGroups: true,
   canHandleBroadcast: false,
+  canHandleVoice: false,        // Future
+
+  // Limits
   maxMessageLength: 2000,
-  maxFileSize: 25 * 1024 * 1024,  // 25MB for regular servers
+  maxEmbedFields: 25,
+  maxButtonsPerRow: 5,
+  maxRowsPerMessage: 5,
+  maxSelectOptions: 25,
+  maxFileSize: 25 * 1024 * 1024,  // 25MB (500MB for boosted servers)
+
   supportedMediaTypes: [
     { mimeType: 'image/*', maxSize: 25 * 1024 * 1024 },
     { mimeType: 'audio/*', maxSize: 25 * 1024 * 1024 },
