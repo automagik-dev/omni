@@ -8,6 +8,8 @@
  * - Error classes
  * - ID generation utilities
  * - Unified logging system
+ * - Scheduler for periodic jobs
+ * - Prometheus metrics
  */
 
 // Events
@@ -38,3 +40,17 @@ export {
   type LogConfig,
   type LogFormat,
 } from './logger';
+
+// Scheduler
+export {
+  Scheduler,
+  getScheduler,
+  resetScheduler,
+  CronExpressions,
+  type JobConfig,
+  type JobHandler,
+  type Job,
+} from './scheduler';
+
+// Metrics
+export * from './metrics';

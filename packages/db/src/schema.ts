@@ -783,3 +783,133 @@ export type NewMediaContent = typeof mediaContent.$inferInsert;
 
 export type ChatIdMapping = typeof chatIdMappings.$inferSelect;
 export type NewChatIdMapping = typeof chatIdMappings.$inferInsert;
+
+// ============================================================================
+// DEAD LETTER EVENTS (Event Ops)
+// ============================================================================
+
+/**
+ * Dead letter event storage.
+ * Captures events that failed processing after max retries.
+ * Supports auto-retry with backoff (1h → 6h → 24h).
+ *
+ * @see events-ops wish
+ */
+export const deadLetterStatuses = ['pending', 'retrying', 'resolved', 'abandoned'] as const;
+export type DeadLetterStatus = (typeof deadLetterStatuses)[number];
+
+export const deadLetterEvents = pgTable(
+  'dead_letter_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: varchar('event_id', { length: 36 }).notNull(),
+    eventType: varchar('event_type', { length: 100 }).notNull(),
+    subject: varchar('subject', { length: 255 }).notNull(),
+    payload: jsonb('payload').notNull().$type<Record<string, unknown>>(),
+    error: text('error').notNull(),
+    stack: text('stack'),
+
+    // Retry tracking
+    autoRetryCount: integer('auto_retry_count').notNull().default(0),
+    manualRetryCount: integer('manual_retry_count').notNull().default(0),
+    nextAutoRetryAt: timestamp('next_auto_retry_at'), // null = no more auto-retries
+
+    // Status tracking
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<DeadLetterStatus>(),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    lastRetryAt: timestamp('last_retry_at'),
+    resolvedAt: timestamp('resolved_at'),
+    resolvedBy: varchar('resolved_by', { length: 100 }), // manual resolution note
+  },
+  (table) => ({
+    eventIdIdx: index('dead_letter_events_event_id_idx').on(table.eventId),
+    eventTypeIdx: index('dead_letter_events_event_type_idx').on(table.eventType),
+    statusIdx: index('dead_letter_events_status_idx').on(table.status),
+    createdAtIdx: index('dead_letter_events_created_at_idx').on(table.createdAt),
+    nextAutoRetryAtIdx: index('dead_letter_events_next_retry_idx').on(table.nextAutoRetryAt),
+  }),
+);
+
+export type DeadLetterEvent = typeof deadLetterEvents.$inferSelect;
+export type NewDeadLetterEvent = typeof deadLetterEvents.$inferInsert;
+
+// ============================================================================
+// PAYLOAD STORAGE (Event Ops)
+// ============================================================================
+
+/**
+ * Payload storage configuration per event type.
+ * Controls what payloads are stored and for how long.
+ *
+ * @see events-ops wish
+ */
+export const payloadStorageConfig = pgTable(
+  'payload_storage_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventType: varchar('event_type', { length: 100 }).notNull().unique(),
+    // '*' = default for all types
+
+    storeWebhookRaw: boolean('store_webhook_raw').notNull().default(true),
+    storeAgentRequest: boolean('store_agent_request').notNull().default(true),
+    storeAgentResponse: boolean('store_agent_response').notNull().default(true),
+    storeChannelSend: boolean('store_channel_send').notNull().default(true),
+    storeError: boolean('store_error').notNull().default(true),
+
+    retentionDays: integer('retention_days').notNull().default(14),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    eventTypeIdx: uniqueIndex('payload_storage_config_event_type_idx').on(table.eventType),
+  }),
+);
+
+export type PayloadStorageConfig = typeof payloadStorageConfig.$inferSelect;
+export type NewPayloadStorageConfig = typeof payloadStorageConfig.$inferInsert;
+
+/**
+ * Actual payload storage with compression.
+ * Stores event payloads at different processing stages.
+ *
+ * @see events-ops wish
+ */
+export const payloadStages = ['webhook_raw', 'agent_request', 'agent_response', 'channel_send', 'error'] as const;
+export type PayloadStage = (typeof payloadStages)[number];
+
+export const eventPayloads = pgTable(
+  'event_payloads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: varchar('event_id', { length: 36 }).notNull(),
+    eventType: varchar('event_type', { length: 100 }).notNull(),
+    stage: varchar('stage', { length: 50 }).notNull().$type<PayloadStage>(),
+
+    payloadCompressed: text('payload_compressed').notNull(),
+    payloadSizeOriginal: integer('payload_size_original'),
+    payloadSizeCompressed: integer('payload_size_compressed'),
+
+    // Metadata
+    timestamp: timestamp('timestamp').notNull().defaultNow(),
+    containsMedia: boolean('contains_media').notNull().default(false),
+    containsBase64: boolean('contains_base64').notNull().default(false),
+
+    // Soft-delete for audit trail
+    deletedAt: timestamp('deleted_at'),
+    deletedBy: varchar('deleted_by', { length: 100 }),
+    deleteReason: varchar('delete_reason', { length: 255 }),
+  },
+  (table) => ({
+    eventIdIdx: index('event_payloads_event_id_idx').on(table.eventId),
+    eventTypeIdx: index('event_payloads_event_type_idx').on(table.eventType),
+    stageIdx: index('event_payloads_stage_idx').on(table.stage),
+    timestampIdx: index('event_payloads_timestamp_idx').on(table.timestamp),
+    deletedAtIdx: index('event_payloads_deleted_at_idx').on(table.deletedAt),
+    eventStageIdx: index('event_payloads_event_stage_idx').on(table.eventId, table.stage),
+  }),
+);
+
+export type EventPayload = typeof eventPayloads.$inferSelect;
+export type NewEventPayload = typeof eventPayloads.$inferInsert;

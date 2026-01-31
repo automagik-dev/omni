@@ -6,7 +6,7 @@
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import { type EventBus, configureLogging, connectEventBus, createLogger } from '@omni/core';
+import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 
@@ -31,6 +31,7 @@ import {
   setupMessageListener,
   setupQrCodeListener,
 } from './plugins';
+import { setupScheduler, stopScheduler } from './scheduler';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
@@ -152,7 +153,7 @@ function convertNodeHeaders(headers: Record<string, string | string[] | undefine
 /**
  * Start the HTTP server
  */
-async function startServer(app: App): Promise<void> {
+async function startServer(app: App): Promise<{ close: (cb: () => void) => void }> {
   const http = await import('node:http');
 
   const server = http.createServer((req, res) => {
@@ -181,7 +182,7 @@ async function startServer(app: App): Promise<void> {
   });
 
   server.listen(PORT, HOST);
-  setupShutdownHandlers(server);
+  return server;
 }
 
 /**
@@ -203,6 +204,10 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
     forceExitTimer.unref();
 
     try {
+      // Stop scheduler first
+      shutdownLog.info('Stopping scheduler');
+      stopScheduler();
+
       server.close(() => shutdownLog.info('HTTP server closed'));
 
       if (globalInstanceMonitor) {
@@ -239,6 +244,9 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
 async function main() {
   log.info('Starting Omni API v2');
 
+  // Enable default Node.js metrics (CPU, memory, event loop)
+  enableDefaultMetrics();
+
   // Create database connection
   log.info('Connecting to database');
   const db = createDb({ url: DATABASE_URL });
@@ -257,12 +265,19 @@ async function main() {
     pluginLog.warn('Skipping channel plugin loading (no event bus)');
   }
 
-  // Create and start server
-  const app = createApp(db, eventBus, globalChannelRegistry);
+  // Create app and get services
+  const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+
+  // Setup scheduler with services
+  log.info('Starting scheduler');
+  setupScheduler(services);
+
   log.info('API server listening', { host: HOST, port: PORT });
   log.info('Health check available', { url: `http://${HOST}:${PORT}/api/v2/health` });
+  log.info('Metrics available', { url: `http://${HOST}:${PORT}/api/v2/metrics` });
 
-  await startServer(app);
+  const server = await startServer(app);
+  setupShutdownHandlers(server);
 }
 
 // Run

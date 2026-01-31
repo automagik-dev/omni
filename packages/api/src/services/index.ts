@@ -8,8 +8,11 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { AccessService } from './access';
+import { DeadLetterService } from './dead-letters';
+import { EventOpsService } from './event-ops';
 import { EventService } from './events';
 import { InstanceService } from './instances';
+import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
 import { ProviderService } from './providers';
 import { SettingsService } from './settings';
@@ -24,12 +27,18 @@ export interface Services {
   settings: SettingsService;
   access: AccessService;
   providers: ProviderService;
+  deadLetters: DeadLetterService;
+  payloadStore: PayloadStoreService;
+  eventOps: EventOpsService;
 }
 
 /**
  * Create all services
  */
 export function createServices(db: Database, eventBus: EventBus | null): Services {
+  const deadLetters = new DeadLetterService(db, eventBus);
+  const payloadStore = new PayloadStoreService(db);
+
   return {
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),
@@ -37,6 +46,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     settings: new SettingsService(db),
     access: new AccessService(db, eventBus),
     providers: new ProviderService(db),
+    deadLetters,
+    payloadStore,
+    eventOps: new EventOpsService(db, eventBus, deadLetters, payloadStore),
   };
 }
 
@@ -47,3 +59,6 @@ export { EventService } from './events';
 export { SettingsService } from './settings';
 export { AccessService } from './access';
 export { ProviderService } from './providers';
+export { DeadLetterService } from './dead-letters';
+export { PayloadStoreService } from './payload-store';
+export { EventOpsService } from './event-ops';

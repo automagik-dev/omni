@@ -6,7 +6,7 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { createMiddleware } from 'hono/factory';
-import { createServices } from '../services';
+import { type Services, createServices } from '../services';
 import type { AppVariables } from '../types';
 
 /**
@@ -17,17 +17,26 @@ function generateRequestId(): string {
 }
 
 /**
+ * Context middleware result with services for external use
+ */
+export interface ContextMiddlewareResult {
+  middleware: ReturnType<typeof createMiddleware<{ Variables: AppVariables }>>;
+  services: Services;
+}
+
+/**
  * Create context middleware with database, event bus, and channel registry
+ * Returns both the middleware and the services instance for scheduler setup
  */
 export function createContextMiddleware(
   db: Database,
   eventBus: EventBus | null,
   channelRegistry: ChannelRegistry | null = null,
-) {
+): ContextMiddlewareResult {
   // Create services once
   const services = createServices(db, eventBus);
 
-  return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
+  const middleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Set request ID
     const requestId = c.req.header('x-request-id') ?? generateRequestId();
     c.set('requestId', requestId);
@@ -49,4 +58,6 @@ export function createContextMiddleware(
 
     await next();
   });
+
+  return { middleware, services };
 }

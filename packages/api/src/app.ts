@@ -18,7 +18,16 @@ import { rateLimitMiddleware } from './middleware/rate-limit';
 import { healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
+import type { Services } from './services';
 import type { AppVariables } from './types';
+
+/**
+ * Create app result with app and services
+ */
+export interface CreateAppResult {
+  app: Hono<{ Variables: AppVariables }>;
+  services: Services;
+}
 
 /**
  * Create the Hono application
@@ -27,8 +36,11 @@ export function createApp(
   db: Database,
   eventBus: EventBus | null = null,
   channelRegistry: ChannelRegistry | null = null,
-) {
+): CreateAppResult {
   const app = new Hono<{ Variables: AppVariables }>();
+
+  // Create context middleware and get services
+  const { middleware: contextMiddleware, services } = createContextMiddleware(db, eventBus, channelRegistry);
 
   // Global middleware
   app.use('*', timing());
@@ -44,7 +56,7 @@ export function createApp(
     }),
   );
   app.use('*', secureHeaders());
-  app.use('*', createContextMiddleware(db, eventBus, channelRegistry));
+  app.use('*', contextMiddleware);
 
   // Error handler - must be registered with onError, not as middleware
   app.onError(errorHandler);
@@ -78,7 +90,7 @@ export function createApp(
     );
   });
 
-  return app;
+  return { app, services };
 }
 
-export type App = ReturnType<typeof createApp>;
+export type App = Hono<{ Variables: AppVariables }>;
