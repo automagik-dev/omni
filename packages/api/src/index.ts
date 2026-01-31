@@ -2,7 +2,7 @@
  * @omni/api - HTTP API Server
  *
  * Entry point for the Omni v2 API server.
- * Supports both Bun and Node.js runtimes.
+ * Uses Node.js HTTP server (required for Baileys WebSocket compatibility).
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
@@ -18,9 +18,6 @@ import {
   setupMessageListener,
   setupQrCodeListener,
 } from './plugins';
-
-// Runtime detection
-const isBun = typeof Bun !== 'undefined';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
@@ -122,18 +119,6 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
- * Start the HTTP server using Bun's native server
- */
-function startBunServer(app: App): void {
-  Bun.serve({
-    port: PORT,
-    hostname: HOST,
-    fetch: app.fetch,
-    idleTimeout: 120,
-  });
-}
-
-/**
  * Convert Node.js request headers to a plain object
  */
 function convertNodeHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
@@ -149,9 +134,9 @@ function convertNodeHeaders(headers: Record<string, string | string[] | undefine
 }
 
 /**
- * Start the HTTP server using Node.js http module
+ * Start the HTTP server
  */
-async function startNodeServer(app: App): Promise<void> {
+async function startServer(app: App): Promise<void> {
   const http = await import('node:http');
 
   const server = http.createServer((req, res) => {
@@ -184,7 +169,7 @@ async function startNodeServer(app: App): Promise<void> {
 }
 
 /**
- * Set up graceful shutdown handlers for Node.js
+ * Set up graceful shutdown handlers
  */
 function setupShutdownHandlers(server: { close: (cb: () => void) => void }): void {
   let isShuttingDown = false;
@@ -261,11 +246,7 @@ async function main() {
   console.log(`API server listening on http://${HOST}:${PORT}`);
   console.log(`Health check: http://${HOST}:${PORT}/api/v2/health`);
 
-  if (isBun) {
-    startBunServer(app);
-  } else {
-    await startNodeServer(app);
-  }
+  await startServer(app);
 }
 
 // Run
