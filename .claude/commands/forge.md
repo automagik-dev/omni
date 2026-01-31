@@ -119,7 +119,7 @@ For each execution group:
 3. **Polish** - Lint, format, cleanup
 4. **Validate** - Run validation commands
 
-### 4. REVIEW
+### 4. SELF-REVIEW
 
 After all groups complete:
 
@@ -128,9 +128,11 @@ After all groups complete:
    - FAIL: Address gaps
 
 2. **Quality Review** - Check code quality
-   - SHIP: Ready for final review
+   - READY: Ready for /review
    - FIX-FIRST: Address minor issues
    - BLOCKED: Major issues, investigate
+
+**Note:** This is self-review only. Forge NEVER sets SHIPPED status - only `/review` can ship.
 
 ### 5. HANDOFF
 
@@ -149,7 +151,7 @@ After all groups complete:
 Forge complete: .wishes/<slug>/<slug>-wish.md
 
 Status: REVIEW
-Beads: omni-v2-abc123 (closed)
+Beads: omni-v2-abc123 (in_progress)
 
 Summary:
 - [What was implemented]
@@ -175,8 +177,10 @@ git branch -d feat/<session-name>
 
 ## Remember
 
+- **NEVER set status to SHIPPED** - Only /review can ship
 - Wish document is a contract - don't modify it
 - Run all validation commands
 - Don't skip the two-stage review
 - Don't implement beyond wish scope
 - Always sync beads: `bd sync`
+- Don't close beads - only /review closes beads on SHIP verdict
