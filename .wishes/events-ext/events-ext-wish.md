@@ -1,9 +1,10 @@
 # WISH: Events Ext
 
-> Extensibility layer for events: advanced registry, webhook sources, and event-driven automations.
+> Webhooks and automations: external event sources and "when X happens, do Y" rules.
 
-**Status:** DRAFT
+**Status:** READY
 **Created:** 2026-01-29
+**Updated:** 2026-01-31
 **Author:** WISH Agent
 **Beads:** omni-v2-ds9
 
@@ -11,19 +12,17 @@
 
 ## Context
 
-The core EventBus (`nats-events`) provides the infrastructure for publishing and subscribing to events, including:
-- **In-memory EventRegistry** (`@omni/core/events/nats/registry.ts`) for runtime schema validation
-- **SystemEventSchemas** with dead_letter, replay.*, health.* schemas predefined
+The core EventBus (`nats-events`) handles event publishing/subscribing. Now we need:
 
-This wish builds the **extensibility layer** on top:
+1. **Webhooks** - External systems can trigger events in Omni
+2. **Automations** - "When event X with conditions, execute actions Y"
 
-1. **Persistent Event Registry** - Database-backed schema storage, versioning, discovery API
-2. **External Event Sources** - Webhooks, cron triggers, manual triggers
-3. **Event Automations** - Rule-based "when X happens, do Y" system
+**Core Use Case (from Omni v1):**
+```
+message.received → call agent API (agno) → send response to sender
+```
 
-This transforms Omni from a messaging platform into an **event-driven automation platform**.
-
-Reference: `docs/architecture/event-system.md`
+This is the foundation for intelligent message handling.
 
 ---
 
@@ -31,12 +30,14 @@ Reference: `docs/architecture/event-system.md`
 
 | ID | Type | Description |
 |----|------|-------------|
-| **ASM-1** | Assumption | `nats-events` wish completed (EventBus + basic registry working) |
-| **ASM-2** | Assumption | API package available for webhook endpoints |
+| **ASM-1** | Assumption | `nats-events` wish completed (EventBus working) |
+| **ASM-2** | Assumption | `events-ops` completed (metrics, dead letter handling) |
 | **DEC-1** | Decision | Automations stored in PostgreSQL, not code |
-| **DEC-2** | Decision | Conditions use JSONPath-like syntax for field matching |
-| **DEC-3** | Decision | Actions are pluggable (trigger_agent, send_message, webhook, etc.) |
-| **DEC-4** | Decision | Automations run in-process (not separate workers, for now) |
+| **DEC-2** | Decision | Conditions use simple field matching (dot notation) |
+| **DEC-3** | Decision | Actions: `webhook`, `send_message`, `emit_event`, `log` |
+| **DEC-4** | Decision | Automations run in-process, simple sequential execution |
+| **DEC-5** | Decision | No webhook signature validation initially (add later) |
+| **DEC-6** | Decision | Defer `trigger_agent` action to future AI integration wish |
 
 ---
 
@@ -44,120 +45,73 @@ Reference: `docs/architecture/event-system.md`
 
 ### IN SCOPE
 
-**Persistent Event Registry (extends @omni/core EventRegistry):**
-- Database-backed event schema storage (upgrade from in-memory)
-- Schema versioning (breaking change detection)
-- Event discovery API (list all event types including core)
-- Schema validation on publish (optional, configurable)
-- Sync between in-memory registry and database on startup
-
-**External Event Sources:**
-- Webhook receiver endpoint (`POST /webhooks/:source`)
+**Webhooks:**
+- Webhook receiver endpoint (`POST /api/v2/webhooks/:source`)
 - Webhook → `custom.webhook.{source}` event translation
-- Cron-based event triggers (`custom.cron.{name}`)
-- Manual trigger API (`POST /events/trigger`)
+- Webhook source configuration (name, expected headers)
+- Manual trigger API (`POST /api/v2/events/trigger`)
 
-**Event Automations:**
+**Automations:**
 - Automation rule definition (trigger + conditions + actions)
 - Condition evaluation (field matching, comparisons)
-- Built-in actions: `trigger_agent`, `send_message`, `emit_event`, `webhook`
+- Built-in actions: `send_message`, `webhook`, `emit_event`, `log`
 - Automation enable/disable
 - Execution logging
 
 ### OUT OF SCOPE
 
-- Visual automation builder (UI - separate wish)
-- Complex workflow orchestration (multi-step, branching)
-- External automation engines (n8n, Temporal integration)
-- Rate limiting / throttling (add later if needed)
+- Persistent event registry (define events in code for now)
+- Event discovery API (not needed without registry)
+- Cron-based triggers (not needed yet)
+- Webhook signature validation (add later if needed)
+- `trigger_agent` action (future AI integration wish)
+- Visual automation builder UI
+- Complex workflow orchestration (branching, rollback)
+- Rate limiting / throttling
 
 ---
 
-## Execution Group A: Persistent Event Registry
-
-**Goal:** Extend the in-memory EventRegistry (`@omni/core/events/nats/registry.ts`) with database persistence.
-
-**Existing (from nats-events):**
-- `EventRegistry` class with `register()`, `validate()`, `list()`, `listByNamespace()`
-- `eventRegistry` singleton instance
-- `createEventSchema()` helper
-- `SystemEventSchemas` (dead_letter, replay.started, replay.completed, health.degraded)
-
-**Deliverables:**
-- [ ] `packages/core/src/events/registry/storage.ts` - Database persistence layer
-- [ ] `packages/core/src/db/schema/event-registry.ts` - Database table
-- [ ] Sync mechanism: load schemas from DB on startup, write to DB on register
-- [ ] Schema versioning with compatibility checks
-- [ ] Event discovery API endpoint (tRPC route)
-
-**Database Schema:**
-```typescript
-export const eventSchemas = pgTable('event_schemas', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  eventType: varchar('event_type', { length: 255 }).notNull().unique(),
-  schema: jsonb('schema').notNull(),           // Zod schema as JSON
-  version: integer('version').notNull().default(1),
-  description: text('description'),
-  stream: varchar('stream', { length: 50 }),   // Override stream routing
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  createdBy: varchar('created_by', { length: 100 }),
-});
-```
-
-**API Endpoints:**
-```typescript
-// List all registered event types
-GET /api/events/types
-// → { types: [{ eventType, description, version, schema }] }
-
-// Get specific event schema
-GET /api/events/types/:eventType
-// → { eventType, description, version, schema }
-
-// Register new event type (admin only)
-POST /api/events/types
-// ← { eventType, schema, description }
-```
-
-**Acceptance Criteria:**
-- [ ] Event schemas stored in database
-- [ ] Can register new `custom.*` event types via API
-- [ ] Schema versioning tracks changes
-- [ ] Breaking changes detected (removed required fields)
-- [ ] Event discovery API returns all registered types
-- [ ] Core events pre-seeded in registry
-
-**Validation:**
-```bash
-bun test packages/core/src/events/registry
-```
-
----
-
-## Execution Group B: External Event Sources
+## Execution Group A: Webhooks & External Sources
 
 **Goal:** Enable external systems to emit events into Omni.
 
 **Deliverables:**
-- [ ] `packages/api/src/routes/webhooks.ts` - Webhook receiver
+- [ ] `packages/api/src/routes/v2/webhooks.ts` - Webhook receiver endpoint
+- [ ] `packages/db/src/schema/webhooks.ts` - Webhook source configuration table
 - [ ] `packages/core/src/events/sources/webhook.ts` - Webhook → event translation
-- [ ] `packages/core/src/events/sources/cron.ts` - Cron trigger service
-- [ ] `packages/core/src/events/sources/manual.ts` - Manual trigger
-- [ ] Webhook signature verification (optional)
-- [ ] Source configuration storage
+- [ ] Manual trigger API endpoint
+
+**Database Schema:**
+```typescript
+export const webhookSources = pgTable('webhook_sources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 100 }).notNull().unique(),  // 'github', 'stripe', 'agno'
+  description: text('description'),
+
+  // Optional validation
+  expectedHeaders: jsonb('expected_headers'),  // { 'X-GitHub-Event': true }
+
+  // Metadata
+  enabled: boolean('enabled').notNull().default(true),
+  lastReceivedAt: timestamp('last_received_at'),
+  totalReceived: integer('total_received').notNull().default(0),
+
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+```
 
 **Webhook Flow:**
 ```
 External System                    Omni
      │                              │
-     │  POST /webhooks/github       │
-     │  { action: "push", ... }     │
+     │  POST /api/v2/webhooks/agno  │
+     │  { response: "Hello!", ... } │
      │ ─────────────────────────────▶
      │                              │
      │                   Translate to event:
-     │                   custom.webhook.github
-     │                   { action, repository, ... }
+     │                   custom.webhook.agno
+     │                   { response, ... }
      │                              │
      │                   Publish to CUSTOM stream
      │                              │
@@ -165,71 +119,61 @@ External System                    Omni
      │ ◀─────────────────────────────
 ```
 
-**Cron Triggers:**
+**API Endpoints:**
 ```typescript
-// Database-stored cron definitions
-export const cronTriggers = pgTable('cron_triggers', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: varchar('name', { length: 100 }).notNull().unique(),
-  schedule: varchar('schedule', { length: 100 }).notNull(),  // Cron expression
-  eventType: varchar('event_type', { length: 255 }).notNull(),
-  payload: jsonb('payload'),         // Static payload
-  enabled: boolean('enabled').notNull().default(true),
-  lastRun: timestamp('last_run'),
-  nextRun: timestamp('next_run'),
-});
+// Receive webhook
+POST /api/v2/webhooks/:source
+// ← Any JSON payload
+// → 200 { received: true, eventId: '...' }
 
-// Example: Daily report trigger
-{
-  name: 'daily-report',
-  schedule: '0 9 * * *',           // 9 AM daily
-  eventType: 'custom.cron.daily-report',
-  payload: { reportType: 'summary' },
-}
-```
+// Manual trigger
+POST /api/v2/events/trigger
+// ← { eventType: 'custom.manual.test', payload: {...} }
+// → 201 { eventId: '...', published: true }
 
-**Manual Trigger API:**
-```typescript
-// Trigger a custom event manually
-POST /api/events/trigger
-{
-  eventType: 'custom.trigger.vip-alert',
-  payload: { personId: 'xyz', reason: 'manual escalation' },
-  metadata: { triggeredBy: 'admin-user-123' }
-}
-// → 201 Created { eventId, sequence }
+// Webhook source CRUD
+GET    /api/v2/webhook-sources
+POST   /api/v2/webhook-sources
+GET    /api/v2/webhook-sources/:id
+PUT    /api/v2/webhook-sources/:id
+DELETE /api/v2/webhook-sources/:id
 ```
 
 **Acceptance Criteria:**
-- [ ] Webhook endpoint receives external payloads
+- [ ] Webhook endpoint receives any JSON payload
 - [ ] Webhooks translated to `custom.webhook.{source}` events
-- [ ] Webhook sources configurable (expected headers, signature)
-- [ ] Cron triggers fire on schedule
-- [ ] Cron events include trigger metadata
-- [ ] Manual trigger API validates against registered schema
-- [ ] All sources include proper tracing (correlationId)
+- [ ] Webhook sources stored in database (name, description, enabled)
+- [ ] Unknown source creates new source automatically (or rejects - configurable)
+- [ ] Manual trigger API publishes custom events
+- [ ] All events include correlationId for tracing
+- [ ] Source stats tracked (lastReceivedAt, totalReceived)
 
 **Validation:**
 ```bash
-bun test packages/api/src/routes/webhooks.test.ts
-bun test packages/core/src/events/sources
+bun test packages/api/src/routes/v2/__tests__/webhooks.test.ts
+bun test packages/core/src/events/sources/__tests__/
 ```
 
 ---
 
-## Execution Group C: Event Automations
+## Execution Group B: Event Automations
 
-**Goal:** Rule-based automation system: "When event X with conditions Y, execute actions Z."
+**Goal:** Rule-based automation: "When event X with conditions Y, execute actions Z."
+
+**Core Use Case:**
+```
+message.received → call agent API → send response to sender
+```
 
 **Deliverables:**
 - [ ] `packages/core/src/automations/engine.ts` - Automation engine
 - [ ] `packages/core/src/automations/conditions.ts` - Condition evaluator
 - [ ] `packages/core/src/automations/actions/` - Action implementations
-- [ ] `packages/core/src/db/schema/automations.ts` - Database tables
+- [ ] `packages/db/src/schema/automations.ts` - Database tables
 - [ ] Automation CRUD API
 - [ ] Execution logging
 
-**Automation Schema:**
+**Database Schema:**
 ```typescript
 export const automations = pgTable('automations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -240,7 +184,7 @@ export const automations = pgTable('automations', {
   triggerEventType: varchar('trigger_event_type', { length: 255 }).notNull(),
   triggerConditions: jsonb('trigger_conditions'),  // Condition[]
 
-  // Actions
+  // Actions (executed sequentially)
   actions: jsonb('actions').notNull(),  // Action[]
 
   // State
@@ -250,7 +194,6 @@ export const automations = pgTable('automations', {
   // Metadata
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  createdBy: varchar('created_by', { length: 100 }),
 });
 
 export const automationLogs = pgTable('automation_logs', {
@@ -259,101 +202,207 @@ export const automationLogs = pgTable('automation_logs', {
   eventId: varchar('event_id', { length: 36 }).notNull(),
   status: varchar('status', { length: 20 }).notNull(),  // 'success' | 'failed' | 'skipped'
   conditionsMatched: boolean('conditions_matched').notNull(),
-  actionsExecuted: jsonb('actions_executed'),  // { action, status, result }[]
+  actionsExecuted: jsonb('actions_executed'),  // [{ action, status, result, durationMs }]
   error: text('error'),
   executionTimeMs: integer('execution_time_ms'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 ```
 
-**Condition Syntax:**
+**Condition Syntax (simple dot notation):**
 ```typescript
 interface Condition {
-  field: string;           // JSONPath-like: 'payload.from.isVIP', 'metadata.channelType'
-  operator: ConditionOp;   // 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'startsWith' | 'matches'
-  value: unknown;          // Expected value
+  field: string;           // Dot notation: 'payload.from.isVIP', 'payload.content.type'
+  operator: ConditionOp;   // 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'exists'
+  value: unknown;          // Expected value (ignored for 'exists')
 }
 
 // Examples:
-{ field: 'payload.content.type', operator: 'eq', value: 'image' }
-{ field: 'metadata.channelType', operator: 'eq', value: 'whatsapp' }
+{ field: 'payload.content.type', operator: 'eq', value: 'text' }
 { field: 'payload.from.tags', operator: 'contains', value: 'vip' }
+{ field: 'payload.instanceId', operator: 'exists' }
 ```
 
 **Built-in Actions:**
 ```typescript
 type Action =
-  | { type: 'trigger_agent'; config: { priority?: string; timeout?: number } }
-  | { type: 'send_message'; config: { instanceId: string; to: string; content: string } }
-  | { type: 'emit_event'; config: { eventType: string; payload: unknown } }
-  | { type: 'webhook'; config: { url: string; method: string; headers?: Record<string, string> } }
-  | { type: 'log'; config: { level: string; message: string } };
+  | { type: 'webhook'; config: { url: string; method?: string; headers?: Record<string, string>; bodyTemplate?: string } }
+  | { type: 'send_message'; config: { instanceId?: string; to?: string; contentTemplate: string } }
+  | { type: 'emit_event'; config: { eventType: string; payloadTemplate?: object } }
+  | { type: 'log'; config: { level: 'debug' | 'info' | 'warn' | 'error'; message: string } };
+
+// Templates support {{payload.field}} substitution
 ```
 
-**Example Automation:**
+**Example: Agent Response Automation (v1 Core Flow):**
 ```json
 {
-  "name": "VIP Fast Response",
-  "description": "Trigger agent immediately for VIP messages",
-  "triggerEventType": "message.received",
+  "name": "Agent Response Handler",
+  "description": "When agent webhook responds, send message to original sender",
+  "triggerEventType": "custom.webhook.agno",
   "triggerConditions": [
-    { "field": "payload.from.tags", "operator": "contains", "value": "vip" }
+    { "field": "payload.response", "operator": "exists" }
   ],
   "actions": [
     {
-      "type": "trigger_agent",
-      "config": { "priority": "high", "timeout": 5000 }
+      "type": "send_message",
+      "config": {
+        "instanceId": "{{payload.instanceId}}",
+        "to": "{{payload.replyTo}}",
+        "contentTemplate": "{{payload.response}}"
+      }
     },
     {
-      "type": "emit_event",
+      "type": "log",
       "config": {
-        "eventType": "custom.alert.vip-message",
-        "payload": { "source": "automation" }
+        "level": "info",
+        "message": "Sent agent response to {{payload.replyTo}}"
       }
     }
   ],
-  "enabled": true,
-  "priority": 100
+  "enabled": true
+}
+```
+
+**Example: Forward Message to Agent:**
+```json
+{
+  "name": "Forward to Agent",
+  "description": "Send incoming messages to agent API for processing",
+  "triggerEventType": "message.received",
+  "triggerConditions": [
+    { "field": "payload.content.type", "operator": "eq", "value": "text" }
+  ],
+  "actions": [
+    {
+      "type": "webhook",
+      "config": {
+        "url": "https://api.agno.ai/v1/process",
+        "method": "POST",
+        "headers": { "Authorization": "Bearer {{env.AGNO_API_KEY}}" },
+        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\", \"instanceId\": \"{{payload.instanceId}}\", \"replyTo\": \"{{payload.from.id}}\"}"
+      }
+    }
+  ],
+  "enabled": true
 }
 ```
 
 **API Endpoints:**
 ```typescript
-// CRUD for automations
-GET    /api/automations
-POST   /api/automations
-GET    /api/automations/:id
-PUT    /api/automations/:id
-DELETE /api/automations/:id
+// CRUD
+GET    /api/v2/automations
+POST   /api/v2/automations
+GET    /api/v2/automations/:id
+PUT    /api/v2/automations/:id
+DELETE /api/v2/automations/:id
 
 // Enable/disable
-POST   /api/automations/:id/enable
-POST   /api/automations/:id/disable
+POST   /api/v2/automations/:id/enable
+POST   /api/v2/automations/:id/disable
+
+// Test automation against sample event
+POST   /api/v2/automations/:id/test
+// ← { event: { type: 'message.received', payload: {...} } }
+// → { matched: true, actions: [...], dryRun: true }
 
 // Execution logs
-GET    /api/automations/:id/logs
-GET    /api/automations/logs?eventType=message.received
+GET    /api/v2/automations/:id/logs
+GET    /api/v2/automation-logs?eventType=message.received&status=failed
 ```
 
 **Acceptance Criteria:**
-- [ ] Automations stored in database
-- [ ] Engine subscribes to trigger event types
-- [ ] Conditions evaluated using JSONPath-like field access
-- [ ] All operators work: eq, neq, gt, lt, contains, startsWith, matches
-- [ ] Actions execute in order
-- [ ] Action failures don't stop subsequent actions (configurable)
-- [ ] Execution logged with timing and results
-- [ ] Can enable/disable automations without deletion
-- [ ] Priority determines execution order when multiple automations match
+- [ ] Automations stored in database with CRUD API
+- [ ] Engine subscribes to all enabled trigger event types
+- [ ] Conditions evaluated using dot notation field access
+- [ ] Operators work: eq, neq, gt, lt, contains, exists
+- [ ] Actions execute sequentially, failures logged but don't stop sequence
+- [ ] Template substitution works: `{{payload.field}}`, `{{env.VAR}}`
+- [ ] Execution logged with timing per action
+- [ ] Can enable/disable without deletion
+- [ ] Test endpoint validates without executing
+- [ ] Priority determines order when multiple automations match same event
 
 **Validation:**
 ```bash
-bun test packages/core/src/automations
+bun test packages/core/src/automations/__tests__/
 ```
 
 ---
 
 ## Technical Notes
+
+### Omnichannel Event Flow
+
+The automation engine works on **all events from all channels**. This is what makes Omni truly omnichannel:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        OMNI EVENT BUS (NATS)                            │
+│                     Central hub for ALL events                          │
+└─────────────────────────────────────────────────────────────────────────┘
+        ▲                       ▲                       ▲
+        │                       │                       │
+   message.received       message.received       custom.webhook.agno
+        │                       │                       │
+┌───────┴───────┐       ┌───────┴───────┐       ┌───────┴───────┐
+│   WhatsApp    │       │    Discord    │       │  Agent API    │
+│   (Baileys)   │       │   (future)    │       │   Response    │
+└───────────────┘       └───────────────┘       └───────────────┘
+```
+
+**Key insight:** `message.received` is channel-agnostic. Automations don't know or care if a message came from WhatsApp, Discord, or Telegram - they just see the event and its payload.
+
+### Complete v1 Flow (2 Automations)
+
+```
+User sends WhatsApp message
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  channel-whatsapp emits:                │
+│  message.received {                     │
+│    instanceId: "wa-123",                │
+│    from: { id: "+5511999...", ... },    │
+│    content: { type: "text", text: "Hi"} │
+│  }                                      │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Automation 1: "Forward to Agent"       │
+│  Trigger: message.received              │
+│  Action: webhook POST to agno API       │
+│  Body: { message, instanceId, replyTo } │
+└─────────────────────────────────────────┘
+         │
+         ▼
+    Agent processes...
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Agent calls back:                      │
+│  POST /api/v2/webhooks/agno             │
+│  { response: "Hello!", instanceId,      │
+│    replyTo: "+5511999..." }             │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Omni emits:                            │
+│  custom.webhook.agno { ... }            │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Automation 2: "Agent Response Handler" │
+│  Trigger: custom.webhook.agno           │
+│  Action: send_message to replyTo        │
+└─────────────────────────────────────────┘
+         │
+         ▼
+    User receives "Hello!" on WhatsApp
+```
 
 ### Automation Engine Architecture
 
@@ -386,25 +435,27 @@ bun test packages/core/src/automations
 ## Dependencies
 
 **NPM:**
-- `cron-parser` - Parse cron expressions
-- `jsonpath-plus` - JSONPath field access (or implement simple version)
+- None new (use simple dot-notation field access, no jsonpath library needed)
 
 **Internal:**
 - `@omni/core` - EventBus, event types
 - `@omni/db` - Database connection
 - `@omni/api` - API routes
+- `@omni/channel-sdk` - For `send_message` action
 
 ---
 
 ## Depends On
 
-- `nats-events` wish (EventBus + basic registry)
-- `api-setup` wish (API routes)
+- `nats-events` wish (EventBus) ✅ SHIPPED
+- `api-setup` wish (API routes) ✅ SHIPPED
+- `events-ops` wish (metrics, dead letter) - for operational observability
+- `channel-whatsapp` wish (at least one channel to test) ✅ SHIPPED
 
 ## Enables
 
-- No-code automation configuration
-- Webhook integrations (GitHub, Stripe, etc.)
-- Scheduled tasks and reports
-- Event-driven workflows
-- Future: Visual automation builder UI
+- **Agent integration** - The core v1 flow (message → agent → response)
+- **Webhook integrations** - GitHub, Stripe, custom systems
+- **Event-driven workflows** - No-code automation configuration
+- **Future:** Visual automation builder UI
+- **Future:** `channel-discord` and other channels (same automations work for all)
