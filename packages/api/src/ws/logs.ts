@@ -4,7 +4,10 @@
  * Streams service logs to connected clients.
  */
 
+import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+
+const log = createLogger('ws:logs');
 
 /**
  * Log level type
@@ -102,7 +105,7 @@ function sendToSocket(ws: unknown, data: string): void {
     const socket = ws as { send?: (data: string) => void };
     socket?.send?.(data);
   } catch (error) {
-    console.error('[WS Logs] Error sending log:', error);
+    log.error('Error sending log', { error: String(error) });
   }
 }
 
@@ -117,7 +120,7 @@ export function createLogsWebSocketHandler(_db: Database) {
      * Handle WebSocket open
      */
     open(_ws: unknown): void {
-      console.log('[WS Logs] Client connected');
+      log.debug('Client connected');
     },
 
     /**
@@ -129,7 +132,7 @@ export function createLogsWebSocketHandler(_db: Database) {
 
         switch (data.type) {
           case 'subscribe':
-            console.log('[WS Logs] Client subscribed:', data);
+            log.debug('Client subscribed', { services: data.services, level: data.level });
             subscriptions.set(ws, {
               services: data.services ?? ['*'],
               level: data.level ?? 'info',
@@ -138,7 +141,7 @@ export function createLogsWebSocketHandler(_db: Database) {
             break;
 
           case 'filter': {
-            console.log('[WS Logs] Client updated filter:', data);
+            log.debug('Client updated filter', { services: data.services, level: data.level });
             const existing = subscriptions.get(ws);
             if (existing) {
               subscriptions.set(ws, {
@@ -151,15 +154,15 @@ export function createLogsWebSocketHandler(_db: Database) {
           }
 
           case 'unsubscribe':
-            console.log('[WS Logs] Client unsubscribed');
+            log.debug('Client unsubscribed');
             subscriptions.delete(ws);
             break;
 
           default:
-            console.log('[WS Logs] Unknown message type:', data);
+            log.debug('Unknown message type', { data });
         }
       } catch (error) {
-        console.error('[WS Logs] Error parsing message:', error);
+        log.error('Error parsing message', { error: String(error) });
       }
     },
 
@@ -167,7 +170,7 @@ export function createLogsWebSocketHandler(_db: Database) {
      * Handle WebSocket close
      */
     close(ws: unknown): void {
-      console.log('[WS Logs] Client disconnected');
+      log.debug('Client disconnected');
       subscriptions.delete(ws);
     },
 

@@ -5,11 +5,14 @@
  * Updates database state and provides debug logging.
  */
 
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { clearQrCode } from './qr-store';
+
+const instanceLog = createLogger('instance');
+const messageLog = createLogger('message');
 
 /**
  * Set up event listener for connection events
@@ -39,11 +42,11 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
             })
             .where(eq(instances.id, instanceId));
         } catch (dbError) {
-          console.error(`[Instance] Failed to update database for ${instanceId}:`, dbError);
+          instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
         }
       }
 
-      console.log(`[Instance] Connected: ${instanceId} (profile: ${profileName || 'unknown'})`);
+      instanceLog.info('Connected', { instanceId, profileName: profileName || 'unknown' });
     });
 
     // Handle disconnection events
@@ -64,18 +67,16 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
               updatedAt: new Date(),
             })
             .where(eq(instances.id, instanceId));
-          console.log(`[Instance] Marked inactive (logged out): ${instanceId}`);
+          instanceLog.info('Marked inactive (logged out)', { instanceId });
         } catch (dbError) {
-          console.error(`[Instance] Failed to update database for ${instanceId}:`, dbError);
+          instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
         }
       }
 
-      console.log(
-        `[Instance] Disconnected: ${instanceId} (willReconnect: ${willReconnect}, reason: ${reason || 'unknown'})`,
-      );
+      instanceLog.info('Disconnected', { instanceId, willReconnect, reason: reason || 'unknown' });
     });
   } catch (error) {
-    console.warn('[Instance] Failed to set up connection listener:', error);
+    instanceLog.warn('Failed to set up connection listener', { error: String(error) });
   }
 }
 
@@ -90,17 +91,16 @@ export async function setupMessageListener(eventBus: EventBus): Promise<void> {
     await eventBus.subscribe('message.received', async (event) => {
       const { externalId, chatId, from, content, rawPayload } = event.payload;
       const _instanceId = event.metadata.instanceId;
-      console.log(`[Message] from=${from} chat=${chatId} id=${externalId}`);
-      console.log(`  payload: ${JSON.stringify(content)}`);
+      messageLog.info('Received', { from, chatId, externalId });
+      messageLog.debug('Payload', { content: JSON.stringify(content) });
 
       // DEBUG: Show full raw Baileys payload
       if (process.env.DEBUG_PAYLOADS === 'true' && rawPayload) {
-        console.log('  [RAW PAYLOAD]:');
-        console.log(JSON.stringify(rawPayload, null, 2));
+        messageLog.debug('Raw payload', { rawPayload });
       }
     });
-    console.log('[Message Listener] Listening for message.received events');
+    messageLog.info('Listening for message.received events');
   } catch (error) {
-    console.warn('[Message Listener] Failed to set up message listener:', error);
+    messageLog.warn('Failed to set up message listener', { error: String(error) });
   }
 }

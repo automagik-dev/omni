@@ -25,7 +25,8 @@
         "useImportType": "error"
       },
       "suspicious": {
-        "noExplicitAny": "error"
+        "noExplicitAny": "error",
+        "noConsole": "error"
       }
     }
   },
@@ -44,5 +45,17 @@
   },
   "files": {
     "ignore": ["node_modules", "dist", ".turbo", "*.min.js", ".pgserve-data", "bin", "*.generated.ts"]
-  }
+  },
+  "overrides": [
+    {
+      "include": ["scripts/**", "packages/core/scripts/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
+    }
+  ]
 }

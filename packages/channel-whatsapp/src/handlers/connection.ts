@@ -8,9 +8,12 @@
  */
 
 import type { Boom } from '@hapi/boom';
+import { createLogger } from '@omni/core';
 import type { ConnectionState, WASocket } from '@whiskeysockets/baileys';
 import { DisconnectReason } from '@whiskeysockets/baileys';
 import type { WhatsAppPlugin } from '../plugin';
+
+const log = createLogger('whatsapp:connection');
 
 /**
  * Reconnection configuration
@@ -95,10 +98,10 @@ async function handleQrCode(
     // Previous QR existed and now we got a new one = it expired/failed
     const attempts = (qrCodeAttempts.get(instanceId) || 0) + 1;
     qrCodeAttempts.set(instanceId, attempts);
-    console.log(`[WhatsApp] QR code expired, attempt ${attempts}/${MAX_QR_ATTEMPTS} for instance ${instanceId}`);
+    log.info('QR code expired', { instanceId, attempts, maxAttempts: MAX_QR_ATTEMPTS });
   } else {
     // First QR code for this connection attempt
-    console.log(`[WhatsApp] QR code generated for instance ${instanceId}`);
+    log.info('QR code generated', { instanceId });
   }
 
   // Track this QR as active
@@ -113,10 +116,11 @@ async function handleQrCode(
 
     // Check if we've exceeded max cycles - STOP completely
     if (cycles >= MAX_QR_CYCLES) {
-      console.log(
-        `[WhatsApp] Max QR cycles (${MAX_QR_CYCLES}) reached for ${instanceId}. ` +
-          `Total ${cycles * MAX_QR_ATTEMPTS} QR codes expired. Stopping to prevent resource exhaustion.`,
-      );
+      log.warn('Max QR cycles reached, stopping', {
+        instanceId,
+        maxCycles: MAX_QR_CYCLES,
+        totalExpired: cycles * MAX_QR_ATTEMPTS,
+      });
       qrCodeAttempts.delete(instanceId);
       qrCycleAttempts.delete(instanceId);
       activeQrCodes.delete(instanceId);
@@ -131,9 +135,7 @@ async function handleQrCode(
       return false;
     }
 
-    console.log(
-      `[WhatsApp] QR cycle ${cycles}/${MAX_QR_CYCLES} complete for ${instanceId}, clearing auth and retrying...`,
-    );
+    log.info('QR cycle complete, clearing auth and retrying', { instanceId, cycle: cycles, maxCycles: MAX_QR_CYCLES });
     qrCodeAttempts.delete(instanceId);
     clearConnectionTimeout(instanceId);
 
@@ -166,7 +168,7 @@ function setConnectionTimeout(
   const timeout = setTimeout(async () => {
     const attempts = qrCodeAttempts.get(instanceId) || 0;
     if (attempts > 0) {
-      console.log(`[WhatsApp] Connection timeout for ${instanceId} after QR scan, will generate new QR...`);
+      log.info('Connection timeout after QR scan, will generate new QR', { instanceId });
       // Don't clear auth yet, just let it retry with a new QR
     }
   }, CONNECTION_TIMEOUT_MS);
@@ -248,8 +250,8 @@ async function handleConnectionClose(
   if (!wasAuthenticated) {
     if (attempts >= 1) {
       // Already tried once after QR scan, stop now
-      console.log(`[WhatsApp] Connection failed after QR scan for ${instanceId}: ${reason}`);
-      console.log('[WhatsApp] Please try scanning QR again...');
+      log.warn('Connection failed after QR scan', { instanceId, reason });
+      log.info('Please try scanning QR again');
       reconnectAttempts.delete(instanceId);
       await plugin.handleDisconnected(instanceId, `Connection closed: ${reason}. Please reconnect manually.`, false);
       return;
@@ -258,11 +260,11 @@ async function handleConnectionClose(
     // First 515 after QR - this is the auth handshake, allow ONE reconnect
     // IMPORTANT: Wait 2 seconds before reconnecting to allow credentials to be saved
     // The 515 often fires before creds.update finishes saving
-    console.log(`[WhatsApp] Auth handshake for ${instanceId}, waiting for credentials to save...`);
+    log.info('Auth handshake, waiting for credentials to save', { instanceId });
     reconnectAttempts.set(instanceId, 1);
 
     setTimeout(async () => {
-      console.log(`[WhatsApp] Reconnecting ${instanceId} to complete authentication...`);
+      log.info('Reconnecting to complete authentication', { instanceId });
       try {
         await onReconnect();
       } catch (reconnectError) {
@@ -308,7 +310,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
   authenticatedInstances.add(instanceId);
 
-  console.log(`[WhatsApp] Connection opened for ${instanceId}`);
+  log.info('Connection opened', { instanceId });
   await plugin.handleConnected(instanceId, sock);
 }
 

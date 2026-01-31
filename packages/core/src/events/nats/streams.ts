@@ -6,6 +6,9 @@
  */
 
 import { type JetStreamManager, RetentionPolicy, StorageType, type StreamConfig } from 'nats';
+import { createLogger } from '../../logger';
+
+const log = createLogger('nats:streams');
 
 /**
  * Stream names (uppercase by convention)
@@ -138,13 +141,13 @@ async function ensureStream(jsm: JetStreamManager, config: Partial<StreamConfig>
 
     if (JSON.stringify(existingSubjects.sort()) !== JSON.stringify(newSubjects.sort())) {
       await jsm.streams.update(streamName, config);
-      console.log(`[NATS] Updated stream: ${streamName}`);
+      log.debug('Updated stream', { stream: streamName });
     }
   } catch (error) {
     // Stream doesn't exist, create it
     if (isStreamNotFoundError(error)) {
       await jsm.streams.add(config);
-      console.log(`[NATS] Created stream: ${streamName}`);
+      log.debug('Created stream', { stream: streamName });
     } else {
       throw error;
     }

@@ -7,8 +7,11 @@
  */
 
 import { type ZodSchema, z } from 'zod';
+import { createLogger } from '../../logger';
 import { isCoreEvent, isCustomEvent, isSystemEvent } from '../types';
 import type { StreamName } from './streams';
+
+const log = createLogger('nats:registry');
 
 /**
  * Event schema entry for the registry
@@ -111,7 +114,7 @@ export class EventRegistry {
     if (!entry) {
       if (isCustomEvent(eventType)) {
         // Allow unregistered custom events with a warning
-        console.warn(`[EventRegistry] No schema registered for '${eventType}'`);
+        log.warn('No schema registered for event type', { eventType });
         return { success: true, data: payload };
       }
 

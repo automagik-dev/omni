@@ -15,6 +15,14 @@
       "types": "./src/events/nats/index.ts",
       "default": "./src/events/nats/index.ts"
     },
+    "./logger": {
+      "types": "./src/logger/index.ts",
+      "default": "./src/logger/index.ts"
+    },
+    "./logger/adapters/baileys": {
+      "types": "./src/logger/adapters/baileys.ts",
+      "default": "./src/logger/adapters/baileys.ts"
+    },
     "./schemas": {
       "types": "./src/schemas/index.ts",
       "default": "./src/schemas/index.ts"

@@ -9,10 +9,13 @@
  * - Lifecycle: edit, delete
  */
 
+import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
 import { fromJid, isGroupJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
+
+const log = createLogger('whatsapp:messages');
 
 /**
  * Extract message content from a WAMessage
@@ -254,13 +257,13 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       // Ephemeral settings (type 3) - disappearing messages toggle
       if (protoType === 3) {
         const expiration = proto?.ephemeralExpiration;
-        console.log(`[WhatsApp] Disappearing messages ${expiration ? `enabled (${expiration}s)` : 'disabled'}`);
+        log.debug('Disappearing messages', { enabled: !!expiration, expiration });
         return null; // Don't emit as message
       }
 
       // Pin message (type 15 = KEEP_IN_CHAT)
       if (protoType === 15) {
-        console.log(`[WhatsApp] Message pinned: ${proto?.key?.id}`);
+        log.debug('Message pinned', { msgId: proto?.key?.id });
         return null; // TODO: emit as 'pin' event when we add support
       }
 
@@ -361,7 +364,7 @@ function extractUnknownContent(message: MessageContent): ExtractedContent | null
   }
 
   // Log unknown types at debug level for future investigation
-  console.debug(`[WhatsApp] Unknown message type: ${messageKeys.join(', ')}`);
+  log.debug('Unknown message type', { keys: messageKeys });
 
   return {
     type: 'unknown' as ContentType,
@@ -429,9 +432,7 @@ function shouldProcessMessage(msg: WAMessage): boolean {
 async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
   // DEBUG: Log full raw payload for development
   if (process.env.DEBUG_PAYLOADS === 'true') {
-    console.log(`\n[DEBUG PAYLOAD] ${msg.key.id}`);
-    console.log(JSON.stringify(msg, null, 2));
-    console.log('[/DEBUG PAYLOAD]\n');
+    log.debug('Raw payload', { msgId: msg.key.id, payload: msg });
   }
 
   const content = extractContent(msg);

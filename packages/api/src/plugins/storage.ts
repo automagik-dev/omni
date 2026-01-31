@@ -6,9 +6,12 @@
  */
 
 import type { PluginStorage } from '@omni/channel-sdk';
+import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { pluginStorage } from '@omni/db';
 import { and, eq, gt, isNull, like, or, sql } from 'drizzle-orm';
+
+const log = createLogger('api:storage');
 
 /**
  * Database-backed storage for plugin data
@@ -245,7 +248,7 @@ export function getPluginStorage(pluginId: string): PluginStorage {
     if (globalDb) {
       storage = new DatabasePluginStorage(globalDb, pluginId);
     } else {
-      console.warn(`[Storage] Database not available, using in-memory storage for plugin: ${pluginId}`);
+      log.warn('Database not available, using in-memory storage', { pluginId });
       storage = new InMemoryPluginStorage(pluginId);
     }
     storageInstances.set(pluginId, storage);

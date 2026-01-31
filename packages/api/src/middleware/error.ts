@@ -2,11 +2,13 @@
  * Error handling middleware and onError handler
  */
 
-import { ERROR_CODES, NotFoundError, OmniError, ValidationError } from '@omni/core';
+import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import type { ApiErrorResponse, AppVariables } from '../types';
+
+const log = createLogger('api:error');
 
 /**
  * Map error codes to HTTP status codes
@@ -172,7 +174,11 @@ function routeError(c: Context, error: unknown): Response {
  */
 export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c) => {
   const requestId = c.get('requestId') ?? 'unknown';
-  console.error(`[${requestId}] Error:`, error);
+  log.error('Request error', {
+    requestId,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
   return routeError(c, error);
 };
 

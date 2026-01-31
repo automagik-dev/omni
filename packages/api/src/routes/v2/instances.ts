@@ -4,11 +4,13 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin } from '@omni/channel-sdk';
-import { ChannelTypeSchema } from '@omni/core';
+import { ChannelTypeSchema, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { getQrCode } from '../../plugins/qr-store';
 import type { AppVariables } from '../../types';
+
+const log = createLogger('api:instances');
 
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -96,13 +98,13 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
             forceNewQr: true,
           },
         });
-        console.log(`[Instances] Triggered connection for instance ${instance.id} via ${data.channel}`);
+        log.info('Triggered connection', { instanceId: instance.id, channel: data.channel });
       } catch (error) {
-        console.error(`[Instances] Failed to connect instance ${instance.id}:`, error);
+        log.error('Failed to connect instance', { instanceId: instance.id, error: String(error) });
         // Don't fail the request - instance is created, connection can be retried
       }
     } else {
-      console.warn(`[Instances] No plugin found for channel: ${data.channel}`);
+      log.warn('No plugin found for channel', { channel: data.channel });
     }
   }
 
@@ -139,7 +141,7 @@ instancesRoutes.delete('/:id', async (c) => {
       try {
         await plugin.disconnect(id);
       } catch (error) {
-        console.error(`[Instances] Failed to disconnect instance ${id} before delete:`, error);
+        log.error('Failed to disconnect instance before delete', { instanceId: id, error: String(error) });
         // Continue with deletion anyway
       }
     }
@@ -365,7 +367,7 @@ instancesRoutes.post('/:id/disconnect', async (c) => {
       try {
         await plugin.disconnect(id);
       } catch (error) {
-        console.error(`[Instances] Failed to disconnect instance ${id}:`, error);
+        log.error('Failed to disconnect instance', { instanceId: id, error: String(error) });
         // Continue anyway - update database state
       }
     }
@@ -453,14 +455,14 @@ instancesRoutes.post('/:id/logout', async (c) => {
       try {
         await (plugin as ChannelPlugin & { logout: (id: string) => Promise<void> }).logout(id);
       } catch (error) {
-        console.error(`[Instances] Failed to logout instance ${id}:`, error);
+        log.error('Failed to logout instance', { instanceId: id, error: String(error) });
       }
     } else if (plugin) {
       // Fall back to disconnect
       try {
         await plugin.disconnect(id);
       } catch (error) {
-        console.error(`[Instances] Failed to disconnect instance ${id} during logout:`, error);
+        log.error('Failed to disconnect instance during logout', { instanceId: id, error: String(error) });
       }
     }
   }

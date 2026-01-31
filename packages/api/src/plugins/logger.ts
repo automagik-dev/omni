@@ -1,40 +1,41 @@
 /**
- * Simple logger implementation for plugins
+ * Logger factory for plugins
  *
- * Creates a logger that writes to console with plugin context.
+ * Re-exports the unified logger from @omni/core.
+ * This module exists for backwards compatibility with code that imports from here.
  */
 
-import type { Logger } from '@omni/channel-sdk';
+import { type Logger, createLogger as coreCreateLogger } from '@omni/core';
+
+// Re-export the Logger type
+export type { Logger };
 
 /**
- * Create a logger with given context
+ * Create a logger for a plugin with given module name
+ *
+ * @param module - Module name or context object
+ * @returns Logger instance
+ *
+ * @example
+ * ```typescript
+ * // Create a module logger
+ * const logger = createPluginLogger('whatsapp:plugin');
+ *
+ * // Or with context for backwards compatibility
+ * const logger = createPluginLogger({ plugin: 'whatsapp' });
+ * ```
  */
-export function createLogger(context: Record<string, unknown> = {}): Logger {
-  const formatContext = (extra?: Record<string, unknown>) => {
-    const combined = { ...context, ...extra };
-    if (Object.keys(combined).length === 0) return '';
-    return ` ${JSON.stringify(combined)}`;
-  };
+export function createPluginLogger(module: string | Record<string, unknown>): Logger {
+  // Handle legacy context object format
+  if (typeof module === 'object') {
+    const moduleName = String(module.plugin ?? module.module ?? 'plugin');
+    return coreCreateLogger(moduleName);
+  }
 
-  const timestamp = () => new Date().toISOString();
-
-  return {
-    debug(message: string, data?: Record<string, unknown>) {
-      if (process.env.LOG_LEVEL === 'debug') {
-        console.debug(`[${timestamp()}] DEBUG: ${message}${formatContext(data)}`);
-      }
-    },
-    info(message: string, data?: Record<string, unknown>) {
-      console.log(`[${timestamp()}] INFO: ${message}${formatContext(data)}`);
-    },
-    warn(message: string, data?: Record<string, unknown>) {
-      console.warn(`[${timestamp()}] WARN: ${message}${formatContext(data)}`);
-    },
-    error(message: string, data?: Record<string, unknown>) {
-      console.error(`[${timestamp()}] ERROR: ${message}${formatContext(data)}`);
-    },
-    child(childContext: Record<string, unknown>): Logger {
-      return createLogger({ ...context, ...childContext });
-    },
-  };
+  return coreCreateLogger(module);
 }
+
+/**
+ * @deprecated Use createPluginLogger instead
+ */
+export const createLogger = createPluginLogger;

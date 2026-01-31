@@ -9,10 +9,13 @@
 
 import type { ConsumerMessages, JsMsg } from 'nats';
 import type { ZodSchema, z } from 'zod';
+import { createLogger } from '../../logger';
 import type { GenericEventHandler, SubscribeOptions, Subscription } from '../bus';
 import type { EventType, GenericEventPayload, OmniEvent } from '../types';
 import { DEFAULT_CONSUMER_CONFIG, calculateBackoffDelay } from './consumer';
 import { eventRegistry } from './registry';
+
+const log = createLogger('nats:subscription');
 
 /**
  * Options for creating a subscription wrapper
@@ -56,12 +59,12 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
         try {
           await processMessage(msg);
         } catch (error) {
-          console.error(`[Subscription ${subscriptionId}] Error processing message:`, error);
+          log.error('Error processing message', { subscriptionId, error: String(error) });
         }
       }
     } catch (error) {
       if (isActive) {
-        console.error(`[Subscription ${subscriptionId}] Consumer error:`, error);
+        log.error('Consumer error', { subscriptionId, error: String(error) });
       }
     }
   }
@@ -74,7 +77,7 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
       event = parseMessage(msg);
     } catch (parseError) {
       // Can't parse message, terminate it (don't retry)
-      console.error(`[Subscription ${subscriptionId}] Failed to parse message:`, parseError);
+      log.error('Failed to parse message', { subscriptionId, error: String(parseError) });
       msg.term();
       return;
     }
@@ -99,11 +102,13 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
   async function handleProcessingError(msg: JsMsg, event: OmniEvent, error: Error): Promise<void> {
     const redeliveryCount = msg.info.redeliveryCount;
 
-    console.error(
-      `[Subscription ${subscriptionId}] Handler error for ${event.type} ` +
-        `(attempt ${redeliveryCount + 1}/${maxRetries + 1}):`,
-      error.message,
-    );
+    log.error('Handler error', {
+      subscriptionId,
+      eventType: event.type,
+      attempt: redeliveryCount + 1,
+      maxAttempts: maxRetries + 1,
+      error: error.message,
+    });
 
     if (redeliveryCount < maxRetries) {
       // Schedule retry with backoff
@@ -115,7 +120,7 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
         try {
           await onDeadLetter(event, error, redeliveryCount);
         } catch (dlError) {
-          console.error(`[Subscription ${subscriptionId}] Dead letter handler failed:`, dlError);
+          log.error('Dead letter handler failed', { subscriptionId, error: String(dlError) });
         }
       }
 
@@ -264,7 +269,7 @@ export class SubscriptionManager {
   async unsubscribeAll(): Promise<void> {
     const promises = Array.from(this.subscriptions.values()).map((sub) =>
       sub.unsubscribe().catch((err) => {
-        console.error(`Failed to unsubscribe ${sub.id}:`, err);
+        log.error('Failed to unsubscribe', { subscriptionId: sub.id, error: String(err) });
       }),
     );
 

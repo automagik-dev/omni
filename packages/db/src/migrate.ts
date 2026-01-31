@@ -4,19 +4,22 @@
  * Usage: bun run packages/db/src/migrate.ts
  */
 
+import { createLogger } from '@omni/core';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { createDb } from './client';
 
+const log = createLogger('db:migrate');
+
 async function runMigrations() {
-  console.log('Running migrations...');
+  log.info('Running migrations');
 
   const db = createDb();
 
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
-    console.log('Migrations completed successfully');
+    log.info('Migrations completed successfully');
   } catch (error) {
-    console.error('Migration failed:', error);
+    log.error('Migration failed', { error: String(error) });
     process.exit(1);
   }
 

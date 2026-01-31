@@ -4,6 +4,7 @@
  * Loads channel plugins from discovered packages
  */
 
+import { createLogger } from '@omni/core';
 import type { Logger } from '../types/context';
 import type { ChannelPlugin } from '../types/plugin';
 import { formatValidationErrors, validatePluginInterface } from './validator';
@@ -26,15 +27,9 @@ export interface LoadResult {
 }
 
 /**
- * Console logger fallback
+ * Default logger for plugin loading
  */
-const consoleLogger: Logger = {
-  debug: (msg, data) => console.debug(msg, data ?? ''),
-  info: (msg, data) => console.info(msg, data ?? ''),
-  warn: (msg, data) => console.warn(msg, data ?? ''),
-  error: (msg, data) => console.error(msg, data ?? ''),
-  child: () => consoleLogger,
-};
+const defaultLogger: Logger = createLogger('plugin-loader');
 
 /**
  * Load a channel plugin from a package path
@@ -47,7 +42,7 @@ const consoleLogger: Logger = {
  * @param logger - Logger for diagnostic messages
  * @returns Load result with plugin or error
  */
-export async function loadChannelPlugin(path: string, logger: Logger = consoleLogger): Promise<LoadResult> {
+export async function loadChannelPlugin(path: string, logger: Logger = defaultLogger): Promise<LoadResult> {
   try {
     // Resolve the actual entry point
     let entryPath: string = path;
@@ -133,6 +128,6 @@ export async function loadChannelPlugin(path: string, logger: Logger = consoleLo
  * @param logger - Logger for diagnostic messages
  * @returns Array of load results
  */
-export async function loadChannelPlugins(paths: string[], logger: Logger = consoleLogger): Promise<LoadResult[]> {
+export async function loadChannelPlugins(paths: string[], logger: Logger = defaultLogger): Promise<LoadResult[]> {
   return Promise.all(paths.map((path) => loadChannelPlugin(path, logger)));
 }

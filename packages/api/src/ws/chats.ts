@@ -4,7 +4,7 @@
  * Streams chat messages, typing indicators, and presence updates.
  */
 
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 
 /**
@@ -95,11 +95,12 @@ function shouldReceiveUpdate(sub: SubscriptionOptions, update: ChatUpdateMessage
  * Safely send a message to a WebSocket
  */
 function sendToSocket(ws: unknown, data: string, instanceId: string): void {
+  const log = createLogger('ws:chats');
   try {
     const socket = ws as { send?: (data: string) => void };
     socket?.send?.(data);
   } catch (error) {
-    console.error(`[WS Chats ${instanceId}] Error sending update:`, error);
+    log.error('Error sending update', { instanceId, error: String(error) });
   }
 }
 
@@ -108,13 +109,14 @@ function sendToSocket(ws: unknown, data: string, instanceId: string): void {
  */
 export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | null, instanceId: string) {
   const subscriptions = new Map<unknown, SubscriptionOptions>();
+  const log = createLogger('ws:chats');
 
   return {
     /**
      * Handle WebSocket open
      */
     open(ws: unknown): void {
-      console.log(`[WS Chats ${instanceId}] Client connected`);
+      log.debug('Client connected', { instanceId });
       subscriptions.set(ws, {
         includeTyping: true,
         includePresence: true,
@@ -131,7 +133,7 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
 
         switch (data.type) {
           case 'subscribe':
-            console.log(`[WS Chats ${instanceId}] Client subscribed:`, data);
+            log.debug('Client subscribed', { instanceId, chatId: data.chatId });
             subscriptions.set(ws, {
               chatId: data.chatId,
               includeTyping: data.includeTyping ?? true,
@@ -141,15 +143,15 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
             break;
 
           case 'unsubscribe':
-            console.log(`[WS Chats ${instanceId}] Client unsubscribed`);
+            log.debug('Client unsubscribed', { instanceId });
             subscriptions.delete(ws);
             break;
 
           default:
-            console.log(`[WS Chats ${instanceId}] Unknown message type:`, data);
+            log.debug('Unknown message type', { instanceId, data });
         }
       } catch (error) {
-        console.error(`[WS Chats ${instanceId}] Error parsing message:`, error);
+        log.error('Error parsing message', { instanceId, error: String(error) });
       }
     },
 
@@ -157,7 +159,7 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
      * Handle WebSocket close
      */
     close(ws: unknown): void {
-      console.log(`[WS Chats ${instanceId}] Client disconnected`);
+      log.debug('Client disconnected', { instanceId });
       subscriptions.delete(ws);
     },
 

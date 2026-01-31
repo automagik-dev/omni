@@ -5,16 +5,18 @@
  * Enable DEBUG_PAYLOADS=true to see full payloads.
  */
 
+import { createLogger } from '@omni/core';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { fromJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 
+const waLog = createLogger('whatsapp:events');
 const DEBUG = process.env.DEBUG_PAYLOADS === 'true';
 
-function log(event: string, data: unknown): void {
-  console.log(`[WA Event] ${event}`);
+function logEvent(event: string, data: unknown): void {
+  waLog.debug('Event received', { event });
   if (DEBUG) {
-    console.log(JSON.stringify(data, null, 2));
+    waLog.debug('Event payload', { event, data });
   }
 }
 
@@ -32,10 +34,10 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
       const callType = call.isVideo ? 'video' : 'voice';
       const status = call.status;
 
-      console.log(`[WA Call] ${callType} call from=${from} status=${status} id=${call.id}`);
+      waLog.info('Call received', { from, callType, status, callId: call.id });
 
       if (DEBUG) {
-        log('call', call);
+        logEvent('call', call);
       }
 
       // Emit call event
@@ -53,7 +55,7 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
       const lastKnown = presence.lastKnownPresence; // 'available', 'unavailable', 'composing', 'recording', 'paused'
 
       if (DEBUG) {
-        console.log(`[WA Presence] chat=${chatId} user=${userId} status=${lastKnown}`);
+        waLog.debug('Presence update', { chatId, userId, status: lastKnown });
       }
 
       plugin.handlePresenceUpdate(instanceId, chatId, userId, lastKnown, presence.lastSeen);
@@ -64,17 +66,17 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // CHATS - Chat list updates
   // ============================================================================
   sock.ev.on('chats.upsert', (chats) => {
-    if (DEBUG) log('chats.upsert', { count: chats.length, chats });
+    if (DEBUG) logEvent('chats.upsert', { count: chats.length, chats });
     plugin.handleChatsUpsert(instanceId, chats);
   });
 
   sock.ev.on('chats.update', (updates) => {
-    if (DEBUG) log('chats.update', { count: updates.length, updates });
+    if (DEBUG) logEvent('chats.update', { count: updates.length, updates });
     plugin.handleChatsUpdate(instanceId, updates);
   });
 
   sock.ev.on('chats.delete', (chatIds) => {
-    if (DEBUG) log('chats.delete', { chatIds });
+    if (DEBUG) logEvent('chats.delete', { chatIds });
     plugin.handleChatsDelete(instanceId, chatIds);
   });
 
@@ -82,12 +84,12 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // CONTACTS - Contact list updates
   // ============================================================================
   sock.ev.on('contacts.upsert', (contacts) => {
-    if (DEBUG) log('contacts.upsert', { count: contacts.length, contacts });
+    if (DEBUG) logEvent('contacts.upsert', { count: contacts.length, contacts });
     plugin.handleContactsUpsert(instanceId, contacts);
   });
 
   sock.ev.on('contacts.update', (updates) => {
-    if (DEBUG) log('contacts.update', { count: updates.length, updates });
+    if (DEBUG) logEvent('contacts.update', { count: updates.length, updates });
     plugin.handleContactsUpdate(instanceId, updates);
   });
 
@@ -95,24 +97,28 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // GROUPS - Group metadata and participant updates
   // ============================================================================
   sock.ev.on('groups.upsert', (groups) => {
-    if (DEBUG) log('groups.upsert', { count: groups.length, groups });
+    if (DEBUG) logEvent('groups.upsert', { count: groups.length, groups });
     plugin.handleGroupsUpsert(instanceId, groups);
   });
 
   sock.ev.on('groups.update', (updates) => {
-    if (DEBUG) log('groups.update', { count: updates.length, updates });
+    if (DEBUG) logEvent('groups.update', { count: updates.length, updates });
     plugin.handleGroupsUpdate(instanceId, updates);
   });
 
   sock.ev.on('group-participants.update', (update) => {
-    console.log(`[WA Group] ${update.action} in ${update.id}: ${update.participants.map((p) => p.id).join(', ')}`);
-    if (DEBUG) log('group-participants.update', update);
+    waLog.info('Group participants update', {
+      action: update.action,
+      groupId: update.id,
+      participants: update.participants.map((p) => p.id),
+    });
+    if (DEBUG) logEvent('group-participants.update', update);
     plugin.handleGroupParticipantsUpdate(instanceId, update);
   });
 
   sock.ev.on('group.join-request', (request) => {
-    console.log(`[WA Group] Join request for ${request.id} from ${request.participant}`);
-    if (DEBUG) log('group.join-request', request);
+    waLog.info('Group join request', { groupId: request.id, participant: request.participant });
+    if (DEBUG) logEvent('group.join-request', request);
     plugin.handleGroupJoinRequest(instanceId, request);
   });
 
@@ -122,8 +128,8 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   sock.ev.on('message-receipt.update', (updates) => {
     for (const update of updates) {
       if (DEBUG) {
-        console.log(`[WA Receipt] msg=${update.key.id}`);
-        log('message-receipt.update', update);
+        waLog.debug('Message receipt update', { msgId: update.key.id });
+        logEvent('message-receipt.update', update);
       }
       plugin.handleMessageReceiptUpdate(instanceId, update);
     }
@@ -135,8 +141,8 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   sock.ev.on('messages.media-update', (updates) => {
     for (const update of updates) {
       if (DEBUG) {
-        console.log(`[WA Media] msg=${update.key.id} error=${update.error?.message || 'none'}`);
-        log('messages.media-update', update);
+        waLog.debug('Media update', { msgId: update.key.id, error: update.error?.message || 'none' });
+        logEvent('messages.media-update', update);
       }
       plugin.handleMediaUpdate(instanceId, update);
     }
@@ -147,11 +153,15 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // ============================================================================
   sock.ev.on('messaging-history.set', (history) => {
     const { chats, contacts, messages, progress, syncType } = history;
-    console.log(
-      `[WA History] chats=${chats.length} contacts=${contacts.length} messages=${messages.length} progress=${progress || 0}% type=${syncType}`,
-    );
+    waLog.info('History sync', {
+      chats: chats.length,
+      contacts: contacts.length,
+      messages: messages.length,
+      progress: progress || 0,
+      syncType,
+    });
     if (DEBUG)
-      log('messaging-history.set', {
+      logEvent('messaging-history.set', {
         chatCount: chats.length,
         contactCount: contacts.length,
         messageCount: messages.length,
@@ -165,14 +175,14 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // BLOCKLIST - Blocked contacts
   // ============================================================================
   sock.ev.on('blocklist.set', (data) => {
-    console.log(`[WA Blocklist] Set ${data.blocklist.length} blocked contacts`);
-    if (DEBUG) log('blocklist.set', data);
+    waLog.info('Blocklist set', { count: data.blocklist.length });
+    if (DEBUG) logEvent('blocklist.set', data);
     plugin.handleBlocklistSet(instanceId, data.blocklist);
   });
 
   sock.ev.on('blocklist.update', (data) => {
-    console.log(`[WA Blocklist] ${data.type} ${data.blocklist.length} contacts`);
-    if (DEBUG) log('blocklist.update', data);
+    waLog.info('Blocklist update', { type: data.type, count: data.blocklist.length });
+    if (DEBUG) logEvent('blocklist.update', data);
     plugin.handleBlocklistUpdate(instanceId, data.blocklist, data.type);
   });
 
@@ -180,12 +190,12 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // LABELS - Business labels (for WhatsApp Business)
   // ============================================================================
   sock.ev.on('labels.edit', (label) => {
-    if (DEBUG) log('labels.edit', label);
+    if (DEBUG) logEvent('labels.edit', label);
     plugin.handleLabelEdit(instanceId, label);
   });
 
   sock.ev.on('labels.association', (data) => {
-    if (DEBUG) log('labels.association', data);
+    if (DEBUG) logEvent('labels.association', data);
     plugin.handleLabelAssociation(instanceId, data.association, data.type);
   });
 
@@ -193,25 +203,25 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // NEWSLETTERS (Channels) - WhatsApp Channels/Broadcasts
   // ============================================================================
   sock.ev.on('newsletter.reaction', (data) => {
-    if (DEBUG) log('newsletter.reaction', data);
+    if (DEBUG) logEvent('newsletter.reaction', data);
   });
 
   sock.ev.on('newsletter.view', (data) => {
-    if (DEBUG) log('newsletter.view', data);
+    if (DEBUG) logEvent('newsletter.view', data);
   });
 
   sock.ev.on('newsletter-participants.update', (data) => {
-    if (DEBUG) log('newsletter-participants.update', data);
+    if (DEBUG) logEvent('newsletter-participants.update', data);
   });
 
   sock.ev.on('newsletter-settings.update', (data) => {
-    if (DEBUG) log('newsletter-settings.update', data);
+    if (DEBUG) logEvent('newsletter-settings.update', data);
   });
 
   // ============================================================================
   // LID MAPPING - Phone number to LID mapping
   // ============================================================================
   sock.ev.on('lid-mapping.update', (data) => {
-    if (DEBUG) log('lid-mapping.update', data);
+    if (DEBUG) logEvent('lid-mapping.update', data);
   });
 }

@@ -4,8 +4,10 @@
  * Streams events to connected clients.
  */
 
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+
+const log = createLogger('ws:events');
 
 /**
  * Subscription message from client
@@ -64,7 +66,7 @@ export function createEventWebSocketHandler(_db: Database, _eventBus: EventBus |
      * Handle WebSocket open
      */
     open(_ws: unknown): void {
-      console.log('[WS Events] Client connected');
+      log.debug('Client connected');
     },
 
     /**
@@ -76,20 +78,20 @@ export function createEventWebSocketHandler(_db: Database, _eventBus: EventBus |
 
         switch (data.type) {
           case 'subscribe':
-            console.log('[WS Events] Client subscribed:', data);
+            log.debug('Client subscribed', { channels: data.channels, filters: data.filters });
             // TODO: Register subscription with eventBus
             break;
 
           case 'unsubscribe':
-            console.log('[WS Events] Client unsubscribed');
+            log.debug('Client unsubscribed');
             // TODO: Unregister subscription
             break;
 
           default:
-            console.log('[WS Events] Unknown message type:', data);
+            log.debug('Unknown message type', { data });
         }
       } catch (error) {
-        console.error('[WS Events] Error parsing message:', error);
+        log.error('Error parsing message', { error: String(error) });
       }
     },
 
@@ -97,7 +99,7 @@ export function createEventWebSocketHandler(_db: Database, _eventBus: EventBus |
      * Handle WebSocket close
      */
     close(_ws: unknown): void {
-      console.log('[WS Events] Client disconnected');
+      log.debug('Client disconnected');
       // TODO: Clean up subscriptions
     },
   };

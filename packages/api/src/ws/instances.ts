@@ -4,8 +4,10 @@
  * Streams instance connection status and QR codes.
  */
 
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+
+const log = createLogger('ws:instances');
 
 /**
  * Subscribe to instance status
@@ -55,7 +57,7 @@ export function createInstancesWebSocketHandler(_db: Database, _eventBus: EventB
      * Handle WebSocket open
      */
     open(_ws: unknown): void {
-      console.log('[WS Instances] Client connected');
+      log.debug('Client connected');
     },
 
     /**
@@ -67,22 +69,22 @@ export function createInstancesWebSocketHandler(_db: Database, _eventBus: EventB
 
         switch (data.type) {
           case 'subscribe':
-            console.log('[WS Instances] Client subscribed:', data);
+            log.debug('Client subscribed', { instances: data.instances });
             subscriptions.set(ws, {
               instances: data.instances ?? ['*'],
             });
             break;
 
           case 'unsubscribe':
-            console.log('[WS Instances] Client unsubscribed');
+            log.debug('Client unsubscribed');
             subscriptions.delete(ws);
             break;
 
           default:
-            console.log('[WS Instances] Unknown message type:', data);
+            log.debug('Unknown message type', { data });
         }
       } catch (error) {
-        console.error('[WS Instances] Error parsing message:', error);
+        log.error('Error parsing message', { error: String(error) });
       }
     },
 
@@ -90,7 +92,7 @@ export function createInstancesWebSocketHandler(_db: Database, _eventBus: EventB
      * Handle WebSocket close
      */
     close(ws: unknown): void {
-      console.log('[WS Instances] Client disconnected');
+      log.debug('Client disconnected');
       subscriptions.delete(ws);
     },
 
@@ -111,7 +113,7 @@ export function createInstancesWebSocketHandler(_db: Database, _eventBus: EventB
             socket.send(JSON.stringify(status));
           }
         } catch (error) {
-          console.error('[WS Instances] Error sending status:', error);
+          log.error('Error sending status', { error: String(error) });
         }
       }
     },

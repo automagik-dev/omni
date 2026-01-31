@@ -5,11 +5,13 @@
  */
 
 import type { PluginContext, PluginDatabase } from '@omni/channel-sdk';
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 
-import { createLogger } from './logger';
+import { createPluginLogger } from './logger';
 import { getPluginStorage } from './storage';
+
+const log = createLogger('api:plugin-context');
 
 /**
  * Create a plugin database adapter
@@ -20,7 +22,7 @@ function createPluginDatabase(db: Database): PluginDatabase {
       // Note: This is a simplified implementation
       // Drizzle doesn't have a direct execute method for raw SQL
       // Plugins should use getDrizzle() for queries
-      console.warn('[PluginDatabase] execute() is not implemented. Use getDrizzle() for queries.');
+      log.warn('PluginDatabase execute() is not implemented. Use getDrizzle() for queries.');
       return [];
     },
     getDrizzle(): unknown {
@@ -51,7 +53,7 @@ export function createPluginContext(options: CreatePluginContextOptions): Plugin
   return {
     eventBus,
     storage: getPluginStorage(pluginId),
-    logger: createLogger({ plugin: pluginId }),
+    logger: createPluginLogger(pluginId),
     config: {
       env,
       apiBaseUrl: `http://${apiHost}:${apiPort}`,

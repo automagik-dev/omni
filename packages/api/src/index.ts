@@ -6,9 +6,22 @@
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import { type EventBus, connectEventBus } from '@omni/core';
+import { type EventBus, configureLogging, connectEventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
+
+// Configure logging at startup
+configureLogging({
+  level: (process.env.LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') ?? 'info',
+  format: (process.env.LOG_FORMAT as 'auto' | 'pretty' | 'json') ?? 'auto',
+});
+
+// Create module-specific loggers
+const log = createLogger('api:startup');
+const natsLog = createLogger('api:nats');
+const pluginLog = createLogger('api:plugins');
+const shutdownLog = createLogger('api:shutdown');
+const httpLog = createLogger('api:http');
 import { type App, createApp } from './app';
 import {
   InstanceMonitor,
@@ -56,13 +69,13 @@ export function getInstanceMonitor(): InstanceMonitor | null {
  */
 async function connectToNats(db: Database): Promise<EventBus | null> {
   try {
-    console.log(`Connecting to NATS at ${NATS_URL}...`);
+    natsLog.info('Connecting to NATS', { url: NATS_URL });
     const eventBus = await connectEventBus({
       url: NATS_URL,
       serviceName: 'omni-api',
     });
     globalEventBus = eventBus;
-    console.log('Connected to NATS');
+    natsLog.info('Connected to NATS');
 
     // Set up event listeners
     await setupQrCodeListener(eventBus);
@@ -71,8 +84,8 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
 
     return eventBus;
   } catch (error) {
-    console.warn('Failed to connect to NATS, running without event bus:', error);
-    console.warn('Channel plugins will not be able to publish events');
+    natsLog.warn('Failed to connect to NATS, running without event bus', { error: String(error) });
+    natsLog.warn('Channel plugins will not be able to publish events');
     return null;
   }
 }
@@ -81,31 +94,34 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
  * Load channel plugins and reconnect active instances
  */
 async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promise<void> {
-  console.log('Loading channel plugins...');
+  pluginLog.info('Loading channel plugins');
   const result = await loadChannelPlugins({ eventBus, db });
   globalChannelRegistry = result.registry;
 
   if (result.loaded > 0) {
-    console.log(`Loaded ${result.loaded} channel plugin(s): ${result.pluginIds.join(', ')}`);
+    pluginLog.info('Channel plugins loaded', { count: result.loaded, plugins: result.pluginIds });
   } else {
-    console.warn('No channel plugins were loaded');
+    pluginLog.warn('No channel plugins were loaded');
     return;
   }
 
   if (result.failed > 0) {
-    console.warn(`${result.failed} channel plugin(s) failed to load`);
+    pluginLog.warn('Some channel plugins failed to load', { failed: result.failed });
   }
 
   // Auto-reconnect previously active instances
-  console.log('Auto-reconnecting active instances...');
+  pluginLog.info('Auto-reconnecting active instances');
   const reconnectResult = await reconnectWithPool(db, result.registry, {
     maxConcurrent: 3,
     delayBetweenMs: 500,
   });
 
   if (reconnectResult.attempted > 0) {
-    const failedMsg = reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : '';
-    console.log(`Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances${failedMsg}`);
+    pluginLog.info('Instance reconnection complete', {
+      succeeded: reconnectResult.succeeded,
+      attempted: reconnectResult.attempted,
+      failed: reconnectResult.failed,
+    });
   }
 
   // Start instance monitor
@@ -115,7 +131,7 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
     autoReconnect: true,
   });
   globalInstanceMonitor.start();
-  console.log('Instance monitor started');
+  pluginLog.info('Instance monitor started');
 }
 
 /**
@@ -158,7 +174,7 @@ async function startServer(app: App): Promise<void> {
         res.end(response.body ? await response.text() : undefined);
       })
       .catch((error: Error) => {
-        console.error('Request error:', error);
+        httpLog.error('Request error', { error: error.message, stack: error.stack });
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Internal server error' }));
       });
@@ -178,37 +194,37 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
     if (isShuttingDown) return;
     isShuttingDown = true;
 
-    console.log('\nShutting down gracefully...');
+    shutdownLog.info('Shutting down gracefully');
 
     const forceExitTimer = setTimeout(() => {
-      console.log('Force exiting (timeout)...');
+      shutdownLog.warn('Force exiting (timeout)');
       process.exit(1);
     }, 10000);
     forceExitTimer.unref();
 
     try {
-      server.close(() => console.log('[Shutdown] HTTP server closed'));
+      server.close(() => shutdownLog.info('HTTP server closed'));
 
       if (globalInstanceMonitor) {
-        console.log('[Shutdown] Stopping instance monitor...');
+        shutdownLog.info('Stopping instance monitor');
         globalInstanceMonitor.stop();
       }
 
       if (globalChannelRegistry) {
-        console.log('[Shutdown] Disconnecting all channel instances...');
+        shutdownLog.info('Disconnecting all channel instances');
         await globalChannelRegistry.destroyAll();
       }
 
       if (globalEventBus) {
-        console.log('[Shutdown] Closing NATS connection...');
+        shutdownLog.info('Closing NATS connection');
         await globalEventBus.close();
       }
 
-      console.log('[Shutdown] Graceful shutdown complete');
+      shutdownLog.info('Graceful shutdown complete');
       clearTimeout(forceExitTimer);
       process.exit(0);
     } catch (error) {
-      console.error('[Shutdown] Error during graceful shutdown:', error);
+      shutdownLog.error('Error during graceful shutdown', { error: String(error) });
       process.exit(1);
     }
   };
@@ -221,10 +237,10 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
  * Main entry point
  */
 async function main() {
-  console.log('Starting Omni API v2...');
+  log.info('Starting Omni API v2');
 
   // Create database connection
-  console.log('Connecting to database...');
+  log.info('Connecting to database');
   const db = createDb({ url: DATABASE_URL });
 
   // Connect to NATS
@@ -235,23 +251,23 @@ async function main() {
     try {
       await initializeChannelPlugins(db, eventBus);
     } catch (error) {
-      console.error('Failed to load channel plugins:', error);
+      pluginLog.error('Failed to load channel plugins', { error: String(error) });
     }
   } else {
-    console.warn('Skipping channel plugin loading (no event bus)');
+    pluginLog.warn('Skipping channel plugin loading (no event bus)');
   }
 
   // Create and start server
   const app = createApp(db, eventBus, globalChannelRegistry);
-  console.log(`API server listening on http://${HOST}:${PORT}`);
-  console.log(`Health check: http://${HOST}:${PORT}/api/v2/health`);
+  log.info('API server listening', { host: HOST, port: PORT });
+  log.info('Health check available', { url: `http://${HOST}:${PORT}/api/v2/health` });
 
   await startServer(app);
 }
 
 // Run
 main().catch((error) => {
-  console.error('Failed to start API server:', error);
+  log.error('Failed to start API server', { error: String(error) });
   process.exit(1);
 });
 

@@ -5,7 +5,9 @@
  * Used by API to serve QR codes for WhatsApp authentication.
  */
 
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
+
+const log = createLogger('api:qr-store');
 
 interface StoredQrCode {
   code: string;
@@ -69,12 +71,12 @@ export async function printQrCodeToTerminal(qrCode: string, instanceId: string):
         }
       ).default || qrTerminalModule;
 
-    console.log(`\n[WhatsApp] QR Code for ${instanceId}:`);
+    log.info('QR Code generated for WhatsApp', { instanceId });
     qrTerminal.generate(qrCode, { small: true });
   } catch (error) {
-    console.log(`\n[QR Code for ${instanceId}]: ${qrCode.substring(0, 50)}...`);
+    log.info('QR Code generated', { instanceId, qrCode: `${qrCode.substring(0, 50)}...` });
     if (error instanceof Error && process.env.DEBUG) {
-      console.debug(`[QR Terminal Error]: ${error.message}`);
+      log.debug('QR Terminal unavailable', { error: error.message });
     }
   }
 }
@@ -94,6 +96,6 @@ export async function setupQrCodeListener(eventBus: EventBus): Promise<void> {
       await printQrCodeToTerminal(qrCode, instanceId);
     });
   } catch (error) {
-    console.warn('[QR Store] Failed to set up QR code listener:', error);
+    log.warn('Failed to set up QR code listener', { error: String(error) });
   }
 }

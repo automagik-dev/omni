@@ -6,8 +6,11 @@
  */
 
 import type { PluginStorage } from '@omni/channel-sdk';
+import { createLogger } from '@omni/core';
 import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '@whiskeysockets/baileys';
 import { initAuthCreds } from '@whiskeysockets/baileys';
+
+const log = createLogger('whatsapp:auth');
 
 // proto may not be available in all Baileys versions/runtimes (especially with tsx)
 // When unavailable, proto deserialization will be skipped - this is non-critical for initial connection
@@ -130,10 +133,10 @@ export async function createStorageAuthState(
       // Storage already parsed it, but we need to reconstruct Buffers
       creds = JSON.parse(JSON.stringify(existingCreds), bufferReviver) as AuthenticationCreds;
     }
-    console.log(`[WhatsApp Auth] Restored creds for ${instanceId}, registered: ${creds.registered}`);
+    log.info('Restored credentials', { instanceId, registered: creds.registered });
   } else {
     creds = initAuthCreds();
-    console.log(`[WhatsApp Auth] Created new creds for ${instanceId}`);
+    log.info('Created new credentials', { instanceId });
   }
 
   return {

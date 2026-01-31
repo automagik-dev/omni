@@ -18,6 +18,9 @@ import {
   StringCodec,
   connect,
 } from 'nats';
+import { createLogger } from '../../logger';
+
+const log = createLogger('nats');
 import type {
   EventBus,
   EventBusConfig,
@@ -130,14 +133,14 @@ export class NatsEventBus implements EventBus {
       // Ensure all streams exist
       await ensureStreams(this.jsm);
 
-      console.log(`[NatsEventBus] Connected to ${this.config.url}`);
+      log.info('Connected to NATS', { url: this.config.url });
       this.connectionAttempts = 0;
     } catch (error) {
-      console.error(`[NatsEventBus] Connection failed (attempt ${this.connectionAttempts}):`, error);
+      log.error('Connection failed', { attempt: this.connectionAttempts, error: String(error) });
 
       if (this.connectionAttempts < this.config.reconnect.maxRetries) {
         const delay = this.calculateReconnectDelay();
-        console.log(`[NatsEventBus] Retrying in ${delay}ms...`);
+        log.info('Retrying connection', { delayMs: delay });
         await this.sleep(delay);
         return this.connect();
       }
@@ -306,7 +309,7 @@ export class NatsEventBus implements EventBus {
         subscriptions.push(sub);
       } catch (error) {
         // Some streams might not match the pattern, ignore
-        console.warn(`[NatsEventBus] Could not subscribe to ${pattern}:`, error);
+        log.warn('Could not subscribe to pattern', { pattern, error: String(error) });
       }
     }
 
@@ -398,7 +401,7 @@ export class NatsEventBus implements EventBus {
     if (this.isClosing) return;
     this.isClosing = true;
 
-    console.log('[NatsEventBus] Closing connection...');
+    log.info('Closing connection');
 
     // Unsubscribe all subscriptions
     await this.subscriptionManager.unsubscribeAll();
@@ -413,7 +416,7 @@ export class NatsEventBus implements EventBus {
     this.jsm = null;
     this.isClosing = false;
 
-    console.log('[NatsEventBus] Connection closed');
+    log.info('Connection closed');
   }
 
   /**
@@ -482,16 +485,16 @@ export class NatsEventBus implements EventBus {
       for await (const status of this.nc.status()) {
         switch (status.type) {
           case 'disconnect':
-            console.warn('[NatsEventBus] Disconnected from NATS');
+            log.warn('Disconnected from NATS');
             break;
           case 'reconnect':
-            console.log('[NatsEventBus] Reconnected to NATS');
+            log.info('Reconnected to NATS');
             break;
           case 'error':
-            console.error('[NatsEventBus] Connection error:', status.data);
+            log.error('Connection error', { data: String(status.data) });
             break;
           case 'ldm':
-            console.warn('[NatsEventBus] Lame duck mode - server is shutting down');
+            log.warn('Lame duck mode - server is shutting down');
             break;
         }
       }

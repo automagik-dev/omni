@@ -7,6 +7,7 @@
  * - TypeScript types for channels and agents
  * - Error classes
  * - ID generation utilities
+ * - Unified logging system
  */
 
 // Events
@@ -23,3 +24,17 @@ export * from './errors';
 
 // IDs
 export * from './ids';
+
+// Logger
+export {
+  createLogger,
+  configureLogging,
+  getLogConfig,
+  rootLogger,
+  getLogBuffer,
+  type Logger,
+  type LogLevel,
+  type LogEntry,
+  type LogConfig,
+  type LogFormat,
+} from './logger';
