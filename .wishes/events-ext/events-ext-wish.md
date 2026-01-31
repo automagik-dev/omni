@@ -41,6 +41,8 @@ This is the foundation for intelligent message handling.
 | **DEC-7** | Decision | **Per-instance queues** with configurable concurrency (not global queue) |
 | **DEC-8** | Decision | Default concurrency: 5 parallel automations per instance |
 | **DEC-9** | Decision | Queue overflow: backpressure to NATS (nak + redelivery) |
+| **DEC-10** | Decision | **Message debounce** per conversation (group rapid messages before processing) |
+| **DEC-11** | Decision | Debounce modes: none, fixed, range (randomized for human-like behavior) |
 
 ---
 
@@ -293,15 +295,20 @@ Automation 1: Forward to agent (fire and forget)
 Automation 2: Handle agent callback → send message
 ```
 
-**Example: Sync Agent (v1 Style - Recommended for Simple Cases)**
+**Example: Sync Agent with Debounce (v1 Style - Recommended)**
 ```json
 {
-  "name": "Auto-Reply with Agent (Sync)",
-  "description": "Forward message to agent, wait for response, reply immediately",
+  "name": "Auto-Reply with Agent (Sync + Debounce)",
+  "description": "Group rapid messages, forward to agent, reply",
   "triggerEventType": "message.received",
   "triggerConditions": [
     { "field": "payload.content.type", "operator": "eq", "value": "text" }
   ],
+  "debounce": {
+    "mode": "range",
+    "minMs": 3000,
+    "maxMs": 8000
+  },
   "actions": [
     {
       "type": "webhook",
@@ -309,7 +316,7 @@ Automation 2: Handle agent callback → send message
         "url": "{{env.AGENT_API_URL}}",
         "method": "POST",
         "headers": { "Authorization": "Bearer {{env.AGENT_API_KEY}}" },
-        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\", \"from\": \"{{payload.from.id}}\"}",
+        "bodyTemplate": "{\"messages\": {{messages}}, \"from\": {{from}}, \"instanceId\": \"{{instanceId}}\"}",
         "waitForResponse": true,
         "timeoutMs": 60000,
         "responseAs": "agent"
@@ -318,13 +325,26 @@ Automation 2: Handle agent callback → send message
     {
       "type": "send_message",
       "config": {
-        "instanceId": "{{payload.instanceId}}",
-        "to": "{{payload.from.id}}",
+        "instanceId": "{{instanceId}}",
+        "to": "{{from.id}}",
         "contentTemplate": "{{agent.response}}"
       }
     }
   ],
   "enabled": true
+}
+```
+
+**What agent receives (after debounce groups 3 messages):**
+```json
+{
+  "messages": [
+    { "type": "text", "text": "Hi", "timestamp": 1706680801000 },
+    { "type": "text", "text": "I have a question", "timestamp": 1706680803000 },
+    { "type": "text", "text": "How do I reset my password?", "timestamp": 1706680805000 }
+  ],
+  "from": { "id": "+5511999001234", "name": "Alice" },
+  "instanceId": "wa-123"
 }
 ```
 
@@ -402,6 +422,10 @@ GET    /api/v2/automation-logs?eventType=message.received&status=failed
 - [ ] **Concurrency:** Default 5 concurrent automations per instance
 - [ ] **Concurrency:** Backpressure via NATS nak when queue full
 - [ ] **Concurrency:** Queue depth exposed in metrics
+- [ ] **Debounce:** Per-conversation grouping (instanceId + personId)
+- [ ] **Debounce:** Modes: none, fixed, range (randomized)
+- [ ] **Debounce:** Configurable per-instance or per-automation
+- [ ] **Debounce:** Grouped messages sent as array to webhook
 - [ ] Execution logged with timing per action
 - [ ] Can enable/disable without deletion
 - [ ] Test endpoint validates without executing (dry run)
@@ -552,8 +576,73 @@ instance.settings.automationConcurrency = 10  // VIP instance gets more slots
 
 **Why Per-Instance (not Per-Conversation):**
 - Simpler to implement
-- Per-conversation ordering rarely needed (agent handles context)
+- Debounce handles conversation grouping (see below)
 - Can add per-conversation queuing later if needed
+
+### Message Debounce (v1 Feature)
+
+**Problem:** User sends 3 messages in quick succession:
+```
+[10:00:01] "Hi"
+[10:00:03] "I have a question"
+[10:00:05] "How do I reset my password?"
+```
+
+Without debounce: Agent processes each separately (3 API calls, 3 responses - bad UX)
+With debounce: Wait, group, send all 3 to agent as one context
+
+**Debounce Modes:**
+```typescript
+type DebounceConfig =
+  | { mode: 'none' }                           // Process immediately
+  | { mode: 'fixed'; delayMs: number }         // Wait exactly N ms
+  | { mode: 'range'; minMs: number; maxMs: number }  // Random between min-max (human-like)
+
+// Examples:
+{ mode: 'none' }                    // Instant processing
+{ mode: 'fixed', delayMs: 5000 }    // Wait 5 seconds
+{ mode: 'range', minMs: 3000, maxMs: 8000 }  // Wait 3-8 seconds (randomized)
+```
+
+**How it works:**
+```
+msg1 arrives (10:00:01) → start debounce timer (e.g., 5s)
+msg2 arrives (10:00:03) → reset timer (still within window)
+msg3 arrives (10:00:05) → reset timer
+... silence ...
+timer fires (10:00:10) → process all 3 messages together
+```
+
+**Debounce is Per-Conversation:**
+- Key: `instanceId + personId` (same person, same instance)
+- Different people = different debounce windows
+- Different instances = different debounce windows
+
+**Configuration Location:**
+```typescript
+// Per-instance setting (in instance config)
+instance.settings.debounce = {
+  mode: 'range',
+  minMs: 3000,
+  maxMs: 8000
+}
+
+// Or per-automation (override)
+automation.debounce = { mode: 'fixed', delayMs: 10000 }
+```
+
+**What the agent receives (grouped):**
+```json
+{
+  "messages": [
+    { "text": "Hi", "timestamp": "10:00:01" },
+    { "text": "I have a question", "timestamp": "10:00:03" },
+    { "text": "How do I reset my password?", "timestamp": "10:00:05" }
+  ],
+  "from": { "id": "+5511999...", "name": "Alice" },
+  "instanceId": "wa-123"
+}
+```
 
 **Backpressure Flow:**
 ```
