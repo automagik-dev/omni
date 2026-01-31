@@ -23,15 +23,11 @@ export { createLogger } from './logger';
 // Storage
 export { getPluginStorage, setStorageDatabase, DatabasePluginStorage, InMemoryPluginStorage } from './storage';
 
-// QR code handling
-export {
-  storeQrCode,
-  getQrCode,
-  clearQrCode,
-  setupQrCodeListener,
-  setupConnectionListener,
-  setupMessageListener,
-} from './qr-store';
+// QR code storage
+export { storeQrCode, getQrCode, clearQrCode, setupQrCodeListener } from './qr-store';
+
+// Event listeners (connection, messages)
+export { setupConnectionListener, setupMessageListener } from './event-listeners';
 
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';

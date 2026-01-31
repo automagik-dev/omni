@@ -73,7 +73,7 @@ async function main() {
 
     // Set up QR code, connection, and message listeners
     await setupQrCodeListener(eventBus);
-    await setupConnectionListener(eventBus);
+    await setupConnectionListener(eventBus, db);
     await setupMessageListener(eventBus);
   } catch (error) {
     console.warn('Failed to connect to NATS, running without event bus:', error);

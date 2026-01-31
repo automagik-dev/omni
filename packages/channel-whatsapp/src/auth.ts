@@ -124,8 +124,10 @@ export async function createStorageAuthState(
       // Storage already parsed it, but we need to reconstruct Buffers
       creds = JSON.parse(JSON.stringify(existingCreds), bufferReviver) as AuthenticationCreds;
     }
+    console.log(`[WhatsApp Auth] Restored creds for ${instanceId}, registered: ${creds.registered}`);
   } else {
     creds = initAuthCreds();
+    console.log(`[WhatsApp Auth] Created new creds for ${instanceId}`);
   }
 
   return {
@@ -140,13 +142,21 @@ export async function createStorageAuthState(
 
           for (const id of ids) {
             const key = `${keyPrefix}:${type}:${id}`;
-            const value = await storage.get<string>(key);
+            const value = await storage.get<unknown>(key);
 
             if (value) {
-              const parsed = deserialize<unknown>(value);
+              // Handle both: raw object (from storage.get parsing) or JSON string (legacy)
+              let parsed: unknown;
+              if (typeof value === 'string') {
+                parsed = deserialize<unknown>(value);
+              } else {
+                // Storage already parsed it, reconstruct Buffers
+                parsed = JSON.parse(JSON.stringify(value), bufferReviver);
+              }
               data[id] = deserializeSignalData(type, parsed);
             }
           }
+
 
           return data;
         },
@@ -158,6 +168,7 @@ export async function createStorageAuthState(
             };
           },
         ): Promise<void> => {
+          let savedCount = 0;
           for (const [type, entries] of Object.entries(data)) {
             if (!entries) continue;
 
@@ -166,6 +177,7 @@ export async function createStorageAuthState(
 
               if (value !== null && value !== undefined) {
                 await storage.set(key, serialize(value));
+                savedCount++;
               } else {
                 await storage.delete(key);
               }

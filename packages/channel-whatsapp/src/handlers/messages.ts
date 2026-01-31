@@ -225,13 +225,18 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       },
     }),
   },
-  // Protocol message (edits, deletes handled separately)
+  // Protocol message - handles internal WhatsApp protocol events
+  // Types: 0=REVOKE, 3=EPHEMERAL_SETTING, 4=EPHEMERAL_SYNC, 5=HISTORY_SYNC,
+  //        6=APP_STATE_KEY_SHARE, 7=APP_STATE_KEY_REQUEST, 14=EDIT, 15=KEEP_IN_CHAT (pin)
   {
     check: (m) => !!m.protocolMessage,
     extract: (m) => {
       const proto = m.protocolMessage;
-      // Message edit
-      if (proto?.type === 14 || proto?.editedMessage) {
+      // Cast to number to handle all protocol types (including ones not in the TypeScript enum)
+      const protoType = proto?.type as number | undefined;
+
+      // Message edit (type 14 = MESSAGE_EDIT)
+      if (protoType === 14 || proto?.editedMessage) {
         return {
           type: 'edit' as ContentType,
           targetMessageId: proto?.key?.id ?? undefined,
@@ -240,13 +245,36 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
             undefined,
         };
       }
-      // Message delete (revoke)
-      if (proto?.type === 0) {
+
+      // Message delete/revoke (type 0 = REVOKE)
+      if (protoType === 0) {
         return {
           type: 'delete' as ContentType,
           targetMessageId: proto?.key?.id ?? undefined,
         };
       }
+
+      // Ephemeral settings (type 3) - disappearing messages toggle
+      if (protoType === 3) {
+        const expiration = proto?.ephemeralExpiration;
+        console.log(`[WhatsApp] Disappearing messages ${expiration ? `enabled (${expiration}s)` : 'disabled'}`);
+        return null; // Don't emit as message
+      }
+
+      // Pin message (type 15 = KEEP_IN_CHAT)
+      if (protoType === 15) {
+        console.log(`[WhatsApp] Message pinned: ${proto?.key?.id}`);
+        return null; // TODO: emit as 'pin' event when we add support
+      }
+
+      // Internal sync messages - silently ignore
+      // 4=EPHEMERAL_SYNC, 5=HISTORY_SYNC, 6=KEY_SHARE, 7=KEY_REQUEST, 8=MSG_FANOUT
+      // 9=INITIAL_SECURITY, 10=APP_STATE_FATAL, 11=SHARE_PHONE, 12-17=various internal
+      if (protoType !== undefined && protoType !== 0 && protoType !== 14) {
+        // All other protocol types are internal sync - don't emit
+        return null;
+      }
+
       return null;
     },
   },
@@ -274,21 +302,73 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       text: m.buttonsResponseMessage?.selectedDisplayText ?? m.buttonsResponseMessage?.selectedButtonId ?? undefined,
     }),
   },
+  // Sender key distribution - internal E2E encryption, ignore
+  {
+    check: (m) => !!m.senderKeyDistributionMessage,
+    extract: () => null, // Internal encryption key, don't emit
+  },
+  // Message history bundle - internal sync, ignore
+  {
+    check: (m) => !!(m as Record<string, unknown>).messageHistoryBundle,
+    extract: () => null, // History sync, don't emit
+  },
+  // Device sent message (multi-device sync)
+  {
+    check: (m) => !!(m as Record<string, unknown>).deviceSentMessage,
+    extract: (m) => {
+      // Extract the actual message from the device sync wrapper
+      const deviceMsg = (m as Record<string, unknown>).deviceSentMessage as Record<string, unknown> | undefined;
+      const innerMsg = deviceMsg?.message as MessageContent | undefined;
+      if (innerMsg) {
+        // Re-run extraction on the inner message
+        for (const { check, extract } of contentExtractors.slice(0, -3)) {
+          if (check(innerMsg)) {
+            return extract(innerMsg);
+          }
+        }
+      }
+      return null; // Can't extract inner content
+    },
+  },
 ];
 
 /**
- * Fallback extractor for unknown message types
- * Captures the message with type 'unknown' and includes raw keys for debugging
+ * Known internal message types that should be silently ignored
  */
-function extractUnknownContent(message: MessageContent): ExtractedContent {
+const INTERNAL_MESSAGE_TYPES = new Set([
+  'messageContextInfo', // Context info for replies, mentions
+  'senderKeyDistributionMessage', // E2E encryption key distribution
+  'messageHistoryBundle', // History sync
+  'protocolMessage', // Already handled above
+  'encReactionMessage', // Encrypted reaction (handled via messages.reaction event)
+  'peerDataOperationRequestMessage', // Internal peer sync
+  'peerDataOperationRequestResponseMessage', // Internal peer sync response
+  'botInvokeMessage', // Bot-related internal
+  'callLogMessage', // Call log sync
+]);
+
+/**
+ * Fallback extractor for unknown message types
+ * Returns null for internal types, captures user-facing unknowns for debugging
+ */
+function extractUnknownContent(message: MessageContent): ExtractedContent | null {
   // Get all keys that have truthy values (actual message content)
   const messageKeys = Object.keys(message).filter(
     (k) => message[k as keyof MessageContent] && k !== 'messageContextInfo',
   );
 
+  // If all keys are internal types, silently ignore
+  const hasOnlyInternalTypes = messageKeys.every((k) => INTERNAL_MESSAGE_TYPES.has(k));
+  if (hasOnlyInternalTypes || messageKeys.length === 0) {
+    return null;
+  }
+
+  // Log unknown types at debug level for future investigation
+  console.debug(`[WhatsApp] Unknown message type: ${messageKeys.join(', ')}`);
+
   return {
     type: 'unknown' as ContentType,
-    text: `Unhandled message type: ${messageKeys.join(', ')}`,
+    text: `Unknown message type: ${messageKeys.join(', ')}`,
   };
 }
 

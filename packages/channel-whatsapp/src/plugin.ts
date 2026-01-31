@@ -148,7 +148,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     });
 
     // Save credentials on update
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async (update) => {
+      // Merge the update into state.creds
+      Object.assign(state.creds, update);
+
+      // If we have 'me' populated, we're registered (Baileys doesn't always set this flag)
+      if (state.creds.me?.id && !state.creds.registered) {
+        state.creds.registered = true;
+      }
+
+      await saveCreds();
+    });
 
     // Set up connection handlers with reconnection and auth-clear callbacks
     setupConnectionHandlers(
@@ -177,7 +187,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Disconnect a WhatsApp instance
+   * Disconnect a WhatsApp instance (keeps session for reconnect)
    *
    * @param instanceId - Instance to disconnect
    */
@@ -190,8 +200,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
     resetConnectionState(instanceId);
 
-    // Close socket with logout
-    await closeSocket(sock, true);
+    // Close socket WITHOUT logging out (preserves session for reconnect)
+    await closeSocket(sock, false);
     this.sockets.delete(instanceId);
 
     // Emit disconnected event

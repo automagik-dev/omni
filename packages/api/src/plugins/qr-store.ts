@@ -1,7 +1,8 @@
 /**
- * QR Code storage and terminal display
+ * QR Code Storage
  *
- * Stores QR codes for API retrieval and prints to terminal in dev mode.
+ * In-memory storage for QR codes with expiration.
+ * Used by API to serve QR codes for WhatsApp authentication.
  */
 
 import type { EventBus } from '@omni/core';
@@ -55,18 +56,15 @@ export function clearQrCode(instanceId: string): void {
  * Print QR code to terminal (dev mode only)
  */
 export async function printQrCodeToTerminal(qrCode: string, instanceId: string): Promise<void> {
-  // Only print in development
   if (process.env.NODE_ENV === 'production') return;
 
   try {
-    // Dynamic import qrcode-terminal
     const qrTerminalModule = await import('qrcode-terminal');
     const qrTerminal = (qrTerminalModule as any).default || qrTerminalModule;
 
     console.log(`\n[WhatsApp] QR Code for ${instanceId}:`);
     qrTerminal.generate(qrCode, { small: true });
   } catch (error) {
-    // If qrcode-terminal isn't installed or import fails, just log the raw QR
     console.log(`\n[QR Code for ${instanceId}]: ${qrCode.substring(0, 50)}...`);
     if (error instanceof Error && process.env.DEBUG) {
       console.debug(`[QR Terminal Error]: ${error.message}`);
@@ -90,39 +88,5 @@ export async function setupQrCodeListener(eventBus: EventBus): Promise<void> {
     });
   } catch (error) {
     console.warn('[QR Store] Failed to set up QR code listener:', error);
-  }
-}
-
-/**
- * Set up event listener for connection events to clear QR codes
- */
-export async function setupConnectionListener(eventBus: EventBus): Promise<void> {
-  try {
-    await eventBus.subscribe('instance.connected', async (event) => {
-      const { instanceId, profileName } = event.payload;
-      clearQrCode(instanceId);
-      console.log(`[QR Store] Cleared QR code for connected instance: ${instanceId}`);
-      console.log(`[Instance] Connected: ${instanceId} (profile: ${profileName || 'unknown'})`);
-    });
-  } catch (error) {
-    console.warn('[QR Store] Failed to set up connection listener:', error);
-  }
-}
-
-/**
- * Set up event listener for message.received events (for logging)
- */
-export async function setupMessageListener(eventBus: EventBus): Promise<void> {
-  try {
-    await eventBus.subscribe('message.received', async (event) => {
-      const { externalId, chatId, from, content } = event.payload;
-      const instanceId = event.metadata.instanceId;
-      console.log(`[Message] Received from ${from} (chat: ${chatId})`);
-      console.log(`  Type: ${content.type}, Text: ${content.text?.substring(0, 100) || '(no text)'}`);
-      console.log(`  Instance: ${instanceId}, ExternalId: ${externalId}`);
-    });
-    console.log('[Message Store] Listening for message.received events');
-  } catch (error) {
-    console.warn('[Message Store] Failed to set up message listener:', error);
   }
 }
