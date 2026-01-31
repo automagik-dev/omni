@@ -430,6 +430,13 @@ function shouldProcessMessage(msg: WAMessage): boolean {
  * Process a single message
  */
 async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
+  // DEBUG: Log full raw payload for development
+  if (process.env.DEBUG_PAYLOADS === 'true') {
+    console.log(`\n[DEBUG PAYLOAD] ${msg.key.id}`);
+    console.log(JSON.stringify(msg, null, 2));
+    console.log('[/DEBUG PAYLOAD]\n');
+  }
+
   const content = extractContent(msg);
   if (!content) return;
 

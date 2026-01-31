@@ -80,14 +80,22 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
 /**
  * Set up event listener for message.received events
  * Logs full message payload for debugging
+ *
+ * Set DEBUG_PAYLOADS=true to see full raw Baileys payloads
  */
 export async function setupMessageListener(eventBus: EventBus): Promise<void> {
   try {
     await eventBus.subscribe('message.received', async (event) => {
-      const { externalId, chatId, from, content } = event.payload;
+      const { externalId, chatId, from, content, rawPayload } = event.payload;
       const instanceId = event.metadata.instanceId;
       console.log(`[Message] from=${from} chat=${chatId} id=${externalId}`);
       console.log(`  payload: ${JSON.stringify(content)}`);
+
+      // DEBUG: Show full raw Baileys payload
+      if (process.env.DEBUG_PAYLOADS === 'true' && rawPayload) {
+        console.log(`  [RAW PAYLOAD]:`);
+        console.log(JSON.stringify(rawPayload, null, 2));
+      }
     });
     console.log('[Message Listener] Listening for message.received events');
   } catch (error) {

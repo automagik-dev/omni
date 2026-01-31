@@ -18,6 +18,7 @@ import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
+import { setupAllEventHandlers } from './handlers/all-events';
 import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
 import { toJid } from './jid';
@@ -181,6 +182,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Set up message handlers
     setupMessageHandlers(sock, this, instanceId);
+
+    // Set up ALL other event handlers (calls, presence, groups, etc.)
+    setupAllEventHandlers(sock, this, instanceId);
 
     // Store socket
     this.sockets.set(instanceId, sock);
@@ -693,6 +697,169 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     duration?: number;
   }): Promise<void> {
     await this.emitMediaReceived(params);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // ALL EVENT HANDLERS (for comprehensive Baileys coverage)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Handle incoming call (voice/video)
+   * @internal
+   */
+  handleCallReceived(
+    instanceId: string,
+    callId: string,
+    from: string,
+    callType: 'voice' | 'video',
+    status: string,
+    rawCall: unknown,
+  ): void {
+    // TODO: Emit call event when we add call support
+    this.logger.info('Call received', { instanceId, callId, from, callType, status });
+  }
+
+  /**
+   * Handle presence update (typing, online/offline)
+   * @internal
+   */
+  handlePresenceUpdate(
+    instanceId: string,
+    chatId: string,
+    userId: string,
+    presence: string,
+    lastSeen?: number,
+  ): void {
+    // TODO: Emit presence event
+    // presence can be: 'available', 'unavailable', 'composing', 'recording', 'paused'
+  }
+
+  /**
+   * Handle chats upsert (new chats)
+   * @internal
+   */
+  handleChatsUpsert(instanceId: string, chats: unknown[]): void {
+    // TODO: Emit chats.upsert event
+  }
+
+  /**
+   * Handle chats update
+   * @internal
+   */
+  handleChatsUpdate(instanceId: string, updates: unknown[]): void {
+    // TODO: Emit chats.update event
+  }
+
+  /**
+   * Handle chats delete
+   * @internal
+   */
+  handleChatsDelete(instanceId: string, chatIds: string[]): void {
+    // TODO: Emit chats.delete event
+  }
+
+  /**
+   * Handle contacts upsert (new contacts)
+   * @internal
+   */
+  handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
+    // TODO: Emit contacts.upsert event
+  }
+
+  /**
+   * Handle contacts update
+   * @internal
+   */
+  handleContactsUpdate(instanceId: string, updates: unknown[]): void {
+    // TODO: Emit contacts.update event
+  }
+
+  /**
+   * Handle groups upsert (new groups)
+   * @internal
+   */
+  handleGroupsUpsert(instanceId: string, groups: unknown[]): void {
+    // TODO: Emit groups.upsert event
+  }
+
+  /**
+   * Handle groups update
+   * @internal
+   */
+  handleGroupsUpdate(instanceId: string, updates: unknown[]): void {
+    // TODO: Emit groups.update event
+  }
+
+  /**
+   * Handle group participants update (join/leave/promote/demote)
+   * @internal
+   */
+  handleGroupParticipantsUpdate(instanceId: string, update: unknown): void {
+    // TODO: Emit group-participants.update event
+  }
+
+  /**
+   * Handle group join request
+   * @internal
+   */
+  handleGroupJoinRequest(instanceId: string, request: unknown): void {
+    // TODO: Emit group.join-request event
+  }
+
+  /**
+   * Handle message receipt update (detailed read receipts)
+   * @internal
+   */
+  handleMessageReceiptUpdate(instanceId: string, update: unknown): void {
+    // TODO: Process detailed receipt info
+  }
+
+  /**
+   * Handle media update (upload/download progress)
+   * @internal
+   */
+  handleMediaUpdate(instanceId: string, update: unknown): void {
+    // TODO: Emit media.update event
+  }
+
+  /**
+   * Handle history sync (initial load)
+   * @internal
+   */
+  handleHistorySync(instanceId: string, history: unknown): void {
+    // TODO: Process history sync for initial data load
+  }
+
+  /**
+   * Handle blocklist set
+   * @internal
+   */
+  handleBlocklistSet(instanceId: string, blocklist: string[]): void {
+    // TODO: Emit blocklist.set event
+  }
+
+  /**
+   * Handle blocklist update
+   * @internal
+   */
+  handleBlocklistUpdate(instanceId: string, blocklist: string[], type: 'add' | 'remove'): void {
+    // TODO: Emit blocklist.update event
+  }
+
+  /**
+   * Handle label edit (WhatsApp Business)
+   * @internal
+   */
+  handleLabelEdit(instanceId: string, label: unknown): void {
+    // TODO: Emit labels.edit event
+  }
+
+  /**
+   * Handle label association (WhatsApp Business)
+   * @internal
+   */
+  handleLabelAssociation(instanceId: string, association: unknown, type: 'add' | 'remove'): void {
+    // TODO: Emit labels.association event
   }
 
   // ─────────────────────────────────────────────────────────────

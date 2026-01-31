@@ -1,0 +1,1917 @@
+{
+  "messages": {
+    "text": [
+      {
+        "id": "AC23570AE54CCF58A8923E45CC6089E8",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC23570AE54CCF58A8923E45CC6089E8",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829698,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "conversation": "Buenas como q tão as coisas aí",
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACE0753E3FBE3A88FF726FC52ED6FB77",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACE0753E3FBE3A88FF726FC52ED6FB77",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829842,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "conversation": "Mensagem será deletada",
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACB6DD980250AADFEF6008DF275A8855",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": true,
+            "id": "ACB6DD980250AADFEF6008DF275A8855",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769830239,
+          "pushName": "Bob Test",
+          "broadcast": false,
+          "status": 2,
+          "message": {
+            "conversation": "Perdi as ligações aqui"
+          }
+        }
+      }
+    ],
+    "audio": [
+      {
+        "id": "ACDEB3DF3FA0B9571674641550949444",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACDEB3DF3FA0B9571674641550949444",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829708,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "audioMessage": {
+              "url": "https://mmg.whatsapp.net/[REDACTED]",
+              "mimetype": "audio/ogg; codecs=opus",
+              "fileSha256": "[REDACTED]",
+              "fileLength": "18446",
+              "seconds": 9,
+              "ptt": true,
+              "mediaKey": "[REDACTED]",
+              "fileEncSha256": "[REDACTED]",
+              "directPath": "/v/[REDACTED]",
+              "mediaKeyTimestamp": "1769829701",
+              "waveform": "[WAVEFORM_DATA]"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      }
+    ],
+    "image": [
+      {
+        "id": "ACFD2E3DC8F0340204B5DB6EAE0A7092",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACFD2E3DC8F0340204B5DB6EAE0A7092",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829746,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "imageMessage": {
+              "url": "https://mmg.whatsapp.net/[REDACTED]",
+              "mimetype": "image/jpeg",
+              "fileSha256": "[REDACTED]",
+              "fileLength": "63502",
+              "height": 1599,
+              "width": 899,
+              "mediaKey": "[REDACTED]",
+              "fileEncSha256": "[REDACTED]",
+              "directPath": "/v/[REDACTED]",
+              "mediaKeyTimestamp": "1769829744",
+              "jpegThumbnail": "[BASE64_THUMBNAIL]",
+              "contextInfo": {
+                "pairedMediaType": "NOT_PAIRED_MEDIA",
+                "statusSourceType": "IMAGE"
+              },
+              "scansSidecar": "/tCspaAeSJSe2rBXCFXB72pQDA5IKhjNO3R7DzjZHYWhciD7Kh9lMw==",
+              "scanLengths": [
+                13007,
+                28780,
+                7408,
+                14307
+              ],
+              "midQualityFileSha256": "aS0g4cbO3pMm35wrBNvoqMxNaD7yz11b5TMgmwy7uJA="
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      }
+    ],
+    "video": [],
+    "sticker": [
+      {
+        "id": "AC987AA4C405005A3EF0CE66A18C1806",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC987AA4C405005A3EF0CE66A18C1806",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829730,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "stickerMessage": {
+              "url": "https://mmg.whatsapp.net/[REDACTED]",
+              "fileSha256": "[REDACTED]",
+              "fileEncSha256": "[REDACTED]",
+              "mediaKey": "[REDACTED]",
+              "mimetype": "image/webp",
+              "directPath": "/v/[REDACTED]",
+              "fileLength": "27636",
+              "mediaKeyTimestamp": "1769829730",
+              "isAnimated": false,
+              "stickerSentTs": "1769829730135",
+              "isAvatar": false,
+              "isAiSticker": false,
+              "isLottie": false
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      }
+    ],
+    "contact": [
+      {
+        "id": "AC71EDD10CE851493E4C5AECF1697A75",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC71EDD10CE851493E4C5AECF1697A75",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829760,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "contactMessage": {
+              "displayName": "Alice Test",
+              "vcard": "BEGIN:VCARD\nVERSION:3.0\nN:Test;User;;;\nFN:Test User\nTEL:+5511999990001\nEND:VCARD"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      }
+    ],
+    "location": [
+      {
+        "id": "ACDAD8DFE4203A41711722E96E24EEC4",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACDAD8DFE4203A41711722E96E24EEC4",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829774,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "locationMessage": {
+              "degreesLatitude": 0,
+              "degreesLongitude": 0,
+              "jpegThumbnail": "[BASE64_THUMBNAIL]"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      }
+    ],
+    "poll": [
+      {
+        "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829927,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            },
+            "pollCreationMessageV3": {
+              "name": "Quero saber",
+              "options": [
+                {
+                  "optionName": "Quem é que"
+                },
+                {
+                  "optionName": "Transa"
+                }
+              ],
+              "selectableOptionsCount": 0
+            }
+          }
+        }
+      }
+    ],
+    "pollUpdate": [
+      {
+        "id": "ACF0EAFB791F6D4412E0860FF2FA3104",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACF0EAFB791F6D4412E0860FF2FA3104",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829931,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2
+            },
+            "pollUpdateMessage": {
+              "pollCreationMessageKey": {
+                "remoteJid": "100000000000001@lid",
+                "fromMe": false,
+                "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+                "participant": ""
+              },
+              "vote": {
+                "encPayload": "[ENCRYPTED]",
+                "encIv": "[ENCRYPTED]"
+              },
+              "senderTimestampMs": "1769829931016"
+            }
+          }
+        }
+      },
+      {
+        "id": "AC9AE42507791AC1DF757D432CBDDF20",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC9AE42507791AC1DF757D432CBDDF20",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829936,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2
+            },
+            "pollUpdateMessage": {
+              "pollCreationMessageKey": {
+                "remoteJid": "100000000000001@lid",
+                "fromMe": false,
+                "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+                "participant": ""
+              },
+              "vote": {
+                "encPayload": "[ENCRYPTED]",
+                "encIv": "[ENCRYPTED]"
+              },
+              "senderTimestampMs": "1769829936279"
+            }
+          }
+        }
+      },
+      {
+        "id": "AC413C7EB86E02D0B4E09CC3075763B5",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC413C7EB86E02D0B4E09CC3075763B5",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829941,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2
+            },
+            "pollUpdateMessage": {
+              "pollCreationMessageKey": {
+                "remoteJid": "100000000000001@lid",
+                "fromMe": false,
+                "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+                "participant": ""
+              },
+              "vote": {
+                "encPayload": "[ENCRYPTED]",
+                "encIv": "[ENCRYPTED]"
+              },
+              "senderTimestampMs": "1769829940946"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACB074BC15DEE3599BE8570DF8A43372",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": true,
+            "id": "ACB074BC15DEE3599BE8570DF8A43372",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769830273,
+          "pushName": "Bob Test",
+          "broadcast": false,
+          "status": 2,
+          "message": {
+            "pollUpdateMessage": {
+              "pollCreationMessageKey": {
+                "remoteJid": "100000000000001@lid",
+                "fromMe": false,
+                "id": "AC04809E9F816ACEB5F794B6081EEAD3"
+              },
+              "vote": {
+                "encPayload": "[ENCRYPTED]",
+                "encIv": "[ENCRYPTED]"
+              },
+              "senderTimestampMs": "1769830272956"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACDE3788F24CCAD757CCA6E7FA4AA48C",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": true,
+            "id": "ACDE3788F24CCAD757CCA6E7FA4AA48C",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769830280,
+          "pushName": "Bob Test",
+          "broadcast": false,
+          "status": 2,
+          "message": {
+            "pollUpdateMessage": {
+              "pollCreationMessageKey": {
+                "remoteJid": "100000000000001@lid",
+                "fromMe": false,
+                "id": "AC04809E9F816ACEB5F794B6081EEAD3"
+              },
+              "vote": {
+                "encPayload": "[ENCRYPTED]",
+                "encIv": "[ENCRYPTED]"
+              },
+              "senderTimestampMs": "1769830280854"
+            }
+          }
+        }
+      }
+    ],
+    "document": [],
+    "extendedText": [
+      {
+        "id": "AC19F8A92E5173E9BC213A6A78C23EC7",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC19F8A92E5173E9BC213A6A78C23EC7",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829868,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "extendedTextMessage": {
+              "text": "Quoting a message here",
+              "previewType": "NONE",
+              "contextInfo": {
+                "stanzaId": "AC23570AE54CCF58A8923E45CC6089E8",
+                "participant": "5511999990001@s.whatsapp.net",
+                "quotedMessage": {
+                  "conversation": "Buenas como q tão as coisas aí"
+                },
+                "quotedType": "EXPLICIT"
+              },
+              "inviteLinkGroupTypeV2": "DEFAULT"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACD1D321398037D659387DABEDFE8A03",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACD1D321398037D659387DABEDFE8A03",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829893,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "extendedTextMessage": {
+              "text": "Essa mensagem será encaminhada",
+              "previewType": "NONE",
+              "contextInfo": {
+                "forwardingScore": 1,
+                "isForwarded": true,
+                "forwardOrigin": "UNKNOWN"
+              },
+              "inviteLinkGroupTypeV2": "DEFAULT"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            }
+          }
+        }
+      },
+      {
+        "id": "ACAA1E0EE9C054130248E6826B75C8B7",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": true,
+            "id": "ACAA1E0EE9C054130248E6826B75C8B7",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769830258,
+          "pushName": "Bob Test",
+          "broadcast": false,
+          "status": 2,
+          "message": {
+            "extendedTextMessage": {
+              "text": "Aí sim",
+              "previewType": "NONE",
+              "contextInfo": {
+                "stanzaId": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
+                "participant": "100000000000001@lid",
+                "quotedMessage": {
+                  "interactiveMessage": {
+                    "nativeFlowMessage": {
+                      "buttons": [
+                        {
+                          "name": "payment_info",
+                          "buttonParamsJson": "{\"redacted\": true}"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "quotedType": "EXPLICIT"
+              },
+              "inviteLinkGroupTypeV2": "DEFAULT"
+            }
+          }
+        }
+      }
+    ],
+    "reaction": [],
+    "other": [
+      {
+        "id": "AC82299425112ACDEAA583417745403C",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC82299425112ACDEAA583417745403C",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829817,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            },
+            "eventMessage": {
+              "isCanceled": false,
+              "name": "Então na loca",
+              "description": "Teste",
+              "location": {
+                "degreesLatitude": 0,
+                "degreesLongitude": 0,
+                "name": "Test Location"
+              },
+              "joinLink": "https://call.whatsapp.com/video/Vpcxhuv4mDgDGy5CajiSuA",
+              "startTime": "1769830200",
+              "endTime": "1769837400",
+              "extraGuestsAllowed": true,
+              "isScheduleCall": false,
+              "hasReminder": true,
+              "reminderOffsetSec": "3600"
+            }
+          }
+        },
+        "types": [
+          "messageContextInfo",
+          "eventMessage"
+        ]
+      },
+      {
+        "id": "ACB3BD49DB830E5114F0E5AC37EEDACF",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "ACB3BD49DB830E5114F0E5AC37EEDACF",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829847,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "protocolMessage": {
+              "key": {
+                "remoteJid": "100000000000002@lid",
+                "fromMe": true,
+                "id": "ACE0753E3FBE3A88FF726FC52ED6FB77"
+              },
+              "type": "REVOKE"
+            },
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2
+            }
+          }
+        },
+        "types": [
+          "protocolMessage",
+          "messageContextInfo"
+        ]
+      },
+      {
+        "id": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
+        "payload": {
+          "key": {
+            "remoteJid": "100000000000001@lid",
+            "remoteJidAlt": "5511999990001@s.whatsapp.net",
+            "fromMe": false,
+            "id": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
+            "participant": "",
+            "addressingMode": "lid"
+          },
+          "messageTimestamp": 1769829970,
+          "pushName": "Alice Test",
+          "broadcast": false,
+          "message": {
+            "messageContextInfo": {
+              "deviceListMetadata": {
+                "senderKeyHash": "[HASH]",
+                "senderTimestamp": "1769044241",
+                "recipientKeyHash": "[HASH]",
+                "recipientTimestamp": "1769827893"
+              },
+              "deviceListMetadataVersion": 2,
+              "messageSecret": "[REDACTED]"
+            },
+            "interactiveMessage": {
+              "nativeFlowMessage": {
+                "buttons": [
+                  {
+                    "name": "payment_info",
+                    "buttonParamsJson": "{\"redacted\": true}"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "types": [
+          "messageContextInfo",
+          "interactiveMessage"
+        ]
+      }
+    ]
+  },
+  "events": {
+    "call": [
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACFAA356CDA59950438DE08129BB9CA9",
+        "date": "2026-01-31T03:21:53.000Z",
+        "offline": false,
+        "status": "offer",
+        "isVideo": true,
+        "isGroup": false
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACFAA356CDA59950438DE08129BB9CA9",
+        "date": "2026-01-31T03:21:54.000Z",
+        "offline": false,
+        "status": "ringing",
+        "isVideo": true,
+        "isGroup": false
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACFAA356CDA59950438DE08129BB9CA9",
+        "date": "2026-01-31T03:21:57.000Z",
+        "offline": false,
+        "status": "terminate",
+        "isVideo": true,
+        "isGroup": false
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACC2CFC0D86270DE70E2E99778DDBB85",
+        "date": "2026-01-31T03:22:02.000Z",
+        "offline": false,
+        "status": "offer",
+        "isVideo": false,
+        "isGroup": false
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACC2CFC0D86270DE70E2E99778DDBB85",
+        "date": "2026-01-31T03:22:02.000Z",
+        "offline": false,
+        "status": "ringing",
+        "isVideo": false,
+        "isGroup": false
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "from": "100000000000001@lid",
+        "id": "ACC2CFC0D86270DE70E2E99778DDBB85",
+        "date": "2026-01-31T03:22:05.000Z",
+        "offline": false,
+        "status": "terminate",
+        "isVideo": false,
+        "isGroup": false
+      }
+    ],
+    "presence": [
+      {
+        "chatId": "100000000000001@lid",
+        "userId": "100000000000001",
+        "status": "composing"
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "userId": "100000000000001",
+        "status": "available"
+      },
+      {
+        "chatId": "100000000000001@lid",
+        "userId": "100000000000001",
+        "status": "recording"
+      },
+      {
+        "chatId": "120363000000000001@g.us",
+        "userId": "100000000000001",
+        "status": "composing"
+      }
+    ],
+    "chatsUpdate": [
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC23570AE54CCF58A8923E45CC6089E8",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829698,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "conversation": "Buenas como q tão as coisas aí",
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829698,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "ACDEB3DF3FA0B9571674641550949444",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829708,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "audioMessage": {
+                      "url": "https://mmg.whatsapp.net/[REDACTED]",
+                      "mimetype": "audio/ogg; codecs=opus",
+                      "fileSha256": "[REDACTED]",
+                      "fileLength": "18446",
+                      "seconds": 9,
+                      "ptt": true,
+                      "mediaKey": "[REDACTED]",
+                      "fileEncSha256": "[REDACTED]",
+                      "directPath": "/v/[REDACTED]",
+                      "mediaKeyTimestamp": "1769829701",
+                      "waveform": "[WAVEFORM_DATA]"
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829708,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC987AA4C405005A3EF0CE66A18C1806",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829730,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "stickerMessage": {
+                      "url": "https://mmg.whatsapp.net/[REDACTED]",
+                      "fileSha256": "[REDACTED]",
+                      "fileEncSha256": "[REDACTED]",
+                      "mediaKey": "[REDACTED]",
+                      "mimetype": "image/webp",
+                      "directPath": "/v/[REDACTED]",
+                      "fileLength": "27636",
+                      "mediaKeyTimestamp": "1769829730",
+                      "isAnimated": false,
+                      "stickerSentTs": "1769829730135",
+                      "isAvatar": false,
+                      "isAiSticker": false,
+                      "isLottie": false
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829730,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "ACFD2E3DC8F0340204B5DB6EAE0A7092",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829746,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "imageMessage": {
+                      "url": "https://mmg.whatsapp.net/[REDACTED]",
+                      "mimetype": "image/jpeg",
+                      "fileSha256": "[REDACTED]",
+                      "fileLength": "63502",
+                      "height": 1599,
+                      "width": 899,
+                      "mediaKey": "[REDACTED]",
+                      "fileEncSha256": "[REDACTED]",
+                      "directPath": "/v/[REDACTED]",
+                      "mediaKeyTimestamp": "1769829744",
+                      "jpegThumbnail": "[BASE64_THUMBNAIL]",
+                      "contextInfo": {
+                        "pairedMediaType": "NOT_PAIRED_MEDIA",
+                        "statusSourceType": "IMAGE"
+                      },
+                      "scansSidecar": "/tCspaAeSJSe2rBXCFXB72pQDA5IKhjNO3R7DzjZHYWhciD7Kh9lMw==",
+                      "scanLengths": [
+                        13007,
+                        28780,
+                        7408,
+                        14307
+                      ],
+                      "midQualityFileSha256": "aS0g4cbO3pMm35wrBNvoqMxNaD7yz11b5TMgmwy7uJA="
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829746,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC71EDD10CE851493E4C5AECF1697A75",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829760,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "contactMessage": {
+                      "displayName": "Alice Test",
+                      "vcard": "BEGIN:VCARD\nVERSION:3.0\nN:Test;User;;;\nFN:Test User\nTEL:+5511999990001\nEND:VCARD"
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829760,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "ACDAD8DFE4203A41711722E96E24EEC4",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829774,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "locationMessage": {
+                      "degreesLatitude": 0,
+                      "degreesLongitude": 0,
+                      "jpegThumbnail": "[BASE64_THUMBNAIL]"
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829774,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC82299425112ACDEAA583417745403C",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829817,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    },
+                    "eventMessage": {
+                      "isCanceled": false,
+                      "name": "Então na loca",
+                      "description": "Teste",
+                      "location": {
+                        "degreesLatitude": 0,
+                        "degreesLongitude": 0,
+                        "name": "Test Location"
+                      },
+                      "joinLink": "https://call.whatsapp.com/video/Vpcxhuv4mDgDGy5CajiSuA",
+                      "startTime": "1769830200",
+                      "endTime": "1769837400",
+                      "extraGuestsAllowed": true,
+                      "isScheduleCall": false,
+                      "hasReminder": true,
+                      "reminderOffsetSec": "3600"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829817,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "ACE0753E3FBE3A88FF726FC52ED6FB77",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829842,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "conversation": "Mensagem será deletada",
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829842,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC19F8A92E5173E9BC213A6A78C23EC7",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829868,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "extendedTextMessage": {
+                      "text": "Quoting a message here",
+                      "previewType": "NONE",
+                      "contextInfo": {
+                        "stanzaId": "AC23570AE54CCF58A8923E45CC6089E8",
+                        "participant": "5511999990001@s.whatsapp.net",
+                        "quotedMessage": {
+                          "conversation": "Buenas como q tão as coisas aí"
+                        },
+                        "quotedType": "EXPLICIT"
+                      },
+                      "inviteLinkGroupTypeV2": "DEFAULT"
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829868,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "ACD1D321398037D659387DABEDFE8A03",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829893,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "extendedTextMessage": {
+                      "text": "Essa mensagem será encaminhada",
+                      "previewType": "NONE",
+                      "contextInfo": {
+                        "forwardingScore": 1,
+                        "isForwarded": true,
+                        "forwardOrigin": "UNKNOWN"
+                      },
+                      "inviteLinkGroupTypeV2": "DEFAULT"
+                    },
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829893,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC04809E9F816ACEB5F794B6081EEAD3",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829927,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    },
+                    "pollCreationMessageV3": {
+                      "name": "Quero saber",
+                      "options": [
+                        {
+                          "optionName": "Quem é que"
+                        },
+                        {
+                          "optionName": "Transa"
+                        }
+                      ],
+                      "selectableOptionsCount": 0
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829927,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": false,
+                    "id": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769829970,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "messageContextInfo": {
+                      "deviceListMetadata": {
+                        "senderKeyHash": "[HASH]",
+                        "senderTimestamp": "1769044241",
+                        "recipientKeyHash": "[HASH]",
+                        "recipientTimestamp": "1769827893"
+                      },
+                      "deviceListMetadataVersion": 2,
+                      "messageSecret": "[REDACTED]"
+                    },
+                    "interactiveMessage": {
+                      "nativeFlowMessage": {
+                        "buttons": [
+                          {
+                            "name": "payment_info",
+                            "buttonParamsJson": "{\"redacted\": true}"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769829970,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "120363000000000001@g.us",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "120363000000000001@g.us",
+                    "fromMe": false,
+                    "id": "AC2BE7343ABFA1417E5691C633CF7D62",
+                    "participant": "100000000000001@lid",
+                    "participantAlt": "5511999990001@s.whatsapp.net",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769830028,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "conversation": "Aí sim tem um novo grupo",
+                    "senderKeyDistributionMessage": {
+                      "groupId": "120363000000000001@g.us",
+                      "axolotlSenderKeyDistributionMessage": "[KEY_DATA]"
+                    },
+                    "messageContextInfo": {
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769830028,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "120363000000000001@g.us",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "120363000000000001@g.us",
+                    "fromMe": false,
+                    "id": "ACB1DC3366CA6C77B71347E8E0692854",
+                    "participant": "100000000000001@lid",
+                    "participantAlt": "5511999990001@s.whatsapp.net",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769830041,
+                  "pushName": "Alice Test",
+                  "broadcast": false,
+                  "message": {
+                    "conversation": "Opa esse é o Charlo",
+                    "messageContextInfo": {
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769830041,
+            "unreadCount": 1
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "120363000000000001@g.us",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "120363000000000001@g.us",
+                    "fromMe": true,
+                    "id": "AC4652A511DAFDF758CE7995935CA0A4",
+                    "participant": "100000000000002@lid",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769830226,
+                  "pushName": "Bob Test",
+                  "broadcast": false,
+                  "status": 2,
+                  "message": {
+                    "conversation": "Fala",
+                    "senderKeyDistributionMessage": {
+                      "groupId": "120363000000000001@g.us",
+                      "axolotlSenderKeyDistributionMessage": "[KEY_DATA]"
+                    },
+                    "messageContextInfo": {
+                      "messageSecret": "[REDACTED]"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769830226
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": true,
+                    "id": "ACB6DD980250AADFEF6008DF275A8855",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769830239,
+                  "pushName": "Bob Test",
+                  "broadcast": false,
+                  "status": 2,
+                  "message": {
+                    "conversation": "Perdi as ligações aqui"
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769830239
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "messages": [
+              {
+                "message": {
+                  "key": {
+                    "remoteJid": "100000000000001@lid",
+                    "remoteJidAlt": "5511999990001@s.whatsapp.net",
+                    "fromMe": true,
+                    "id": "ACAA1E0EE9C054130248E6826B75C8B7",
+                    "participant": "",
+                    "addressingMode": "lid"
+                  },
+                  "messageTimestamp": 1769830258,
+                  "pushName": "Bob Test",
+                  "broadcast": false,
+                  "status": 2,
+                  "message": {
+                    "extendedTextMessage": {
+                      "text": "Aí sim",
+                      "previewType": "NONE",
+                      "contextInfo": {
+                        "stanzaId": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
+                        "participant": "100000000000001@lid",
+                        "quotedMessage": {
+                          "interactiveMessage": {
+                            "nativeFlowMessage": {
+                              "buttons": [
+                                {
+                                  "name": "payment_info",
+                                  "buttonParamsJson": "{\"redacted\": true}"
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "quotedType": "EXPLICIT"
+                      },
+                      "inviteLinkGroupTypeV2": "DEFAULT"
+                    }
+                  }
+                }
+              }
+            ],
+            "conversationTimestamp": 1769830258
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "120363000000000001@g.us",
+            "readOnly": true
+          }
+        ]
+      }
+    ],
+    "contactsUpdate": [
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      },
+      {
+        "count": 1,
+        "updates": [
+          {
+            "id": "100000000000001@lid",
+            "notify": "Alice Test"
+          }
+        ]
+      }
+    ],
+    "groupParticipantsUpdate": [
+      {
+        "id": "120363000000000001@g.us",
+        "author": "100000000000001@lid",
+        "participants": [
+          {
+            "id": "100000000000003@lid",
+            "phoneNumber": "5511999990002@s.whatsapp.net",
+            "admin": null
+          }
+        ],
+        "action": "add"
+      },
+      {
+        "id": "120363000000000001@g.us",
+        "author": "100000000000001@lid",
+        "participants": [
+          {
+            "id": "100000000000003@lid",
+            "phoneNumber": "5511999990002@s.whatsapp.net",
+            "admin": null
+          }
+        ],
+        "action": "promote"
+      },
+      {
+        "id": "120363000000000001@g.us",
+        "author": "100000000000001@lid",
+        "participants": [
+          {
+            "id": "100000000000003@lid",
+            "phoneNumber": "5511999990002@s.whatsapp.net",
+            "admin": null
+          }
+        ],
+        "action": "remove"
+      },
+      {
+        "id": "120363000000000001@g.us",
+        "author": "100000000000002@lid",
+        "participants": [
+          {
+            "id": "100000000000002@lid",
+            "phoneNumber": "5511999990003@s.whatsapp.net",
+            "admin": null
+          }
+        ],
+        "action": "remove"
+      }
+    ],
+    "messageReceiptUpdate": [
+      {
+        "key": {
+          "remoteJid": "120363000000000001@g.us",
+          "id": "ACB1DC3366CA6C77B71347E8E0692854",
+          "fromMe": false,
+          "participant": "100000000000002@lid"
+        },
+        "receipt": {
+          "userJid": "100000000000002@lid",
+          "readTimestamp": 1769830223
+        }
+      },
+      {
+        "key": {
+          "remoteJid": "120363000000000001@g.us",
+          "id": "AC2BE7343ABFA1417E5691C633CF7D62",
+          "fromMe": false,
+          "participant": "100000000000002@lid"
+        },
+        "receipt": {
+          "userJid": "100000000000002@lid",
+          "readTimestamp": 1769830223
+        }
+      }
+    ],
+    "groupsUpdate": [],
+    "historySync": []
+  }
+}

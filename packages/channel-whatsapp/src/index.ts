@@ -79,3 +79,45 @@ export type { SocketConfig } from './socket';
 
 // Types
 export type { WhatsAppConfig } from './plugin';
+
+// Message and event types (derived from actual Baileys payloads)
+export type {
+  // Message key
+  WAMessageKey,
+  // Media base
+  WAMediaBase,
+  // Text messages
+  WAConversationMessage,
+  WAExtendedTextMessage,
+  WAContextInfo,
+  // Media messages
+  WAAudioMessage,
+  WAImageMessage,
+  WAVideoMessage,
+  WADocumentMessage,
+  WAStickerMessage,
+  // Other message types
+  WAContactMessage,
+  WAContactsArrayMessage,
+  WALocationMessage,
+  WALiveLocationMessage,
+  WAPollCreationMessage,
+  WAPollUpdateMessage,
+  WAReactionMessage,
+  // Events
+  WACallEvent,
+  WACallStatus,
+  WAPresenceUpdate,
+  WAPresenceData,
+  WAPresenceStatus,
+  WAGroupParticipantsUpdate,
+  WAGroupParticipant,
+  WAGroupAction,
+  WAMessageReceiptUpdate,
+  // Full message wrapper
+  WAFullMessage,
+  WAMessageContextInfo,
+  // Updates
+  WAChatUpdate,
+  WAContactUpdate,
+} from './types';
