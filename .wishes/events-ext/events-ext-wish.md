@@ -226,49 +226,75 @@ interface Condition {
 **Built-in Actions:**
 ```typescript
 type Action =
-  | { type: 'webhook'; config: { url: string; method?: string; headers?: Record<string, string>; bodyTemplate?: string } }
-  | { type: 'send_message'; config: { instanceId?: string; to?: string; contentTemplate: string } }
+  | {
+      type: 'webhook';
+      config: {
+        url: string;
+        method?: string;
+        headers?: Record<string, string>;
+        bodyTemplate?: string;
+        // Sync mode (v1 pattern): wait for response, use in next action
+        waitForResponse?: boolean;  // default: false
+        timeoutMs?: number;         // default: 30000 (30s)
+        responseAs?: string;        // store response as variable, e.g. 'agentResponse'
+      }
+    }
+  | {
+      type: 'send_message';
+      config: {
+        instanceId?: string;   // {{payload.instanceId}} or hardcoded
+        to?: string;           // {{payload.from.id}} or hardcoded
+        contentTemplate: string; // {{agentResponse.text}} or {{payload.response}}
+      }
+    }
   | { type: 'emit_event'; config: { eventType: string; payloadTemplate?: object } }
   | { type: 'log'; config: { level: 'debug' | 'info' | 'warn' | 'error'; message: string } };
 
-// Templates support {{payload.field}} substitution
+// Templates support {{payload.field}} and {{variableName.field}} substitution
 ```
 
-**Example: Agent Response Automation (v1 Core Flow):**
+**Two Patterns for Agent Integration:**
+
+**Pattern 1: Sync (v1 style)** - Single automation, wait for response
 ```json
 {
-  "name": "Agent Response Handler",
-  "description": "When agent webhook responds, send message to original sender",
-  "triggerEventType": "custom.webhook.agno",
-  "triggerConditions": [
-    { "field": "payload.response", "operator": "exists" }
-  ],
+  "name": "Agent Handler (Sync)",
+  "triggerEventType": "message.received",
   "actions": [
+    {
+      "type": "webhook",
+      "config": {
+        "url": "https://api.agno.ai/v1/process",
+        "method": "POST",
+        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\"}",
+        "waitForResponse": true,
+        "timeoutMs": 60000,
+        "responseAs": "agent"
+      }
+    },
     {
       "type": "send_message",
       "config": {
         "instanceId": "{{payload.instanceId}}",
-        "to": "{{payload.replyTo}}",
-        "contentTemplate": "{{payload.response}}"
-      }
-    },
-    {
-      "type": "log",
-      "config": {
-        "level": "info",
-        "message": "Sent agent response to {{payload.replyTo}}"
+        "to": "{{payload.from.id}}",
+        "contentTemplate": "{{agent.response}}"
       }
     }
-  ],
-  "enabled": true
+  ]
 }
 ```
 
-**Example: Forward Message to Agent:**
+**Pattern 2: Async (callback style)** - Two automations, agent calls back
+```
+Automation 1: Forward to agent (fire and forget)
+Automation 2: Handle agent callback → send message
+```
+
+**Example: Sync Agent (v1 Style - Recommended for Simple Cases)**
 ```json
 {
-  "name": "Forward to Agent",
-  "description": "Send incoming messages to agent API for processing",
+  "name": "Auto-Reply with Agent (Sync)",
+  "description": "Forward message to agent, wait for response, reply immediately",
   "triggerEventType": "message.received",
   "triggerConditions": [
     { "field": "payload.content.type", "operator": "eq", "value": "text" }
@@ -277,14 +303,62 @@ type Action =
     {
       "type": "webhook",
       "config": {
-        "url": "https://api.agno.ai/v1/process",
+        "url": "{{env.AGENT_API_URL}}",
         "method": "POST",
-        "headers": { "Authorization": "Bearer {{env.AGNO_API_KEY}}" },
-        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\", \"instanceId\": \"{{payload.instanceId}}\", \"replyTo\": \"{{payload.from.id}}\"}"
+        "headers": { "Authorization": "Bearer {{env.AGENT_API_KEY}}" },
+        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\", \"from\": \"{{payload.from.id}}\"}",
+        "waitForResponse": true,
+        "timeoutMs": 60000,
+        "responseAs": "agent"
+      }
+    },
+    {
+      "type": "send_message",
+      "config": {
+        "instanceId": "{{payload.instanceId}}",
+        "to": "{{payload.from.id}}",
+        "contentTemplate": "{{agent.response}}"
       }
     }
   ],
   "enabled": true
+}
+```
+
+**Example: Async Agent (Callback Style - For Long-Running Tasks)**
+
+*Automation 1: Forward to agent*
+```json
+{
+  "name": "Forward to Agent (Async)",
+  "triggerEventType": "message.received",
+  "actions": [
+    {
+      "type": "webhook",
+      "config": {
+        "url": "{{env.AGENT_API_URL}}",
+        "bodyTemplate": "{\"message\": \"{{payload.content.text}}\", \"callbackUrl\": \"{{env.OMNI_WEBHOOK_URL}}/agno\", \"instanceId\": \"{{payload.instanceId}}\", \"replyTo\": \"{{payload.from.id}}\"}"
+      }
+    }
+  ]
+}
+```
+
+*Automation 2: Handle callback*
+```json
+{
+  "name": "Agent Callback Handler",
+  "triggerEventType": "custom.webhook.agno",
+  "actions": [
+    {
+      "type": "send_message",
+      "config": {
+        "instanceId": "{{payload.instanceId}}",
+        "to": "{{payload.replyTo}}",
+        "contentTemplate": "{{payload.response}}"
+      }
+    }
+  ]
 }
 ```
 
@@ -317,10 +391,13 @@ GET    /api/v2/automation-logs?eventType=message.received&status=failed
 - [ ] Conditions evaluated using dot notation field access
 - [ ] Operators work: eq, neq, gt, lt, contains, exists
 - [ ] Actions execute sequentially, failures logged but don't stop sequence
-- [ ] Template substitution works: `{{payload.field}}`, `{{env.VAR}}`
+- [ ] Template substitution works: `{{payload.field}}`, `{{env.VAR}}`, `{{varName.field}}`
+- [ ] **Webhook sync mode:** `waitForResponse: true` blocks until response received
+- [ ] **Webhook sync mode:** Response stored as variable for subsequent actions
+- [ ] **Webhook sync mode:** Configurable timeout (default 30s, up to 120s)
 - [ ] Execution logged with timing per action
 - [ ] Can enable/disable without deletion
-- [ ] Test endpoint validates without executing
+- [ ] Test endpoint validates without executing (dry run)
 - [ ] Priority determines order when multiple automations match same event
 
 **Validation:**
