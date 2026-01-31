@@ -138,8 +138,6 @@ export class InstanceMonitor {
 
     if (activeInstances.length === 0) return;
 
-    logger.debug('Running health check', { instanceCount: activeInstances.length });
-
     for (const instance of activeInstances) {
       try {
         const plugin = this.registry.get(instance.channel as Parameters<typeof this.registry.get>[0]);
