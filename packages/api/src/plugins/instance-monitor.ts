@@ -123,10 +123,16 @@ export class InstanceMonitor {
 
   /**
    * Run health check on all active instances
+   * Only reconnects instances that have been authenticated before (have ownerIdentifier)
    */
   async runHealthCheck(): Promise<void> {
     const activeInstances = await this.db
-      .select({ id: instances.id, name: instances.name, channel: instances.channel })
+      .select({
+        id: instances.id,
+        name: instances.name,
+        channel: instances.channel,
+        ownerIdentifier: instances.ownerIdentifier,
+      })
       .from(instances)
       .where(eq(instances.isActive, true));
 
@@ -145,6 +151,19 @@ export class InstanceMonitor {
         const status = await plugin.getStatus(instance.id);
 
         if (status.state === 'disconnected' || status.state === 'error') {
+          // Only auto-reconnect if instance was previously authenticated
+          // (has ownerIdentifier from a successful connection)
+          const wasAuthenticated = !!instance.ownerIdentifier;
+
+          if (!wasAuthenticated) {
+            logger.debug('Skipping reconnect for never-authenticated instance', {
+              instanceId: instance.id,
+              name: instance.name,
+              state: status.state,
+            });
+            continue;
+          }
+
           logger.warn('Instance unhealthy', {
             instanceId: instance.id,
             name: instance.name,
@@ -162,7 +181,8 @@ export class InstanceMonitor {
           error: String(error),
         });
 
-        if (this.config.autoReconnect) {
+        // Only auto-reconnect if instance was previously authenticated
+        if (this.config.autoReconnect && instance.ownerIdentifier) {
           this.scheduleReconnect(instance.id, instance.channel, String(error));
         }
       }
