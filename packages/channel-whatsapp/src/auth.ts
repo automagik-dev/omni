@@ -114,14 +114,18 @@ export async function createStorageAuthState(
 
   // Load existing credentials or create new ones
   let creds: AuthenticationCreds;
-  const existingCreds = await storage.get<string>(credsKey);
+  const existingCreds = await storage.get<AuthenticationCreds | string>(credsKey);
 
   if (existingCreds) {
-    creds = deserialize<AuthenticationCreds>(existingCreds);
-    console.log(`[WhatsApp Auth] Restored existing creds for ${instanceId}, registered: ${creds.registered}`);
+    // Handle both cases: raw object (from storage.get parsing) or JSON string (legacy)
+    if (typeof existingCreds === 'string') {
+      creds = deserialize<AuthenticationCreds>(existingCreds);
+    } else {
+      // Storage already parsed it, but we need to reconstruct Buffers
+      creds = JSON.parse(JSON.stringify(existingCreds), bufferReviver) as AuthenticationCreds;
+    }
   } else {
     creds = initAuthCreds();
-    console.log(`[WhatsApp Auth] Created new creds for ${instanceId}`);
   }
 
   return {
@@ -172,7 +176,6 @@ export async function createStorageAuthState(
     },
 
     saveCreds: async () => {
-      console.log(`[WhatsApp Auth] Saving creds for ${instanceId}, registered: ${creds.registered}`);
       await storage.set(credsKey, serialize(creds));
     },
   };

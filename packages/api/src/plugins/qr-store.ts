@@ -60,22 +60,11 @@ export async function printQrCodeToTerminal(qrCode: string, instanceId: string):
 
   try {
     // Dynamic import qrcode-terminal
-    // For CommonJS modules imported with dynamic import in Node.js,
-    // the module object itself is what we need
     const qrTerminalModule = await import('qrcode-terminal');
     const qrTerminal = (qrTerminalModule as any).default || qrTerminalModule;
 
-    console.log('\n╔════════════════════════════════════════════════════════════╗');
-    console.log(`║  WhatsApp QR Code for instance: ${instanceId.padEnd(25)} ║`);
-    console.log('║  Scan with your phone to connect                           ║');
-    console.log('╚════════════════════════════════════════════════════════════╝\n');
-
-    // qrcode-terminal exports a generate function
+    console.log(`\n[WhatsApp] QR Code for ${instanceId}:`);
     qrTerminal.generate(qrCode, { small: true });
-
-    console.log('\n╔════════════════════════════════════════════════════════════╗');
-    console.log('║  QR code also available via GET /instances/:id/qr          ║');
-    console.log('╚════════════════════════════════════════════════════════════╝\n');
   } catch (error) {
     // If qrcode-terminal isn't installed or import fails, just log the raw QR
     console.log(`\n[QR Code for ${instanceId}]: ${qrCode.substring(0, 50)}...`);
@@ -93,20 +82,12 @@ export async function setupQrCodeListener(eventBus: EventBus): Promise<void> {
     await eventBus.subscribe('instance.qr_code', async (event) => {
       const { instanceId, qrCode, expiresAt } = event.payload;
 
-      console.log('\n╔════════════════════════════════════════════════════════════╗');
-      console.log('║  WhatsApp QR Code Generated                                 ║');
-      console.log(`║  Instance: ${instanceId.padEnd(49)} ║`);
-      console.log(`║  Expires: ${new Date(expiresAt).toISOString().padEnd(50)} ║`);
-      console.log('╚════════════════════════════════════════════════════════════╝\n');
-
       // Store the QR code
       storeQrCode(instanceId, qrCode, new Date(expiresAt));
 
       // Print to terminal in dev mode
       await printQrCodeToTerminal(qrCode, instanceId);
     });
-
-    console.log('[QR Store] Listening for QR code events');
   } catch (error) {
     console.warn('[QR Store] Failed to set up QR code listener:', error);
   }
