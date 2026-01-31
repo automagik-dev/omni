@@ -222,6 +222,40 @@ describe('evaluateCondition', () => {
       const condition: AutomationCondition = { field: 'name', operator: 'regex', value: '[invalid(' };
       expect(evaluateCondition(condition, { name: 'Alice' })).toBe(false);
     });
+
+    describe('ReDoS protection', () => {
+      test('rejects regex with nested quantifiers (a+)+', () => {
+        const condition: AutomationCondition = { field: 'text', operator: 'regex', value: '(a+)+$' };
+        expect(evaluateCondition(condition, { text: 'aaaaaaaaa' })).toBe(false);
+      });
+
+      test('rejects regex with nested quantifiers (a*)*', () => {
+        const condition: AutomationCondition = { field: 'text', operator: 'regex', value: '(a*)*b' };
+        expect(evaluateCondition(condition, { text: 'aaaaaab' })).toBe(false);
+      });
+
+      test('rejects regex pattern exceeding max length', () => {
+        const longPattern = 'a'.repeat(600);
+        const condition: AutomationCondition = { field: 'text', operator: 'regex', value: longPattern };
+        expect(evaluateCondition(condition, { text: 'a' })).toBe(false);
+      });
+
+      test('truncates input string exceeding max length', () => {
+        const longInput = 'test'.repeat(5000); // 20000 chars
+        const condition: AutomationCondition = { field: 'text', operator: 'regex', value: '^test' };
+        // Should still match because we truncate, not reject
+        expect(evaluateCondition(condition, { text: longInput })).toBe(true);
+      });
+
+      test('allows safe regex patterns', () => {
+        const condition: AutomationCondition = {
+          field: 'email',
+          operator: 'regex',
+          value: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$',
+        };
+        expect(evaluateCondition(condition, { email: 'test@example.com' })).toBe(true);
+      });
+    });
   });
 
   describe('nested field access', () => {

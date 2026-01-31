@@ -60,6 +60,22 @@ export type ExecutionLogger = (log: NewAutomationLog) => Promise<void>;
 export interface EngineConfig {
   defaultConcurrency: number;
   instanceConcurrencyOverrides?: Record<string, number>;
+  /** Maximum pending items per queue before applying backpressure (default: 100) */
+  maxQueueDepth?: number;
+}
+
+/**
+ * Error thrown when queue is full, triggering NATS backpressure
+ */
+export class QueueFullError extends Error {
+  constructor(
+    public readonly instanceId: string,
+    public readonly queueDepth: number,
+    public readonly maxDepth: number,
+  ) {
+    super(`Queue full for instance ${instanceId}: ${queueDepth}/${maxDepth} pending`);
+    this.name = 'QueueFullError';
+  }
 }
 
 /**
@@ -309,6 +325,17 @@ export class AutomationEngine {
       return this.executeAutomation(automation, event, context, queue);
     }
 
+    // Check if queue is at capacity (backpressure)
+    const maxQueueDepth = this.config.maxQueueDepth ?? 100;
+    if (queue.pending.length >= maxQueueDepth) {
+      logger.warn('Queue full, applying backpressure', {
+        instanceId,
+        queueDepth: queue.pending.length,
+        maxDepth: maxQueueDepth,
+      });
+      throw new QueueFullError(instanceId, queue.pending.length, maxQueueDepth);
+    }
+
     // Otherwise, queue it
     // Note: queue is guaranteed to be defined here since we set it above
     const queueRef = queue;
@@ -498,5 +525,6 @@ export function createAutomationEngine(config?: Partial<EngineConfig>): Automati
   return new AutomationEngine({
     defaultConcurrency: config?.defaultConcurrency ?? 5,
     instanceConcurrencyOverrides: config?.instanceConcurrencyOverrides,
+    maxQueueDepth: config?.maxQueueDepth ?? 100,
   });
 }

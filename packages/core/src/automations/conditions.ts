@@ -4,7 +4,19 @@
  * Evaluates conditions against event payloads using dot notation field access.
  */
 
+import { createLogger } from '../logger';
 import type { AutomationCondition, ConditionOperator } from './types';
+
+const logger = createLogger('automations:conditions');
+
+/** Maximum length of string to test against regex (ReDoS protection) */
+const MAX_REGEX_INPUT_LENGTH = 10000;
+
+/** Maximum length of regex pattern (ReDoS protection) */
+const MAX_REGEX_PATTERN_LENGTH = 500;
+
+/** Pattern to detect potentially dangerous regex (nested quantifiers, etc.) */
+const DANGEROUS_REGEX_PATTERN = /(\+|\*|\?|\{[0-9,]+\})\)?(\+|\*|\?|\{[0-9,]+\})/;
 
 /**
  * Get a value from an object using dot notation path
@@ -61,12 +73,43 @@ function checkContains(fieldValue: unknown, value: unknown): boolean {
 }
 
 /**
- * Check regex match
+ * Check if a regex pattern is potentially dangerous (ReDoS)
+ */
+function isDangerousRegex(pattern: string): boolean {
+  // Check pattern length
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    return true;
+  }
+
+  // Check for nested quantifiers (e.g., (a+)+, (a*)*b)
+  if (DANGEROUS_REGEX_PATTERN.test(pattern)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check regex match with ReDoS protection
  */
 function checkRegex(fieldValue: unknown, value: unknown): boolean {
   if (typeof fieldValue !== 'string' || typeof value !== 'string') return false;
+
+  // ReDoS protection: check pattern safety
+  if (isDangerousRegex(value)) {
+    logger.warn('Regex pattern rejected as potentially dangerous', {
+      patternLength: value.length,
+      maxLength: MAX_REGEX_PATTERN_LENGTH,
+    });
+    return false;
+  }
+
+  // ReDoS protection: limit input length
+  const testValue =
+    fieldValue.length > MAX_REGEX_INPUT_LENGTH ? fieldValue.slice(0, MAX_REGEX_INPUT_LENGTH) : fieldValue;
+
   try {
-    return new RegExp(value).test(fieldValue);
+    return new RegExp(value).test(testValue);
   } catch {
     return false;
   }
