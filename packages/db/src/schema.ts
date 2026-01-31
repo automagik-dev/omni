@@ -913,3 +913,252 @@ export const eventPayloads = pgTable(
 
 export type EventPayload = typeof eventPayloads.$inferSelect;
 export type NewEventPayload = typeof eventPayloads.$inferInsert;
+
+// ============================================================================
+// WEBHOOK SOURCES (Events Ext)
+// ============================================================================
+
+/**
+ * Webhook source configurations.
+ * External systems can trigger events in Omni via webhooks.
+ *
+ * @see events-ext wish
+ */
+export const webhookSources = pgTable(
+  'webhook_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 100 }).notNull().unique(), // 'github', 'stripe', 'agno'
+    description: text('description'),
+
+    // Optional validation
+    expectedHeaders: jsonb('expected_headers').$type<Record<string, boolean>>(), // { 'X-GitHub-Event': true }
+
+    // State
+    enabled: boolean('enabled').notNull().default(true),
+
+    // Stats
+    lastReceivedAt: timestamp('last_received_at'),
+    totalReceived: integer('total_received').notNull().default(0),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
+    enabledIdx: index('webhook_sources_enabled_idx').on(table.enabled),
+  }),
+);
+
+export type WebhookSource = typeof webhookSources.$inferSelect;
+export type NewWebhookSource = typeof webhookSources.$inferInsert;
+
+// ============================================================================
+// AUTOMATIONS (Events Ext)
+// ============================================================================
+
+/**
+ * Condition operators for automation rules.
+ */
+export const conditionOperators = [
+  'eq',
+  'neq',
+  'gt',
+  'lt',
+  'gte',
+  'lte',
+  'contains',
+  'not_contains',
+  'exists',
+  'not_exists',
+  'regex',
+] as const;
+export type ConditionOperator = (typeof conditionOperators)[number];
+
+/**
+ * Action types for automations.
+ */
+export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log'] as const;
+export type ActionType = (typeof actionTypes)[number];
+
+/**
+ * Debounce modes for message grouping.
+ */
+export const automationDebounceModes = ['none', 'fixed', 'range', 'presence'] as const;
+export type AutomationDebounceMode = (typeof automationDebounceModes)[number];
+
+/**
+ * Automation rule interface for trigger conditions.
+ */
+export interface AutomationCondition {
+  field: string; // Dot notation: 'payload.from.isVIP'
+  operator: ConditionOperator;
+  value?: unknown; // Ignored for 'exists'/'not_exists'
+}
+
+/**
+ * Webhook action configuration.
+ */
+export interface WebhookActionConfig {
+  url: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  waitForResponse?: boolean;
+  timeoutMs?: number;
+  responseAs?: string; // Store response as variable
+}
+
+/**
+ * Send message action configuration.
+ */
+export interface SendMessageActionConfig {
+  instanceId?: string; // Template: {{payload.instanceId}}
+  to?: string; // Template: {{payload.from.id}}
+  contentTemplate: string;
+}
+
+/**
+ * Emit event action configuration.
+ */
+export interface EmitEventActionConfig {
+  eventType: string;
+  payloadTemplate?: Record<string, unknown>;
+}
+
+/**
+ * Log action configuration.
+ */
+export interface LogActionConfig {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+}
+
+/**
+ * Union type for action configurations.
+ */
+export type AutomationAction =
+  | { type: 'webhook'; config: WebhookActionConfig }
+  | { type: 'send_message'; config: SendMessageActionConfig }
+  | { type: 'emit_event'; config: EmitEventActionConfig }
+  | { type: 'log'; config: LogActionConfig };
+
+/**
+ * Debounce configuration for message grouping.
+ */
+export type DebounceConfig =
+  | { mode: 'none' }
+  | { mode: 'fixed'; delayMs: number }
+  | { mode: 'range'; minMs: number; maxMs: number }
+  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] };
+
+/**
+ * Automation rules - "When event X with conditions Y, execute actions Z."
+ *
+ * @see events-ext wish
+ */
+export const automations = pgTable(
+  'automations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+
+    // Trigger
+    triggerEventType: varchar('trigger_event_type', { length: 255 }).notNull(),
+    triggerConditions: jsonb('trigger_conditions').$type<AutomationCondition[]>(),
+
+    // Actions (executed sequentially)
+    actions: jsonb('actions').notNull().$type<AutomationAction[]>(),
+
+    // Debounce configuration
+    debounce: jsonb('debounce').$type<DebounceConfig>(),
+
+    // State
+    enabled: boolean('enabled').notNull().default(true),
+    priority: integer('priority').notNull().default(0), // Higher = runs first
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: index('automations_name_idx').on(table.name),
+    triggerIdx: index('automations_trigger_idx').on(table.triggerEventType),
+    enabledIdx: index('automations_enabled_idx').on(table.enabled),
+    priorityIdx: index('automations_priority_idx').on(table.priority),
+  }),
+);
+
+export type Automation = typeof automations.$inferSelect;
+export type NewAutomation = typeof automations.$inferInsert;
+
+/**
+ * Automation execution status.
+ */
+export const automationLogStatuses = ['success', 'failed', 'skipped'] as const;
+export type AutomationLogStatus = (typeof automationLogStatuses)[number];
+
+/**
+ * Action execution result.
+ */
+export interface ActionExecutionResult {
+  action: ActionType;
+  status: 'success' | 'failed';
+  result?: unknown;
+  error?: string;
+  durationMs: number;
+}
+
+/**
+ * Automation execution logs.
+ * Tracks each automation run with detailed action results.
+ *
+ * @see events-ext wish
+ */
+export const automationLogs = pgTable(
+  'automation_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    automationId: uuid('automation_id')
+      .notNull()
+      .references(() => automations.id, { onDelete: 'cascade' }),
+    eventId: varchar('event_id', { length: 36 }).notNull(),
+
+    // Execution status
+    status: varchar('status', { length: 20 }).notNull().$type<AutomationLogStatus>(),
+    conditionsMatched: boolean('conditions_matched').notNull(),
+
+    // Action results
+    actionsExecuted: jsonb('actions_executed').$type<ActionExecutionResult[]>(),
+    error: text('error'),
+
+    // Performance
+    executionTimeMs: integer('execution_time_ms'),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    automationIdx: index('automation_logs_automation_idx').on(table.automationId),
+    eventIdIdx: index('automation_logs_event_id_idx').on(table.eventId),
+    statusIdx: index('automation_logs_status_idx').on(table.status),
+    createdAtIdx: index('automation_logs_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export type AutomationLog = typeof automationLogs.$inferSelect;
+export type NewAutomationLog = typeof automationLogs.$inferInsert;
+
+// Relations for webhook sources and automations
+export const automationsRelations = relations(automations, ({ many }) => ({
+  logs: many(automationLogs),
+}));
+
+export const automationLogsRelations = relations(automationLogs, ({ one }) => ({
+  automation: one(automations, {
+    fields: [automationLogs.automationId],
+    references: [automations.id],
+  }),
+}));

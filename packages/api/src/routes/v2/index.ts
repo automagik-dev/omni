@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
+import { automationsRoutes } from './automations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
@@ -18,6 +19,7 @@ import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
+import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
@@ -34,3 +36,6 @@ v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);
 v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/payloads and /api/v2/payload-config
+v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
+v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
+v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics

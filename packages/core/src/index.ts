@@ -54,3 +54,6 @@ export {
 
 // Metrics
 export * from './metrics';
+
+// Automations
+export * from './automations';

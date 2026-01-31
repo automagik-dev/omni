@@ -8,6 +8,7 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { AccessService } from './access';
+import { AutomationService } from './automations';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
@@ -16,6 +17,7 @@ import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
 import { ProviderService } from './providers';
 import { SettingsService } from './settings';
+import { WebhookService } from './webhooks';
 
 /**
  * Service container
@@ -30,6 +32,8 @@ export interface Services {
   deadLetters: DeadLetterService;
   payloadStore: PayloadStoreService;
   eventOps: EventOpsService;
+  webhooks: WebhookService;
+  automations: AutomationService;
 }
 
 /**
@@ -49,6 +53,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     deadLetters,
     payloadStore,
     eventOps: new EventOpsService(db, eventBus, deadLetters, payloadStore),
+    webhooks: new WebhookService(db, eventBus),
+    automations: new AutomationService(db, eventBus),
   };
 }
 
@@ -62,3 +68,5 @@ export { ProviderService } from './providers';
 export { DeadLetterService } from './dead-letters';
 export { PayloadStoreService } from './payload-store';
 export { EventOpsService } from './event-ops';
+export { WebhookService } from './webhooks';
+export { AutomationService } from './automations';
