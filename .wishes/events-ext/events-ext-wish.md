@@ -35,9 +35,12 @@ This is the foundation for intelligent message handling.
 | **DEC-1** | Decision | Automations stored in PostgreSQL, not code |
 | **DEC-2** | Decision | Conditions use simple field matching (dot notation) |
 | **DEC-3** | Decision | Actions: `webhook`, `send_message`, `emit_event`, `log` |
-| **DEC-4** | Decision | Automations run in-process, simple sequential execution |
+| **DEC-4** | Decision | Automations run in-process (not separate workers) |
 | **DEC-5** | Decision | No webhook signature validation initially (add later) |
 | **DEC-6** | Decision | Defer `trigger_agent` action to future AI integration wish |
+| **DEC-7** | Decision | **Per-instance queues** with configurable concurrency (not global queue) |
+| **DEC-8** | Decision | Default concurrency: 5 parallel automations per instance |
+| **DEC-9** | Decision | Queue overflow: backpressure to NATS (nak + redelivery) |
 
 ---
 
@@ -395,6 +398,10 @@ GET    /api/v2/automation-logs?eventType=message.received&status=failed
 - [ ] **Webhook sync mode:** `waitForResponse: true` blocks until response received
 - [ ] **Webhook sync mode:** Response stored as variable for subsequent actions
 - [ ] **Webhook sync mode:** Configurable timeout (default 30s, up to 120s)
+- [ ] **Concurrency:** Per-instance queues with bounded parallelism
+- [ ] **Concurrency:** Default 5 concurrent automations per instance
+- [ ] **Concurrency:** Backpressure via NATS nak when queue full
+- [ ] **Concurrency:** Queue depth exposed in metrics
 - [ ] Execution logged with timing per action
 - [ ] Can enable/disable without deletion
 - [ ] Test endpoint validates without executing (dry run)
@@ -500,12 +507,74 @@ User sends WhatsApp message
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Concurrency Model (Critical for Scale)
+
+**Problem:** 100 messages arrive. Do we:
+- Process all 100 in parallel? (overwhelms agent API)
+- Process one at a time? (slow, unfair to other instances)
+- Something smarter?
+
+**Solution: Per-Instance Queues with Bounded Concurrency**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AUTOMATION ENGINE                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   Instance A Queue          Instance B Queue          Instance C Queue   │
+│   ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐ │
+│   │ msg1 → [slot 1] │      │ msg1 → [slot 1] │      │ msg1 → [slot 1] │ │
+│   │ msg2 → [slot 2] │      │ msg2 → [slot 2] │      │ (empty)         │ │
+│   │ msg3 → [slot 3] │      │ (empty)         │      │                 │ │
+│   │ msg4 → waiting  │      │                 │      │                 │ │
+│   │ msg5 → waiting  │      │                 │      │                 │ │
+│   └─────────────────┘      └─────────────────┘      └─────────────────┘ │
+│        ↓                        ↓                        ↓               │
+│   concurrency: 3           concurrency: 3           concurrency: 3      │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+1. Each instance gets its own queue
+2. Each queue processes up to N automations in parallel (default: 5)
+3. If queue is full, use NATS backpressure (nak → redelivery later)
+4. Instance A's traffic doesn't block Instance B
+
+**Configuration:**
+```typescript
+// Global default
+automation.concurrency.default = 5
+
+// Per-instance override (in instance settings)
+instance.settings.automationConcurrency = 10  // VIP instance gets more slots
+```
+
+**Why Per-Instance (not Per-Conversation):**
+- Simpler to implement
+- Per-conversation ordering rarely needed (agent handles context)
+- Can add per-conversation queuing later if needed
+
+**Backpressure Flow:**
+```
+NATS delivers event
+    │
+    ▼
+Queue has capacity? ──No──► nak (negative ack) → NATS redelivers later
+    │
+   Yes
+    │
+    ▼
+Add to instance queue → process → ack
+```
+
 ### Performance Considerations
 
 1. **Automation Loading:** Cache automations in memory, reload on change
 2. **Condition Evaluation:** Short-circuit on first non-match
-3. **Action Execution:** Run async, don't block event processing
+3. **Action Execution:** Run async within queue slot
 4. **Logging:** Batch writes, async flush
+5. **Queue Monitoring:** Track queue depth, processing latency per instance
 
 ---
 
