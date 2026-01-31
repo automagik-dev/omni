@@ -47,6 +47,29 @@ function padModule(module: string, width = 17): string {
   return module.length >= width ? module.slice(0, width) : module.padEnd(width);
 }
 
+/** Internal keys to skip when formatting data */
+const INTERNAL_KEYS = new Set(['level', 'time', 'module', 'msg']);
+
+/**
+ * Format a single value for key=value output
+ */
+function formatValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.includes(' ') ? `"${value}"` : value;
+  }
+  if (value === null || value === undefined) {
+    return 'null';
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '[Object]';
+    }
+  }
+  return String(value);
+}
+
 /**
  * Format extra data as key=value pairs
  */
@@ -54,27 +77,9 @@ function formatData(data: Record<string, unknown>): string {
   const pairs: string[] = [];
 
   for (const [key, value] of Object.entries(data)) {
-    // Skip internal keys
-    if (['level', 'time', 'module', 'msg'].includes(key)) continue;
-
-    // Format value based on type
-    let formatted: string;
-    if (typeof value === 'string') {
-      // Quote strings with spaces
-      formatted = value.includes(' ') ? `"${value}"` : value;
-    } else if (value === null || value === undefined) {
-      formatted = 'null';
-    } else if (typeof value === 'object') {
-      try {
-        formatted = JSON.stringify(value);
-      } catch {
-        formatted = '[Object]';
-      }
-    } else {
-      formatted = String(value);
+    if (!INTERNAL_KEYS.has(key)) {
+      pairs.push(`${key}=${formatValue(value)}`);
     }
-
-    pairs.push(`${key}=${formatted}`);
   }
 
   return pairs.length > 0 ? ` ${pairs.join(' ')}` : '';

@@ -8,6 +8,13 @@ import { formatJson, formatPretty } from '../formatters';
 import { configureLogging, createLogger, getLogBuffer, resetLogBuffer } from '../index';
 import type { LogEntry } from '../types';
 
+/** Helper to safely parse captured output at index */
+function parseOutput(arr: string[], index: number): Record<string, unknown> {
+  const item = arr[index];
+  if (!item) throw new Error(`No output at index ${index}`);
+  return JSON.parse(item) as Record<string, unknown>;
+}
+
 describe('Logger', () => {
   let stdoutSpy: ReturnType<typeof spyOn>;
   let stderrSpy: ReturnType<typeof spyOn>;
@@ -49,7 +56,7 @@ describe('Logger', () => {
       logger.info('Hello world');
 
       expect(capturedOutput.length).toBe(1);
-      const entry = JSON.parse(capturedOutput[0]!);
+      const entry = parseOutput(capturedOutput, 0);
       expect(entry.module).toBe('test:module');
       expect(entry.msg).toBe('Hello world');
       expect(entry.level).toBe('info');
@@ -59,7 +66,7 @@ describe('Logger', () => {
       const logger = createLogger('test');
       logger.info('User action', { userId: '123', action: 'login' });
 
-      const entry = JSON.parse(capturedOutput[0]!);
+      const entry = parseOutput(capturedOutput, 0);
       expect(entry.userId).toBe('123');
       expect(entry.action).toBe('login');
     });
@@ -75,10 +82,10 @@ describe('Logger', () => {
       expect(capturedOutput.length).toBe(3); // debug, info, warn
       expect(capturedErrors.length).toBe(1); // error
 
-      const debugEntry = JSON.parse(capturedOutput[0]!);
-      const infoEntry = JSON.parse(capturedOutput[1]!);
-      const warnEntry = JSON.parse(capturedOutput[2]!);
-      const errorEntry = JSON.parse(capturedErrors[0]!);
+      const debugEntry = parseOutput(capturedOutput, 0);
+      const infoEntry = parseOutput(capturedOutput, 1);
+      const warnEntry = parseOutput(capturedOutput, 2);
+      const errorEntry = parseOutput(capturedErrors, 0);
 
       expect(debugEntry.level).toBe('debug');
       expect(infoEntry.level).toBe('info');
@@ -92,7 +99,7 @@ describe('Logger', () => {
 
       child.info('Child message');
 
-      const entry = JSON.parse(capturedOutput[0]!);
+      const entry = parseOutput(capturedOutput, 0);
       expect(entry.module).toBe('parent');
       expect(entry.requestId).toBe('abc123');
     });
@@ -103,7 +110,7 @@ describe('Logger', () => {
 
       child.info('Message', { extra: 'data' });
 
-      const entry = JSON.parse(capturedOutput[0]!);
+      const entry = parseOutput(capturedOutput, 0);
       expect(entry.requestId).toBe('abc123');
       expect(entry.extra).toBe('data');
     });
@@ -144,7 +151,7 @@ describe('Logger', () => {
       dbLogger.info('hidden');
 
       expect(capturedOutput.length).toBe(1);
-      const entry = JSON.parse(capturedOutput[0]!);
+      const entry = parseOutput(capturedOutput, 0);
       expect(entry.module).toBe('api');
     });
 

@@ -2,7 +2,9 @@
  * NATS JetStream EventBus implementation
  *
  * @example
- * import { createEventBus, connectEventBus } from '@omni/core/events/nats';
+ * import { createEventBus, connectEventBus, createLogger } from '@omni/core';
+ *
+ * const logger = createLogger('my-service');
  *
  * // Create and connect
  * const eventBus = await connectEventBus({ url: 'nats://localhost:4222' });
@@ -12,12 +14,12 @@
  *
  * // Subscribe to events
  * await eventBus.subscribe('message.received', async (event) => {
- *   console.log('Received:', event);
+ *   logger.info('Received event', { type: event.type });
  * });
  *
  * // Pattern subscriptions
  * await eventBus.subscribePattern('message.*.whatsapp-baileys.>', async (event) => {
- *   console.log('WhatsApp event:', event);
+ *   logger.info('WhatsApp event', { type: event.type });
  * });
  *
  * // Clean shutdown
