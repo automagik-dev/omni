@@ -2,9 +2,9 @@
 
 > Discord.js integration following WhatsApp patterns: same structure, same events, Discord-specific features.
 
-**Status:** READY
+**Status:** SHIPPED
 **Created:** 2026-01-29
-**Updated:** 2026-01-31
+**Updated:** 2026-01-31 (aligned with WhatsApp patterns, added Pre-Work)
 **Author:** WISH Agent
 **Beads:** omni-v2-6zm
 
@@ -152,6 +152,7 @@ packages/channel-discord/
 ```
 
 **Deliverables:**
+- [ ] **Extend ChannelCapabilities** - Add Discord-specific fields (see Pre-Work section)
 - [ ] Package setup (package.json, tsconfig.json)
 - [ ] `plugin.ts` - DiscordPlugin class extending BaseChannelPlugin
 - [ ] `auth.ts` - Token storage in PluginStorage
@@ -584,7 +585,7 @@ export function mapDiscordError(error: unknown): OmniError {
 
 ```typescript
 export const DISCORD_CAPABILITIES: ChannelCapabilities = {
-  // Core messaging
+  // Core messaging (existing in ChannelCapabilities)
   canSendText: true,
   canSendMedia: true,
   canSendReaction: true,
@@ -592,44 +593,36 @@ export const DISCORD_CAPABILITIES: ChannelCapabilities = {
   canEditMessage: true,
   canDeleteMessage: true,
   canReplyToMessage: true,
-
-  // Rich content
-  canSendEmbed: true,           // Discord-specific
+  canForwardMessage: false,      // Discord doesn't have forwarding
+  canSendContact: false,         // No contact cards
+  canSendLocation: false,        // No location pins
   canSendSticker: true,
-  canSendPoll: true,            // Discord-specific
-
-  // Interactive components
-  canSendButtons: true,         // Discord-specific
-  canSendSelectMenu: true,      // Discord-specific
-  canShowModal: true,           // Discord-specific
-  canUseSlashCommands: true,    // Discord-specific
-  canUseContextMenu: true,      // Discord-specific
-
-  // Channels
-  canHandleGroups: true,        // Guilds/servers
-  canHandleDMs: true,           // Direct messages
-  canHandleThreads: true,
-
-  // Discord webhooks
-  canCreateWebhooks: true,      // Discord-specific
-  canSendViaWebhook: true,      // Discord-specific
-
-  // Not supported
-  canReceiveReadReceipts: false,
+  canHandleGroups: true,         // Guilds/servers
+  canHandleBroadcast: false,     // No broadcast lists
+  canReceiveReadReceipts: false, // Discord doesn't have read receipts
   canReceiveDeliveryReceipts: false,
-  canForwardMessage: false,
-  canSendContact: false,
-  canSendLocation: false,
-  canHandleBroadcast: false,
-  canHandleVoice: false,        // Future
+
+  // NEW fields (add to ChannelCapabilities interface first)
+  canSendEmbed: true,            // Rich embeds
+  canSendPoll: true,             // Polls
+  canSendButtons: true,          // Action buttons
+  canSendSelectMenu: true,       // Dropdown selections
+  canShowModal: true,            // Modal dialogs
+  canUseSlashCommands: true,     // Slash commands
+  canUseContextMenu: true,       // Right-click commands
+  canHandleDMs: true,            // Direct messages
+  canHandleThreads: true,        // Thread conversations
+  canCreateWebhooks: true,       // Create Discord webhooks
+  canSendViaWebhook: true,       // Send via Discord webhooks
+  canHandleVoice: false,         // Future
 
   // Limits
   maxMessageLength: 2000,
-  maxEmbedFields: 25,
-  maxButtonsPerRow: 5,
-  maxRowsPerMessage: 5,
-  maxSelectOptions: 25,
   maxFileSize: 25 * 1024 * 1024,  // 25MB (500MB for boosted servers)
+  maxEmbedFields: 25,             // NEW - add to interface
+  maxButtonsPerRow: 5,            // NEW - add to interface
+  maxRowsPerMessage: 5,           // NEW - add to interface
+  maxSelectOptions: 25,           // NEW - add to interface
 
   supportedMediaTypes: [
     { mimeType: 'image/*', maxSize: 25 * 1024 * 1024 },
@@ -684,9 +677,39 @@ export function setupMessageHandlers(
 
 ---
 
+## Pre-Work: Extend ChannelCapabilities
+
+The current `ChannelCapabilities` interface needs Discord-specific additions:
+
+```typescript
+// packages/channel-sdk/src/types/capabilities.ts - Add these:
+canSendEmbed: boolean;           // Rich embeds (Discord, Slack, etc.)
+canSendPoll: boolean;            // Polls
+canSendButtons: boolean;         // Action buttons
+canSendSelectMenu: boolean;      // Dropdown selections
+canShowModal: boolean;           // Modal dialogs
+canUseSlashCommands: boolean;    // Slash commands
+canUseContextMenu: boolean;      // Right-click commands
+canHandleDMs: boolean;           // Direct messages
+canHandleThreads: boolean;       // Thread conversations
+canCreateWebhooks: boolean;      // Channel webhooks
+canSendViaWebhook: boolean;      // Webhook message sending
+canHandleVoice: boolean;         // Voice channels (future)
+
+// New limits
+maxEmbedFields?: number;
+maxButtonsPerRow?: number;
+maxRowsPerMessage?: number;
+maxSelectOptions?: number;
+```
+
+**Action:** Add these to `ChannelCapabilities` in Group A before implementing Discord-specific code.
+
+---
+
 ## Depends On
 
-- `channel-sdk` ✅ SHIPPED
+- `channel-sdk` ✅ SHIPPED (needs extension - see Pre-Work)
 - `nats-events` ✅ SHIPPED
 
 ## Enables
@@ -694,3 +717,119 @@ export function setupMessageHandlers(
 - Full Discord bot capability
 - Multi-guild bot management
 - Integration with automations (events-ext) via `custom.discord.command` events
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-01-31
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Plugin extends BaseChannelPlugin | PASS | `DiscordPlugin extends BaseChannelPlugin` in plugin.ts |
+| `connect()` loads token, creates Client, logs in | PASS | plugin.ts:95-145 |
+| `disconnect()` properly destroys Client | PASS | plugin.ts:147-163 |
+| `sendMessage()` sends text with chunking | PASS | plugin.ts:183-207, senders/text.ts |
+| `getStatus()` returns connection state | PASS | plugin.ts:165-181 |
+| messageCreate → emitMessageReceived | PASS | handlers/messages.ts:264-268 |
+| ready → emitInstanceConnected | PASS | handlers/connection.ts:48-53 |
+| disconnect → emitInstanceDisconnected | PASS | handlers/connection.ts:62-78 |
+| Error handling maps Discord API errors | PASS | utils/errors.ts |
+| Works across multiple guilds | PASS | One bot token supports many guilds |
+| Can send embeds | PASS | senders/embeds.ts |
+| Can add/remove reactions | PASS | senders/reaction.ts, handlers/reactions.ts |
+| messageReactionAdd/Remove events | PASS | handlers/reactions.ts |
+| Can edit/delete messages | PASS | senders/text.ts:65-101 |
+| messageUpdate/Delete events | PASS | handlers/messages.ts:270-291 |
+| Thread support | PASS | handlers/all-events.ts thread handlers |
+| Can send stickers by ID | PASS | senders/sticker.ts |
+| Can create polls | PASS | senders/poll.ts |
+| Can send messages with buttons | PASS | components/buttons.ts |
+| Button clicks → event emission | PASS | handlers/interactions.ts |
+| Can send select menus | PASS | components/select-menus.ts |
+| Select menu events | PASS | handlers/interactions.ts |
+| Can show modals | PASS | components/modals.ts |
+| Modal submit events | PASS | handlers/interactions.ts |
+| Slash commands registered | PASS | commands/slash.ts |
+| Slash command events | PASS | handlers/interactions.ts |
+| Context menu commands | PASS | commands/context.ts |
+| Autocomplete support | PASS | handlers/interactions.ts, plugin.ts:respondToAutocomplete |
+| Can create Discord webhooks | PASS | webhooks/discord-webhooks.ts |
+| Can send via Discord webhooks | PASS | webhooks/discord-webhooks.ts:sendWebhookMessage |
+
+### Quality Gates
+
+| Check | Status | Evidence |
+|-------|--------|----------|
+| Typecheck | PASS | `bun run typecheck` - 0 errors |
+| Lint | PASS | Only style warnings (non-null assertions intentional) |
+| Tests | PASS | 567 pass, 0 fail (existing tests unaffected) |
+
+### Findings
+
+**Lint Warnings (Non-blocking):**
+- 16 warnings about non-null assertions (`!`) - These are intentional because Discord.js API guarantees these values exist after we check preconditions (e.g., `client.token!` after checking `client.application`)
+- 3 warnings about cognitive complexity - Inherent to switch statements in extractContent() and mapDiscordError(), acceptable for now
+
+### File Structure Delivered
+
+```
+packages/channel-discord/
+├── src/
+│   ├── index.ts              ✅
+│   ├── plugin.ts             ✅
+│   ├── types.ts              ✅
+│   ├── auth.ts               ✅
+│   ├── client.ts             ✅
+│   ├── capabilities.ts       ✅
+│   ├── handlers/
+│   │   ├── index.ts          ✅
+│   │   ├── connection.ts     ✅
+│   │   ├── messages.ts       ✅
+│   │   ├── reactions.ts      ✅
+│   │   ├── interactions.ts   ✅
+│   │   └── all-events.ts     ✅
+│   ├── senders/
+│   │   ├── index.ts          ✅
+│   │   ├── builders.ts       ✅
+│   │   ├── text.ts           ✅
+│   │   ├── media.ts          ✅
+│   │   ├── embeds.ts         ✅
+│   │   ├── sticker.ts        ✅
+│   │   ├── poll.ts           ✅
+│   │   └── reaction.ts       ✅
+│   ├── components/
+│   │   ├── index.ts          ✅
+│   │   ├── buttons.ts        ✅
+│   │   ├── select-menus.ts   ✅
+│   │   └── modals.ts         ✅
+│   ├── commands/
+│   │   ├── index.ts          ✅
+│   │   ├── slash.ts          ✅
+│   │   ├── context.ts        ✅
+│   │   └── types.ts          ✅
+│   ├── webhooks/
+│   │   ├── index.ts          ✅
+│   │   └── discord-webhooks.ts ✅
+│   └── utils/
+│       ├── errors.ts         ✅
+│       ├── snowflake.ts      ✅
+│       └── chunking.ts       ✅
+├── package.json              ✅
+└── tsconfig.json             ✅
+```
+
+### Pre-Work Completed
+
+ChannelCapabilities extended in `packages/channel-sdk/src/types/capabilities.ts` with:
+- canSendEmbed, canSendPoll, canSendButtons, canSendSelectMenu, canShowModal
+- canUseSlashCommands, canUseContextMenu, canHandleDMs, canHandleThreads
+- canCreateWebhooks, canSendViaWebhook, canHandleVoice
+- maxEmbedFields, maxButtonsPerRow, maxRowsPerMessage, maxSelectOptions
+
+### Recommendation
+
+Ship. All acceptance criteria met. The Discord plugin follows WhatsApp patterns exactly and implements full Discord.js v14 integration with all core, rich features, and interactive components.
