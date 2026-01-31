@@ -42,7 +42,7 @@ This is the foundation for intelligent message handling.
 | **DEC-8** | Decision | Default concurrency: 5 parallel automations per instance |
 | **DEC-9** | Decision | Queue overflow: backpressure to NATS (nak + redelivery) |
 | **DEC-10** | Decision | **Message debounce** per conversation (group rapid messages before processing) |
-| **DEC-11** | Decision | Debounce modes: none, fixed, range (randomized for human-like behavior) |
+| **DEC-11** | Decision | Debounce modes: none, fixed, range, **presence** (event-aware) |
 
 ---
 
@@ -423,7 +423,9 @@ GET    /api/v2/automation-logs?eventType=message.received&status=failed
 - [ ] **Concurrency:** Backpressure via NATS nak when queue full
 - [ ] **Concurrency:** Queue depth exposed in metrics
 - [ ] **Debounce:** Per-conversation grouping (instanceId + personId)
-- [ ] **Debounce:** Modes: none, fixed, range (randomized)
+- [ ] **Debounce:** Modes: none, fixed, range, presence (event-aware)
+- [ ] **Debounce:** Presence mode extends timer on composing/recording events
+- [ ] **Debounce:** Presence mode has maxWaitMs safety limit
 - [ ] **Debounce:** Configurable per-instance or per-automation
 - [ ] **Debounce:** Grouped messages sent as array to webhook
 - [ ] Execution logged with timing per action
@@ -597,14 +599,25 @@ type DebounceConfig =
   | { mode: 'none' }                           // Process immediately
   | { mode: 'fixed'; delayMs: number }         // Wait exactly N ms
   | { mode: 'range'; minMs: number; maxMs: number }  // Random between min-max (human-like)
+  | { mode: 'presence';                        // Event-aware debounce (smartest)
+      baseDelayMs: number;                     // Default wait (e.g., 5000)
+      maxWaitMs?: number;                      // Max total wait (e.g., 120000)
+      extendOnEvents: string[];                // Events that reset timer
+    }
 
 // Examples:
 { mode: 'none' }                    // Instant processing
 { mode: 'fixed', delayMs: 5000 }    // Wait 5 seconds
 { mode: 'range', minMs: 3000, maxMs: 8000 }  // Wait 3-8 seconds (randomized)
+{
+  mode: 'presence',
+  baseDelayMs: 5000,                // Wait 5s after last activity
+  maxWaitMs: 120000,                // But never more than 2 minutes total
+  extendOnEvents: ['presence.composing', 'presence.recording']
+}
 ```
 
-**How it works:**
+**How time-based debounce works:**
 ```
 msg1 arrives (10:00:01) → start debounce timer (e.g., 5s)
 msg2 arrives (10:00:03) → reset timer (still within window)
@@ -612,6 +625,25 @@ msg3 arrives (10:00:05) → reset timer
 ... silence ...
 timer fires (10:00:10) → process all 3 messages together
 ```
+
+**How presence-based debounce works (smarter):**
+```
+msg1 arrives (10:00:01) → start 5s timer
+presence.composing (10:00:03) → user is typing! reset timer
+presence.composing (10:00:06) → still typing, reset timer
+presence.composing (10:00:09) → still typing, reset timer
+msg2 arrives (10:00:12) → message sent, reset timer
+presence.paused (10:00:13) → user stopped typing
+... 5s of silence ...
+timer fires (10:00:18) → process both messages together
+```
+
+**Why presence-based is better:**
+- Short default delay (5s) for quick interactions
+- Automatically waits while user is still composing
+- No need to guess with long fixed timeouts
+- Captures the "user is thinking/typing" behavior
+- `maxWaitMs` prevents infinite waiting (e.g., user left mid-typing)
 
 **Debounce is Per-Conversation:**
 - Key: `instanceId + personId` (same person, same instance)
