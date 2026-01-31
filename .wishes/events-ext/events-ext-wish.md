@@ -778,16 +778,28 @@ Add to instance queue → process → ack
 
 | Dimension | Rating | Notes |
 |-----------|--------|-------|
-| **Security** | PASS | Zod validation on all inputs, timeout on webhooks, no SQL injection |
-| **Correctness** | PASS | All 464 tests pass, 86 new tests for automations/webhooks |
+| **Security** | PASS | Zod validation, ReDoS protection, timeout on webhooks |
+| **Correctness** | PASS | All 567 tests pass |
 | **Quality** | PASS | Clean code, extracted helpers, no lint errors |
-| **Tests** | PASS | 761 lines of tests covering conditions, templates, debounce |
+| **Tests** | PASS | Integration tests with real WhatsApp fixtures + service tests |
+
+### Test Coverage
+
+| Component | Tests | Type |
+|-----------|-------|------|
+| Conditions | 41 | Unit |
+| Conditions (WhatsApp) | 65 | Integration (real fixtures) |
+| Debounce | 13 | Unit |
+| Templates | 50 | Unit |
+| Engine | 24 | Integration (real fixtures) |
+| Webhooks | 32 | Integration (actual service) |
 
 ### Findings
 
 No critical or high-severity issues found.
 
-**Note:** Backpressure via NATS nak is not implemented (queue just grows). This is a future enhancement when operating at scale.
+- Backpressure implemented via `QueueFullError` (throws when queue depth exceeds limit)
+- ReDoS protection added (pattern validation + input truncation)
 
 ### Recommendation
 
