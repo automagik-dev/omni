@@ -8,7 +8,7 @@
 import type { PluginStorage } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { pluginStorage } from '@omni/db';
-import { and, eq, gt, like, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, like, or, sql } from 'drizzle-orm';
 
 /**
  * Database-backed storage for plugin data
@@ -39,7 +39,7 @@ export class DatabasePluginStorage implements PluginStorage {
         and(
           eq(pluginStorage.pluginId, this.pluginId),
           eq(pluginStorage.key, fullKey),
-          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+          or(isNull(pluginStorage.expiresAt), gt(pluginStorage.expiresAt, new Date())),
         ),
       )
       .limit(1);
@@ -99,7 +99,7 @@ export class DatabasePluginStorage implements PluginStorage {
         and(
           eq(pluginStorage.pluginId, this.pluginId),
           eq(pluginStorage.key, fullKey),
-          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+          or(isNull(pluginStorage.expiresAt), gt(pluginStorage.expiresAt, new Date())),
         ),
       )
       .limit(1);
@@ -117,7 +117,7 @@ export class DatabasePluginStorage implements PluginStorage {
         and(
           eq(pluginStorage.pluginId, this.pluginId),
           like(pluginStorage.key, prefixPattern),
-          or(eq(pluginStorage.expiresAt, sql`NULL`), gt(pluginStorage.expiresAt, new Date())),
+          or(isNull(pluginStorage.expiresAt), gt(pluginStorage.expiresAt, new Date())),
         ),
       );
 

@@ -256,9 +256,23 @@ async function handleConnectionClose(
     }
 
     // First 515 after QR - this is the auth handshake, allow ONE reconnect
-    console.log(`[WhatsApp] Auth handshake for ${instanceId}, reconnecting to complete authentication...`);
+    // IMPORTANT: Wait 2 seconds before reconnecting to allow credentials to be saved
+    // The 515 often fires before creds.update finishes saving
+    console.log(`[WhatsApp] Auth handshake for ${instanceId}, waiting for credentials to save...`);
     reconnectAttempts.set(instanceId, 1);
-    scheduleReconnect(plugin, instanceId, 0, config, onReconnect);
+
+    setTimeout(async () => {
+      console.log(`[WhatsApp] Reconnecting ${instanceId} to complete authentication...`);
+      try {
+        await onReconnect();
+      } catch (reconnectError) {
+        plugin.handleConnectionError(
+          instanceId,
+          reconnectError instanceof Error ? reconnectError.message : 'Auth handshake reconnection failed',
+          false,
+        );
+      }
+    }, 2000);
     return;
   }
 

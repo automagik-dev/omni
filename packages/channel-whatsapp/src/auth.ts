@@ -118,8 +118,10 @@ export async function createStorageAuthState(
 
   if (existingCreds) {
     creds = deserialize<AuthenticationCreds>(existingCreds);
+    console.log(`[WhatsApp Auth] Restored existing creds for ${instanceId}, registered: ${creds.registered}`);
   } else {
     creds = initAuthCreds();
+    console.log(`[WhatsApp Auth] Created new creds for ${instanceId}`);
   }
 
   return {
@@ -170,6 +172,7 @@ export async function createStorageAuthState(
     },
 
     saveCreds: async () => {
+      console.log(`[WhatsApp Auth] Saving creds for ${instanceId}, registered: ${creds.registered}`);
       await storage.set(credsKey, serialize(creds));
     },
   };
