@@ -36,12 +36,19 @@ const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
 const reconnectAttempts = new Map<string, number>();
 
 /**
- * Track QR code generation attempts per instance
+ * Track QR code generation attempts per instance (within a cycle)
  * Only counts QR codes that expire without being scanned (not connection errors)
  * After MAX_QR_ATTEMPTS expired QRs, we clear auth state and start fresh
  */
 const qrCodeAttempts = new Map<string, number>();
 const MAX_QR_ATTEMPTS = 3;
+
+/**
+ * Track how many "clear auth and restart" cycles we've done
+ * After MAX_QR_CYCLES, we STOP completely to prevent infinite loops and OOM
+ */
+const qrCycleAttempts = new Map<string, number>();
+const MAX_QR_CYCLES = 2; // 2 cycles = 6 total QR codes before giving up
 
 /**
  * Track if current QR has been displayed (for expiry counting)
@@ -99,13 +106,38 @@ async function handleQrCode(
 
   const attempts = qrCodeAttempts.get(instanceId) || 0;
 
-  // Check if we've exceeded max attempts
+  // Check if we've exceeded max attempts within this cycle
   if (attempts >= MAX_QR_ATTEMPTS) {
-    console.log(`[WhatsApp] Max QR attempts reached for ${instanceId}, clearing auth state and restarting...`);
+    const cycles = (qrCycleAttempts.get(instanceId) || 0) + 1;
+    qrCycleAttempts.set(instanceId, cycles);
+
+    // Check if we've exceeded max cycles - STOP completely
+    if (cycles >= MAX_QR_CYCLES) {
+      console.log(
+        `[WhatsApp] Max QR cycles (${MAX_QR_CYCLES}) reached for ${instanceId}. ` +
+          `Total ${cycles * MAX_QR_ATTEMPTS} QR codes expired. Stopping to prevent resource exhaustion.`,
+      );
+      qrCodeAttempts.delete(instanceId);
+      qrCycleAttempts.delete(instanceId);
+      activeQrCodes.delete(instanceId);
+      clearConnectionTimeout(instanceId);
+
+      // Notify plugin - DO NOT reconnect
+      await plugin.handleDisconnected(
+        instanceId,
+        'QR code expired too many times. Please manually reconnect when ready to scan.',
+        false,
+      );
+      return false;
+    }
+
+    console.log(
+      `[WhatsApp] QR cycle ${cycles}/${MAX_QR_CYCLES} complete for ${instanceId}, clearing auth and retrying...`,
+    );
     qrCodeAttempts.delete(instanceId);
     clearConnectionTimeout(instanceId);
 
-    // Clear auth and reconnect fresh
+    // Clear auth and reconnect fresh - but only if we haven't hit max cycles
     await clearAuthAndReconnect();
     return false;
   }
@@ -200,6 +232,7 @@ async function handleConnectionClose(
   if (wasLoggedOut) {
     reconnectAttempts.delete(instanceId);
     qrCodeAttempts.delete(instanceId);
+    qrCycleAttempts.delete(instanceId);
     authenticatedInstances.delete(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
     return;
@@ -254,6 +287,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Clear all tracking state on successful connection
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
+  qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
   clearConnectionTimeout(instanceId);
 
@@ -318,6 +352,7 @@ export function resetReconnectAttempts(instanceId: string): void {
 export function resetConnectionState(instanceId: string): void {
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
+  qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
   authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);

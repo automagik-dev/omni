@@ -158,8 +158,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       () => this.createConnection(instanceId, config),
       async () => {
         // Clear auth and reconnect fresh - this is called after MAX_QR_ATTEMPTS
+        // IMPORTANT: Close the old socket to release resources and event listeners
+        const oldSocket = this.sockets.get(instanceId);
+        if (oldSocket) {
+          await closeSocket(oldSocket, false);
+          this.sockets.delete(instanceId);
+        }
         await clearAuthState(this.storage, instanceId);
-        this.sockets.delete(instanceId);
         await this.createConnection(instanceId, config);
       },
     );
@@ -439,7 +444,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleDisconnected(instanceId: string, reason: string, willReconnect: boolean): Promise<void> {
-    this.sockets.delete(instanceId);
+    // Close and cleanup socket to prevent memory leaks
+    const sock = this.sockets.get(instanceId);
+    if (sock) {
+      await closeSocket(sock, false);
+      this.sockets.delete(instanceId);
+    }
 
     const config = this.instances.get(instanceId)?.config;
     if (config) {
