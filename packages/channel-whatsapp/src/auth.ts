@@ -11,7 +11,13 @@ import { initAuthCreds } from '@whiskeysockets/baileys';
 
 // proto may not be available in all Baileys versions/runtimes (especially with tsx)
 // When unavailable, proto deserialization will be skipped - this is non-critical for initial connection
-let proto: any = undefined;
+type ProtoModule = {
+  Message: {
+    AppStateSyncKeyData: { fromObject: (obj: unknown) => unknown };
+    AppStateSyncKeyId: { fromObject: (obj: unknown) => unknown };
+  };
+};
+const proto: ProtoModule | undefined = undefined;
 
 /**
  * Buffer JSON replacer for serialization
@@ -157,7 +163,6 @@ export async function createStorageAuthState(
             }
           }
 
-
           return data;
         },
 
@@ -168,7 +173,7 @@ export async function createStorageAuthState(
             };
           },
         ): Promise<void> => {
-          let savedCount = 0;
+          let _savedCount = 0;
           for (const [type, entries] of Object.entries(data)) {
             if (!entries) continue;
 
@@ -177,7 +182,7 @@ export async function createStorageAuthState(
 
               if (value !== null && value !== undefined) {
                 await storage.set(key, serialize(value));
-                savedCount++;
+                _savedCount++;
               } else {
                 await storage.delete(key);
               }

@@ -23,7 +23,7 @@ import { resetConnectionState, setupConnectionHandlers } from './handlers/connec
 import { setupMessageHandlers } from './handlers/messages';
 import { toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
-import { closeSocket, createSocket, DEFAULT_SOCKET_CONFIG, type SocketConfig } from './socket';
+import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
 /**
@@ -524,7 +524,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       poll?: { name: string; options: string[]; selectableCount?: number };
       pollVotes?: string[];
       event?: { name: string; description?: string; location?: string; startTime?: Date; endTime?: Date };
-      product?: { id: string; title?: string; description?: string; price?: string; currency?: string; imageUrl?: string };
+      product?: {
+        id: string;
+        title?: string;
+        description?: string;
+        price?: string;
+        currency?: string;
+        imageUrl?: string;
+      };
       targetMessageId?: string;
       editedText?: string;
     },
@@ -627,12 +634,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message edited
    * @internal
    */
-  async handleMessageEdited(
-    instanceId: string,
-    externalId: string,
-    chatId: string,
-    newText: string,
-  ): Promise<void> {
+  async handleMessageEdited(instanceId: string, externalId: string, chatId: string, newText: string): Promise<void> {
     // Emit as a special message.received event with type 'edit'
     await this.emitMessageReceived({
       instanceId,
@@ -657,12 +659,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message deleted (revoked)
    * @internal
    */
-  async handleMessageDeleted(
-    instanceId: string,
-    externalId: string,
-    chatId: string,
-    fromMe: boolean,
-  ): Promise<void> {
+  async handleMessageDeleted(instanceId: string, externalId: string, chatId: string, fromMe: boolean): Promise<void> {
     // Emit as a special message.received event with type 'delete'
     await this.emitMessageReceived({
       instanceId,
@@ -713,7 +710,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     from: string,
     callType: 'voice' | 'video',
     status: string,
-    rawCall: unknown,
+    _rawCall: unknown,
   ): void {
     // TODO: Emit call event when we add call support
     this.logger.info('Call received', { instanceId, callId, from, callType, status });
@@ -724,11 +721,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   handlePresenceUpdate(
-    instanceId: string,
-    chatId: string,
-    userId: string,
-    presence: string,
-    lastSeen?: number,
+    _instanceId: string,
+    _chatId: string,
+    _userId: string,
+    _presence: string,
+    _lastSeen?: number,
   ): void {
     // TODO: Emit presence event
     // presence can be: 'available', 'unavailable', 'composing', 'recording', 'paused'
@@ -738,7 +735,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle chats upsert (new chats)
    * @internal
    */
-  handleChatsUpsert(instanceId: string, chats: unknown[]): void {
+  handleChatsUpsert(_instanceId: string, _chats: unknown[]): void {
     // TODO: Emit chats.upsert event
   }
 
@@ -746,7 +743,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle chats update
    * @internal
    */
-  handleChatsUpdate(instanceId: string, updates: unknown[]): void {
+  handleChatsUpdate(_instanceId: string, _updates: unknown[]): void {
     // TODO: Emit chats.update event
   }
 
@@ -754,7 +751,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle chats delete
    * @internal
    */
-  handleChatsDelete(instanceId: string, chatIds: string[]): void {
+  handleChatsDelete(_instanceId: string, _chatIds: string[]): void {
     // TODO: Emit chats.delete event
   }
 
@@ -762,7 +759,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle contacts upsert (new contacts)
    * @internal
    */
-  handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
+  handleContactsUpsert(_instanceId: string, _contacts: unknown[]): void {
     // TODO: Emit contacts.upsert event
   }
 
@@ -770,7 +767,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle contacts update
    * @internal
    */
-  handleContactsUpdate(instanceId: string, updates: unknown[]): void {
+  handleContactsUpdate(_instanceId: string, _updates: unknown[]): void {
     // TODO: Emit contacts.update event
   }
 
@@ -778,7 +775,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle groups upsert (new groups)
    * @internal
    */
-  handleGroupsUpsert(instanceId: string, groups: unknown[]): void {
+  handleGroupsUpsert(_instanceId: string, _groups: unknown[]): void {
     // TODO: Emit groups.upsert event
   }
 
@@ -786,7 +783,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle groups update
    * @internal
    */
-  handleGroupsUpdate(instanceId: string, updates: unknown[]): void {
+  handleGroupsUpdate(_instanceId: string, _updates: unknown[]): void {
     // TODO: Emit groups.update event
   }
 
@@ -794,7 +791,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle group participants update (join/leave/promote/demote)
    * @internal
    */
-  handleGroupParticipantsUpdate(instanceId: string, update: unknown): void {
+  handleGroupParticipantsUpdate(_instanceId: string, _update: unknown): void {
     // TODO: Emit group-participants.update event
   }
 
@@ -802,7 +799,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle group join request
    * @internal
    */
-  handleGroupJoinRequest(instanceId: string, request: unknown): void {
+  handleGroupJoinRequest(_instanceId: string, _request: unknown): void {
     // TODO: Emit group.join-request event
   }
 
@@ -810,7 +807,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message receipt update (detailed read receipts)
    * @internal
    */
-  handleMessageReceiptUpdate(instanceId: string, update: unknown): void {
+  handleMessageReceiptUpdate(_instanceId: string, _update: unknown): void {
     // TODO: Process detailed receipt info
   }
 
@@ -818,7 +815,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle media update (upload/download progress)
    * @internal
    */
-  handleMediaUpdate(instanceId: string, update: unknown): void {
+  handleMediaUpdate(_instanceId: string, _update: unknown): void {
     // TODO: Emit media.update event
   }
 
@@ -826,7 +823,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle history sync (initial load)
    * @internal
    */
-  handleHistorySync(instanceId: string, history: unknown): void {
+  handleHistorySync(_instanceId: string, _history: unknown): void {
     // TODO: Process history sync for initial data load
   }
 
@@ -834,7 +831,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle blocklist set
    * @internal
    */
-  handleBlocklistSet(instanceId: string, blocklist: string[]): void {
+  handleBlocklistSet(_instanceId: string, _blocklist: string[]): void {
     // TODO: Emit blocklist.set event
   }
 
@@ -842,7 +839,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle blocklist update
    * @internal
    */
-  handleBlocklistUpdate(instanceId: string, blocklist: string[], type: 'add' | 'remove'): void {
+  handleBlocklistUpdate(_instanceId: string, _blocklist: string[], _type: 'add' | 'remove'): void {
     // TODO: Emit blocklist.update event
   }
 
@@ -850,7 +847,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle label edit (WhatsApp Business)
    * @internal
    */
-  handleLabelEdit(instanceId: string, label: unknown): void {
+  handleLabelEdit(_instanceId: string, _label: unknown): void {
     // TODO: Emit labels.edit event
   }
 
@@ -858,7 +855,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle label association (WhatsApp Business)
    * @internal
    */
-  handleLabelAssociation(instanceId: string, association: unknown, type: 'add' | 'remove'): void {
+  handleLabelAssociation(_instanceId: string, _association: unknown, _type: 'add' | 'remove'): void {
     // TODO: Emit labels.association event
   }
 

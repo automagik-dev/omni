@@ -186,9 +186,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
         name: m.eventMessage?.name ?? '',
         description: m.eventMessage?.description ?? undefined,
         location: m.eventMessage?.location?.name ?? undefined,
-        startTime: m.eventMessage?.startTime
-          ? new Date(Number(m.eventMessage.startTime) * 1000)
-          : undefined,
+        startTime: m.eventMessage?.startTime ? new Date(Number(m.eventMessage.startTime) * 1000) : undefined,
       },
     }),
   },
@@ -220,7 +218,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
           : undefined,
         currency: m.productMessage?.product?.currencyCode ?? undefined,
         imageUrl: m.productMessage?.product?.productImageCount
-          ? m.productMessage?.product?.productImage?.url ?? undefined
+          ? (m.productMessage?.product?.productImage?.url ?? undefined)
           : undefined,
       },
     }),
@@ -240,9 +238,8 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
         return {
           type: 'edit' as ContentType,
           targetMessageId: proto?.key?.id ?? undefined,
-          editedText: proto?.editedMessage?.conversation ||
-            proto?.editedMessage?.extendedTextMessage?.text ||
-            undefined,
+          editedText:
+            proto?.editedMessage?.conversation || proto?.editedMessage?.extendedTextMessage?.text || undefined,
         };
       }
 
@@ -472,12 +469,7 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 
   // Handle delete messages via protocol message
   if (content.type === 'delete' && content.targetMessageId) {
-    await plugin.handleMessageDeleted(
-      instanceId,
-      content.targetMessageId,
-      chatId,
-      isFromMe(msg),
-    );
+    await plugin.handleMessageDeleted(instanceId, content.targetMessageId, chatId, isFromMe(msg));
     return;
   }
 
@@ -546,12 +538,7 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
           null;
 
         if (newText) {
-          await plugin.handleMessageEdited(
-            instanceId,
-            update.key.id || '',
-            update.key.remoteJid || '',
-            newText,
-          );
+          await plugin.handleMessageEdited(instanceId, update.key.id || '', update.key.remoteJid || '', newText);
         }
       }
     }
@@ -562,12 +549,7 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
     if ('keys' in deletion) {
       // Batch deletion
       for (const key of deletion.keys) {
-        await plugin.handleMessageDeleted(
-          instanceId,
-          key.id || '',
-          key.remoteJid || '',
-          key.fromMe || false,
-        );
+        await plugin.handleMessageDeleted(instanceId, key.id || '', key.remoteJid || '', key.fromMe || false);
       }
     }
   });

@@ -7,9 +7,9 @@
 
 import type { AuthenticationState, WASocket } from '@whiskeysockets/baileys';
 import {
-  default as makeWASocket,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  default as makeWASocket,
 } from '@whiskeysockets/baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';

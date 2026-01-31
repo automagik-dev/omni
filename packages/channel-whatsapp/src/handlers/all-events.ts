@@ -6,8 +6,8 @@
  */
 
 import type { WASocket } from '@whiskeysockets/baileys';
-import type { WhatsAppPlugin } from '../plugin';
 import { fromJid } from '../jid';
+import type { WhatsAppPlugin } from '../plugin';
 
 const DEBUG = process.env.DEBUG_PAYLOADS === 'true';
 
@@ -105,7 +105,7 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   });
 
   sock.ev.on('group-participants.update', (update) => {
-    console.log(`[WA Group] ${update.action} in ${update.id}: ${update.participants.map(p => p.id).join(', ')}`);
+    console.log(`[WA Group] ${update.action} in ${update.id}: ${update.participants.map((p) => p.id).join(', ')}`);
     if (DEBUG) log('group-participants.update', update);
     plugin.handleGroupParticipantsUpdate(instanceId, update);
   });
@@ -147,8 +147,17 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // ============================================================================
   sock.ev.on('messaging-history.set', (history) => {
     const { chats, contacts, messages, progress, syncType } = history;
-    console.log(`[WA History] chats=${chats.length} contacts=${contacts.length} messages=${messages.length} progress=${progress || 0}% type=${syncType}`);
-    if (DEBUG) log('messaging-history.set', { chatCount: chats.length, contactCount: contacts.length, messageCount: messages.length, progress, syncType });
+    console.log(
+      `[WA History] chats=${chats.length} contacts=${contacts.length} messages=${messages.length} progress=${progress || 0}% type=${syncType}`,
+    );
+    if (DEBUG)
+      log('messaging-history.set', {
+        chatCount: chats.length,
+        contactCount: contacts.length,
+        messageCount: messages.length,
+        progress,
+        syncType,
+      });
     plugin.handleHistorySync(instanceId, history);
   });
 

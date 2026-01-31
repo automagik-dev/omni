@@ -157,8 +157,8 @@ async function handleQrCode(
  */
 function setConnectionTimeout(
   instanceId: string,
-  plugin: WhatsAppPlugin,
-  clearAuthAndReconnect: () => Promise<void>,
+  _plugin: WhatsAppPlugin,
+  _clearAuthAndReconnect: () => Promise<void>,
 ): void {
   // Clear existing timeout
   clearConnectionTimeout(instanceId);
@@ -249,7 +249,7 @@ async function handleConnectionClose(
     if (attempts >= 1) {
       // Already tried once after QR scan, stop now
       console.log(`[WhatsApp] Connection failed after QR scan for ${instanceId}: ${reason}`);
-      console.log(`[WhatsApp] Please try scanning QR again...`);
+      console.log('[WhatsApp] Please try scanning QR again...');
       reconnectAttempts.delete(instanceId);
       await plugin.handleDisconnected(instanceId, `Connection closed: ${reason}. Please reconnect manually.`, false);
       return;
