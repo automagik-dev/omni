@@ -50,7 +50,9 @@ describe('Real Payload Fixtures', () => {
       });
 
       it('should extract sender info from JID', () => {
-        const msg = fixtures.messages.text[0].payload as WAFullMessage;
+        const firstText = fixtures.messages.text[0];
+        if (!firstText) throw new Error('No text fixture');
+        const msg = firstText.payload as WAFullMessage;
         const { id, isGroup } = fromJid(msg.key.remoteJid);
 
         expect(id).toBeDefined();
@@ -58,7 +60,9 @@ describe('Real Payload Fixtures', () => {
       });
 
       it('should have remoteJidAlt for LID-addressed messages', () => {
-        const msg = fixtures.messages.text[0].payload as WAFullMessage;
+        const firstText = fixtures.messages.text[0];
+        if (!firstText) throw new Error('No text fixture');
+        const msg = firstText.payload as WAFullMessage;
 
         // LID messages have remoteJidAlt with phone number
         if (msg.key.addressingMode === 'lid') {

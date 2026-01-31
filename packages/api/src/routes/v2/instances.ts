@@ -262,22 +262,19 @@ instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (
 
   const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
   if (!plugin) {
-    return c.json(
-      { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-      400,
-    );
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
   }
 
   // Check if plugin supports pairing code (WhatsApp specific)
   if (!('requestPairingCode' in plugin)) {
-    return c.json(
-      { error: { code: 'NOT_SUPPORTED', message: 'This plugin does not support pairing codes' } },
-      400,
-    );
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'This plugin does not support pairing codes' } }, 400);
   }
 
   try {
-    const code = await (plugin as any).requestPairingCode(id, phoneNumber);
+    // Type assertion is safe here - we checked for method existence above
+    const code = await (
+      plugin as unknown as { requestPairingCode: (id: string, phone: string) => Promise<string> }
+    ).requestPairingCode(id, phoneNumber);
     return c.json({
       data: {
         code,
@@ -288,10 +285,7 @@ instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    return c.json(
-      { error: { code: 'PAIRING_FAILED', message } },
-      500,
-    );
+    return c.json({ error: { code: 'PAIRING_FAILED', message } }, 500);
   }
 });
 

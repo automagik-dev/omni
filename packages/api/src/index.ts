@@ -53,6 +53,7 @@ export function getInstanceMonitor(): InstanceMonitor | null {
   return globalInstanceMonitor;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Main bootstrap function, complexity is inherent
 async function main() {
   console.log('Starting Omni API v2...');
 
@@ -109,8 +110,7 @@ async function main() {
         });
         if (reconnectResult.attempted > 0) {
           console.log(
-            `Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances` +
-              (reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : ''),
+            `Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances${reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : ''}`,
           );
         }
 
@@ -147,36 +147,42 @@ async function main() {
     });
   } else {
     // Use Node.js HTTP server
-    const http = await import('http');
-    const server = http.createServer(
-      (req: any, res: any) => {
-        // Wrap Node.js request/response in Hono's interface
-        const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-        const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
-          method: req.method,
-          headers: req.headers,
-          ...(hasBody && { body: req, duplex: 'half' } as any),
-        });
-
-        return Promise.resolve(app.fetch(fetchRequest))
-          .then(async (response: Response) => {
-            res.writeHead(response.status, {
-              ...Object.fromEntries(response.headers),
-              'Content-Type': response.headers.get('Content-Type') || 'application/json',
-            });
-            if (response.body) {
-              res.end(await response.text());
-            } else {
-              res.end();
-            }
-          })
-          .catch((error: Error) => {
-            console.error('Request error:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Internal server error' }));
-          });
+    const http = await import('node:http');
+    const server = http.createServer((req, res) => {
+      // Wrap Node.js request/response in Hono's interface
+      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (typeof value === 'string') {
+          headers[key] = value;
+        } else if (Array.isArray(value)) {
+          headers[key] = value.join(', ');
+        }
       }
-    );
+      const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
+        method: req.method,
+        headers,
+        ...(hasBody && ({ body: req, duplex: 'half' } as unknown as { body: ReadableStream })),
+      });
+
+      return Promise.resolve(app.fetch(fetchRequest))
+        .then(async (response: Response) => {
+          res.writeHead(response.status, {
+            ...Object.fromEntries(response.headers),
+            'Content-Type': response.headers.get('Content-Type') || 'application/json',
+          });
+          if (response.body) {
+            res.end(await response.text());
+          } else {
+            res.end();
+          }
+        })
+        .catch((error: Error) => {
+          console.error('Request error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal server error' }));
+        });
+    });
 
     server.listen(PORT, HOST, () => {
       // Server started

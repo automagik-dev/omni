@@ -56,7 +56,7 @@ export async function loadChannelPlugin(path: string, logger: Logger = consoleLo
     if (!path.endsWith('.ts') && !path.endsWith('.js')) {
       // Default to src/index.ts for directory paths
       entryPath = `${path}/src/index.ts`;
-      logger.debug(`Resolving plugin entry point from directory`, { path, entryPath });
+      logger.debug('Resolving plugin entry point from directory', { path, entryPath });
     }
 
     // Import the module

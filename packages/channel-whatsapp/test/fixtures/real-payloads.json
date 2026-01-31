@@ -156,12 +156,7 @@
                 "statusSourceType": "IMAGE"
               },
               "scansSidecar": "/tCspaAeSJSe2rBXCFXB72pQDA5IKhjNO3R7DzjZHYWhciD7Kh9lMw==",
-              "scanLengths": [
-                13007,
-                28780,
-                7408,
-                14307
-              ],
+              "scanLengths": [13007, 28780, 7408, 14307],
               "midQualityFileSha256": "aS0g4cbO3pMm35wrBNvoqMxNaD7yz11b5TMgmwy7uJA="
             },
             "messageContextInfo": {
@@ -688,10 +683,7 @@
             }
           }
         },
-        "types": [
-          "messageContextInfo",
-          "eventMessage"
-        ]
+        "types": ["messageContextInfo", "eventMessage"]
       },
       {
         "id": "ACB3BD49DB830E5114F0E5AC37EEDACF",
@@ -727,10 +719,7 @@
             }
           }
         },
-        "types": [
-          "protocolMessage",
-          "messageContextInfo"
-        ]
+        "types": ["protocolMessage", "messageContextInfo"]
       },
       {
         "id": "AC4D1AE3B43F2AE48CBFF925F9EE6AC0",
@@ -769,10 +758,7 @@
             }
           }
         },
-        "types": [
-          "messageContextInfo",
-          "interactiveMessage"
-        ]
+        "types": ["messageContextInfo", "interactiveMessage"]
       }
     ]
   },
@@ -1045,12 +1031,7 @@
                         "statusSourceType": "IMAGE"
                       },
                       "scansSidecar": "/tCspaAeSJSe2rBXCFXB72pQDA5IKhjNO3R7DzjZHYWhciD7Kh9lMw==",
-                      "scanLengths": [
-                        13007,
-                        28780,
-                        7408,
-                        14307
-                      ],
+                      "scanLengths": [13007, 28780, 7408, 14307],
                       "midQualityFileSha256": "aS0g4cbO3pMm35wrBNvoqMxNaD7yz11b5TMgmwy7uJA="
                     },
                     "messageContextInfo": {

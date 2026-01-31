@@ -10,7 +10,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { instances } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { createLogger } from './logger';
 
@@ -125,6 +125,7 @@ export class InstanceMonitor {
    * Run health check on all active instances
    * Only reconnects instances that have been authenticated before (have ownerIdentifier)
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Health check logic requires multiple condition paths
   async runHealthCheck(): Promise<void> {
     const activeInstances = await this.db
       .select({
@@ -190,7 +191,7 @@ export class InstanceMonitor {
   /**
    * Schedule a reconnection attempt with exponential backoff
    */
-  scheduleReconnect(instanceId: string, channel: string, error?: string): void {
+  scheduleReconnect(instanceId: string, _channel: string, error?: string): void {
     const existing = this.reconnectQueue.get(instanceId);
 
     if (existing && existing.attempts >= this.config.maxReconnectAttempts) {
@@ -205,10 +206,7 @@ export class InstanceMonitor {
     }
 
     const attempts = existing ? existing.attempts + 1 : 1;
-    const backoffMs = Math.min(
-      this.config.backoffBaseMs * Math.pow(2, attempts - 1),
-      this.config.backoffMaxMs,
-    );
+    const backoffMs = Math.min(this.config.backoffBaseMs * 2 ** (attempts - 1), this.config.backoffMaxMs);
 
     const state: ReconnectState = {
       instanceId,
@@ -248,10 +246,7 @@ export class InstanceMonitor {
     readyToReconnect.sort((a, b) => a.nextAttempt.getTime() - b.nextAttempt.getTime());
 
     // Process up to maxConcurrentReconnects
-    const toProcess = readyToReconnect.slice(
-      0,
-      this.config.maxConcurrentReconnects - this.activeReconnects,
-    );
+    const toProcess = readyToReconnect.slice(0, this.config.maxConcurrentReconnects - this.activeReconnects);
 
     for (const state of toProcess) {
       this.attemptReconnect(state).catch(() => {});
@@ -271,11 +266,7 @@ export class InstanceMonitor {
       });
 
       // Get instance details from database
-      const [instance] = await this.db
-        .select()
-        .from(instances)
-        .where(eq(instances.id, state.instanceId))
-        .limit(1);
+      const [instance] = await this.db.select().from(instances).where(eq(instances.id, state.instanceId)).limit(1);
 
       if (!instance) {
         logger.warn('Instance not found, removing from queue', { instanceId: state.instanceId });
@@ -326,10 +317,7 @@ export class InstanceMonitor {
    * Mark an instance as inactive in the database
    */
   private async markInstanceInactive(instanceId: string): Promise<void> {
-    await this.db
-      .update(instances)
-      .set({ isActive: false })
-      .where(eq(instances.id, instanceId));
+    await this.db.update(instances).set({ isActive: false }).where(eq(instances.id, instanceId));
 
     logger.info('Marked instance as inactive', { instanceId });
   }
@@ -395,6 +383,7 @@ export class InstanceMonitor {
  *
  * Limits concurrent connections to prevent overwhelming the system on startup
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Batch reconnection logic requires multiple condition paths
 export async function reconnectWithPool(
   db: Database,
   registry: ChannelRegistry,
@@ -451,8 +440,9 @@ export async function reconnectWithPool(
     );
 
     for (let j = 0; j < batchResults.length; j++) {
-      const result = batchResults[j]!;
-      const instance = batch[j]!;
+      const result = batchResults[j];
+      const instance = batch[j];
+      if (!result || !instance) continue; // Type guard
 
       if (result.status === 'fulfilled') {
         results.succeeded++;

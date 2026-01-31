@@ -110,7 +110,7 @@ export class DatabasePluginStorage implements PluginStorage {
   async keys(pattern?: string): Promise<string[]> {
     const prefixPattern = `${this.prefix}%`;
 
-    let query = this.db
+    const query = this.db
       .select({ key: pluginStorage.key })
       .from(pluginStorage)
       .where(

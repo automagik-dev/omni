@@ -60,7 +60,14 @@ export async function printQrCodeToTerminal(qrCode: string, instanceId: string):
 
   try {
     const qrTerminalModule = await import('qrcode-terminal');
-    const qrTerminal = (qrTerminalModule as any).default || qrTerminalModule;
+    // qrcode-terminal lacks proper TypeScript types
+    const qrTerminal =
+      (
+        qrTerminalModule as {
+          default?: { generate: (text: string, opts: { small: boolean }) => void };
+          generate?: (text: string, opts: { small: boolean }) => void;
+        }
+      ).default || qrTerminalModule;
 
     console.log(`\n[WhatsApp] QR Code for ${instanceId}:`);
     qrTerminal.generate(qrCode, { small: true });
