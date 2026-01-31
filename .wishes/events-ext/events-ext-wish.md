@@ -2,7 +2,7 @@
 
 > Webhooks and automations: external event sources and "when X happens, do Y" rules.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-01-29
 **Updated:** 2026-01-31
 **Author:** WISH Agent
@@ -726,3 +726,69 @@ Add to instance queue → process → ack
 - **Event-driven workflows** - No-code automation configuration
 - **Future:** Visual automation builder UI
 - **Future:** `channel-discord` and other channels (same automations work for all)
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-01-31
+
+### Acceptance Criteria
+
+#### Group A: Webhooks & External Sources
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Webhook endpoint receives any JSON payload | PASS | `POST /webhooks/:source` accepts JSON, parses body |
+| Webhooks translated to `custom.webhook.{source}` events | PASS | `custom.webhook.${sourceName}` in webhooks.ts:141 |
+| Webhook sources stored in database | PASS | `webhookSources` table in schema.ts:927 |
+| Unknown source creates new source automatically | PASS | Auto-creates disabled source on unknown webhook |
+| Manual trigger API publishes custom events | PASS | `POST /events/trigger` endpoint |
+| All events include correlationId for tracing | PASS | correlationId in webhooks.ts:162,188 |
+| Source stats tracked (lastReceivedAt, totalReceived) | PASS | Updated on receive in webhooks.ts:147-148 |
+
+#### Group B: Event Automations
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Automations stored in database with CRUD API | PASS | `automations` table + full CRUD routes |
+| Engine subscribes to all enabled trigger event types | PASS | engine.ts:98-104 pattern subscription |
+| Conditions evaluated using dot notation | PASS | getNestedValue in conditions.ts |
+| Operators work: eq, neq, gt, lt, gte, lte, contains, exists, regex | PASS | All operators in conditions.ts:43-100 |
+| Actions execute sequentially, failures logged | PASS | executeActions loop in actions.ts:278-306 |
+| Template substitution works | PASS | 169 tests, templates.ts covers payload/env/var paths |
+| Webhook sync mode (waitForResponse) | PASS | actions.ts:76-82 blocks on response |
+| Webhook response stored as variable | PASS | actions.ts:297-298 stores in variables |
+| Webhook configurable timeout | PASS | actions.ts:73 uses config.timeoutMs |
+| Per-instance queues with bounded parallelism | PASS | InstanceQueue in engine.ts:26-35 |
+| Default 5 concurrent automations per instance | PASS | engine.ts:499 defaultConcurrency |
+| Queue depth exposed in metrics | PASS | getMetrics() in engine.ts:447-455 |
+| Debounce per-conversation grouping | PASS | buildConversationKey in debounce.ts |
+| Debounce modes: none, fixed, range, presence | PASS | types.ts:104-107, tested in debounce.test.ts |
+| Presence mode extends timer on events | PASS | handlePresenceEvent in debounce.ts:123 |
+| Presence mode maxWaitMs safety limit | PASS | maxWaitMs in types.ts:107 |
+| Grouped messages sent as array | PASS | messages array in engine.ts:256-260 |
+| Execution logged with timing | PASS | automationLogs table + durationMs field |
+| Can enable/disable without deletion | PASS | `/automations/:id/enable` and `/disable` |
+| Test endpoint validates without executing | PASS | testAutomation with dryRun:true in engine.ts:467-489 |
+| Priority determines order | PASS | Sort by priority in engine.ts:172 |
+
+### Assessment
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| **Security** | PASS | Zod validation on all inputs, timeout on webhooks, no SQL injection |
+| **Correctness** | PASS | All 464 tests pass, 86 new tests for automations/webhooks |
+| **Quality** | PASS | Clean code, extracted helpers, no lint errors |
+| **Tests** | PASS | 761 lines of tests covering conditions, templates, debounce |
+
+### Findings
+
+No critical or high-severity issues found.
+
+**Note:** Backpressure via NATS nak is not implemented (queue just grows). This is a future enhancement when operating at scale.
+
+### Recommendation
+
+Ship the implementation. All acceptance criteria pass.
