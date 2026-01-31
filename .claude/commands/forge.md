@@ -84,12 +84,17 @@ When no `--spawn`:
 ### 1. LOAD
 
 ```
-1. Ask which wish to forge (or use $ARGUMENTS path)
-2. Read: .wishes/<slug>/<slug>-wish.md
-3. Verify status is DRAFT or APPROVED
-4. Extract beads ID from wish document (Beads: <id>)
-5. Update status to FORGING
-6. Update beads: bd update <beads-id> --status in_progress
+1. Find wishes to forge:
+   - Glob: .wishes/**/*-wish.md
+   - Read each and check Status field
+   - ONLY show wishes with Status: DRAFT, READY, or APPROVED
+   - SKIP wishes with Status: SHIPPED, REVIEW, FORGING
+2. Ask which wish to forge (or use $ARGUMENTS path)
+3. Read: .wishes/<slug>/<slug>-wish.md
+4. Verify status is DRAFT, READY, or APPROVED
+5. Extract beads ID from wish document (Beads: <id>)
+6. Update status to FORGING
+7. Update beads: bd update <beads-id> --status in_progress
 ```
 
 If `--group` specified, only load that group.
