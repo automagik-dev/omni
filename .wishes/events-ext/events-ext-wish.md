@@ -2,7 +2,7 @@
 
 > Webhooks and automations: external event sources and "when X happens, do Y" rules.
 
-**Status:** READY
+**Status:** REVIEW
 **Created:** 2026-01-29
 **Updated:** 2026-01-31
 **Author:** WISH Agent
