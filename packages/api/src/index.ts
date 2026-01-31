@@ -7,8 +7,9 @@
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, connectEventBus } from '@omni/core';
+import type { Database } from '@omni/db';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
-import { createApp } from './app';
+import { type App, createApp } from './app';
 import {
   InstanceMonitor,
   loadChannelPlugins,
@@ -53,7 +54,187 @@ export function getInstanceMonitor(): InstanceMonitor | null {
   return globalInstanceMonitor;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Main bootstrap function, complexity is inherent
+/**
+ * Connect to NATS event bus and set up listeners
+ */
+async function connectToNats(db: Database): Promise<EventBus | null> {
+  try {
+    console.log(`Connecting to NATS at ${NATS_URL}...`);
+    const eventBus = await connectEventBus({
+      url: NATS_URL,
+      serviceName: 'omni-api',
+    });
+    globalEventBus = eventBus;
+    console.log('Connected to NATS');
+
+    // Set up event listeners
+    await setupQrCodeListener(eventBus);
+    await setupConnectionListener(eventBus, db);
+    await setupMessageListener(eventBus);
+
+    return eventBus;
+  } catch (error) {
+    console.warn('Failed to connect to NATS, running without event bus:', error);
+    console.warn('Channel plugins will not be able to publish events');
+    return null;
+  }
+}
+
+/**
+ * Load channel plugins and reconnect active instances
+ */
+async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promise<void> {
+  console.log('Loading channel plugins...');
+  const result = await loadChannelPlugins({ eventBus, db });
+  globalChannelRegistry = result.registry;
+
+  if (result.loaded > 0) {
+    console.log(`Loaded ${result.loaded} channel plugin(s): ${result.pluginIds.join(', ')}`);
+  } else {
+    console.warn('No channel plugins were loaded');
+    return;
+  }
+
+  if (result.failed > 0) {
+    console.warn(`${result.failed} channel plugin(s) failed to load`);
+  }
+
+  // Auto-reconnect previously active instances
+  console.log('Auto-reconnecting active instances...');
+  const reconnectResult = await reconnectWithPool(db, result.registry, {
+    maxConcurrent: 3,
+    delayBetweenMs: 500,
+  });
+
+  if (reconnectResult.attempted > 0) {
+    const failedMsg = reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : '';
+    console.log(`Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances${failedMsg}`);
+  }
+
+  // Start instance monitor
+  globalInstanceMonitor = new InstanceMonitor(db, result.registry, {
+    healthCheckIntervalMs: 30_000,
+    maxConcurrentReconnects: 3,
+    autoReconnect: true,
+  });
+  globalInstanceMonitor.start();
+  console.log('Instance monitor started');
+}
+
+/**
+ * Start the HTTP server using Bun's native server
+ */
+function startBunServer(app: App): void {
+  Bun.serve({
+    port: PORT,
+    hostname: HOST,
+    fetch: app.fetch,
+    idleTimeout: 120,
+  });
+}
+
+/**
+ * Convert Node.js request headers to a plain object
+ */
+function convertNodeHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === 'string') {
+      result[key] = value;
+    } else if (Array.isArray(value)) {
+      result[key] = value.join(', ');
+    }
+  }
+  return result;
+}
+
+/**
+ * Start the HTTP server using Node.js http module
+ */
+async function startNodeServer(app: App): Promise<void> {
+  const http = await import('node:http');
+
+  const server = http.createServer((req, res) => {
+    const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+    const headers = convertNodeHeaders(req.headers as Record<string, string | string[] | undefined>);
+
+    const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
+      method: req.method,
+      headers,
+      ...(hasBody && ({ body: req, duplex: 'half' } as unknown as { body: ReadableStream })),
+    });
+
+    Promise.resolve(app.fetch(fetchRequest))
+      .then(async (response: Response) => {
+        res.writeHead(response.status, {
+          ...Object.fromEntries(response.headers),
+          'Content-Type': response.headers.get('Content-Type') || 'application/json',
+        });
+        res.end(response.body ? await response.text() : undefined);
+      })
+      .catch((error: Error) => {
+        console.error('Request error:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      });
+  });
+
+  server.listen(PORT, HOST);
+  setupShutdownHandlers(server);
+}
+
+/**
+ * Set up graceful shutdown handlers for Node.js
+ */
+function setupShutdownHandlers(server: { close: (cb: () => void) => void }): void {
+  let isShuttingDown = false;
+
+  const shutdown = async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log('\nShutting down gracefully...');
+
+    const forceExitTimer = setTimeout(() => {
+      console.log('Force exiting (timeout)...');
+      process.exit(1);
+    }, 10000);
+    forceExitTimer.unref();
+
+    try {
+      server.close(() => console.log('[Shutdown] HTTP server closed'));
+
+      if (globalInstanceMonitor) {
+        console.log('[Shutdown] Stopping instance monitor...');
+        globalInstanceMonitor.stop();
+      }
+
+      if (globalChannelRegistry) {
+        console.log('[Shutdown] Disconnecting all channel instances...');
+        await globalChannelRegistry.destroyAll();
+      }
+
+      if (globalEventBus) {
+        console.log('[Shutdown] Closing NATS connection...');
+        await globalEventBus.close();
+      }
+
+      console.log('[Shutdown] Graceful shutdown complete');
+      clearTimeout(forceExitTimer);
+      process.exit(0);
+    } catch (error) {
+      console.error('[Shutdown] Error during graceful shutdown:', error);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+/**
+ * Main entry point
+ */
 async function main() {
   console.log('Starting Omni API v2...');
 
@@ -61,68 +242,13 @@ async function main() {
   console.log('Connecting to database...');
   const db = createDb({ url: DATABASE_URL });
 
-  // Connect to NATS event bus
-  let eventBus: EventBus | null = null;
-  try {
-    console.log(`Connecting to NATS at ${NATS_URL}...`);
-    eventBus = await connectEventBus({
-      url: NATS_URL,
-      serviceName: 'omni-api',
-    });
-    globalEventBus = eventBus;
-    console.log('Connected to NATS');
+  // Connect to NATS
+  const eventBus = await connectToNats(db);
 
-    // Set up QR code, connection, and message listeners
-    await setupQrCodeListener(eventBus);
-    await setupConnectionListener(eventBus, db);
-    await setupMessageListener(eventBus);
-  } catch (error) {
-    console.warn('Failed to connect to NATS, running without event bus:', error);
-    console.warn('Channel plugins will not be able to publish events');
-  }
-
-  // Load channel plugins
+  // Load channel plugins (if NATS is available)
   if (eventBus) {
     try {
-      console.log('Loading channel plugins...');
-      const result = await loadChannelPlugins({
-        eventBus,
-        db,
-      });
-      globalChannelRegistry = result.registry;
-
-      if (result.loaded > 0) {
-        console.log(`Loaded ${result.loaded} channel plugin(s): ${result.pluginIds.join(', ')}`);
-      } else {
-        console.warn('No channel plugins were loaded');
-      }
-
-      if (result.failed > 0) {
-        console.warn(`${result.failed} channel plugin(s) failed to load`);
-      }
-
-      // Auto-reconnect previously active instances with connection pooling
-      if (result.loaded > 0) {
-        console.log('Auto-reconnecting active instances...');
-        const reconnectResult = await reconnectWithPool(db, result.registry, {
-          maxConcurrent: 3,
-          delayBetweenMs: 500,
-        });
-        if (reconnectResult.attempted > 0) {
-          console.log(
-            `Reconnected ${reconnectResult.succeeded}/${reconnectResult.attempted} instances${reconnectResult.failed > 0 ? ` (${reconnectResult.failed} failed)` : ''}`,
-          );
-        }
-
-        // Start instance monitor for health checks and auto-reconnection
-        globalInstanceMonitor = new InstanceMonitor(db, result.registry, {
-          healthCheckIntervalMs: 30_000, // Check every 30 seconds
-          maxConcurrentReconnects: 3,
-          autoReconnect: true,
-        });
-        globalInstanceMonitor.start();
-        console.log('Instance monitor started');
-      }
+      await initializeChannelPlugins(db, eventBus);
     } catch (error) {
       console.error('Failed to load channel plugins:', error);
     }
@@ -130,117 +256,15 @@ async function main() {
     console.warn('Skipping channel plugin loading (no event bus)');
   }
 
-  // Create app
+  // Create and start server
   const app = createApp(db, eventBus, globalChannelRegistry);
-
-  // Start server
   console.log(`API server listening on http://${HOST}:${PORT}`);
   console.log(`Health check: http://${HOST}:${PORT}/api/v2/health`);
 
   if (isBun) {
-    // Use Bun's native server
-    Bun.serve({
-      port: PORT,
-      hostname: HOST,
-      fetch: app.fetch,
-      idleTimeout: 120,
-    });
+    startBunServer(app);
   } else {
-    // Use Node.js HTTP server
-    const http = await import('node:http');
-    const server = http.createServer((req, res) => {
-      // Wrap Node.js request/response in Hono's interface
-      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-      const headers: Record<string, string> = {};
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (typeof value === 'string') {
-          headers[key] = value;
-        } else if (Array.isArray(value)) {
-          headers[key] = value.join(', ');
-        }
-      }
-      const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
-        method: req.method,
-        headers,
-        ...(hasBody && ({ body: req, duplex: 'half' } as unknown as { body: ReadableStream })),
-      });
-
-      return Promise.resolve(app.fetch(fetchRequest))
-        .then(async (response: Response) => {
-          res.writeHead(response.status, {
-            ...Object.fromEntries(response.headers),
-            'Content-Type': response.headers.get('Content-Type') || 'application/json',
-          });
-          if (response.body) {
-            res.end(await response.text());
-          } else {
-            res.end();
-          }
-        })
-        .catch((error: Error) => {
-          console.error('Request error:', error);
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Internal server error' }));
-        });
-    });
-
-    server.listen(PORT, HOST, () => {
-      // Server started
-    });
-
-    // Handle graceful shutdown
-    let isShuttingDown = false;
-    const shutdown = async () => {
-      if (isShuttingDown) return;
-      isShuttingDown = true;
-
-      console.log('\nShutting down gracefully...');
-
-      // Force exit after 10 seconds if graceful shutdown fails
-      const forceExitTimer = setTimeout(() => {
-        console.log('Force exiting (timeout)...');
-        process.exit(1);
-      }, 10000);
-      forceExitTimer.unref();
-
-      try {
-        // 1. Stop accepting new connections
-        server.close(() => {
-          console.log('[Shutdown] HTTP server closed');
-        });
-
-        // 2. Stop instance monitor (prevents reconnection attempts during shutdown)
-        if (globalInstanceMonitor) {
-          console.log('[Shutdown] Stopping instance monitor...');
-          globalInstanceMonitor.stop();
-          console.log('[Shutdown] Instance monitor stopped');
-        }
-
-        // 3. Disconnect all WhatsApp instances and destroy plugins
-        if (globalChannelRegistry) {
-          console.log('[Shutdown] Disconnecting all channel instances...');
-          await globalChannelRegistry.destroyAll();
-          console.log('[Shutdown] All channel plugins destroyed');
-        }
-
-        // 4. Close NATS event bus (drains subscriptions)
-        if (globalEventBus) {
-          console.log('[Shutdown] Closing NATS connection...');
-          await globalEventBus.close();
-          console.log('[Shutdown] NATS connection closed');
-        }
-
-        console.log('[Shutdown] Graceful shutdown complete');
-        clearTimeout(forceExitTimer);
-        process.exit(0);
-      } catch (error) {
-        console.error('[Shutdown] Error during graceful shutdown:', error);
-        process.exit(1);
-      }
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    await startNodeServer(app);
   }
 }
 

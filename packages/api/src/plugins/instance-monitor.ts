@@ -7,7 +7,7 @@
  * - Connection pooling to limit concurrent operations
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -15,6 +15,32 @@ import { eq } from 'drizzle-orm';
 import { createLogger } from './logger';
 
 const logger = createLogger({ module: 'instance-monitor' });
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface InstanceInfo {
+  id: string;
+  name: string;
+  channel: string;
+  ownerIdentifier: string | null;
+}
+
+interface ReconnectState {
+  instanceId: string;
+  attempts: number;
+  lastAttempt: Date;
+  nextAttempt: Date;
+  error?: string;
+}
+
+interface ReconnectResults {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  errors: Array<{ instanceId: string; error: string }>;
+}
 
 // ============================================================================
 // Configuration
@@ -45,15 +71,65 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
 };
 
 // ============================================================================
-// Reconnection State
+// Helper Functions
 // ============================================================================
 
-interface ReconnectState {
-  instanceId: string;
-  attempts: number;
-  lastAttempt: Date;
-  nextAttempt: Date;
-  error?: string;
+/**
+ * Check if an instance needs reconnection based on its status
+ */
+function needsReconnect(state: string): boolean {
+  return state === 'disconnected' || state === 'error';
+}
+
+/**
+ * Check if an instance was previously authenticated
+ */
+function wasAuthenticated(instance: InstanceInfo): boolean {
+  return !!instance.ownerIdentifier;
+}
+
+/**
+ * Connect a single instance via its plugin
+ */
+async function connectInstance(instance: { id: string; channel: string }, registry: ChannelRegistry): Promise<void> {
+  const plugin = registry.get(instance.channel as Parameters<typeof registry.get>[0]);
+  if (!plugin) {
+    throw new Error(`No plugin for channel: ${instance.channel}`);
+  }
+
+  await plugin.connect(instance.id, {
+    instanceId: instance.id,
+    credentials: {},
+    options: {},
+  });
+}
+
+/**
+ * Process a single batch result and update counters
+ */
+async function handleBatchResult(
+  result: PromiseSettledResult<string>,
+  instance: { id: string; name: string },
+  db: Database,
+  results: ReconnectResults,
+): Promise<void> {
+  if (result.status === 'fulfilled') {
+    results.succeeded++;
+    logger.info('Instance reconnected', { instanceId: instance.id, name: instance.name });
+  } else {
+    results.failed++;
+    const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
+    results.errors.push({ instanceId: instance.id, error });
+    logger.error('Instance reconnection failed', { instanceId: instance.id, name: instance.name, error });
+    await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
+  }
+}
+
+/**
+ * Delay execution for a specified duration
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ============================================================================
@@ -103,7 +179,7 @@ export class InstanceMonitor {
       this.processReconnectQueue().catch((err) => {
         logger.error('Reconnect queue processing failed', { error: String(err) });
       });
-    }, 5000); // Check queue every 5 seconds
+    }, 5000);
   }
 
   /**
@@ -123,11 +199,21 @@ export class InstanceMonitor {
 
   /**
    * Run health check on all active instances
-   * Only reconnects instances that have been authenticated before (have ownerIdentifier)
    */
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Health check logic requires multiple condition paths
   async runHealthCheck(): Promise<void> {
-    const activeInstances = await this.db
+    const activeInstances = await this.fetchActiveInstances();
+    if (activeInstances.length === 0) return;
+
+    for (const instance of activeInstances) {
+      await this.checkInstanceHealth(instance);
+    }
+  }
+
+  /**
+   * Fetch all active instances from database
+   */
+  private async fetchActiveInstances(): Promise<InstanceInfo[]> {
+    return this.db
       .select({
         id: instances.id,
         name: instances.name,
@@ -136,55 +222,69 @@ export class InstanceMonitor {
       })
       .from(instances)
       .where(eq(instances.isActive, true));
+  }
 
-    if (activeInstances.length === 0) return;
+  /**
+   * Check health of a single instance and schedule reconnect if needed
+   */
+  private async checkInstanceHealth(instance: InstanceInfo): Promise<void> {
+    const plugin = this.getPluginForInstance(instance);
+    if (!plugin) return;
 
-    for (const instance of activeInstances) {
-      try {
-        const plugin = this.registry.get(instance.channel as Parameters<typeof this.registry.get>[0]);
-        if (!plugin) {
-          logger.warn('No plugin for instance', { instanceId: instance.id, channel: instance.channel });
-          continue;
-        }
+    try {
+      const status = await plugin.getStatus(instance.id);
 
-        const status = await plugin.getStatus(instance.id);
-
-        if (status.state === 'disconnected' || status.state === 'error') {
-          // Only auto-reconnect if instance was previously authenticated
-          // (has ownerIdentifier from a successful connection)
-          const wasAuthenticated = !!instance.ownerIdentifier;
-
-          if (!wasAuthenticated) {
-            logger.debug('Skipping reconnect for never-authenticated instance', {
-              instanceId: instance.id,
-              name: instance.name,
-              state: status.state,
-            });
-            continue;
-          }
-
-          logger.warn('Instance unhealthy', {
-            instanceId: instance.id,
-            name: instance.name,
-            state: status.state,
-            message: status.message,
-          });
-
-          if (this.config.autoReconnect) {
-            this.scheduleReconnect(instance.id, instance.channel, status.message);
-          }
-        }
-      } catch (error) {
-        logger.error('Health check failed for instance', {
-          instanceId: instance.id,
-          error: String(error),
-        });
-
-        // Only auto-reconnect if instance was previously authenticated
-        if (this.config.autoReconnect && instance.ownerIdentifier) {
-          this.scheduleReconnect(instance.id, instance.channel, String(error));
-        }
+      if (needsReconnect(status.state)) {
+        this.handleUnhealthyInstance(instance, status.state, status.message);
       }
+    } catch (error) {
+      logger.error('Health check failed for instance', { instanceId: instance.id, error: String(error) });
+      this.handleHealthCheckError(instance, String(error));
+    }
+  }
+
+  /**
+   * Get plugin for an instance, logging warning if not found
+   */
+  private getPluginForInstance(instance: InstanceInfo): ChannelPlugin | null {
+    const plugin = this.registry.get(instance.channel as Parameters<typeof this.registry.get>[0]);
+    if (!plugin) {
+      logger.warn('No plugin for instance', { instanceId: instance.id, channel: instance.channel });
+    }
+    return plugin ?? null;
+  }
+
+  /**
+   * Handle an unhealthy instance by scheduling reconnect if appropriate
+   */
+  private handleUnhealthyInstance(instance: InstanceInfo, state: string, message?: string): void {
+    if (!wasAuthenticated(instance)) {
+      logger.debug('Skipping reconnect for never-authenticated instance', {
+        instanceId: instance.id,
+        name: instance.name,
+        state,
+      });
+      return;
+    }
+
+    logger.warn('Instance unhealthy', {
+      instanceId: instance.id,
+      name: instance.name,
+      state,
+      message,
+    });
+
+    if (this.config.autoReconnect) {
+      this.scheduleReconnect(instance.id, instance.channel, message);
+    }
+  }
+
+  /**
+   * Handle a health check error
+   */
+  private handleHealthCheckError(instance: InstanceInfo, error: string): void {
+    if (this.config.autoReconnect && wasAuthenticated(instance)) {
+      this.scheduleReconnect(instance.id, instance.channel, error);
     }
   }
 
@@ -195,11 +295,7 @@ export class InstanceMonitor {
     const existing = this.reconnectQueue.get(instanceId);
 
     if (existing && existing.attempts >= this.config.maxReconnectAttempts) {
-      logger.error('Max reconnect attempts reached', {
-        instanceId,
-        attempts: existing.attempts,
-      });
-      // Mark instance as inactive in database
+      logger.error('Max reconnect attempts reached', { instanceId, attempts: existing.attempts });
       this.markInstanceInactive(instanceId).catch(() => {});
       this.reconnectQueue.delete(instanceId);
       return;
@@ -217,7 +313,6 @@ export class InstanceMonitor {
     };
 
     this.reconnectQueue.set(instanceId, state);
-
     logger.info('Scheduled reconnect', {
       instanceId,
       attempt: attempts,
@@ -233,24 +328,28 @@ export class InstanceMonitor {
     if (this.reconnectQueue.size === 0) return;
     if (this.activeReconnects >= this.config.maxConcurrentReconnects) return;
 
-    const now = new Date();
-    const readyToReconnect: ReconnectState[] = [];
-
-    for (const state of this.reconnectQueue.values()) {
-      if (state.nextAttempt <= now) {
-        readyToReconnect.push(state);
-      }
-    }
-
-    // Sort by next attempt time (oldest first)
-    readyToReconnect.sort((a, b) => a.nextAttempt.getTime() - b.nextAttempt.getTime());
-
-    // Process up to maxConcurrentReconnects
+    const readyToReconnect = this.getReadyReconnects();
     const toProcess = readyToReconnect.slice(0, this.config.maxConcurrentReconnects - this.activeReconnects);
 
     for (const state of toProcess) {
       this.attemptReconnect(state).catch(() => {});
     }
+  }
+
+  /**
+   * Get reconnects that are ready to be processed
+   */
+  private getReadyReconnects(): ReconnectState[] {
+    const now = new Date();
+    const ready: ReconnectState[] = [];
+
+    for (const state of this.reconnectQueue.values()) {
+      if (state.nextAttempt <= now) {
+        ready.push(state);
+      }
+    }
+
+    return ready.sort((a, b) => a.nextAttempt.getTime() - b.nextAttempt.getTime());
   }
 
   /**
@@ -260,57 +359,43 @@ export class InstanceMonitor {
     this.activeReconnects++;
 
     try {
-      logger.info('Attempting reconnect', {
-        instanceId: state.instanceId,
-        attempt: state.attempts,
-      });
+      logger.info('Attempting reconnect', { instanceId: state.instanceId, attempt: state.attempts });
 
-      // Get instance details from database
-      const [instance] = await this.db.select().from(instances).where(eq(instances.id, state.instanceId)).limit(1);
-
+      const instance = await this.fetchInstanceById(state.instanceId);
       if (!instance) {
         logger.warn('Instance not found, removing from queue', { instanceId: state.instanceId });
         this.reconnectQueue.delete(state.instanceId);
         return;
       }
 
-      const plugin = this.registry.get(instance.channel as Parameters<typeof this.registry.get>[0]);
-      if (!plugin) {
-        logger.warn('No plugin for instance', { instanceId: state.instanceId, channel: instance.channel });
-        this.reconnectQueue.delete(state.instanceId);
-        return;
-      }
-
-      // Attempt reconnection
-      await plugin.connect(instance.id, {
-        instanceId: instance.id,
-        credentials: {},
-        options: {},
-      });
-
-      // Success - remove from queue
+      await connectInstance(instance, this.registry);
       this.reconnectQueue.delete(state.instanceId);
       logger.info('Reconnect successful', { instanceId: state.instanceId, attempts: state.attempts });
     } catch (error) {
-      logger.error('Reconnect failed', {
-        instanceId: state.instanceId,
-        attempt: state.attempts,
-        error: String(error),
-      });
-
-      // Update state for retry
-      const instance = await this.db
-        .select({ channel: instances.channel })
-        .from(instances)
-        .where(eq(instances.id, state.instanceId))
-        .limit(1);
-
-      if (instance[0]) {
-        this.scheduleReconnect(state.instanceId, instance[0].channel, String(error));
-      }
+      await this.handleReconnectFailure(state, String(error));
     } finally {
       this.activeReconnects--;
     }
+  }
+
+  /**
+   * Handle a failed reconnection attempt
+   */
+  private async handleReconnectFailure(state: ReconnectState, error: string): Promise<void> {
+    logger.error('Reconnect failed', { instanceId: state.instanceId, attempt: state.attempts, error });
+
+    const instance = await this.fetchInstanceById(state.instanceId);
+    if (instance) {
+      this.scheduleReconnect(state.instanceId, instance.channel, error);
+    }
+  }
+
+  /**
+   * Fetch an instance by ID
+   */
+  private async fetchInstanceById(instanceId: string): Promise<{ id: string; channel: string } | null> {
+    const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
+    return instance ?? null;
   }
 
   /**
@@ -318,7 +403,6 @@ export class InstanceMonitor {
    */
   private async markInstanceInactive(instanceId: string): Promise<void> {
     await this.db.update(instances).set({ isActive: false }).where(eq(instances.id, instanceId));
-
     logger.info('Marked instance as inactive', { instanceId });
   }
 
@@ -329,11 +413,7 @@ export class InstanceMonitor {
     isRunning: boolean;
     activeReconnects: number;
     queuedReconnects: number;
-    reconnectQueue: Array<{
-      instanceId: string;
-      attempts: number;
-      nextAttempt: string;
-    }>;
+    reconnectQueue: Array<{ instanceId: string; attempts: number; nextAttempt: string }>;
   } {
     return {
       isRunning: this.isRunning,
@@ -351,23 +431,17 @@ export class InstanceMonitor {
    * Manually trigger reconnection for an instance
    */
   async forceReconnect(instanceId: string): Promise<void> {
-    const [instance] = await this.db
-      .select({ channel: instances.channel })
-      .from(instances)
-      .where(eq(instances.id, instanceId))
-      .limit(1);
-
+    const instance = await this.fetchInstanceById(instanceId);
     if (!instance) {
       throw new Error(`Instance not found: ${instanceId}`);
     }
 
-    // Remove from queue if present and add fresh
     this.reconnectQueue.delete(instanceId);
     this.scheduleReconnect(instanceId, instance.channel, 'Manual reconnect requested');
   }
 
   /**
-   * Clear reconnect queue for an instance (e.g., when manually disconnected)
+   * Clear reconnect queue for an instance
    */
   clearReconnectQueue(instanceId: string): void {
     this.reconnectQueue.delete(instanceId);
@@ -380,23 +454,12 @@ export class InstanceMonitor {
 
 /**
  * Reconnect instances with connection pooling
- *
- * Limits concurrent connections to prevent overwhelming the system on startup
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Batch reconnection logic requires multiple condition paths
 export async function reconnectWithPool(
   db: Database,
   registry: ChannelRegistry,
-  options: {
-    maxConcurrent?: number;
-    delayBetweenMs?: number;
-  } = {},
-): Promise<{
-  attempted: number;
-  succeeded: number;
-  failed: number;
-  errors: Array<{ instanceId: string; error: string }>;
-}> {
+  options: { maxConcurrent?: number; delayBetweenMs?: number } = {},
+): Promise<ReconnectResults> {
   const { maxConcurrent = 3, delayBetweenMs = 500 } = options;
 
   const activeInstances = await db.select().from(instances).where(eq(instances.isActive, true));
@@ -407,67 +470,63 @@ export async function reconnectWithPool(
     delayBetweenMs,
   });
 
-  const results = {
+  const results: ReconnectResults = {
     attempted: activeInstances.length,
     succeeded: 0,
     failed: 0,
-    errors: [] as Array<{ instanceId: string; error: string }>,
+    errors: [],
   };
 
   if (activeInstances.length === 0) {
     return results;
   }
 
-  // Process in batches
-  for (let i = 0; i < activeInstances.length; i += maxConcurrent) {
-    const batch = activeInstances.slice(i, i + maxConcurrent);
+  await processInstanceBatches(activeInstances, registry, db, results, maxConcurrent, delayBetweenMs);
 
-    const batchResults = await Promise.allSettled(
-      batch.map(async (instance) => {
-        const plugin = registry.get(instance.channel as Parameters<typeof registry.get>[0]);
-        if (!plugin) {
-          throw new Error(`No plugin for channel: ${instance.channel}`);
-        }
+  logger.info('Pooled reconnection complete', { ...results });
+  return results;
+}
 
-        await plugin.connect(instance.id, {
-          instanceId: instance.id,
-          credentials: {},
-          options: {},
-        });
+/**
+ * Process instances in batches with concurrency control
+ */
+async function processInstanceBatches(
+  allInstances: Array<{ id: string; name: string; channel: string }>,
+  registry: ChannelRegistry,
+  db: Database,
+  results: ReconnectResults,
+  maxConcurrent: number,
+  delayBetweenMs: number,
+): Promise<void> {
+  for (let i = 0; i < allInstances.length; i += maxConcurrent) {
+    const batch = allInstances.slice(i, i + maxConcurrent);
+    await processSingleBatch(batch, registry, db, results);
 
-        return instance.id;
-      }),
-    );
-
-    for (let j = 0; j < batchResults.length; j++) {
-      const result = batchResults[j];
-      const instance = batch[j];
-      if (!result || !instance) continue; // Type guard
-
-      if (result.status === 'fulfilled') {
-        results.succeeded++;
-        logger.info('Instance reconnected', { instanceId: instance.id, name: instance.name });
-      } else {
-        results.failed++;
-        const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        results.errors.push({ instanceId: instance.id, error });
-        logger.error('Instance reconnection failed', {
-          instanceId: instance.id,
-          name: instance.name,
-          error,
-        });
-
-        // Mark as inactive if connection fails
-        await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
-      }
-    }
-
-    // Delay between batches to prevent overwhelming
-    if (i + maxConcurrent < activeInstances.length) {
-      await new Promise((resolve) => setTimeout(resolve, delayBetweenMs));
+    const hasMoreBatches = i + maxConcurrent < allInstances.length;
+    if (hasMoreBatches) {
+      await delay(delayBetweenMs);
     }
   }
+}
 
-  logger.info('Pooled reconnection complete', results);
-  return results;
+/**
+ * Process a single batch of instances
+ */
+async function processSingleBatch(
+  batch: Array<{ id: string; name: string; channel: string }>,
+  registry: ChannelRegistry,
+  db: Database,
+  results: ReconnectResults,
+): Promise<void> {
+  const batchResults = await Promise.allSettled(
+    batch.map((instance) => connectInstance(instance, registry).then(() => instance.id)),
+  );
+
+  for (let j = 0; j < batchResults.length; j++) {
+    const result = batchResults[j];
+    const instance = batch[j];
+    if (!result || !instance) continue;
+
+    await handleBatchResult(result, instance, db, results);
+  }
 }
