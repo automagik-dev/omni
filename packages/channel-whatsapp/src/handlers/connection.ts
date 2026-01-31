@@ -207,18 +207,29 @@ async function handleConnectionClose(
 
   // Check if this instance was ever authenticated
   const wasAuthenticated = authenticatedInstances.has(instanceId);
+  const attempts = reconnectAttempts.get(instanceId) || 0;
 
-  // If NEVER authenticated (still waiting for QR scan), DON'T auto-reconnect
-  // The 515 errors during QR phase are normal - WhatsApp is just refreshing the connection
+  // If NEVER authenticated, allow ONE reconnect attempt
+  // This is because after QR scan, WhatsApp sends a 515 forcing a reconnect
+  // to complete the auth handshake - this is documented Baileys behavior
   if (!wasAuthenticated) {
-    console.log(`[WhatsApp] Connection closed during QR phase for ${instanceId}: ${reason}`);
-    console.log(`[WhatsApp] Waiting for manual retry or QR scan...`);
-    await plugin.handleDisconnected(instanceId, `Connection closed: ${reason}. Please reconnect manually.`, false);
+    if (attempts >= 1) {
+      // Already tried once after QR scan, stop now
+      console.log(`[WhatsApp] Connection failed after QR scan for ${instanceId}: ${reason}`);
+      console.log(`[WhatsApp] Please try scanning QR again...`);
+      reconnectAttempts.delete(instanceId);
+      await plugin.handleDisconnected(instanceId, `Connection closed: ${reason}. Please reconnect manually.`, false);
+      return;
+    }
+
+    // First 515 after QR - this is the auth handshake, allow ONE reconnect
+    console.log(`[WhatsApp] Auth handshake for ${instanceId}, reconnecting to complete authentication...`);
+    reconnectAttempts.set(instanceId, 1);
+    scheduleReconnect(plugin, instanceId, 0, config, onReconnect);
     return;
   }
 
   // Instance WAS authenticated before - try to auto-reconnect
-  const attempts = reconnectAttempts.get(instanceId) || 0;
 
   if (attempts >= config.maxRetries) {
     reconnectAttempts.delete(instanceId);
