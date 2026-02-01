@@ -179,8 +179,9 @@ describe('BaseChannelPlugin', () => {
   it('should initialize with context', async () => {
     await plugin.initialize(context);
 
-    expect(logger.logs.some((l) => l.message.includes('Initializing'))).toBe(true);
-    expect(logger.logs.some((l) => l.message.includes('initialized successfully'))).toBe(true);
+    // Initialization should complete without error
+    // Logs are now handled at the loader level, not base plugin
+    expect(plugin.connectCalled).toBe(false); // Not connected yet
   });
 
   it('should connect an instance and emit events', async () => {

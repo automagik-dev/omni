@@ -98,10 +98,5 @@ export async function discoverAndRegisterPlugins(options?: {
     }
   }
 
-  logger?.info('Plugin discovery complete', {
-    registered: result.registered.length,
-    failed: result.failed.length,
-  });
-
   return result;
 }

@@ -28,10 +28,13 @@ import {
   loadChannelPlugins,
   reconnectWithPool,
   setupConnectionListener,
+  setupEventPersistence,
   setupMessageListener,
   setupQrCodeListener,
 } from './plugins';
 import { setupScheduler, stopScheduler } from './scheduler';
+import { printStartupBanner } from './utils/startup-banner';
+import packageJson from '../package.json';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
@@ -82,6 +85,7 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     await setupQrCodeListener(eventBus);
     await setupConnectionListener(eventBus, db);
     await setupMessageListener(eventBus);
+    await setupEventPersistence(eventBus, db);
 
     return eventBus;
   } catch (error) {
@@ -272,11 +276,18 @@ async function main() {
   log.info('Starting scheduler');
   setupScheduler(services);
 
-  log.info('API server listening', { host: HOST, port: PORT });
-  log.info('Health check available', { url: `http://${HOST}:${PORT}/api/v2/health` });
-  log.info('Metrics available', { url: `http://${HOST}:${PORT}/api/v2/metrics` });
-
+  // Start HTTP server
   const server = await startServer(app);
+
+  // Print startup banner
+  printStartupBanner({
+    version: packageJson.version,
+    host: HOST,
+    port: PORT,
+    docsPath: '/api/v2/docs',
+    healthPath: '/api/v2/health',
+    metricsPath: '/api/v2/metrics',
+  });
   setupShutdownHandlers(server);
 }
 

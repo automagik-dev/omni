@@ -314,7 +314,9 @@ describe('Formatters', () => {
 
       // Should contain time (format depends on timezone)
       expect(output).toContain('INFO');
-      expect(output).toContain('api:startup');
+      // Module parts may be split by color codes
+      expect(output).toContain('api');
+      expect(output).toContain(':startup');
       expect(output).toContain('Server listening');
     });
 

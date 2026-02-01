@@ -171,7 +171,8 @@ export function setupConnectionHandlers(
   config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): void {
   // Ready - bot is connected and ready
-  client.once('ready', async () => {
+  // Note: 'clientReady' replaces deprecated 'ready' event (discord.js v15+)
+  client.once('clientReady', async () => {
     await handleReady(plugin, instanceId, client);
   });
 

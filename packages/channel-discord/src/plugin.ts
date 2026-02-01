@@ -72,7 +72,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
-    this.logger.info('Discord plugin initialized');
+    // No additional initialization needed for Discord plugin
   }
 
   /**

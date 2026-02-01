@@ -100,11 +100,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     this.config = context.config;
     this.db = context.db;
 
-    this.logger.info(`Initializing plugin: ${this.name} v${this.version}`);
-
     await this.onInitialize(context);
-
-    this.logger.info('Plugin initialized successfully');
   }
 
   /**

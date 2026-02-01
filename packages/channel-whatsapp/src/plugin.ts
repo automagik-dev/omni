@@ -85,7 +85,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
-    this.logger.info('WhatsApp plugin initialized');
+    // No additional initialization needed for WhatsApp plugin
   }
 
   /**
