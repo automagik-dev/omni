@@ -2,10 +2,11 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-services dev-stop build clean \
-        test test-watch typecheck lint format check \
+        test test-watch test-api test-db typecheck lint lint-fix format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats start stop restart logs status \
-        kill-ghosts reset sdk-generate
+        kill-ghosts reset sdk-generate \
+        migrate-messages migrate-messages-dry
 
 # Default target
 help:
@@ -25,15 +26,24 @@ help:
 	@echo "  make check         Run all quality checks (typecheck + lint + test)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
+	@echo "  make lint-fix      Fix auto-fixable lint issues"
+	@echo "  make lint-api      Lint API package only"
 	@echo "  make format        Format code with Biome"
 	@echo "  make test          Run all tests"
 	@echo "  make test-watch    Run tests in watch mode"
+	@echo "  make test-api      Run API package tests only"
+	@echo "  make test-db       Run DB package tests only"
+	@echo "  make test-file F=<path>  Run a specific test file"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-push       Push schema changes (dev)"
 	@echo "  make db-migrate    Run migrations (prod)"
 	@echo "  make db-studio     Open Drizzle Studio"
 	@echo "  make db-reset      Reset database (DESTRUCTIVE)"
+	@echo ""
+	@echo "Migrations:"
+	@echo "  make migrate-messages-dry  Dry run: events → unified messages"
+	@echo "  make migrate-messages      Run migration: events → unified messages"
 	@echo ""
 	@echo "Building:"
 	@echo "  make build         Build all packages"
@@ -131,6 +141,16 @@ lint:
 lint-fix:
 	bunx biome check --write .
 
+# Lint specific packages (faster during development)
+lint-api:
+	bunx biome check packages/api
+
+lint-db:
+	bunx biome check packages/db
+
+lint-core:
+	bunx biome check packages/core
+
 format:
 	bunx biome format --write .
 
@@ -139,6 +159,18 @@ test:
 
 test-watch:
 	bun test --watch
+
+# Run tests for specific packages
+test-api:
+	cd packages/api && bun test
+
+test-db:
+	cd packages/db && bun test
+
+# Run a specific test file (usage: make test-file F=packages/api/src/__tests__/foo.test.ts)
+test-file:
+	@if [ -z "$(F)" ]; then echo "Usage: make test-file F=<path-to-test-file>"; exit 1; fi
+	bun test $(F)
 
 # Run all quality checks
 check: typecheck lint test
@@ -237,3 +269,18 @@ reset: clean stop
 	rm -rf .pgserve-data
 	bun install
 	@echo "Reset complete"
+
+# ============================================================================
+# Data Migrations
+# ============================================================================
+
+# Migrate events to unified messages (dry run - no changes)
+migrate-messages-dry:
+	@echo "Running migration dry-run (no changes will be made)..."
+	cd packages/api && bun run scripts/migrate-events-to-messages.ts --dry-run
+
+# Migrate events to unified messages (LIVE - makes changes)
+migrate-messages:
+	@echo "WARNING: This will migrate events to the unified messages schema."
+	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	cd packages/api && bun run scripts/migrate-events-to-messages.ts
