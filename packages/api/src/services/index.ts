@@ -9,10 +9,12 @@ import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { AccessService } from './access';
 import { AutomationService } from './automations';
+import { ChatService } from './chats';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
 import { InstanceService } from './instances';
+import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
 import { ProviderService } from './providers';
@@ -34,6 +36,8 @@ export interface Services {
   eventOps: EventOpsService;
   webhooks: WebhookService;
   automations: AutomationService;
+  chats: ChatService;
+  messages: MessageService;
 }
 
 /**
@@ -55,6 +59,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     eventOps: new EventOpsService(db, eventBus, deadLetters, payloadStore),
     webhooks: new WebhookService(db, eventBus),
     automations: new AutomationService(db, eventBus),
+    chats: new ChatService(db, eventBus),
+    messages: new MessageService(db, eventBus),
   };
 }
 
@@ -70,3 +76,5 @@ export { PayloadStoreService } from './payload-store';
 export { EventOpsService } from './event-ops';
 export { WebhookService } from './webhooks';
 export { AutomationService } from './automations';
+export { ChatService } from './chats';
+export { MessageService } from './messages';

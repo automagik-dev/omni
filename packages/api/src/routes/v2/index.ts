@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
 import { automationsRoutes } from './automations';
+import { chatsRoutes } from './chats';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
@@ -19,6 +20,7 @@ import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
+import { unifiedMessagesRoutes } from './unified-messages';
 import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -39,3 +41,5 @@ v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/pa
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
+v2Routes.route('/chats', chatsRoutes); // Unified chat model
+v2Routes.route('/unified-messages', unifiedMessagesRoutes); // Unified message model (source of truth)

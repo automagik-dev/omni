@@ -22,6 +22,7 @@ const natsLog = createLogger('api:nats');
 const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
 const httpLog = createLogger('api:http');
+import packageJson from '../package.json';
 import { type App, createApp } from './app';
 import {
   InstanceMonitor,
@@ -30,11 +31,11 @@ import {
   setupConnectionListener,
   setupEventPersistence,
   setupMessageListener,
+  setupMessagePersistence,
   setupQrCodeListener,
 } from './plugins';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { printStartupBanner } from './utils/startup-banner';
-import packageJson from '../package.json';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
@@ -271,6 +272,15 @@ async function main() {
 
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+
+  // Set up message persistence (writes to unified chats/messages tables)
+  if (eventBus) {
+    try {
+      await setupMessagePersistence(eventBus, services);
+    } catch (error) {
+      log.error('Failed to set up message persistence', { error: String(error) });
+    }
+  }
 
   // Setup scheduler with services
   log.info('Starting scheduler');

@@ -32,5 +32,8 @@ export { setupConnectionListener, setupMessageListener } from './event-listeners
 // Event persistence (writes events to omni_events table)
 export { setupEventPersistence } from './event-persistence';
 
+// Message persistence (writes to unified chats/messages tables)
+export { setupMessagePersistence } from './message-persistence';
+
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';

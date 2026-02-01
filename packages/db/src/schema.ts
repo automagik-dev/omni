@@ -426,6 +426,243 @@ export const platformIdentities = pgTable(
 );
 
 // ============================================================================
+// CHATS (Unified Chat Model)
+// ============================================================================
+
+/**
+ * Chat entity - represents a conversation/chat room.
+ * Unified model for DMs, groups, channels, threads, etc.
+ * Works across all platforms (WhatsApp, Discord, Slack, Telegram).
+ *
+ * @see unified-messages wish
+ */
+export const chats = pgTable(
+  'chats',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
+
+    // ---- Identity ----
+    externalId: varchar('external_id', { length: 255 }).notNull(), // Platform chat ID
+    canonicalId: varchar('canonical_id', { length: 255 }), // Normalized ID (e.g., phone instead of @lid)
+
+    // ---- Classification ----
+    chatType: varchar('chat_type', { length: 50 }).notNull().$type<ChatType>(),
+    channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
+
+    // ---- Metadata ----
+    name: varchar('name', { length: 255 }),
+    description: text('description'),
+    avatarUrl: text('avatar_url'),
+
+    // ---- Hierarchy (for threads, forums) ----
+    parentChatId: uuid('parent_chat_id'),
+
+    // ---- Stats (denormalized for performance) ----
+    participantCount: integer('participant_count').notNull().default(0),
+    messageCount: integer('message_count').notNull().default(0),
+    unreadCount: integer('unread_count').notNull().default(0),
+
+    // ---- Activity ----
+    lastMessageAt: timestamp('last_message_at'),
+    lastMessagePreview: varchar('last_message_preview', { length: 255 }),
+
+    // ---- Settings ----
+    settings: jsonb('settings').$type<ChatSettings>(),
+
+    // ---- Platform metadata ----
+    platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    archivedAt: timestamp('archived_at'),
+    deletedAt: timestamp('deleted_at'),
+  },
+  (table) => ({
+    instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
+    chatTypeIdx: index('chats_type_idx').on(table.chatType),
+    channelIdx: index('chats_channel_idx').on(table.channel),
+    parentIdx: index('chats_parent_idx').on(table.parentChatId),
+    lastMessageIdx: index('chats_last_message_idx').on(table.lastMessageAt),
+  }),
+);
+
+// ============================================================================
+// CHAT PARTICIPANTS
+// ============================================================================
+
+/**
+ * Chat participant - tracks who is in a chat.
+ * Links to Person and PlatformIdentity for cross-platform identity.
+ *
+ * @see unified-messages wish
+ */
+export const chatParticipants = pgTable(
+  'chat_participants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+    platformIdentityId: uuid('platform_identity_id').references(() => platformIdentities.id, { onDelete: 'set null' }),
+
+    // ---- Platform identity ----
+    platformUserId: varchar('platform_user_id', { length: 255 }).notNull(),
+    displayName: varchar('display_name', { length: 255 }),
+    avatarUrl: text('avatar_url'),
+
+    // ---- Role (varies by platform) ----
+    role: varchar('role', { length: 50 }), // 'owner', 'admin', 'member', 'guest'
+
+    // ---- Status ----
+    isActive: boolean('is_active').notNull().default(true),
+    joinedAt: timestamp('joined_at').notNull().defaultNow(),
+    leftAt: timestamp('left_at'),
+
+    // ---- Activity ----
+    lastSeenAt: timestamp('last_seen_at'),
+    messageCount: integer('message_count').notNull().default(0),
+
+    // ---- Platform metadata ----
+    platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    chatUserIdx: uniqueIndex('chat_participants_chat_user_idx').on(table.chatId, table.platformUserId),
+    chatIdx: index('chat_participants_chat_idx').on(table.chatId),
+    personIdx: index('chat_participants_person_idx').on(table.personId),
+    platformIdentityIdx: index('chat_participants_platform_identity_idx').on(table.platformIdentityId),
+    roleIdx: index('chat_participants_role_idx').on(table.role),
+  }),
+);
+
+// ============================================================================
+// MESSAGES (Source of Truth)
+// ============================================================================
+
+/**
+ * Message entity - the source of truth for all messages.
+ * Works for both real-time (via webhook) and synced (via API) messages.
+ * Event links are OPTIONAL - synced messages have no events.
+ *
+ * Uses JSONB for reactions and edit history to simplify schema.
+ *
+ * @see unified-messages wish
+ */
+export const messages = pgTable(
+  'messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+
+    // === IDENTITY ===
+    externalId: varchar('external_id', { length: 255 }).notNull(), // Platform message ID
+
+    // === SOURCE TRACKING ===
+    source: varchar('source', { length: 20 }).notNull().$type<MessageSource>(),
+    // 'realtime' | 'sync' | 'api' | 'import'
+
+    // === SENDER ===
+    senderPersonId: uuid('sender_person_id').references(() => persons.id, { onDelete: 'set null' }),
+    senderPlatformIdentityId: uuid('sender_platform_identity_id').references(() => platformIdentities.id, {
+      onDelete: 'set null',
+    }),
+    senderPlatformUserId: varchar('sender_platform_user_id', { length: 255 }),
+    senderDisplayName: varchar('sender_display_name', { length: 255 }),
+    isFromMe: boolean('is_from_me').notNull().default(false),
+
+    // === CONTENT (CURRENT STATE) ===
+    messageType: varchar('message_type', { length: 50 }).notNull().$type<MessageType>(),
+    textContent: text('text_content'),
+
+    // === LLM-READY PRE-PROCESSED CONTENT ===
+    transcription: text('transcription'), // Audio → text (Whisper)
+    imageDescription: text('image_description'), // Image → description (Vision)
+    videoDescription: text('video_description'), // Video → description
+    documentExtraction: text('document_extraction'), // Document → text (PyMuPDF/Vision)
+
+    // === MEDIA ===
+    hasMedia: boolean('has_media').notNull().default(false),
+    mediaMimeType: varchar('media_mime_type', { length: 100 }),
+    mediaUrl: text('media_url'),
+    mediaLocalPath: text('media_local_path'),
+    mediaMetadata: jsonb('media_metadata').$type<MediaMetadata>(),
+
+    // === MESSAGE LINKING ===
+    // Reply/Quote
+    replyToMessageId: uuid('reply_to_message_id'),
+    replyToExternalId: varchar('reply_to_external_id', { length: 255 }),
+    quotedText: text('quoted_text'),
+    quotedSenderName: varchar('quoted_sender_name', { length: 255 }),
+
+    // Forward
+    forwardedFromMessageId: uuid('forwarded_from_message_id'),
+    forwardedFromExternalId: varchar('forwarded_from_external_id', { length: 255 }),
+    forwardCount: integer('forward_count').notNull().default(0),
+    isForwarded: boolean('is_forwarded').notNull().default(false),
+
+    // Mentions (JSONB array)
+    mentions: jsonb('mentions').$type<MentionInfo[]>(),
+
+    // === MESSAGE STATE ===
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<MessageStatus>(),
+    // 'active' | 'edited' | 'deleted' | 'expired'
+
+    deliveryStatus: varchar('delivery_status', { length: 20 }).default('sent').$type<DeliveryStatus>(),
+    // 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
+
+    // === EDIT TRACKING (JSONB - no separate table) ===
+    editCount: integer('edit_count').notNull().default(0),
+    originalText: text('original_text'), // First version (for quick access)
+    editHistory: jsonb('edit_history').$type<EditHistoryEntry[]>(),
+    // [{ text: "Hello!", at: "2024-01-01T12:00:00Z" }, ...]
+    editedAt: timestamp('edited_at'),
+    deletedAt: timestamp('deleted_at'),
+
+    // === REACTIONS (JSONB - no separate table) ===
+    reactions: jsonb('reactions').$type<ReactionInfo[]>(),
+    // [{ emoji: "👍", platformUserId: "...", personId: "...", at: "..." }, ...]
+    reactionCounts: jsonb('reaction_counts').$type<Record<string, number>>(),
+    // { "👍": 5, "❤️": 3 } - denormalized for quick display
+
+    // === RAW DATA (stored here, not just event link) ===
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+    // Full platform message object - essential for synced messages!
+
+    // === EVENT LINKS (OPTIONAL - only for realtime) ===
+    originalEventId: uuid('original_event_id'),
+    latestEventId: uuid('latest_event_id'),
+    // NULL for synced messages - they have no events!
+
+    // === TIMESTAMPS ===
+    platformTimestamp: timestamp('platform_timestamp').notNull(), // When platform says sent
+    receivedAt: timestamp('received_at').notNull().defaultNow(), // When we got it
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    chatExternalIdx: uniqueIndex('messages_chat_external_idx').on(table.chatId, table.externalId),
+    chatIdx: index('messages_chat_idx').on(table.chatId),
+    senderPersonIdx: index('messages_sender_person_idx').on(table.senderPersonId),
+    senderPlatformIdentityIdx: index('messages_sender_platform_identity_idx').on(table.senderPlatformIdentityId),
+    sourceIdx: index('messages_source_idx').on(table.source),
+    typeIdx: index('messages_type_idx').on(table.messageType),
+    statusIdx: index('messages_status_idx').on(table.status),
+    platformTimestampIdx: index('messages_platform_timestamp_idx').on(table.platformTimestamp),
+    replyToIdx: index('messages_reply_to_idx').on(table.replyToMessageId),
+    hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
+    originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
+  }),
+);
+
+// ============================================================================
 // OMNI EVENTS (Event Sourcing)
 // ============================================================================
 
@@ -766,12 +1003,15 @@ export const instancesRelations = relations(instances, ({ one, many }) => ({
   omniEvents: many(omniEvents),
   batchJobs: many(batchJobs),
   chatIdMappings: many(chatIdMappings),
+  chats: many(chats),
 }));
 
 export const personsRelations = relations(persons, ({ many }) => ({
   platformIdentities: many(platformIdentities),
   accessRules: many(accessRules),
   omniEvents: many(omniEvents),
+  chatParticipants: many(chatParticipants),
+  sentMessages: many(messages),
 }));
 
 export const platformIdentitiesRelations = relations(platformIdentities, ({ one, many }) => ({
@@ -784,6 +1024,73 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
     references: [instances.id],
   }),
   omniEvents: many(omniEvents),
+  chatParticipants: many(chatParticipants),
+  sentMessages: many(messages),
+}));
+
+export const chatsRelations = relations(chats, ({ one, many }) => ({
+  instance: one(instances, {
+    fields: [chats.instanceId],
+    references: [instances.id],
+  }),
+  parentChat: one(chats, {
+    fields: [chats.parentChatId],
+    references: [chats.id],
+    relationName: 'parentChild',
+  }),
+  childChats: many(chats, {
+    relationName: 'parentChild',
+  }),
+  participants: many(chatParticipants),
+  messages: many(messages),
+}));
+
+export const chatParticipantsRelations = relations(chatParticipants, ({ one }) => ({
+  chat: one(chats, {
+    fields: [chatParticipants.chatId],
+    references: [chats.id],
+  }),
+  person: one(persons, {
+    fields: [chatParticipants.personId],
+    references: [persons.id],
+  }),
+  platformIdentity: one(platformIdentities, {
+    fields: [chatParticipants.platformIdentityId],
+    references: [platformIdentities.id],
+  }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  chat: one(chats, {
+    fields: [messages.chatId],
+    references: [chats.id],
+  }),
+  senderPerson: one(persons, {
+    fields: [messages.senderPersonId],
+    references: [persons.id],
+  }),
+  senderPlatformIdentity: one(platformIdentities, {
+    fields: [messages.senderPlatformIdentityId],
+    references: [platformIdentities.id],
+  }),
+  replyToMessage: one(messages, {
+    fields: [messages.replyToMessageId],
+    references: [messages.id],
+    relationName: 'replyTo',
+  }),
+  forwardedFromMessage: one(messages, {
+    fields: [messages.forwardedFromMessageId],
+    references: [messages.id],
+    relationName: 'forwardedFrom',
+  }),
+  originalEvent: one(omniEvents, {
+    fields: [messages.originalEventId],
+    references: [omniEvents.id],
+  }),
+  latestEvent: one(omniEvents, {
+    fields: [messages.latestEventId],
+    references: [omniEvents.id],
+  }),
 }));
 
 export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
@@ -865,6 +1172,15 @@ export type NewPerson = typeof persons.$inferInsert;
 
 export type PlatformIdentity = typeof platformIdentities.$inferSelect;
 export type NewPlatformIdentity = typeof platformIdentities.$inferInsert;
+
+export type Chat = typeof chats.$inferSelect;
+export type NewChat = typeof chats.$inferInsert;
+
+export type ChatParticipant = typeof chatParticipants.$inferSelect;
+export type NewChatParticipant = typeof chatParticipants.$inferInsert;
+
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = typeof messages.$inferInsert;
 
 export type OmniEvent = typeof omniEvents.$inferSelect;
 export type NewOmniEvent = typeof omniEvents.$inferInsert;
