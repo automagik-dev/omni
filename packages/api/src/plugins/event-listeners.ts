@@ -23,7 +23,7 @@ const messageLog = createLogger('message');
 export async function setupConnectionListener(eventBus: EventBus, db?: Database): Promise<void> {
   try {
     await eventBus.subscribe('instance.connected', async (event) => {
-      const { instanceId, profileName, profilePicUrl, ownerIdentifier } = event.payload;
+      const { instanceId, channelType, profileName, profilePicUrl, ownerIdentifier } = event.payload;
 
       // Clear QR code
       clearQrCode(instanceId);
@@ -46,12 +46,12 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         }
       }
 
-      instanceLog.info('Connected', { instanceId, profileName: profileName || 'unknown' });
+      instanceLog.info('Connected', { instanceId, channel: channelType, profileName: profileName || 'unknown' });
     });
 
     // Handle disconnection events
     await eventBus.subscribe('instance.disconnected', async (event) => {
-      const { instanceId, willReconnect, reason } = event.payload;
+      const { instanceId, channelType, willReconnect, reason } = event.payload;
 
       // Only mark inactive if EXPLICITLY logged out by WhatsApp
       // Normal disconnects (graceful shutdown, network issues) should NOT mark inactive
@@ -73,7 +73,7 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         }
       }
 
-      instanceLog.info('Disconnected', { instanceId, willReconnect, reason: reason || 'unknown' });
+      instanceLog.info('Disconnected', { instanceId, channel: channelType, willReconnect, reason: reason || 'unknown' });
     });
   } catch (error) {
     instanceLog.warn('Failed to set up connection listener', { error: String(error) });
