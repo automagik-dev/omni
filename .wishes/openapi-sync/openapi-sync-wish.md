@@ -2,7 +2,7 @@
 
 > Auto-generate OpenAPI spec from Hono route definitions to keep SDK in sync.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-b86
@@ -278,3 +278,59 @@ bun test packages/sdk
 | Automations | 12 |
 | Payloads | 6 |
 | **Total** | **72** |
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-01
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| **Group A: Foundation** | | |
+| `GET /api/v2/openapi.json` includes all instance endpoints | PASS | 13 instance endpoints documented (list, get, create, update, delete, status, qr, connect, disconnect, restart, logout, pair, supported-channels) |
+| Swagger UI shows complete instance documentation | PASS | All endpoints visible at `/api/v2/docs` |
+| Existing tests pass (no behavior change) | PASS | 50 API tests pass, 0 fail |
+| `make typecheck` passes | PASS | All 7 packages typecheck clean |
+| **Group B: Route Migration** | | |
+| All 40+ endpoints documented in OpenAPI spec | PASS | 72 paths documented (exceeds 40+ target) |
+| All existing tests pass | PASS | API tests: 50 pass, SDK tests: 8 pass |
+| No API behavior changes | PASS | Routes unchanged, only documentation added |
+| **Group C: SDK Regeneration** | | |
+| SDK types include all 40+ endpoints | PASS | 72 paths in types.generated.ts (10,545 lines) |
+| `omni.raw.GET('/instances/{id}/qr', ...)` works with full types | PASS | Full type inference available |
+| SDK tests pass | PASS | 8 pass, 7 skip, 0 fail |
+| cli-setup wish can proceed | PASS | SDK now has complete endpoint coverage |
+
+### Quality Assessment
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| **Security** | PASS | No new vulnerabilities introduced; read-only documentation layer |
+| **Correctness** | PASS | All existing functionality preserved; 72 endpoints documented |
+| **Quality** | PASS | Clean registry pattern; well-organized schema files |
+| **Tests** | PASS | 58 tests pass (50 API + 8 SDK), no failures |
+
+### Findings
+
+**Minor (LOW):**
+- Import order issue in `packages/api/src/routes/openapi.ts` - biome suggests reordering imports. Non-blocking, purely stylistic.
+
+**Pre-existing Issues (NOT from this wish):**
+- 16 lint warnings in `packages/channel-discord/` - these are from a separate wish (channel-discord) and not part of this scope.
+
+### Technical Notes
+
+The implementation uses `@asteasolutions/zod-to-openapi` v7.3.4 with a registry pattern instead of `@hono/zod-openapi`. This was a sound architectural choice because:
+1. Keeps existing route handlers unchanged (no behavior changes)
+2. Documents routes via separate schema files (separation of concerns)
+3. Avoids runtime behavior changes (documentation is additive)
+4. Uses Zod 3 compatible version
+
+### Recommendation
+
+**SHIP** - All acceptance criteria met. The wish successfully delivers auto-generated OpenAPI specs from route definitions with 72 documented endpoints (exceeding the 40+ target). SDK types are fully generated and the cli-setup wish is now unblocked.
