@@ -16,6 +16,16 @@ import {
 import type { CommandOption, CommandOptionType, SlashCommandDefinition } from '../types';
 
 /**
+ * Get client token, throwing if not available
+ */
+function getClientToken(client: Client): string {
+  if (!client.token) {
+    throw new Error('Client must be logged in (no token available)');
+  }
+  return client.token;
+}
+
+/**
  * Map command option type to Discord's ApplicationCommandOptionType
  */
 function mapOptionType(type: CommandOptionType): ApplicationCommandOptionType {
@@ -117,7 +127,7 @@ export async function registerGlobalCommands(client: Client, commands: SlashComm
     throw new Error('Client must be logged in before registering commands');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   const commandData = commands.filter((cmd) => !cmd.guildId).map(buildSlashCommand);
 
   await rest.put(Routes.applicationCommands(client.application.id), {
@@ -141,7 +151,7 @@ export async function registerGuildCommands(
     throw new Error('Client must be logged in before registering commands');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   const commandData = commands.map(buildSlashCommand);
 
   await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), {
@@ -168,9 +178,11 @@ export async function registerCommands(client: Client, commands: SlashCommandDef
   // Group and register guild commands
   const guildMap = new Map<string, SlashCommandDefinition[]>();
   for (const cmd of guildCommands) {
-    const list = guildMap.get(cmd.guildId!) ?? [];
+    const guildId = cmd.guildId;
+    if (!guildId) continue; // Skip commands without guildId (shouldn't happen after filter)
+    const list = guildMap.get(guildId) ?? [];
     list.push(cmd);
-    guildMap.set(cmd.guildId!, list);
+    guildMap.set(guildId, list);
   }
 
   for (const [guildId, cmds] of guildMap) {
@@ -189,7 +201,7 @@ export async function deleteGlobalCommand(client: Client, commandId: string): Pr
     throw new Error('Client must be logged in');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   await rest.delete(Routes.applicationCommand(client.application.id, commandId));
 }
 
@@ -205,7 +217,7 @@ export async function deleteGuildCommand(client: Client, guildId: string, comman
     throw new Error('Client must be logged in');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   await rest.delete(Routes.applicationGuildCommand(client.application.id, guildId, commandId));
 }
 
@@ -219,7 +231,7 @@ export async function clearGlobalCommands(client: Client): Promise<void> {
     throw new Error('Client must be logged in');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   await rest.put(Routes.applicationCommands(client.application.id), { body: [] });
 }
 
@@ -234,6 +246,6 @@ export async function clearGuildCommands(client: Client, guildId: string): Promi
     throw new Error('Client must be logged in');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   await rest.put(Routes.applicationGuildCommands(client.application.id, guildId), { body: [] });
 }

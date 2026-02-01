@@ -14,6 +14,16 @@ import {
 import type { ContextMenuDefinition } from '../types';
 
 /**
+ * Get client token, throwing if not available
+ */
+function getClientToken(client: Client): string {
+  if (!client.token) {
+    throw new Error('Client must be logged in (no token available)');
+  }
+  return client.token;
+}
+
+/**
  * Build context menu command data for Discord API
  */
 export function buildContextMenuCommand(definition: ContextMenuDefinition): RESTPostAPIApplicationCommandsJSONBody {
@@ -44,7 +54,7 @@ export async function registerGlobalContextMenus(client: Client, commands: Conte
     throw new Error('Client must be logged in before registering commands');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   const commandData = commands.filter((cmd) => !cmd.guildId).map(buildContextMenuCommand);
 
   // Get existing commands to merge with
@@ -82,7 +92,7 @@ export async function registerGuildContextMenus(
     throw new Error('Client must be logged in before registering commands');
   }
 
-  const rest = new REST({ version: '10' }).setToken(client.token!);
+  const rest = new REST({ version: '10' }).setToken(getClientToken(client));
   const commandData = commands.map(buildContextMenuCommand);
 
   // Get existing guild commands to merge with

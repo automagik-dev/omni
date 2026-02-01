@@ -38,14 +38,15 @@ export async function sendTextMessage(
   const chunks = chunkMessage(text);
   const messageIds: string[] = [];
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
+  let isFirst = true;
+  for (const chunk of chunks) {
     const options: MessageCreateOptions = buildTextContent(chunk);
 
     // Only reply to first chunk
-    if (i === 0 && replyToId) {
+    if (isFirst && replyToId) {
       options.reply = { messageReference: replyToId };
     }
+    isFirst = false;
 
     const result = await sendChannel.send(options);
     messageIds.push(result.id);

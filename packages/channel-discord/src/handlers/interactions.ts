@@ -200,6 +200,37 @@ async function processAutocomplete(plugin: DiscordPlugin, instanceId: string, in
 }
 
 /**
+ * Route interaction to appropriate handler
+ */
+async function routeInteraction(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<boolean> {
+  if (isChatInputCommand(interaction)) {
+    await processSlashCommand(plugin, instanceId, interaction);
+    return true;
+  }
+  if (isContextMenuCommand(interaction)) {
+    await processContextMenu(plugin, instanceId, interaction);
+    return true;
+  }
+  if (isButton(interaction)) {
+    await processButton(plugin, instanceId, interaction);
+    return true;
+  }
+  if (isStringSelectMenu(interaction)) {
+    await processSelectMenu(plugin, instanceId, interaction);
+    return true;
+  }
+  if (isModalSubmit(interaction)) {
+    await processModalSubmit(plugin, instanceId, interaction);
+    return true;
+  }
+  if (isAutocomplete(interaction)) {
+    await processAutocomplete(plugin, instanceId, interaction);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Set up interaction event handlers for a Discord client
  *
  * @param client - Discord.js Client instance
@@ -209,24 +240,9 @@ async function processAutocomplete(plugin: DiscordPlugin, instanceId: string, in
 export function setupInteractionHandlers(client: Client, plugin: DiscordPlugin, instanceId: string): void {
   client.on('interactionCreate', async (interaction) => {
     try {
-      // Process based on interaction type
-      if (isChatInputCommand(interaction)) {
-        await processSlashCommand(plugin, instanceId, interaction);
-      } else if (isContextMenuCommand(interaction)) {
-        await processContextMenu(plugin, instanceId, interaction);
-      } else if (isButton(interaction)) {
-        await processButton(plugin, instanceId, interaction);
-      } else if (isStringSelectMenu(interaction)) {
-        await processSelectMenu(plugin, instanceId, interaction);
-      } else if (isModalSubmit(interaction)) {
-        await processModalSubmit(plugin, instanceId, interaction);
-      } else if (isAutocomplete(interaction)) {
-        await processAutocomplete(plugin, instanceId, interaction);
-      } else {
-        log.debug('Unhandled interaction type', {
-          instanceId,
-          type: interaction.type,
-        });
+      const handled = await routeInteraction(plugin, instanceId, interaction);
+      if (!handled) {
+        log.debug('Unhandled interaction type', { instanceId, type: interaction.type });
       }
     } catch (error) {
       log.error('Error processing interaction', {

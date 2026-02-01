@@ -17,98 +17,92 @@ import type { ExtractedContent } from '../types';
 const log = createLogger('discord:messages');
 
 /**
- * Extract content from a Discord message
+ * Extract poll content from message
  */
-function extractContent(message: Message): ExtractedContent | null {
-  // Check for poll first (before attachments)
-  if (message.poll) {
-    const questionText = message.poll.question.text ?? '';
-    return {
-      type: 'poll',
-      text: questionText,
-      poll: {
-        question: questionText,
-        answers: message.poll.answers.map((a) => a.text ?? '').filter((t): t is string => Boolean(t)),
-        multiSelect: message.poll.allowMultiselect,
-        expiresAt: message.poll.expiresAt ?? undefined,
-      },
-    };
+function extractPollContent(message: Message): ExtractedContent | null {
+  if (!message.poll) return null;
+
+  const questionText = message.poll.question.text ?? '';
+  return {
+    type: 'poll',
+    text: questionText,
+    poll: {
+      question: questionText,
+      answers: message.poll.answers.map((a) => a.text ?? '').filter((t): t is string => Boolean(t)),
+      multiSelect: message.poll.allowMultiselect,
+      expiresAt: message.poll.expiresAt ?? undefined,
+    },
+  };
+}
+
+/**
+ * Determine media type from MIME type
+ */
+function getMediaType(contentType: string): 'image' | 'audio' | 'video' | 'document' {
+  if (contentType.startsWith('image/')) return 'image';
+  if (contentType.startsWith('audio/')) return 'audio';
+  if (contentType.startsWith('video/')) return 'video';
+  return 'document';
+}
+
+/**
+ * Extract attachment content from message
+ */
+function extractAttachmentContent(message: Message): ExtractedContent | null {
+  if (message.attachments.size === 0) return null;
+
+  const attachment = message.attachments.first();
+  if (!attachment) return null;
+
+  const contentType = attachment.contentType ?? 'application/octet-stream';
+  const mediaType = getMediaType(contentType);
+
+  const base: ExtractedContent = {
+    type: mediaType,
+    mediaUrl: attachment.url,
+    mimeType: contentType,
+    filename: attachment.name ?? undefined,
+    size: attachment.size,
+  };
+
+  // Add duration for audio/video
+  if ((mediaType === 'audio' || mediaType === 'video') && attachment.duration !== null) {
+    base.duration = attachment.duration;
   }
 
-  // Check for attachments (media)
-  if (message.attachments.size > 0) {
-    const attachment = message.attachments.first();
-    if (attachment) {
-      const contentType = attachment.contentType ?? 'application/octet-stream';
-
-      if (contentType.startsWith('image/')) {
-        return {
-          type: 'image',
-          mediaUrl: attachment.url,
-          mimeType: contentType,
-          filename: attachment.name ?? undefined,
-          size: attachment.size,
-          text: message.content || undefined,
-        };
-      }
-
-      if (contentType.startsWith('audio/')) {
-        return {
-          type: 'audio',
-          mediaUrl: attachment.url,
-          mimeType: contentType,
-          filename: attachment.name ?? undefined,
-          size: attachment.size,
-          duration: attachment.duration !== null ? attachment.duration : undefined,
-        };
-      }
-
-      if (contentType.startsWith('video/')) {
-        return {
-          type: 'video',
-          mediaUrl: attachment.url,
-          mimeType: contentType,
-          filename: attachment.name ?? undefined,
-          size: attachment.size,
-          duration: attachment.duration !== null ? attachment.duration : undefined,
-          text: message.content || undefined,
-        };
-      }
-
-      // Default to document for other types
-      return {
-        type: 'document',
-        mediaUrl: attachment.url,
-        mimeType: contentType,
-        filename: attachment.name ?? undefined,
-        size: attachment.size,
-        text: message.content || undefined,
-      };
-    }
+  // Add caption for non-audio types
+  if (mediaType !== 'audio' && message.content) {
+    base.text = message.content;
   }
 
-  // Check for stickers
-  if (message.stickers.size > 0) {
-    const sticker = message.stickers.first();
-    if (sticker) {
-      return {
-        type: 'sticker',
-        stickerId: sticker.id,
-        text: sticker.name,
-        mediaUrl: sticker.url,
-      };
-    }
-  }
+  return base;
+}
 
-  // Plain text message
+/**
+ * Extract sticker content from message
+ */
+function extractStickerContent(message: Message): ExtractedContent | null {
+  if (message.stickers.size === 0) return null;
+
+  const sticker = message.stickers.first();
+  if (!sticker) return null;
+
+  return {
+    type: 'sticker',
+    stickerId: sticker.id,
+    text: sticker.name,
+    mediaUrl: sticker.url,
+  };
+}
+
+/**
+ * Extract text or embed content from message
+ */
+function extractTextContent(message: Message): ExtractedContent | null {
   if (message.content) {
-    return {
-      type: 'text',
-      text: message.content,
-    };
+    return { type: 'text', text: message.content };
   }
 
-  // Embeds only (no text content)
   if (message.embeds.length > 0) {
     const embed = message.embeds[0];
     return {
@@ -117,8 +111,20 @@ function extractContent(message: Message): ExtractedContent | null {
     };
   }
 
-  // Unknown/empty message
   return null;
+}
+
+/**
+ * Extract content from a Discord message
+ */
+function extractContent(message: Message): ExtractedContent | null {
+  // Try each content type in priority order
+  return (
+    extractPollContent(message) ||
+    extractAttachmentContent(message) ||
+    extractStickerContent(message) ||
+    extractTextContent(message)
+  );
 }
 
 /**

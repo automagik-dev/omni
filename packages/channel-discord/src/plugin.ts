@@ -94,14 +94,14 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * @param config - Instance configuration (must include token in options or storage)
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
-    if (this.clients.has(instanceId)) {
-      const client = this.clients.get(instanceId)!;
-      if (isClientReady(client)) {
+    const existingClient = this.clients.get(instanceId);
+    if (existingClient) {
+      if (isClientReady(existingClient)) {
         this.logger.warn('Instance already connected', { instanceId });
         return;
       }
       // Client exists but not ready, destroy and reconnect
-      await destroyClient(client);
+      await destroyClient(existingClient);
       this.clients.delete(instanceId);
     }
 

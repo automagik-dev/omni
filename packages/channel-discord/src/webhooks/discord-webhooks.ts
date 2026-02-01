@@ -37,9 +37,14 @@ export async function createWebhook(
     reason: 'Created by Omni Discord plugin',
   });
 
+  // Newly created webhooks should always have a token
+  if (!webhook.token) {
+    throw new Error('Created webhook has no token - this is unexpected');
+  }
+
   return {
     id: webhook.id,
-    token: webhook.token!,
+    token: webhook.token,
     channelId: webhook.channelId,
     guildId: webhook.guildId ?? undefined,
     name: webhook.name ?? undefined,

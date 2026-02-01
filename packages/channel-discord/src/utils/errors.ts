@@ -62,61 +62,84 @@ const apiErrorCodes: Record<number, { code: ErrorCodeType; retryable: boolean }>
 };
 
 /**
+ * Handle DiscordAPIError from discord.js
+ */
+function handleDiscordAPIError(error: DiscordAPIError): DiscordError {
+  // Check for mapped error codes first
+  const mapping = apiErrorCodes[error.code as number];
+  if (mapping) {
+    return new DiscordError(mapping.code, error.message, mapping.retryable, {
+      discordCode: error.code,
+      method: error.method,
+      url: error.url,
+    });
+  }
+
+  // Token errors (40001, 40002)
+  if (error.code === 40001 || error.code === 40002) {
+    return new DiscordError(ErrorCode.INVALID_TOKEN, error.message, false, {
+      discordCode: error.code,
+    });
+  }
+
+  // Map by HTTP status
+  return handleDiscordAPIErrorByStatus(error);
+}
+
+/**
+ * Map DiscordAPIError by HTTP status code
+ */
+function handleDiscordAPIErrorByStatus(error: DiscordAPIError): DiscordError {
+  const context = { discordCode: error.code, status: error.status };
+
+  if (error.status === 401) {
+    return new DiscordError(ErrorCode.AUTH_FAILED, error.message, false, context);
+  }
+
+  if (error.status === 403) {
+    return new DiscordError(ErrorCode.MISSING_PERMISSIONS, error.message, false, context);
+  }
+
+  if (error.status >= 500) {
+    return new DiscordError(ErrorCode.UNKNOWN, error.message, true, context);
+  }
+
+  return new DiscordError(ErrorCode.UNKNOWN, error.message, false, context);
+}
+
+/**
+ * Handle generic Error by message pattern matching
+ */
+function handleGenericError(error: Error): DiscordError {
+  const message = error.message.toLowerCase();
+
+  if (message.includes('token') || message.includes('unauthorized')) {
+    return new DiscordError(ErrorCode.INVALID_TOKEN, error.message, false);
+  }
+
+  if (message.includes('not connected') || message.includes('disconnected')) {
+    return new DiscordError(ErrorCode.NOT_CONNECTED, error.message, true);
+  }
+
+  if (message.includes('permission') || message.includes('access')) {
+    return new DiscordError(ErrorCode.MISSING_PERMISSIONS, error.message, false);
+  }
+
+  return new DiscordError(ErrorCode.UNKNOWN, error.message, false);
+}
+
+/**
  * Map Discord.js error to Omni error
  */
 export function mapDiscordError(error: unknown): DiscordError {
-  // Already a DiscordError
   if (error instanceof DiscordError) {
     return error;
   }
 
-  // Discord API Error (from discord.js)
   if (error instanceof DiscordAPIError) {
-    const mapping = apiErrorCodes[error.code as number];
-    if (mapping) {
-      return new DiscordError(mapping.code, error.message, mapping.retryable, {
-        discordCode: error.code,
-        method: error.method,
-        url: error.url,
-      });
-    }
-
-    // Token errors
-    if (error.code === 40001 || error.code === 40002) {
-      return new DiscordError(ErrorCode.INVALID_TOKEN, error.message, false, {
-        discordCode: error.code,
-      });
-    }
-
-    // Unauthorized (401)
-    if (error.status === 401) {
-      return new DiscordError(ErrorCode.AUTH_FAILED, error.message, false, {
-        discordCode: error.code,
-      });
-    }
-
-    // Forbidden (403)
-    if (error.status === 403) {
-      return new DiscordError(ErrorCode.MISSING_PERMISSIONS, error.message, false, {
-        discordCode: error.code,
-      });
-    }
-
-    // Server error (5xx) - retryable
-    if (error.status >= 500) {
-      return new DiscordError(ErrorCode.UNKNOWN, error.message, true, {
-        discordCode: error.code,
-        status: error.status,
-      });
-    }
-
-    return new DiscordError(ErrorCode.UNKNOWN, error.message, false, {
-      discordCode: error.code,
-      status: error.status,
-    });
+    return handleDiscordAPIError(error);
   }
 
-  // Rate limit error
   if (error instanceof RateLimitError) {
     return new DiscordError(ErrorCode.RATE_LIMITED, error.message, true, {
       timeToReset: error.timeToReset,
@@ -124,7 +147,6 @@ export function mapDiscordError(error: unknown): DiscordError {
     });
   }
 
-  // HTTP error
   if (error instanceof HTTPError) {
     const retryable = error.status >= 500 || error.status === 429;
     return new DiscordError(ErrorCode.UNKNOWN, error.message, retryable, {
@@ -133,29 +155,10 @@ export function mapDiscordError(error: unknown): DiscordError {
     });
   }
 
-  // Generic Error
   if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-
-    // Token errors
-    if (message.includes('token') || message.includes('unauthorized')) {
-      return new DiscordError(ErrorCode.INVALID_TOKEN, error.message, false);
-    }
-
-    // Connection errors
-    if (message.includes('not connected') || message.includes('disconnected')) {
-      return new DiscordError(ErrorCode.NOT_CONNECTED, error.message, true);
-    }
-
-    // Permission errors
-    if (message.includes('permission') || message.includes('access')) {
-      return new DiscordError(ErrorCode.MISSING_PERMISSIONS, error.message, false);
-    }
-
-    return new DiscordError(ErrorCode.UNKNOWN, error.message, false);
+    return handleGenericError(error);
   }
 
-  // Unknown error type
   return new DiscordError(ErrorCode.UNKNOWN, String(error), false);
 }
 

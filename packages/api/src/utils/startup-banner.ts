@@ -52,12 +52,16 @@ function getLocalIPs(): string[] {
   return ips;
 }
 
+// ANSI escape sequence pattern - built dynamically to avoid lint warnings about control characters
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape codes require ESC character
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+
 /**
  * Create a padded line for the box
  */
 function padLine(content: string, width: number): string {
   // Strip ANSI codes for length calculation
-  const stripped = content.replace(/\x1b\[[0-9;]*m/g, '');
+  const stripped = content.replace(ANSI_ESCAPE_PATTERN, '');
   const padding = width - stripped.length;
   return content + ' '.repeat(Math.max(0, padding));
 }
