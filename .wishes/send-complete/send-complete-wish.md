@@ -2,7 +2,7 @@
 
 > Wire up stubbed message send API routes to channel plugins with unified person-ID resolution.
 
-**Status:** REVIEW
+**Status:** FIX-FIRST
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-y51
@@ -267,3 +267,61 @@ packages/core/src/errors.ts              # Add RECIPIENT_NOT_ON_CHANNEL, CAPABIL
 - WhatsApp senders: `packages/channel-whatsapp/src/senders/`
 - Discord senders: `packages/channel-discord/src/senders/`
 - Channel capabilities: `packages/channel-*/src/capabilities.ts`
+
+---
+
+## Review Verdict
+
+**Verdict:** FIX-FIRST
+**Date:** 2026-02-01
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+| Group | Criterion | Status | Evidence |
+|-------|-----------|--------|----------|
+| A | `POST /messages/send` calls channel plugin | PASS | `messages.ts:507-587` - routes call `plugin.sendMessage()` |
+| A | Event stored with `direction: 'outbound'` | PASS | `event-persistence.ts:86-125` - subscribes to `message.sent`, stores with `direction: 'outbound'` |
+| A | Response includes real `externalMessageId` | PASS | `messages.ts:577-578` - returns `result.messageId` from channel |
+| A | Integration test for send flow | FAIL | No test file found for send routes |
+| B | `POST /messages/send/reaction` works | PASS | `messages.ts:689-764` - wired with capability check |
+| B | `POST /messages/send/sticker` works | PASS | `messages.ts:769-854` - wired with capability check |
+| B | `POST /messages/send/contact` works | PASS | `messages.ts:859-936` - wired with capability check |
+| B | `POST /messages/send/location` works | PASS | `messages.ts:941-1023` - wired with capability check |
+| B | Capability errors return clear messages | PASS | Uses `CAPABILITY_NOT_SUPPORTED` error code with channel name |
+| C | Error codes added | PASS | `errors.ts:37-38` - `RECIPIENT_NOT_ON_CHANNEL`, `CAPABILITY_NOT_SUPPORTED` |
+| C | `getIdentityForChannel` method | PASS | `persons.ts:116-142` - filters by channel, returns most recent |
+| C | UUID detection in routes | PASS | `messages.ts:51-58` - `isUUID()` function |
+| C | Recipient resolution logic | PASS | `messages.ts:71-90` - `resolveRecipient()` implemented |
+| C | Tests for resolution scenarios | FAIL | No tests for `getIdentityForChannel` or `resolveRecipient` |
+
+### Quality Gates
+
+| Check | Status | Details |
+|-------|--------|---------|
+| Typecheck | PASS | All 7 packages pass |
+| Tests | PASS | 636 pass, 7 skip, 0 fail |
+| Lint | PASS (with warnings) | Warnings in unrelated files only |
+
+### Findings
+
+**LOW: Missing unit tests for new code**
+- `PersonService.getIdentityForChannel()` has no tests
+- `resolveRecipient()` function has no tests
+- Send route handlers have no tests
+
+The implementation is correct and complete. Event persistence for `message.sent` is tested separately. The missing tests are for new code paths added by this wish.
+
+### Recommendation
+
+Before shipping:
+1. Add unit tests for `PersonService.getIdentityForChannel()` covering:
+   - Person with single identity on channel
+   - Person with multiple identities (should pick most recent)
+   - Person with no identity on channel (returns null)
+2. Add tests for `resolveRecipient()` covering:
+   - Platform ID passthrough
+   - UUID resolution to platform ID
+   - UUID with no identity throws `RECIPIENT_NOT_ON_CHANNEL`
+
+Estimated effort: Add tests to `packages/api/src/services/__tests__/persons.test.ts`
