@@ -569,6 +569,7 @@ psql -c "SELECT source, COUNT(*) FROM messages GROUP BY source"
 
 **Verdict:** SHIP
 **Date:** 2026-02-01
+**Updated:** 2026-02-01 (Group C verified)
 
 ### Acceptance Criteria
 
@@ -583,16 +584,16 @@ psql -c "SELECT source, COUNT(*) FROM messages GROUP BY source"
 | Can track message edits | PASS | Edit history tracked in JSONB array |
 | Real-time events create messages | PASS | message-persistence plugin handles events |
 | Can create messages without events | PASS | `source: 'sync'` messages work without event link |
+| Migration script exists | PASS | `packages/api/scripts/migrate-events-to-messages.ts` |
+| Migration supports dry-run | PASS | `--dry-run --limit N` flags work |
 
 ### Findings
 
 **No CRITICAL or HIGH issues found.**
 
-MEDIUM:
-- Pre-existing lint warnings in unrelated files (channel-discord, startup-banner) - not introduced by this wish
-
 LOW:
-- Fixed minor formatting issue in messages routes during review
+- Fixed minor formatting issue in messages routes during initial review
+- Moved migration script to `packages/api/scripts/` for proper dependency resolution
 
 ### Implementation Quality
 
@@ -618,6 +619,12 @@ LOW:
 - Routes mounted at `/api/v2/chats` and `/api/v2/messages`
 - Event integration via `message-persistence` plugin
 
+**Group C (Migration & Integration):**
+- `packages/api/scripts/migrate-events-to-messages.ts` - Backfill script
+- `packages/api/src/plugins/message-persistence.ts` - NATS event subscriber
+- Real-time events create both event AND message
+- Supports `--dry-run` and `--limit N` for safe migration
+
 ### Recommendation
 
-Ship to production. All acceptance criteria met. Migration script (Group C) can be tackled as follow-up when ready to backfill existing events.
+All groups complete. Ready to ship and run migration when needed.

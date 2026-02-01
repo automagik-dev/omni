@@ -6,11 +6,12 @@
  * This is a one-time migration to populate the new schema from existing data.
  *
  * Usage:
- *   bun run scripts/migrate-events-to-messages.ts [--dry-run] [--limit N]
+ *   cd packages/api && bun run scripts/migrate-events-to-messages.ts [--dry-run] [--limit N]
  *
  * @see unified-messages wish
  */
 
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 import {
   type ChannelType,
@@ -21,7 +22,6 @@ import {
   messages,
   omniEvents,
 } from '@omni/db';
-import { and, asc, eq, sql } from 'drizzle-orm';
 
 // Configuration
 const DATABASE_URL = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
