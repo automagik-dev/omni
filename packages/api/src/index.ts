@@ -33,6 +33,7 @@ import {
   setupMessageListener,
   setupMessagePersistence,
   setupQrCodeListener,
+  setupSyncWorker,
 } from './plugins';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { printStartupBanner } from './utils/startup-banner';
@@ -300,6 +301,15 @@ async function main() {
       await setupMessagePersistence(eventBus, services);
     } catch (error) {
       log.error('Failed to set up message persistence', { error: String(error) });
+    }
+  }
+
+  // Set up sync worker (processes sync jobs)
+  if (eventBus && globalChannelRegistry) {
+    try {
+      await setupSyncWorker(eventBus, services, globalChannelRegistry);
+    } catch (error) {
+      log.error('Failed to set up sync worker', { error: String(error) });
     }
   }
 

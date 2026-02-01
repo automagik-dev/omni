@@ -23,16 +23,58 @@ function getMediaStorage(db: unknown): MediaStorageService {
 }
 
 /**
+ * Validate path component to prevent path traversal attacks
+ */
+function isValidPathComponent(component: string): boolean {
+  // Reject empty, dot sequences, or absolute paths
+  if (!component || component === '.' || component === '..') {
+    return false;
+  }
+  // Reject if contains path traversal patterns
+  if (component.includes('..') || component.includes('\0')) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Validate UUID format for instanceId
+ */
+function isValidUUID(str: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
+
+/**
  * GET /media/:instanceId/* - Serve stored media files
  *
  * Supports range requests for audio/video streaming.
  */
 mediaRoutes.get('/:instanceId/*', async (c) => {
   const instanceId = c.req.param('instanceId');
+
+  // Validate instanceId is a valid UUID
+  if (!isValidUUID(instanceId)) {
+    return c.json({ error: { code: 'INVALID_INSTANCE', message: 'Invalid instance ID format' } }, 400);
+  }
+
   const path = c.req.path.replace(`/api/v2/media/${instanceId}/`, '');
 
   if (!path) {
     return c.json({ error: { code: 'INVALID_PATH', message: 'No path specified' } }, 400);
+  }
+
+  // Security: Validate path to prevent path traversal attacks
+  // Check each path segment
+  const pathSegments = path.split('/');
+  for (const segment of pathSegments) {
+    if (!isValidPathComponent(segment)) {
+      return c.json({ error: { code: 'INVALID_PATH', message: 'Invalid path' } }, 400);
+    }
+  }
+
+  // Additional check: reject paths starting with /
+  if (path.startsWith('/')) {
+    return c.json({ error: { code: 'INVALID_PATH', message: 'Invalid path' } }, 400);
   }
 
   // Build relative path

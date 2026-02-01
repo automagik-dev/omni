@@ -11,6 +11,7 @@ import { DiscordAPIError, HTTPError, RateLimitError } from 'discord.js';
  */
 export const ErrorCode = {
   NOT_CONNECTED: 'DISCORD_NOT_CONNECTED',
+  NOT_FOUND: 'DISCORD_NOT_FOUND',
   SEND_FAILED: 'DISCORD_SEND_FAILED',
   AUTH_FAILED: 'DISCORD_AUTH_FAILED',
   RATE_LIMITED: 'DISCORD_RATE_LIMITED',

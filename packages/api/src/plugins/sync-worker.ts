@@ -1,0 +1,322 @@
+/**
+ * Sync Worker Plugin
+ *
+ * Subscribes to sync.started events and processes sync jobs.
+ * Handles message history sync by calling channel plugin fetchHistory methods.
+ *
+ * @see history-sync wish
+ */
+
+import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { EventBus } from '@omni/core';
+import { createLogger } from '@omni/core';
+import type { ChannelType } from '@omni/core/types';
+import type { SyncJobConfig, SyncJobType } from '@omni/db';
+import type { Services } from '../services';
+
+const log = createLogger('sync-worker');
+
+/**
+ * Sync started event payload
+ */
+interface SyncStartedPayload {
+  jobId: string;
+  instanceId: string;
+  type: SyncJobType;
+  config: SyncJobConfig;
+}
+
+/**
+ * Rate limiter for sync operations
+ */
+class RateLimiter {
+  private lastRequest = 0;
+  private readonly minIntervalMs: number;
+
+  constructor(requestsPerMinute: number) {
+    this.minIntervalMs = Math.floor(60000 / requestsPerMinute);
+  }
+
+  async wait(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this.lastRequest;
+    if (elapsed < this.minIntervalMs) {
+      await new Promise((resolve) => setTimeout(resolve, this.minIntervalMs - elapsed));
+    }
+    this.lastRequest = Date.now();
+  }
+}
+
+/**
+ * Rate limit configurations per channel type
+ */
+const RATE_LIMITS: Record<string, number> = {
+  'whatsapp-baileys': 30, // 30 messages per minute
+  discord: 50, // 50 messages per minute
+  default: 20,
+};
+
+/**
+ * Get rate limiter for a channel type
+ */
+function getRateLimiter(channelType: string): RateLimiter {
+  const rpm = RATE_LIMITS[channelType] ?? RATE_LIMITS.default ?? 20;
+  return new RateLimiter(rpm);
+}
+
+/**
+ * Parse sync depth to date
+ */
+function parseSyncDepth(depth?: string): Date | undefined {
+  if (!depth) return undefined;
+
+  const now = new Date();
+  switch (depth) {
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    case '90d':
+      return new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    case '1y':
+      return new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+    case 'all':
+      return undefined; // No date filter
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Set up sync worker - subscribes to sync events and processes jobs
+ */
+export async function setupSyncWorker(
+  eventBus: EventBus,
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): Promise<void> {
+  try {
+    // Subscribe to sync.started events
+    await eventBus.subscribe(
+      'sync.started',
+      async (event) => {
+        const payload = event.payload as SyncStartedPayload;
+        const { jobId, instanceId, type, config } = payload;
+
+        log.info('Processing sync job', { jobId, instanceId, type });
+
+        try {
+          // Start the job
+          await services.syncJobs.start(jobId);
+
+          // Get instance to determine channel type
+          const instance = await services.instances.getById(instanceId);
+          if (!instance) {
+            throw new Error(`Instance ${instanceId} not found`);
+          }
+
+          const channelType = instance.channel;
+
+          // Process based on job type
+          switch (type) {
+            case 'messages':
+              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              break;
+            case 'profile':
+              // Profile sync is handled by ProfileSyncService, just mark complete
+              await services.syncJobs.complete(jobId);
+              break;
+            case 'contacts':
+              // Contacts sync - to be implemented
+              log.warn('Contacts sync not yet implemented', { jobId });
+              await services.syncJobs.complete(jobId);
+              break;
+            case 'groups':
+              // Groups sync - to be implemented
+              log.warn('Groups sync not yet implemented', { jobId });
+              await services.syncJobs.complete(jobId);
+              break;
+            case 'all':
+              // All sync - process each type
+              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              break;
+            default:
+              log.warn('Unknown sync type', { jobId, type });
+              await services.syncJobs.fail(jobId, `Unknown sync type: ${type}`);
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          log.error('Sync job failed', { jobId, error: errorMessage });
+          await services.syncJobs.fail(jobId, errorMessage);
+        }
+      },
+      {
+        durable: 'sync-worker',
+        queue: 'sync-workers',
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Sync worker initialized - listening for sync.started events');
+  } catch (error) {
+    log.error('Failed to set up sync worker', { error: String(error) });
+    throw error;
+  }
+}
+
+/**
+ * Process message history sync
+ */
+async function processMessageSync(
+  jobId: string,
+  instanceId: string,
+  channelType: ChannelType,
+  config: SyncJobConfig,
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): Promise<void> {
+  const plugin = channelRegistry.get(channelType);
+  if (!plugin) {
+    throw new Error(`No plugin found for channel type: ${channelType}`);
+  }
+
+  // Check if plugin supports fetchHistory
+  if (!('fetchHistory' in plugin) || typeof plugin.fetchHistory !== 'function') {
+    log.warn('Plugin does not support fetchHistory', { channelType });
+    await services.syncJobs.complete(jobId);
+    return;
+  }
+
+  const since = parseSyncDepth(config.depth);
+  const rateLimiter = getRateLimiter(channelType);
+
+  let fetched = 0;
+  let stored = 0;
+  let duplicates = 0;
+
+  log.info('Starting message sync', {
+    jobId,
+    instanceId,
+    channelType,
+    since: since?.toISOString(),
+  });
+
+  // For Discord, we need a channel ID from config
+  const fetchOptions: Record<string, unknown> = {
+    since,
+    until: new Date(),
+    onProgress: async (count: number, progress?: number) => {
+      await services.syncJobs.updateProgress(jobId, {
+        fetched: count,
+        stored,
+        duplicates,
+        totalEstimated: progress ? Math.round(count / (progress / 100)) : undefined,
+      });
+    },
+    onMessage: async (message: unknown) => {
+      // Rate limit
+      await rateLimiter.wait();
+
+      const msg = message as {
+        externalId: string;
+        chatId: string;
+        from: string;
+        timestamp: Date;
+        content: { type: string; text?: string };
+        isFromMe: boolean;
+        rawPayload: unknown;
+      };
+
+      fetched++;
+
+      try {
+        // Find or create chat
+        const { chat } = await services.chats.findOrCreate(instanceId, msg.chatId, {
+          chatType: 'dm', // Default, will be updated
+          channel: channelType as 'whatsapp-baileys' | 'discord',
+        });
+
+        // Check for duplicates
+        const existing = await services.messages.getByExternalId(chat.id, msg.externalId);
+        if (existing) {
+          duplicates++;
+          return;
+        }
+
+        // Create message
+        await services.messages.create({
+          chatId: chat.id,
+          externalId: msg.externalId,
+          source: 'sync',
+          messageType: mapContentType(msg.content.type),
+          textContent: msg.content.text,
+          platformTimestamp: msg.timestamp,
+          senderPlatformUserId: msg.from,
+          isFromMe: msg.isFromMe,
+          rawPayload: msg.rawPayload as Record<string, unknown>,
+        });
+
+        stored++;
+      } catch (error) {
+        log.warn('Failed to store synced message', {
+          externalId: msg.externalId,
+          error: String(error),
+        });
+      }
+    },
+  };
+
+  // Add channel ID for Discord
+  if (channelType === 'discord' && config.channelId) {
+    fetchOptions.channelId = config.channelId;
+  }
+
+  // Call fetchHistory
+  await plugin.fetchHistory(instanceId, fetchOptions);
+
+  // Update final progress
+  await services.syncJobs.updateProgress(jobId, {
+    fetched,
+    stored,
+    duplicates,
+  });
+
+  // Complete the job
+  await services.syncJobs.complete(jobId);
+
+  log.info('Message sync completed', {
+    jobId,
+    fetched,
+    stored,
+    duplicates,
+  });
+}
+
+/**
+ * Map content type to message type
+ */
+function mapContentType(
+  contentType: string,
+): 'text' | 'image' | 'audio' | 'video' | 'document' | 'sticker' | 'contact' | 'location' | 'poll' {
+  switch (contentType) {
+    case 'image':
+      return 'image';
+    case 'audio':
+      return 'audio';
+    case 'video':
+      return 'video';
+    case 'document':
+      return 'document';
+    case 'sticker':
+      return 'sticker';
+    case 'contact':
+      return 'contact';
+    case 'location':
+      return 'location';
+    case 'poll':
+    case 'poll_update':
+      return 'poll';
+    default:
+      return 'text';
+  }
+}

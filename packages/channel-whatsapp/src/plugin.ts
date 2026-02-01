@@ -14,17 +14,62 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
+import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
 import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
-import { toJid } from './jid';
+import { fromJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
+
+/**
+ * Message from history sync
+ */
+export interface HistorySyncMessage {
+  externalId: string;
+  chatId: string;
+  from: string;
+  timestamp: Date;
+  content: {
+    type: string;
+    text?: string;
+    mediaUrl?: string;
+    mimeType?: string;
+    caption?: string;
+  };
+  isFromMe: boolean;
+  rawPayload: unknown;
+}
+
+/**
+ * Options for fetchHistory method
+ */
+export interface FetchHistoryOptions {
+  /** Fetch messages since this date */
+  since?: Date;
+  /** Fetch messages until this date (default: now) */
+  until?: Date;
+  /** Callback for progress updates */
+  onProgress?: (fetched: number, progress?: number) => void;
+  /** Callback for each message synced */
+  onMessage?: (message: HistorySyncMessage) => void;
+  /** Request additional history beyond initial sync */
+  fetchMore?: boolean;
+  /** Max messages to fetch when using fetchMore */
+  maxMessages?: number;
+}
+
+/**
+ * Result of fetchHistory operation
+ */
+export interface FetchHistoryResult {
+  totalFetched: number;
+  messages: HistorySyncMessage[];
+}
 
 /**
  * WhatsApp connection options - passed per instance
@@ -80,6 +125,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Plugin configuration */
   private pluginConfig: WhatsAppConfig = {};
+
+  /** Active history sync operations - tracks callbacks for history sync events */
+  private historySyncCallbacks = new Map<
+    string,
+    {
+      since?: Date;
+      until?: Date;
+      onProgress?: (fetched: number, progress?: number) => void;
+      onMessage?: (message: HistorySyncMessage) => void;
+      onComplete?: (totalFetched: number) => void;
+      totalFetched: number;
+    }
+  >();
 
   /**
    * Plugin-specific initialization
@@ -474,6 +532,79 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       ownerIdentifier: user.id,
       platformMetadata,
     };
+  }
+
+  /**
+   * Fetch message history for an instance.
+   *
+   * WhatsApp syncs history automatically on connection via the `messaging-history.set` event.
+   * This method:
+   * 1. Sets up callbacks to process history as it arrives
+   * 2. Optionally requests additional history via `fetchMessageHistory`
+   * 3. Returns collected messages or streams them via callbacks
+   *
+   * @param instanceId - Instance to fetch history for
+   * @param options - Fetch options including date range and callbacks
+   * @returns Promise that resolves when sync is complete or timeout
+   */
+  async fetchHistory(instanceId: string, options: FetchHistoryOptions = {}): Promise<FetchHistoryResult> {
+    // Validate instance is connected (throws if not)
+    this.getSocket(instanceId);
+    const messages: HistorySyncMessage[] = [];
+
+    const syncState = {
+      since: options.since,
+      until: options.until ?? new Date(),
+      onProgress: options.onProgress,
+      onMessage: (msg: HistorySyncMessage) => {
+        messages.push(msg);
+        options.onMessage?.(msg);
+      },
+      onComplete: options.onProgress ? () => options.onProgress?.(messages.length, 100) : undefined,
+      totalFetched: 0,
+    };
+
+    this.historySyncCallbacks.set(instanceId, syncState);
+
+    try {
+      // If fetchMore is requested and we have existing messages, request more history
+      if (options.fetchMore && options.maxMessages) {
+        // Get oldest message in the chat to use as anchor
+        // For now, we'll rely on the automatic history sync
+        // In the future, we could use sock.fetchMessageHistory() to request more
+        this.logger.debug('Additional history fetch requested', {
+          instanceId,
+          maxMessages: options.maxMessages,
+        });
+
+        // Note: fetchMessageHistory requires an existing message key and timestamp
+        // which we don't have at this point. The initial sync via messaging-history.set
+        // handles the bulk of history. For on-demand fetching of older messages,
+        // we would need to track the oldest synced message.
+      }
+
+      // Wait for history sync to complete or timeout
+      // WhatsApp history sync is progressive - we wait for isLatest or progress=100
+      const timeout = 60000; // 60 second timeout
+      const startTime = Date.now();
+
+      await new Promise<void>((resolve) => {
+        const checkComplete = setInterval(() => {
+          const state = this.historySyncCallbacks.get(instanceId);
+          if (!state || Date.now() - startTime > timeout) {
+            clearInterval(checkComplete);
+            resolve();
+          }
+        }, 1000);
+      });
+
+      return {
+        totalFetched: messages.length,
+        messages,
+      };
+    } finally {
+      this.historySyncCallbacks.delete(instanceId);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -911,10 +1042,197 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle history sync (initial load)
+   * Processes messages from `messaging-history.set` event
    * @internal
    */
-  handleHistorySync(_instanceId: string, _history: unknown): void {
-    // TODO: Process history sync for initial data load
+  handleHistorySync(
+    instanceId: string,
+    history: {
+      chats: unknown[];
+      contacts: unknown[];
+      messages: WAMessage[];
+      isLatest?: boolean;
+      progress?: number | null;
+      syncType?: proto.HistorySync.HistorySyncType | null;
+    },
+  ): void {
+    const { messages, progress, isLatest, syncType } = history;
+    const syncState = this.historySyncCallbacks.get(instanceId);
+
+    this.logger.debug('Processing history sync batch', {
+      instanceId,
+      messageCount: messages.length,
+      progress: progress ?? 'unknown',
+      isLatest,
+      syncType,
+    });
+
+    // Process each message in the history
+    for (const msg of messages) {
+      this.processHistoryMessage(msg, syncState);
+    }
+
+    // Report progress and completion
+    this.reportHistorySyncProgress(instanceId, syncState, progress, isLatest, messages.length);
+  }
+
+  /**
+   * Process a single message from history sync
+   * @internal
+   */
+  private processHistoryMessage(
+    msg: WAMessage,
+    syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
+  ): void {
+    if (!msg.key?.id || !msg.key?.remoteJid) return;
+
+    const timestamp = this.getMessageTimestamp(msg);
+
+    // Filter by date range if specified
+    if (syncState?.since && timestamp < syncState.since) return;
+    if (syncState?.until && timestamp > syncState.until) return;
+
+    // Extract basic content info
+    const content = this.extractHistoryMessageContent(msg);
+    if (!content) return;
+
+    const chatId = msg.key.remoteJid;
+    const { id: senderId } = fromJid(msg.key.fromMe ? chatId : msg.key.participant || chatId);
+
+    const historyMessage: HistorySyncMessage = {
+      externalId: msg.key.id,
+      chatId,
+      from: senderId,
+      timestamp,
+      content,
+      isFromMe: msg.key.fromMe ?? false,
+      rawPayload: msg,
+    };
+
+    // Call message callback if registered
+    syncState?.onMessage?.(historyMessage);
+    if (syncState) syncState.totalFetched++;
+  }
+
+  /**
+   * Get timestamp from a message
+   * @internal
+   */
+  private getMessageTimestamp(msg: WAMessage): Date {
+    if (!msg.messageTimestamp) return new Date();
+    const ts = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+    return new Date(ts * 1000);
+  }
+
+  /**
+   * Report history sync progress and completion
+   * @internal
+   */
+  private reportHistorySyncProgress(
+    instanceId: string,
+    syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
+    progress: number | null | undefined,
+    isLatest: boolean | undefined,
+    messageCount: number,
+  ): void {
+    // Report progress
+    if (syncState?.onProgress && progress !== undefined && progress !== null) {
+      syncState.onProgress(syncState.totalFetched, progress);
+    }
+
+    // Check if sync is complete
+    if (isLatest || progress === 100) {
+      syncState?.onComplete?.(syncState?.totalFetched ?? 0);
+      this.logger.info('History sync complete', {
+        instanceId,
+        totalMessages: syncState?.totalFetched ?? messageCount,
+      });
+    }
+  }
+
+  /**
+   * Extract content from a history message
+   * Simplified version for history sync processing
+   * @internal
+   */
+  private extractHistoryMessageContent(
+    msg: WAMessage,
+  ): { type: string; text?: string; mediaUrl?: string; mimeType?: string; caption?: string } | null {
+    const message = msg.message;
+    if (!message) return null;
+
+    // Use a lookup approach to reduce complexity
+    return this.extractTextContent(message) || this.extractMediaContent(message) || this.extractOtherContent(message);
+  }
+
+  /**
+   * Extract text content from message
+   * @internal
+   */
+  private extractTextContent(message: NonNullable<WAMessage['message']>): { type: string; text?: string } | null {
+    if (message.conversation) {
+      return { type: 'text', text: message.conversation };
+    }
+    if (message.extendedTextMessage?.text) {
+      return { type: 'text', text: message.extendedTextMessage.text };
+    }
+    return null;
+  }
+
+  /**
+   * Extract media content from message
+   * @internal
+   */
+  private extractMediaContent(
+    message: NonNullable<WAMessage['message']>,
+  ): { type: string; mimeType?: string; caption?: string } | null {
+    if (message.imageMessage) {
+      return {
+        type: 'image',
+        mimeType: message.imageMessage.mimetype ?? 'image/jpeg',
+        caption: message.imageMessage.caption ?? undefined,
+      };
+    }
+    if (message.audioMessage) {
+      return { type: 'audio', mimeType: message.audioMessage.mimetype ?? 'audio/ogg' };
+    }
+    if (message.videoMessage) {
+      return {
+        type: 'video',
+        mimeType: message.videoMessage.mimetype ?? 'video/mp4',
+        caption: message.videoMessage.caption ?? undefined,
+      };
+    }
+    if (message.documentMessage) {
+      return {
+        type: 'document',
+        mimeType: message.documentMessage.mimetype ?? 'application/octet-stream',
+        caption: message.documentMessage.caption ?? undefined,
+      };
+    }
+    if (message.stickerMessage) {
+      return { type: 'sticker', mimeType: message.stickerMessage.mimetype ?? 'image/webp' };
+    }
+    return null;
+  }
+
+  /**
+   * Extract other content types (location, contact, poll)
+   * @internal
+   */
+  private extractOtherContent(message: NonNullable<WAMessage['message']>): { type: string; text?: string } | null {
+    if (message.locationMessage) {
+      return { type: 'location', text: message.locationMessage.name ?? message.locationMessage.address ?? undefined };
+    }
+    if (message.contactMessage) {
+      return { type: 'contact', text: message.contactMessage.displayName ?? undefined };
+    }
+    if (message.pollCreationMessage || message.pollCreationMessageV3) {
+      const poll = message.pollCreationMessage || message.pollCreationMessageV3;
+      return { type: 'poll', text: poll?.name ?? undefined };
+    }
+
+    return null;
   }
 
   /**

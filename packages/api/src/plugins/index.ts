@@ -35,5 +35,8 @@ export { setupEventPersistence } from './event-persistence';
 // Message persistence (writes to unified chats/messages tables)
 export { setupMessagePersistence } from './message-persistence';
 
+// Sync worker (processes sync jobs)
+export { setupSyncWorker } from './sync-worker';
+
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';

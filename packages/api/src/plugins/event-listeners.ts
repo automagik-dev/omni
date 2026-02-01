@@ -73,7 +73,12 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         }
       }
 
-      instanceLog.info('Disconnected', { instanceId, channel: channelType, willReconnect, reason: reason || 'unknown' });
+      instanceLog.info('Disconnected', {
+        instanceId,
+        channel: channelType,
+        willReconnect,
+        reason: reason || 'unknown',
+      });
     });
   } catch (error) {
     instanceLog.warn('Failed to set up connection listener', { error: String(error) });

@@ -14,7 +14,7 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { Client } from 'discord.js';
+import type { Client, Message, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
@@ -41,6 +41,51 @@ import type {
   SlashCommandPayload,
 } from './types';
 import { DiscordError, ErrorCode, mapDiscordError } from './utils/errors';
+
+/**
+ * Message from history sync
+ */
+export interface HistorySyncMessage {
+  externalId: string;
+  chatId: string;
+  from: string;
+  timestamp: Date;
+  content: {
+    type: string;
+    text?: string;
+    mediaUrl?: string;
+    mimeType?: string;
+    caption?: string;
+  };
+  isFromMe: boolean;
+  rawPayload: unknown;
+}
+
+/**
+ * Options for fetchHistory method
+ */
+export interface FetchHistoryOptions {
+  /** Channel ID to fetch messages from (required for Discord) */
+  channelId: string;
+  /** Fetch messages since this date */
+  since?: Date;
+  /** Fetch messages until this date (default: now) */
+  until?: Date;
+  /** Maximum number of messages to fetch (default: 100, max: 1000) */
+  limit?: number;
+  /** Callback for progress updates */
+  onProgress?: (fetched: number, total?: number) => void;
+  /** Callback for each message synced */
+  onMessage?: (message: HistorySyncMessage) => void;
+}
+
+/**
+ * Result of fetchHistory operation
+ */
+export interface FetchHistoryResult {
+  totalFetched: number;
+  messages: HistorySyncMessage[];
+}
 
 /**
  * Discord Channel Plugin
@@ -390,6 +435,196 @@ export class DiscordPlugin extends BaseChannelPlugin {
       ownerIdentifier: user.id,
       platformMetadata,
     };
+  }
+
+  /**
+   * Fetch message history from a Discord channel.
+   *
+   * Discord provides a proper API for fetching historical messages using
+   * the channel.messages.fetch() method.
+   *
+   * @param instanceId - Instance to fetch history for
+   * @param options - Fetch options including channel ID and date range
+   * @returns Promise that resolves with fetched messages
+   */
+  async fetchHistory(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    const client = this.getClient(instanceId);
+    const limit = Math.min(options.limit ?? 100, 1000); // Max 1000 messages
+
+    // Get the channel
+    const channel = await client.channels.fetch(options.channelId);
+    if (!channel || !('messages' in channel)) {
+      throw new DiscordError(ErrorCode.NOT_FOUND, `Channel ${options.channelId} not found or not a text channel`);
+    }
+
+    const textChannel = channel as TextBasedChannel;
+    const botId = client.user?.id;
+
+    this.logger.debug('Starting history fetch', {
+      instanceId,
+      channelId: options.channelId,
+      limit,
+      since: options.since?.toISOString(),
+      until: options.until?.toISOString(),
+    });
+
+    try {
+      const messages = await this.fetchMessageBatches(textChannel, options, limit, botId);
+
+      this.logger.info('History fetch complete', {
+        instanceId,
+        channelId: options.channelId,
+        totalFetched: messages.length,
+      });
+
+      return {
+        totalFetched: messages.length,
+        messages,
+      };
+    } catch (error) {
+      throw mapDiscordError(error);
+    }
+  }
+
+  /**
+   * Convert a Discord message to HistorySyncMessage format
+   * @internal
+   */
+  private convertToHistoryMessage(msg: Message, channelId: string, botId?: string): HistorySyncMessage {
+    const { contentType, text, mediaUrl, mimeType } = this.extractMessageContent(msg);
+
+    return {
+      externalId: msg.id,
+      chatId: channelId,
+      from: msg.author.id,
+      timestamp: msg.createdAt,
+      content: { type: contentType, text, mediaUrl, mimeType },
+      isFromMe: msg.author.id === botId,
+      rawPayload: this.buildRawPayload(msg),
+    };
+  }
+
+  /**
+   * Extract content from a Discord message
+   * @internal
+   */
+  private extractMessageContent(msg: Message): {
+    contentType: string;
+    text: string | undefined;
+    mediaUrl: string | undefined;
+    mimeType: string | undefined;
+  } {
+    let contentType = 'text';
+    let text = msg.content || undefined;
+    let mediaUrl: string | undefined;
+    let mimeType: string | undefined;
+
+    // Check for attachments
+    const attachment = msg.attachments.first();
+    if (attachment) {
+      mediaUrl = attachment.url;
+      mimeType = attachment.contentType ?? undefined;
+      contentType = this.getContentTypeFromMime(mimeType);
+    }
+
+    // Check for embeds
+    if (msg.embeds.length > 0 && !text) {
+      const embed = msg.embeds[0];
+      if (embed) {
+        text = embed.description ?? embed.title ?? undefined;
+      }
+    }
+
+    return { contentType, text, mediaUrl, mimeType };
+  }
+
+  /**
+   * Get content type from MIME type
+   * @internal
+   */
+  private getContentTypeFromMime(mimeType: string | undefined): string {
+    if (!mimeType) return 'document';
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    if (mimeType.startsWith('video/')) return 'video';
+    return 'document';
+  }
+
+  /**
+   * Build raw payload from a Discord message
+   * @internal
+   */
+  private buildRawPayload(msg: Message): Record<string, unknown> {
+    return {
+      id: msg.id,
+      channelId: msg.channelId,
+      guildId: msg.guildId,
+      authorId: msg.author.id,
+      authorTag: msg.author.tag,
+      content: msg.content,
+      attachments: msg.attachments.map((a) => ({
+        id: a.id,
+        url: a.url,
+        name: a.name,
+        size: a.size,
+        contentType: a.contentType,
+      })),
+      embeds: msg.embeds.length,
+      reactions: msg.reactions.cache.map((r) => ({
+        emoji: r.emoji.name,
+        count: r.count,
+      })),
+      replyToId: msg.reference?.messageId,
+      createdAt: msg.createdAt.toISOString(),
+      editedAt: msg.editedAt?.toISOString(),
+    };
+  }
+
+  /**
+   * Fetch message batches from a Discord channel
+   * Handles pagination and filtering by date range
+   * @internal
+   */
+  private async fetchMessageBatches(
+    channel: TextBasedChannel,
+    options: FetchHistoryOptions,
+    limit: number,
+    botId: string | undefined,
+  ): Promise<HistorySyncMessage[]> {
+    const messages: HistorySyncMessage[] = [];
+    let before: string | undefined;
+    let remaining = limit;
+
+    while (remaining > 0) {
+      const batchSize = Math.min(remaining, 100);
+      const batch = await channel.messages.fetch({ limit: batchSize, before });
+
+      if (batch.size === 0) break;
+
+      for (const msg of batch.values()) {
+        // Apply date filters
+        if (options.since && msg.createdAt < options.since) {
+          remaining = 0; // Stop fetching, reached oldest message
+          break;
+        }
+        if (options.until && msg.createdAt > options.until) {
+          continue; // Skip messages newer than until date
+        }
+
+        const historyMsg = this.convertToHistoryMessage(msg, options.channelId, botId);
+        messages.push(historyMsg);
+        options.onMessage?.(historyMsg);
+      }
+
+      remaining -= batch.size;
+      before = batch.last()?.id;
+      options.onProgress?.(messages.length);
+
+      // If batch returned less than requested, we've reached the end
+      if (batch.size < batchSize) break;
+    }
+
+    return messages;
   }
 
   /**
