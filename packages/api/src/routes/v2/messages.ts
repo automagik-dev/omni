@@ -405,36 +405,28 @@ messagesRoutes.patch('/:id/transcription', zValidator('json', z.object({ transcr
 /**
  * PATCH /messages/:id/image-description - Update image description
  */
-messagesRoutes.patch(
-  '/:id/image-description',
-  zValidator('json', z.object({ description: z.string() })),
-  async (c) => {
-    const id = c.req.param('id');
-    const { description } = c.req.valid('json');
-    const services = c.get('services');
+messagesRoutes.patch('/:id/image-description', zValidator('json', z.object({ description: z.string() })), async (c) => {
+  const id = c.req.param('id');
+  const { description } = c.req.valid('json');
+  const services = c.get('services');
 
-    const message = await services.messages.updateImageDescription(id, description);
+  const message = await services.messages.updateImageDescription(id, description);
 
-    return c.json({ data: message });
-  },
-);
+  return c.json({ data: message });
+});
 
 /**
  * PATCH /messages/:id/video-description - Update video description
  */
-messagesRoutes.patch(
-  '/:id/video-description',
-  zValidator('json', z.object({ description: z.string() })),
-  async (c) => {
-    const id = c.req.param('id');
-    const { description } = c.req.valid('json');
-    const services = c.get('services');
+messagesRoutes.patch('/:id/video-description', zValidator('json', z.object({ description: z.string() })), async (c) => {
+  const id = c.req.param('id');
+  const { description } = c.req.valid('json');
+  const services = c.get('services');
 
-    const message = await services.messages.updateVideoDescription(id, description);
+  const message = await services.messages.updateVideoDescription(id, description);
 
-    return c.json({ data: message });
-  },
-);
+  return c.json({ data: message });
+});
 
 /**
  * PATCH /messages/:id/document-extraction - Update document extraction

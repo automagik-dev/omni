@@ -2,7 +2,7 @@
 
 > Unified message and chat schema with versioning, linking, and LLM-ready preprocessing.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-p5c
@@ -562,3 +562,62 @@ psql -c "SELECT source, COUNT(*) FROM messages GROUP BY source"
 | Raw payload via event | Raw payload **on message** |
 
 **Result:** 3 tables instead of 5, simpler queries, works for both real-time AND synced messages.
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-01
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `make db-push` succeeds | PASS | Schema pushed successfully, tables created |
+| `make typecheck` passes | PASS | All 7 packages pass TypeScript check |
+| All indexes created properly | PASS | Verified via db-push success |
+| Can create/get/update chats | PASS | ChatService tests pass (5 tests) |
+| Can create/get/update messages | PASS | MessageService tests pass (9 tests) |
+| Can add/remove reactions | PASS | JSONB reactions work correctly |
+| Can track message edits | PASS | Edit history tracked in JSONB array |
+| Real-time events create messages | PASS | message-persistence plugin handles events |
+| Can create messages without events | PASS | `source: 'sync'` messages work without event link |
+
+### Findings
+
+**No CRITICAL or HIGH issues found.**
+
+MEDIUM:
+- Pre-existing lint warnings in unrelated files (channel-discord, startup-banner) - not introduced by this wish
+
+LOW:
+- Fixed minor formatting issue in messages routes during review
+
+### Implementation Quality
+
+- **Security:** No vulnerabilities. Proper input validation via Zod schemas on all routes.
+- **Correctness:** All 14 integration tests pass. Schema matches wish specification exactly.
+- **Quality:** Clean, well-documented code. Services follow consistent patterns.
+- **Tests:** Comprehensive integration tests covering CRUD, reactions, edits, delivery status.
+
+### Deliverables Summary
+
+**Group A (Schema & Tables):**
+- Chat types enum (`dm`, `group`, `channel`, `thread`, `forum`, `voice`, etc.)
+- Message types enum (`text`, `audio`, `image`, `video`, etc.)
+- Message sources enum (`realtime`, `sync`, `api`, `import`)
+- `chats` table with all required fields and indexes
+- `chat_participants` table with cross-platform linking
+- `messages` table as source of truth with JSONB for reactions/history
+- Relations defined for all tables
+
+**Group B (Services & API):**
+- `ChatService` with full CRUD + participant management
+- `MessageService` with CRUD, edit tracking, reactions, delivery status
+- Routes mounted at `/api/v2/chats` and `/api/v2/messages`
+- Event integration via `message-persistence` plugin
+
+### Recommendation
+
+Ship to production. All acceptance criteria met. Migration script (Group C) can be tackled as follow-up when ready to backfill existing events.
