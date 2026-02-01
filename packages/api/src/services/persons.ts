@@ -6,7 +6,7 @@ import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type NewPerson, type Person, type PlatformIdentity, persons, platformIdentities } from '@omni/db';
-import { eq, ilike, or } from 'drizzle-orm';
+import { desc, eq, ilike, or, sql } from 'drizzle-orm';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -29,6 +29,42 @@ export class PersonService {
     private db: Database,
     private eventBus: EventBus | null,
   ) {}
+
+  /**
+   * List all persons with pagination
+   */
+  async list(options: { limit?: number; cursor?: string } = {}): Promise<{
+    items: Person[];
+    hasMore: boolean;
+    cursor?: string;
+  }> {
+    const { limit = 20, cursor } = options;
+    const fetchLimit = limit + 1; // Fetch one extra to check if there's more
+
+    const conditions = [];
+    if (cursor) {
+      conditions.push(sql`${persons.createdAt} < ${cursor}`);
+    }
+
+    const items = await this.db
+      .select()
+      .from(persons)
+      .where(conditions.length ? conditions[0] : undefined)
+      .orderBy(desc(persons.createdAt))
+      .limit(fetchLimit);
+
+    const hasMore = items.length > limit;
+    if (hasMore) {
+      items.pop(); // Remove the extra item
+    }
+
+    const lastItem = items[items.length - 1];
+    return {
+      items,
+      hasMore,
+      cursor: lastItem?.createdAt.toISOString(),
+    };
+  }
 
   /**
    * Search persons by name, email, or phone

@@ -3,13 +3,14 @@
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import type { EventBus } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
+
+const httpLog = createLogger('http');
 
 import { authMiddleware } from './middleware/auth';
 import { createContextMiddleware } from './middleware/context';
@@ -44,7 +45,12 @@ export function createApp(
 
   // Global middleware
   app.use('*', timing());
-  app.use('*', logger());
+  app.use('*', async (c, next) => {
+    const start = Date.now();
+    await next();
+    const ms = Date.now() - start;
+    httpLog.info(`→ ${c.req.method} ${c.req.path}`, { status: c.res.status, ms });
+  });
   app.use(
     '*',
     cors({

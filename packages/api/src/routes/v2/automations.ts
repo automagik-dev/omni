@@ -146,6 +146,47 @@ automationsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 });
 
 /**
+ * GET /automation-logs - Search execution logs
+ * NOTE: Must be defined before /:id route to avoid matching as ID
+ */
+automationsRoutes.get('/automation-logs', zValidator('query', logsQuerySchema), async (c) => {
+  const { limit, cursor, status, eventType, automationId } = c.req.valid('query');
+  const services = c.get('services');
+
+  const result = await services.automations.searchLogs({
+    limit,
+    cursor,
+    status,
+    eventType,
+    automationId,
+  });
+
+  return c.json({
+    items: result.items,
+    meta: { hasMore: result.hasMore, cursor: result.cursor },
+  });
+});
+
+/**
+ * GET /automation-metrics - Get engine metrics
+ * NOTE: Must be defined before /:id route to avoid matching as ID
+ */
+automationsRoutes.get('/automation-metrics', async (c) => {
+  const services = c.get('services');
+
+  const metrics = services.automations.getMetrics();
+
+  if (!metrics) {
+    return c.json({ running: false, message: 'Automation engine not running' });
+  }
+
+  return c.json({
+    running: true,
+    ...metrics,
+  });
+});
+
+/**
  * GET /automations/:id - Get automation by ID
  */
 automationsRoutes.get('/:id', async (c) => {
@@ -250,44 +291,5 @@ automationsRoutes.get(
     });
   },
 );
-
-/**
- * GET /automation-logs - Search execution logs
- */
-automationsRoutes.get('/automation-logs', zValidator('query', logsQuerySchema), async (c) => {
-  const { limit, cursor, status, eventType, automationId } = c.req.valid('query');
-  const services = c.get('services');
-
-  const result = await services.automations.searchLogs({
-    limit,
-    cursor,
-    status,
-    eventType,
-    automationId,
-  });
-
-  return c.json({
-    items: result.items,
-    meta: { hasMore: result.hasMore, cursor: result.cursor },
-  });
-});
-
-/**
- * GET /automation-metrics - Get engine metrics
- */
-automationsRoutes.get('/automation-metrics', async (c) => {
-  const services = c.get('services');
-
-  const metrics = services.automations.getMetrics();
-
-  if (!metrics) {
-    return c.json({ running: false, message: 'Automation engine not running' });
-  }
-
-  return c.json({
-    running: true,
-    ...metrics,
-  });
-});
 
 export { automationsRoutes };

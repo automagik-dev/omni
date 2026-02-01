@@ -29,5 +29,8 @@ export { storeQrCode, getQrCode, clearQrCode, setupQrCodeListener } from './qr-s
 // Event listeners (connection, messages)
 export { setupConnectionListener, setupMessageListener } from './event-listeners';
 
+// Event persistence (writes events to omni_events table)
+export { setupEventPersistence } from './event-persistence';
+
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';

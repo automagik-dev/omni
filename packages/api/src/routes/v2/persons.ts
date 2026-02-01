@@ -10,10 +10,11 @@ import type { AppVariables } from '../../types';
 
 const personsRoutes = new Hono<{ Variables: AppVariables }>();
 
-// Search query schema
-const searchQuerySchema = z.object({
-  search: z.string().min(1).describe('Search term (name, email, or phone)'),
+// List/search query schema
+const listQuerySchema = z.object({
+  search: z.string().min(1).optional().describe('Search term (name, email, or phone)'),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().optional().describe('Cursor for pagination'),
 });
 
 // Timeline query schema
@@ -56,15 +57,27 @@ const mergePersonsSchema = z.object({
 });
 
 /**
- * GET /persons - Search persons
+ * GET /persons - List or search persons
  */
-personsRoutes.get('/', zValidator('query', searchQuerySchema), async (c) => {
-  const { search, limit } = c.req.valid('query');
+personsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
+  const { search, limit, cursor } = c.req.valid('query');
   const services = c.get('services');
 
-  const persons = await services.persons.search(search, limit);
+  if (search) {
+    // Search mode
+    const persons = await services.persons.search(search, limit);
+    return c.json({ items: persons });
+  }
 
-  return c.json({ items: persons });
+  // List mode
+  const result = await services.persons.list({ limit, cursor });
+  return c.json({
+    items: result.items,
+    meta: {
+      hasMore: result.hasMore,
+      cursor: result.cursor,
+    },
+  });
 });
 
 /**
