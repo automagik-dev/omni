@@ -5,6 +5,7 @@
 **Status:** SHIPPED
 **Created:** 2026-01-29
 **Author:** WISH Agent
+**Beads:** omni-v2-8wd
 
 ---
 

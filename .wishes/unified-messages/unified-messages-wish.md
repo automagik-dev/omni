@@ -2,7 +2,7 @@
 
 > Unified message and chat schema with versioning, linking, and LLM-ready preprocessing.
 
-**Status:** DRAFT
+**Status:** FORGING
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-p5c

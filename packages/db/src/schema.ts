@@ -76,6 +76,109 @@ export const contentTypes = [
 ] as const;
 export type ContentType = (typeof contentTypes)[number];
 
+// ============================================================================
+// UNIFIED MESSAGES ENUMS
+// ============================================================================
+
+export const chatTypes = [
+  // Common across platforms
+  'dm', // Direct message (1:1)
+  'group', // Multi-party chat (WhatsApp group, Discord group DM)
+
+  // Channel-oriented (Discord, Slack)
+  'channel', // Public/private channel in a server
+  'thread', // Thread within a channel
+  'forum', // Forum channel with thread-per-post
+  'voice', // Voice channel (can have text)
+
+  // Platform-specific
+  'broadcast', // WhatsApp broadcast list
+  'community', // WhatsApp community
+  'announcement', // Discord announcement channel
+  'stage', // Discord stage channel
+] as const;
+export type ChatType = (typeof chatTypes)[number];
+
+export const messageSources = [
+  'realtime', // Received via webhook (has event)
+  'sync', // Fetched via history sync (NO event)
+  'api', // Sent via our API
+  'import', // Bulk imported
+] as const;
+export type MessageSource = (typeof messageSources)[number];
+
+export const messageTypes = [
+  'text',
+  'audio',
+  'image',
+  'video',
+  'document',
+  'sticker',
+  'contact',
+  'location',
+  'poll',
+  'system', // System messages (join, leave, etc.)
+] as const;
+export type MessageType = (typeof messageTypes)[number];
+
+export const messageStatuses = ['active', 'edited', 'deleted', 'expired'] as const;
+export type MessageStatus = (typeof messageStatuses)[number];
+
+export const deliveryStatuses = ['pending', 'sent', 'delivered', 'read', 'failed'] as const;
+export type DeliveryStatus = (typeof deliveryStatuses)[number];
+
+// ============================================================================
+// UNIFIED MESSAGES JSONB TYPES
+// ============================================================================
+
+export interface EditHistoryEntry {
+  text: string;
+  at: string; // ISO timestamp
+  by?: string; // Platform user ID who edited (if available)
+}
+
+export interface ReactionInfo {
+  emoji: string;
+  platformUserId: string;
+  personId?: string; // If resolved to Omni person
+  displayName?: string;
+  at: string; // ISO timestamp
+  isCustomEmoji?: boolean;
+  customEmojiId?: string; // Discord custom emoji
+}
+
+export interface MentionInfo {
+  platformUserId: string;
+  personId?: string;
+  displayName?: string;
+  startIndex?: number;
+  length?: number;
+  type: 'user' | 'role' | 'channel' | 'everyone' | 'here';
+}
+
+export interface MediaMetadata {
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+  fileName?: string;
+  fileSize?: number;
+  isVoiceNote?: boolean;
+  waveform?: number[];
+  isGif?: boolean;
+  processingCostUsd?: number;
+  processingModel?: string;
+}
+
+export interface ChatSettings {
+  muted?: boolean;
+  muteUntil?: string; // ISO timestamp
+  pinned?: boolean;
+  archived?: boolean;
+  readOnly?: boolean;
+  slowMode?: number; // seconds
+  [key: string]: unknown;
+}
+
 export const jobStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
 
