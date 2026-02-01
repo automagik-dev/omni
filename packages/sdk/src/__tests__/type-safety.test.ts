@@ -26,13 +26,27 @@ describe('SDK Type Safety', () => {
   });
 
   test('raw client provides typed path params for /instances/{id}', async () => {
-    // This would fail at compile time if we passed wrong types
+    // Get a real instance ID first (or skip if none exist)
+    const instances = await client.raw.GET('/instances', { params: { query: { limit: 1 } } });
+    const instanceId = instances.data?.items?.[0]?.id;
+
+    if (!instanceId) {
+      // No instances - just verify types compile without calling
+      const paramsTypeCheck: Parameters<typeof client.raw.GET<'/instances/{id}'>>[1] = {
+        params: { path: { id: 'some-uuid' } },
+      };
+      expect(paramsTypeCheck).toBeDefined();
+      return;
+    }
+
+    // Call with real instance ID
     const result = await client.raw.GET('/instances/{id}', {
-      params: { path: { id: '00000000-0000-0000-0000-000000000000' } },
+      params: { path: { id: instanceId } },
     });
 
     // TypeScript knows response shape
-    expect(result.response.ok || result.error).toBeTruthy();
+    expect(result.response.ok).toBe(true);
+    expect(result.data?.data?.id).toBe(instanceId);
   });
 
   test('raw client provides typed query params for /instances', async () => {
