@@ -190,17 +190,45 @@ git merge feat/<session>
 - **Events:** NATS JetStream
 - **Validation:** Zod
 
-## Key Commands
+## Commands: Use Make First
+
+**ALWAYS check `make help` before running raw commands.** The Makefile wraps common tasks with proper setup, environment loading, and error handling.
 
 ```bash
-make dev          # Start development
-make test         # Run tests
-make typecheck    # Type checking
-make lint         # Linting
-make check        # All quality checks
-make db-push      # Push schema changes
+make help         # Show all available commands (START HERE)
+```
+
+### Development
+```bash
+make dev          # Start all services + API
+make dev-api      # Start just the API
+make dev-services # Start PostgreSQL + NATS
+```
+
+### Quality Checks
+```bash
+make check        # All checks: typecheck + lint + test
+make typecheck    # TypeScript only
+make lint         # Biome linter
+make lint-fix     # Auto-fix lint issues
+make test         # All tests
+make test-api     # API package tests only
+make test-file F=<path>  # Specific test file
+```
+
+### Database
+```bash
+make db-push      # Push schema changes (dev)
 make db-studio    # Open Drizzle Studio
 ```
+
+### Migrations
+```bash
+make migrate-messages-dry  # Dry run: events → messages
+make migrate-messages      # Live migration
+```
+
+**When to use raw commands:** Only for edge cases not covered by make targets (e.g., specific bun flags, one-off debugging).
 
 ## Project Structure
 
@@ -230,3 +258,5 @@ packages/
 - Use `any` types
 - Leave uncommitted work
 - Stop without pushing
+- Run raw commands without checking `make help` first
+- Bypass make commands for common tasks (tests, lint, typecheck)
