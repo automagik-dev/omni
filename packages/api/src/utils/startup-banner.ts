@@ -4,8 +4,8 @@
  * Displays a pretty startup banner with server info
  */
 
-import { createLogger } from '@omni/core';
 import { networkInterfaces } from 'node:os';
+import { createLogger } from '@omni/core';
 
 const log = createLogger('api:startup');
 
@@ -73,7 +73,14 @@ export function printStartupBanner(options: {
   healthPath?: string;
   metricsPath?: string;
 }): void {
-  const { version, host, port, docsPath = '/api/v2/docs', healthPath = '/api/v2/health', metricsPath = '/api/v2/metrics' } = options;
+  const {
+    version,
+    host,
+    port,
+    docsPath = '/api/v2/docs',
+    healthPath = '/api/v2/health',
+    metricsPath = '/api/v2/metrics',
+  } = options;
 
   const localIPs = getLocalIPs();
   const isAllInterfaces = host === '0.0.0.0';
@@ -94,7 +101,9 @@ export function printStartupBanner(options: {
   // URLs section
   const addLine = (label: string, value: string, color: string = COLORS.green) => {
     const content = `  ${COLORS.dim}${label}:${COLORS.reset} ${color}${value}${COLORS.reset}`;
-    lines.push(`  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${padLine(content, WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`);
+    lines.push(
+      `  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${padLine(content, WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`,
+    );
   };
 
   addLine('Local', baseUrl, COLORS.green);
@@ -106,7 +115,9 @@ export function printStartupBanner(options: {
   }
 
   // Separator
-  lines.push(`  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${' '.repeat(WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`);
+  lines.push(
+    `  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${' '.repeat(WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`,
+  );
 
   // Links
   addLine('API Docs', `${baseUrl}${docsPath}`, COLORS.cyan);

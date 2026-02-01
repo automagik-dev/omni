@@ -11,7 +11,6 @@
  * @see unified-messages wish
  */
 
-import { and, asc, eq, sql } from 'drizzle-orm';
 import { createDb, getDefaultDatabaseUrl } from '@omni/db';
 import {
   type ChannelType,
@@ -22,6 +21,7 @@ import {
   messages,
   omniEvents,
 } from '@omni/db';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
 // Configuration
 const DATABASE_URL = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();

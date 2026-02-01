@@ -110,6 +110,38 @@ export class PersonService {
   }
 
   /**
+   * Get platform identity for a person on a specific channel
+   * Returns the most recently active identity if multiple exist (per DEC-2)
+   */
+  async getIdentityForChannel(personId: string, channel: string): Promise<PlatformIdentity | null> {
+    const identities = await this.db.select().from(platformIdentities).where(eq(platformIdentities.personId, personId));
+
+    // Filter by channel type
+    const channelIdentities = identities.filter((i) => i.channel === channel);
+
+    if (channelIdentities.length === 0) {
+      return null;
+    }
+
+    // If multiple identities, return most recently active (per DEC-2)
+    if (channelIdentities.length > 1) {
+      // Sort by lastSeenAt descending, then by messageCount descending
+      return (
+        channelIdentities.sort((a, b) => {
+          const aLastSeen = a.lastSeenAt?.getTime() ?? 0;
+          const bLastSeen = b.lastSeenAt?.getTime() ?? 0;
+          if (aLastSeen !== bLastSeen) {
+            return bLastSeen - aLastSeen; // More recent first
+          }
+          return b.messageCount - a.messageCount; // Higher message count first
+        })[0] ?? null
+      );
+    }
+
+    return channelIdentities[0] ?? null;
+  }
+
+  /**
    * Get person presence (cross-channel summary)
    */
   async getPresence(id: string): Promise<PersonPresence> {

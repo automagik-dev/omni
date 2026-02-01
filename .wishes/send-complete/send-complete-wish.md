@@ -2,7 +2,7 @@
 
 > Wire up stubbed message send API routes to channel plugins with unified person-ID resolution.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-y51
@@ -206,10 +206,15 @@ curl -X POST http://localhost:8881/api/v2/messages/location \
 **Goal:** Enable sending to Omni person IDs with auto-resolution.
 
 **Deliverables:**
+- [ ] Add error codes to `packages/core/src/errors.ts`:
+  - `RECIPIENT_NOT_ON_CHANNEL` - Person has no identity on target channel
+  - `CAPABILITY_NOT_SUPPORTED` - Channel doesn't support this message type
 - [ ] Add `PersonService.getIdentityForChannel(personId, channel)` method
+  - Filter identities by channel type
+  - Return most recently active if multiple exist (per DEC-2)
+  - Return `null` if no identity found
 - [ ] Add UUID detection in send routes
 - [ ] Implement recipient resolution logic
-- [ ] If person has multiple identities, use most recently active
 - [ ] Clear error messages when person not on channel
 - [ ] Add tests for resolution scenarios
 
@@ -252,7 +257,7 @@ curl -X POST http://localhost:8881/api/v2/messages \
 packages/api/src/routes/v2/messages.ts   # Main changes - wire to plugins
 packages/api/src/services/persons.ts     # Add getIdentityForChannel
 packages/core/src/services/events.ts     # Store outbound events
-packages/api/src/types.ts                # Add channelRegistry to context
+packages/core/src/errors.ts              # Add RECIPIENT_NOT_ON_CHANNEL, CAPABILITY_NOT_SUPPORTED
 ```
 
 ---
