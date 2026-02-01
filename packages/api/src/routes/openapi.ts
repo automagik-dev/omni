@@ -5,9 +5,9 @@
  */
 
 import { OpenAPIRegistry, OpenApiGeneratorV3 } from '@asteasolutions/zod-to-openapi';
-import type { OpenAPIObject } from 'openapi3-ts/oas30';
 import { swaggerUI } from '@hono/swagger-ui';
 import { Hono } from 'hono';
+import type { OpenAPIObject } from 'openapi3-ts/oas30';
 import { apiTags, openApiInfo, securitySchemes } from '../lib/openapi';
 import type { AppVariables } from '../types';
 
