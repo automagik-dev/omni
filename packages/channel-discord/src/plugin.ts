@@ -333,6 +333,66 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Get the profile of the connected Discord bot.
+   * Returns profile info including bot name, avatar, and platform-specific metadata.
+   *
+   * @param instanceId - Instance to get profile for
+   * @returns Profile information including platform metadata
+   */
+  async getProfile(instanceId: string): Promise<{
+    name?: string;
+    avatarUrl?: string;
+    bio?: string;
+    ownerIdentifier?: string;
+    platformMetadata: {
+      botId: string;
+      applicationId?: string;
+      discriminator?: string;
+      isBot: boolean;
+      guildCount: number;
+      flags?: number;
+    };
+  }> {
+    const client = this.getClient(instanceId);
+    const user = client.user;
+
+    if (!user) {
+      throw new DiscordError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not fully connected - no bot user info`);
+    }
+
+    // Get guild count
+    const guildCount = client.guilds.cache.size;
+
+    // Get avatar URL (access directly from client.user to have full User type)
+    const avatarUrl = user.displayAvatarURL({ size: 256 });
+
+    // Build platform metadata
+    const platformMetadata: {
+      botId: string;
+      applicationId?: string;
+      discriminator?: string;
+      isBot: boolean;
+      guildCount: number;
+      flags?: number;
+    } = {
+      botId: user.id,
+      applicationId: client.application?.id,
+      discriminator: user.discriminator || undefined,
+      isBot: user.bot ?? true,
+      guildCount,
+      flags: user.flags?.bitfield,
+    };
+
+    return {
+      name: user.username,
+      avatarUrl,
+      bio: undefined, // Discord bots don't have bios
+      ownerIdentifier: user.id,
+      platformMetadata,
+    };
+  }
+
+  /**
    * Get the Discord client for an instance
    * @internal - Used by other modules
    */

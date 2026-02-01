@@ -369,7 +369,13 @@ export const instances = pgTable(
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
     profilePicUrl: text('profile_pic_url'),
+    profileBio: text('profile_bio'),
+    profileMetadata: jsonb('profile_metadata').$type<Record<string, unknown>>(), // Platform-specific: phone, isBusiness, etc.
+    profileSyncedAt: timestamp('profile_synced_at'),
     ownerIdentifier: varchar('owner_identifier', { length: 255 }), // JID for WhatsApp, user ID for Discord, etc.
+
+    // ---- Sync Settings ----
+    downloadMediaOnSync: boolean('download_media_on_sync').notNull().default(false),
 
     // ---- Instance Status ----
     isDefault: boolean('is_default').notNull().default(false),
@@ -960,6 +966,76 @@ export const batchJobs = pgTable(
 );
 
 // ============================================================================
+// SYNC JOBS
+// ============================================================================
+
+export const syncJobTypes = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
+export type SyncJobType = (typeof syncJobTypes)[number];
+
+/**
+ * Sync job configuration stored in JSONB.
+ */
+export interface SyncJobConfig {
+  depth?: '7d' | '30d' | '90d' | '1y' | 'all';
+  channelId?: string; // For Discord channel-specific sync
+  downloadMedia?: boolean;
+}
+
+/**
+ * Sync job progress tracking.
+ */
+export interface SyncJobProgress {
+  fetched: number;
+  stored: number;
+  duplicates: number;
+  mediaDownloaded: number;
+  totalEstimated?: number;
+}
+
+/**
+ * Sync jobs track async sync operations.
+ * Used for profile, message history, contacts, and groups sync.
+ *
+ * @see history-sync wish
+ */
+export const syncJobs = pgTable(
+  'sync_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+
+    // ---- Job Type ----
+    type: varchar('type', { length: 50 }).notNull().$type<SyncJobType>(),
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<JobStatus>(),
+
+    // ---- Configuration ----
+    config: jsonb('config').notNull().default('{}').$type<SyncJobConfig>(),
+
+    // ---- Progress ----
+    progress: jsonb('progress').notNull().default('{}').$type<SyncJobProgress>(),
+
+    // ---- Error Handling ----
+    errorMessage: text('error_message'),
+
+    // ---- Timing ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    instanceIdx: index('sync_jobs_instance_idx').on(table.instanceId),
+    statusIdx: index('sync_jobs_status_idx').on(table.status),
+    typeIdx: index('sync_jobs_type_idx').on(table.type),
+    createdAtIdx: index('sync_jobs_created_at_idx').on(table.createdAt),
+  }),
+);
+
+export type SyncJob = typeof syncJobs.$inferSelect;
+export type NewSyncJob = typeof syncJobs.$inferInsert;
+
+// ============================================================================
 // MEDIA CONTENT
 // ============================================================================
 
@@ -1070,8 +1146,16 @@ export const instancesRelations = relations(instances, ({ one, many }) => ({
   accessRules: many(accessRules),
   omniEvents: many(omniEvents),
   batchJobs: many(batchJobs),
+  syncJobs: many(syncJobs),
   chatIdMappings: many(chatIdMappings),
   chats: many(chats),
+}));
+
+export const syncJobsRelations = relations(syncJobs, ({ one }) => ({
+  instance: one(instances, {
+    fields: [syncJobs.instanceId],
+    references: [instances.id],
+  }),
 }));
 
 export const personsRelations = relations(persons, ({ many }) => ({

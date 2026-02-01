@@ -20,6 +20,7 @@ import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
 import { ProviderService } from './providers';
 import { SettingsService } from './settings';
+import { SyncJobService } from './sync-jobs';
 import { WebhookService } from './webhooks';
 
 /**
@@ -40,6 +41,7 @@ export interface Services {
   automations: AutomationService;
   chats: ChatService;
   messages: MessageService;
+  syncJobs: SyncJobService;
 }
 
 /**
@@ -65,6 +67,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     automations: new AutomationService(db, eventBus),
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
+    syncJobs: new SyncJobService(db, eventBus),
   };
 }
 
@@ -83,3 +86,4 @@ export { WebhookService } from './webhooks';
 export { AutomationService } from './automations';
 export { ChatService } from './chats';
 export { MessageService } from './messages';
+export { SyncJobService } from './sync-jobs';

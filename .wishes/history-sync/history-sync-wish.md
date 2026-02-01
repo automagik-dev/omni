@@ -1,8 +1,8 @@
 # WISH: History Sync
 
-> Sync message history, contacts, and groups from channels with rate-limiting and configurable depth.
+> Sync message history, contacts, groups, and instance profile from channels with rate-limiting and configurable depth.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-rnc
@@ -13,12 +13,14 @@
 ## Context
 
 When connecting a new instance (e.g., WhatsApp number), users want to:
+- Know the profile of the connected account (name, avatar, bio)
 - Import existing message history
 - Sync contacts and groups
 - Have a complete view of conversations in Omni
 
 Currently:
 - WhatsApp Baileys has `syncFullHistory` on initial connect
+- No profile sync (name, avatar, bio) for the instance itself
 - No on-demand "sync last N days" API
 - No scheduled sync for contacts/groups
 - No rate limiting to avoid platform throttling
@@ -29,14 +31,16 @@ Currently:
 
 **Current state:**
 - Connect WhatsApp → get initial sync (limited, no control)
+- Instance profile (name, avatar, bio) not captured
 - No way to trigger "sync last 30 days" after connection
 - Contacts/groups not synced or refreshed
 - Risk of hitting rate limits on platforms
 
 **Desired state:**
-- On-demand: `POST /instances/:id/sync` with configurable depth
-- On-connect: Automatic initial sync (already partial)
-- Scheduled: Periodic contact/group refresh
+- Profile sync: Capture instance identity (name, avatar, bio) on connect and refresh
+- On-demand: `POST /instances/:id/sync` with configurable depth and type
+- On-connect: Automatic profile + initial message sync
+- Scheduled: Periodic profile/contact/group refresh
 - Rate-limited: Built-in throttling to avoid platform bans
 - Deduplication: Don't import same message twice
 
@@ -48,14 +52,25 @@ Currently:
 |----|------|-------------|
 | **ASM-1** | Assumption | Platforms allow fetching historical messages (WhatsApp via Baileys, Discord via API) |
 | **ASM-2** | Assumption | Rate limits are known per platform |
+| **ASM-3** | Assumption | Profile data (name, avatar, bio) is available on connect |
 | **DEC-1** | Decision | Sync is async job, returns job ID for status polling |
 | **DEC-2** | Decision | Default sync depth: 7 days. Max: unlimited ("all time") |
 | **DEC-3** | Decision | Dedupe by external message ID |
 | **DEC-4** | Decision | Contacts/groups sync runs daily by default |
 | **DEC-5** | Decision | Rate limits configurable per channel in settings |
+| **DEC-6** | Decision | Profile sync uses first-class columns + JSONB for platform extras |
+| **DEC-7** | Decision | Profile syncs on: connect, API startup (if stale), on-demand, daily schedule |
+| **DEC-8** | Decision | Avatar stored as URL only (no blob storage) |
+| **DEC-9** | Decision | `downloadMediaOnSync` defaults to `false` (opt-in) |
+| **DEC-10** | Decision | Media stored to filesystem at configurable path (default: `./data/media`) |
+| **DEC-11** | Decision | Media path structure: `{basePath}/{instanceId}/{YYYY-MM}/{messageId}.{ext}` |
+| **DEC-12** | Decision | If base64 present in payload → decode, store, clear base64 from DB |
+| **DEC-13** | Decision | Preserve all media metadata in `mediaMetadata` JSONB |
 | **RISK-1** | Risk | WhatsApp may ban for aggressive syncing → conservative defaults |
 | **RISK-2** | Risk | Large history sync may take hours → progress tracking needed |
 | **RISK-3** | Risk | Discord rate limits are strict → per-channel cooldowns |
+| **RISK-4** | Risk | Avatar URLs may expire → track `profileSyncedAt` for staleness |
+| **RISK-5** | Risk | Media downloads increase disk usage → monitor and alert |
 
 ---
 
@@ -63,19 +78,36 @@ Currently:
 
 ### IN SCOPE
 
+**Profile Sync:**
+- Instance profile sync (name, avatar URL, bio)
+- First-class columns + JSONB for platform-specific metadata
+- Sync triggers: on-connect, API startup, on-demand, scheduled
+
+**Message History Sync:**
 - `POST /instances/:id/sync` - On-demand sync API
 - Sync job queue with status tracking
 - Message history sync (WhatsApp, Discord)
-- Contact sync (WhatsApp)
-- Group/server sync (WhatsApp groups, Discord guilds/channels)
 - Configurable sync depth (7d, 30d, 90d, all)
 - Built-in rate limiting per platform
 - Message deduplication
 - Progress events (sync.started, sync.progress, sync.completed)
 
+**Media Handling:**
+- `downloadMediaOnSync` setting per instance (boolean)
+- Store media to local filesystem (configurable path)
+- Preserve all media metadata (mime, size, dimensions, duration, waveform, etc.)
+- If base64 already present in payload → decode and store
+- `GET /media/:id` endpoint to serve stored files
+- Update messages with `mediaLocalPath` after download
+
+**Contacts & Groups:**
+- Contact sync (WhatsApp)
+- Group/server sync (WhatsApp groups, Discord guilds/channels)
+
 ### OUT OF SCOPE
 
-- Media file downloading (just metadata for now)
+- Cloud storage for media (S3, R2, etc.) - filesystem only for now
+- Media transcoding or optimization
 - Cross-channel message merging (messages stay in their channel)
 - Real-time message streaming (we already have webhooks for this)
 - Telegram/Slack sync (future channels)
@@ -148,19 +180,38 @@ if (!existing) {
 
 ---
 
-## Execution Group A: Sync Job Infrastructure
+## Execution Group A: Profile Sync & Job Infrastructure
 
-**Goal:** Build the job queue and basic sync API.
+**Goal:** Sync instance profile and build the job queue infrastructure.
 
 **Deliverables:**
+
+*Schema Changes:*
+- [ ] Add `profileBio` (text) to instances table
+- [ ] Add `profileMetadata` (jsonb) to instances table
+- [ ] Add `profileSyncedAt` (timestamp) to instances table
+- [ ] Add `downloadMediaOnSync` (boolean, default false) to instances table
 - [ ] Create `sync_jobs` table (id, instanceId, status, type, config, progress, createdAt, completedAt)
+
+*Profile Sync:*
+- [ ] Add `getProfile()` to WhatsApp plugin → returns name, avatar, bio, phone
+- [ ] Add `getProfile()` to Discord plugin → returns bot name, avatar, application info
+- [ ] Create `ProfileSyncService` with sync and refresh methods
+- [ ] Sync profile on instance connect (automatic)
+- [ ] Sync profile on API startup if stale (>24h)
+- [ ] Add `POST /instances/:id/sync` with `type: "profile"`
+
+*Job Infrastructure:*
 - [ ] Create `SyncService` with job creation and status methods
-- [ ] Add `POST /instances/:id/sync` endpoint
+- [ ] Add `POST /instances/:id/sync` endpoint (supports: profile, messages, contacts, groups, all)
 - [ ] Add `GET /instances/:id/sync/:jobId` for status
 - [ ] Set up NATS consumer for sync jobs
 - [ ] Emit sync events (sync.started, sync.progress, sync.completed, sync.failed)
 
 **Acceptance Criteria:**
+- [ ] Instance shows profile name/avatar/bio after connect
+- [ ] Profile refreshes automatically on startup if stale
+- [ ] Can trigger profile sync via API
 - [ ] Can create sync job via API
 - [ ] Job appears in `sync_jobs` table
 - [ ] Can poll job status
@@ -168,7 +219,14 @@ if (!existing) {
 
 **Validation:**
 ```bash
-# Start a sync
+# Check instance has profile after connect
+curl http://localhost:8881/api/v2/instances/$INSTANCE_ID | jq '.data.profileName, .data.profileBio'
+
+# Trigger profile sync
+curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
+  -d '{"type": "profile"}'
+
+# Start a message sync job
 JOB_ID=$(curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
   -d '{"type": "messages", "depth": "7d"}' | jq -r '.data.jobId')
 
@@ -179,18 +237,31 @@ curl http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync/$JOB_ID
 
 ---
 
-## Execution Group B: Message History Sync
+## Execution Group B: Message History Sync + Media
 
-**Goal:** Implement message fetching with rate limiting and deduplication.
+**Goal:** Implement message fetching with rate limiting, deduplication, and media storage.
 
 **Deliverables:**
+
+*Message Sync:*
 - [ ] Add `fetchHistory(since, until)` to WhatsApp plugin
 - [ ] Add `fetchHistory(channelId, since, until)` to Discord plugin
 - [ ] Implement rate limiter with exponential backoff
 - [ ] Implement message deduplication logic
-- [ ] Store synced messages in `omni_events`
+- [ ] Store synced messages in `messages` table (source: 'sync')
 - [ ] Track progress (fetched, stored, skipped)
 - [ ] Handle partial failures gracefully
+
+*Media Handling:*
+- [ ] Create `MediaStorageService` for filesystem operations
+- [ ] Configurable base path via settings (default: `./data/media`)
+- [ ] Path structure: `{basePath}/{instanceId}/{YYYY-MM}/{messageId}.{ext}`
+- [ ] If base64 present in message payload → decode and store
+- [ ] If media URL present + `downloadMediaOnSync=true` → download and store
+- [ ] Update `messages.mediaLocalPath` after storage
+- [ ] Preserve all metadata: mime, size, dimensions, duration, waveform, isVoiceNote, etc.
+- [ ] Add `GET /media/:instanceId/:path*` endpoint to serve files
+- [ ] Support range requests for audio/video streaming
 
 **Acceptance Criteria:**
 - [ ] WhatsApp: Can sync last 7 days of messages
@@ -198,16 +269,25 @@ curl http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync/$JOB_ID
 - [ ] No duplicate messages in database
 - [ ] Respects rate limits (observe no 429 errors)
 - [ ] Progress updates visible via job status
+- [ ] Media files stored to disk when `downloadMediaOnSync=true`
+- [ ] Can serve stored media via endpoint
+- [ ] All media metadata preserved in message record
 
 **Validation:**
 ```bash
-# Sync messages
-curl -X POST http://localhost:8881/api/v2/instances/$WHATSAPP_INSTANCE/sync \
-  -d '{"type": "messages", "depth": "30d"}'
+# Enable media download for instance
+curl -X PATCH http://localhost:8881/api/v2/instances/$INSTANCE_ID \
+  -d '{"downloadMediaOnSync": true}'
 
-# Wait for completion, then check
-psql -c "SELECT COUNT(*) FROM omni_events WHERE instance_id = '$WHATSAPP_INSTANCE'"
-# Should show synced messages
+# Sync messages with media
+curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
+  -d '{"type": "messages", "depth": "7d"}'
+
+# Check messages have local paths
+psql -c "SELECT id, media_local_path, media_metadata FROM messages WHERE has_media = true LIMIT 5"
+
+# Serve stored media
+curl http://localhost:8881/api/v2/media/$INSTANCE_ID/2026-02/$MESSAGE_ID.jpg --output test.jpg
 ```
 
 ---
@@ -247,16 +327,53 @@ curl http://localhost:8881/api/v2/persons?search=John
 
 ## Database Changes
 
+### Alter Table: `instances`
+
+```sql
+-- Profile fields
+ALTER TABLE instances ADD COLUMN profile_bio TEXT;
+ALTER TABLE instances ADD COLUMN profile_metadata JSONB;
+ALTER TABLE instances ADD COLUMN profile_synced_at TIMESTAMPTZ;
+
+-- Media sync setting
+ALTER TABLE instances ADD COLUMN download_media_on_sync BOOLEAN NOT NULL DEFAULT false;
+```
+
+**Profile Metadata JSONB structure (platform-specific):**
+```typescript
+// WhatsApp
+{
+  phoneNumber: string;          // E.164 format
+  pushName: string;             // Display name from contacts
+  isBusiness: boolean;
+  businessName?: string;
+  businessDescription?: string;
+  businessCategory?: string;
+  businessHours?: object;
+  isVerified?: boolean;
+}
+
+// Discord
+{
+  botId: string;
+  applicationId: string;
+  discriminator: string;
+  isBot: boolean;
+  guildCount: number;
+  flags: number;
+}
+```
+
 ### New Table: `sync_jobs`
 
 ```sql
 CREATE TABLE sync_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  instance_id UUID NOT NULL REFERENCES omni_instances(id),
-  type VARCHAR(50) NOT NULL,  -- 'messages', 'contacts', 'groups', 'all'
+  instance_id UUID NOT NULL REFERENCES instances(id),
+  type VARCHAR(50) NOT NULL,  -- 'profile', 'messages', 'contacts', 'groups', 'all'
   status VARCHAR(50) NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed
-  config JSONB NOT NULL DEFAULT '{}',  -- { depth: '30d', channelId: '...' }
-  progress JSONB NOT NULL DEFAULT '{}',  -- { fetched: 0, stored: 0, duplicates: 0 }
+  config JSONB NOT NULL DEFAULT '{}',  -- { depth: '30d', channelId: '...', downloadMedia: true }
+  progress JSONB NOT NULL DEFAULT '{}',  -- { fetched: 0, stored: 0, duplicates: 0, mediaDownloaded: 0 }
   error_message TEXT,
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
@@ -269,7 +386,7 @@ CREATE TABLE sync_jobs (
 ```sql
 CREATE TABLE omni_groups (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  instance_id UUID NOT NULL REFERENCES omni_instances(id),
+  instance_id UUID NOT NULL REFERENCES instances(id),
   external_id VARCHAR(255) NOT NULL,
   name VARCHAR(255),
   description TEXT,
@@ -300,14 +417,41 @@ CREATE TABLE omni_groups (
 ## Settings
 
 ```typescript
-// Settings for rate limiting (configurable via /settings)
+// Settings for sync (configurable via /settings)
 {
+  // Rate limiting
   "sync.whatsapp.messagesPerMinute": 30,
   "sync.whatsapp.contactsPerMinute": 60,
   "sync.discord.messagesPerMinute": 50,
   "sync.discord.contactsPerMinute": 100,
+
+  // Defaults
   "sync.defaultDepth": "7d",
+
+  // Scheduling
+  "sync.profile.scheduleEnabled": true,
+  "sync.profile.scheduleCron": "0 4 * * *",    // 4 AM daily
   "sync.contacts.scheduleEnabled": true,
-  "sync.contacts.scheduleCron": "0 3 * * *",  // 3 AM daily
+  "sync.contacts.scheduleCron": "0 3 * * *",   // 3 AM daily
+
+  // Media storage
+  "media.storagePath": "./data/media",          // Base path for media files
+  "media.maxFileSizeMb": 100,                   // Skip files larger than this
+  "media.allowedMimeTypes": ["image/*", "audio/*", "video/*", "application/pdf"],
 }
 ```
+
+## Media Storage Structure
+
+```
+./data/media/
+├── {instanceId}/
+│   ├── 2026-01/
+│   │   ├── {messageId}.jpg
+│   │   ├── {messageId}.mp4
+│   │   └── {messageId}.opus
+│   └── 2026-02/
+│       └── ...
+```
+
+Files are served via `GET /api/v2/media/{instanceId}/{path}` with proper MIME types and range request support for streaming.

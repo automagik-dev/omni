@@ -34,6 +34,12 @@ export const CORE_EVENT_TYPES = [
   // Access control
   'access.allowed',
   'access.denied',
+  // Sync operations
+  'sync.started',
+  'sync.progress',
+  'sync.completed',
+  'sync.failed',
+  'profile.synced',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -254,6 +260,61 @@ export interface AccessDeniedPayload {
 }
 
 /**
+ * Sync event payloads
+ */
+export interface SyncJobConfig {
+  depth?: '7d' | '30d' | '90d' | '1y' | 'all';
+  channelId?: string;
+  downloadMedia?: boolean;
+}
+
+export interface SyncJobProgress {
+  fetched: number;
+  stored: number;
+  duplicates: number;
+  mediaDownloaded: number;
+  totalEstimated?: number;
+}
+
+export type SyncJobType = 'profile' | 'messages' | 'contacts' | 'groups' | 'all';
+
+export interface SyncStartedPayload {
+  jobId: string;
+  instanceId: string;
+  type: SyncJobType;
+  config?: SyncJobConfig;
+}
+
+export interface SyncProgressPayload {
+  jobId: string;
+  instanceId: string;
+  type: SyncJobType;
+  progress: SyncJobProgress;
+}
+
+export interface SyncCompletedPayload {
+  jobId: string;
+  instanceId: string;
+  type: SyncJobType;
+  progress: SyncJobProgress;
+}
+
+export interface SyncFailedPayload {
+  jobId: string;
+  instanceId: string;
+  type: SyncJobType;
+  error: string;
+}
+
+export interface ProfileSyncedPayload {
+  instanceId: string;
+  name?: string;
+  avatarUrl?: string;
+  bio?: string;
+  platformMetadata?: Record<string, unknown>;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -273,6 +334,11 @@ export interface EventPayloadMap {
   'instance.qr_code': InstanceQrCodePayload;
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
+  'sync.started': SyncStartedPayload;
+  'sync.progress': SyncProgressPayload;
+  'sync.completed': SyncCompletedPayload;
+  'sync.failed': SyncFailedPayload;
+  'profile.synced': ProfileSyncedPayload;
 }
 
 /**

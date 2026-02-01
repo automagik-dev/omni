@@ -538,4 +538,252 @@ instancesRoutes.post('/:id/logout', async (c) => {
   });
 });
 
+// ============================================================================
+// SYNC ENDPOINTS
+// ============================================================================
+
+// Sync request schema
+const syncRequestSchema = z.object({
+  type: z
+    .enum(['profile', 'messages', 'contacts', 'groups', 'all'])
+    .describe('Type of sync: profile, messages, contacts, groups, or all'),
+  depth: z.enum(['7d', '30d', '90d', '1y', 'all']).optional().describe('Sync depth for message history'),
+  channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
+  downloadMedia: z.boolean().optional().describe('Download and store media files'),
+});
+
+/** Type for profile sync response */
+interface ProfileSyncResult {
+  name?: string | null;
+  avatarUrl?: string | null;
+  bio?: string | null;
+  platformMetadata?: Record<string, unknown> | null;
+  syncedAt?: Date | null;
+}
+
+/**
+ * POST /instances/:id/sync/profile - Sync profile immediately
+ */
+instancesRoutes.post('/:id/sync/profile', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  // Check if plugin supports profile sync
+  if (!('getProfile' in plugin) || typeof plugin.getProfile !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support profile sync` } },
+      400,
+    );
+  }
+
+  try {
+    // Get profile from plugin
+    type ProfileResult = {
+      name?: string;
+      avatarUrl?: string;
+      bio?: string;
+      ownerIdentifier?: string;
+      platformMetadata: Record<string, unknown>;
+    };
+    const profile = await (plugin as { getProfile: (id: string) => Promise<ProfileResult> }).getProfile(id);
+
+    // Update instance with profile info
+    const updated = await services.instances.update(id, {
+      profileName: profile.name,
+      profilePicUrl: profile.avatarUrl,
+      profileBio: profile.bio,
+      profileMetadata: profile.platformMetadata,
+      profileSyncedAt: new Date(),
+      ownerIdentifier: profile.ownerIdentifier,
+    });
+
+    const result: ProfileSyncResult = {
+      name: updated.profileName,
+      avatarUrl: updated.profilePicUrl,
+      bio: updated.profileBio,
+      platformMetadata: updated.profileMetadata as Record<string, unknown> | null,
+      syncedAt: updated.profileSyncedAt,
+    };
+
+    return c.json({ data: { type: 'profile', status: 'completed', profile: result } });
+  } catch (error) {
+    const message = `Failed to sync profile: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'SYNC_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * POST /instances/:id/sync - Request a sync operation
+ *
+ * Creates a sync job for the specified type:
+ * - profile: Sync instance profile (redirects to /sync/profile)
+ * - messages: Sync message history (with optional depth)
+ * - contacts: Sync contacts
+ * - groups: Sync groups/guilds
+ * - all: Sync everything
+ */
+instancesRoutes.post('/:id/sync', zValidator('json', syncRequestSchema), async (c) => {
+  const id = c.req.param('id');
+  const { type, depth, channelId, downloadMedia } = c.req.valid('json');
+  const services = c.get('services');
+
+  const instance = await services.instances.getById(id);
+
+  // For profile sync, redirect to dedicated endpoint
+  if (type === 'profile') {
+    // Create internal redirect by calling the profile sync handler directly
+    const channelRegistry = c.get('channelRegistry');
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('getProfile' in plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Profile sync not supported' } }, 400);
+    }
+
+    type ProfileResult = {
+      name?: string;
+      avatarUrl?: string;
+      bio?: string;
+      ownerIdentifier?: string;
+      platformMetadata: Record<string, unknown>;
+    };
+    const profile = await (plugin as { getProfile: (id: string) => Promise<ProfileResult> }).getProfile(id);
+    const updated = await services.instances.update(id, {
+      profileName: profile.name,
+      profilePicUrl: profile.avatarUrl,
+      profileBio: profile.bio,
+      profileMetadata: profile.platformMetadata,
+      profileSyncedAt: new Date(),
+      ownerIdentifier: profile.ownerIdentifier,
+    });
+
+    return c.json({
+      data: {
+        type: 'profile',
+        status: 'completed',
+        profile: {
+          name: updated.profileName,
+          avatarUrl: updated.profilePicUrl,
+          bio: updated.profileBio,
+          platformMetadata: updated.profileMetadata,
+          syncedAt: updated.profileSyncedAt,
+        },
+      },
+    });
+  }
+
+  // For other sync types, check for existing active job
+  const hasActiveJob = await services.syncJobs.hasActiveJob(id, type);
+  if (hasActiveJob) {
+    return c.json({ error: { code: 'JOB_EXISTS', message: `A ${type} sync job is already running` } }, 409);
+  }
+
+  // Create sync job
+  const job = await services.syncJobs.create({
+    instanceId: id,
+    type,
+    config: { depth: depth ?? '7d', channelId, downloadMedia: downloadMedia ?? instance.downloadMediaOnSync },
+  });
+
+  return c.json(
+    {
+      data: {
+        jobId: job.id,
+        instanceId: id,
+        type,
+        status: job.status,
+        config: job.config,
+        message: 'Sync job created',
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * GET /instances/:id/sync/:jobId - Get sync job status
+ */
+instancesRoutes.get('/:id/sync/:jobId', async (c) => {
+  const id = c.req.param('id');
+  const jobId = c.req.param('jobId');
+  const services = c.get('services');
+
+  // Verify instance exists
+  await services.instances.getById(id);
+
+  const job = await services.syncJobs.getByIdWithStats(jobId);
+
+  // Verify job belongs to this instance
+  if (job.instanceId !== id) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Sync job not found' } }, 404);
+  }
+
+  return c.json({
+    data: {
+      jobId: job.id,
+      instanceId: job.instanceId,
+      type: job.type,
+      status: job.status,
+      config: job.config,
+      progress: job.progress,
+      progressPercent: job.progressPercent,
+      errorMessage: job.errorMessage,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    },
+  });
+});
+
+/**
+ * GET /instances/:id/sync - List sync jobs for instance
+ */
+instancesRoutes.get('/:id/sync', async (c) => {
+  const id = c.req.param('id');
+  const status = c.req.query('status')?.split(',') as
+    | ('pending' | 'running' | 'completed' | 'failed' | 'cancelled')[]
+    | undefined;
+  const limit = Number.parseInt(c.req.query('limit') ?? '20', 10);
+  const services = c.get('services');
+
+  // Verify instance exists
+  await services.instances.getById(id);
+
+  const result = await services.syncJobs.list({
+    instanceId: id,
+    status,
+    limit,
+  });
+
+  return c.json({
+    items: result.items.map((job) => ({
+      jobId: job.id,
+      type: job.type,
+      status: job.status,
+      progressPercent: job.progressPercent,
+      createdAt: job.createdAt,
+      completedAt: job.completedAt,
+    })),
+    meta: {
+      hasMore: result.hasMore,
+      cursor: result.cursor,
+    },
+  });
+});
+
 export { instancesRoutes };

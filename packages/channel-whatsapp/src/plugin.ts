@@ -386,6 +386,96 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     await sock.sendPresenceUpdate(presence);
   }
 
+  /**
+   * Get the profile of the connected WhatsApp account.
+   * Returns profile info including name, avatar, bio, and platform-specific metadata.
+   *
+   * @param instanceId - Instance to get profile for
+   * @returns Profile information including platform metadata
+   */
+  async getProfile(instanceId: string): Promise<{
+    name?: string;
+    avatarUrl?: string;
+    bio?: string;
+    ownerIdentifier?: string;
+    platformMetadata: {
+      phoneNumber?: string;
+      pushName?: string;
+      isBusiness?: boolean;
+      businessName?: string;
+      businessDescription?: string;
+      businessCategory?: string;
+      isVerified?: boolean;
+    };
+  }> {
+    const sock = this.getSocket(instanceId);
+    const user = sock.user;
+
+    if (!user) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not fully connected - no user info`);
+    }
+
+    let avatarUrl: string | undefined;
+    let bio: string | undefined;
+
+    // Try to get profile picture
+    try {
+      avatarUrl = await sock.profilePictureUrl(user.id, 'image');
+    } catch {
+      // Profile picture might not be set
+    }
+
+    // Try to get status (bio)
+    try {
+      const statusResult = await sock.fetchStatus(user.id);
+      // fetchStatus returns an array of status results
+      if (Array.isArray(statusResult) && statusResult.length > 0) {
+        const firstStatus = statusResult[0] as { status?: string };
+        bio = firstStatus?.status;
+      }
+    } catch {
+      // Status might not be set or available
+    }
+
+    // Extract phone number from JID (format: 5511999999999@s.whatsapp.net)
+    const phoneNumber = user.id.split('@')[0]?.split(':')[0];
+
+    // Build platform metadata
+    const platformMetadata: {
+      phoneNumber?: string;
+      pushName?: string;
+      isBusiness?: boolean;
+      businessName?: string;
+      businessDescription?: string;
+      businessCategory?: string;
+      isVerified?: boolean;
+    } = {
+      phoneNumber: phoneNumber ? `+${phoneNumber}` : undefined,
+      pushName: user.name,
+    };
+
+    // Try to get business profile if available
+    try {
+      const businessProfile = await sock.getBusinessProfile(user.id);
+      if (businessProfile) {
+        platformMetadata.isBusiness = true;
+        platformMetadata.businessName = businessProfile.wid?.split('@')[0] || undefined;
+        platformMetadata.businessDescription = businessProfile.description || undefined;
+        platformMetadata.businessCategory = businessProfile.category || undefined;
+      }
+    } catch {
+      // Not a business account or business profile not available
+    }
+
+    return {
+      name: user.name,
+      avatarUrl,
+      bio,
+      ownerIdentifier: user.id,
+      platformMetadata,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Internal handlers called by connection/message handlers
   // ─────────────────────────────────────────────────────────────

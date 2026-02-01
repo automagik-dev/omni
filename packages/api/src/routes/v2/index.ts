@@ -14,6 +14,7 @@ import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
 import { instancesRoutes } from './instances';
 import { logsRoutes } from './logs';
+import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { metricsRoutes } from './metrics';
 import { payloadsRoutes } from './payloads';
@@ -41,3 +42,4 @@ v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:sour
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/chats', chatsRoutes); // Unified chat model
+v2Routes.route('/media', mediaRoutes); // Media file serving
