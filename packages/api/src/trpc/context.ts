@@ -39,16 +39,19 @@ export function createTrpcContext(options: CreateContextOptions) {
     // Extract API key from header
     const apiKeyHeader = req.headers.get('x-api-key');
 
-    // For now, simple validation - will be replaced with database lookup
-    const apiKey =
-      apiKeyHeader === 'test-key' || apiKeyHeader?.startsWith('omni_sk_')
-        ? {
-            id: 'test-key-id',
-            name: 'Test Key',
-            scopes: ['*'],
-            instanceIds: null,
-          }
-        : null;
+    // Validate API key against database
+    let apiKey: TrpcContext['apiKey'] = null;
+    if (apiKeyHeader) {
+      const validatedKey = await options.services.apiKeys.validate(apiKeyHeader);
+      if (validatedKey) {
+        apiKey = {
+          id: validatedKey.id,
+          name: validatedKey.name,
+          scopes: validatedKey.scopes,
+          instanceIds: validatedKey.instanceIds,
+        };
+      }
+    }
 
     // Generate request ID
     const requestId =

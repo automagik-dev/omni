@@ -12,6 +12,32 @@ import { timing } from 'hono/timing';
 
 const httpLog = createLogger('http');
 
+/**
+ * Get allowed CORS origins from environment
+ * OMNI_CORS_ORIGINS can be comma-separated list or '*' for development
+ */
+function getAllowedOrigins(): string[] | '*' {
+  const envOrigins = process.env.OMNI_CORS_ORIGINS;
+
+  // If not set, default to restrictive (localhost only in dev)
+  if (!envOrigins) {
+    const isDev = process.env.NODE_ENV !== 'production';
+    if (isDev) {
+      return ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173'];
+    }
+    // Production: require explicit configuration
+    return [];
+  }
+
+  // Allow wildcard for development
+  if (envOrigins === '*') {
+    return '*';
+  }
+
+  // Parse comma-separated origins
+  return envOrigins.split(',').map((origin) => origin.trim());
+}
+
 import { authMiddleware } from './middleware/auth';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
@@ -51,10 +77,12 @@ export function createApp(
     const ms = Date.now() - start;
     httpLog.info(`→ ${c.req.method} ${c.req.path}`, { status: c.res.status, ms });
   });
+  // Configure CORS with allowed origins
+  const allowedOrigins = getAllowedOrigins();
   app.use(
     '*',
     cors({
-      origin: '*', // TODO: Configure for production
+      origin: allowedOrigins === '*' ? '*' : allowedOrigins,
       allowHeaders: ['Content-Type', 'x-api-key', 'x-request-id'],
       allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       exposeHeaders: ['x-request-id', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],

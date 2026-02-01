@@ -1,37 +1,16 @@
 /**
- * Authentication middleware - validates API keys
+ * Authentication middleware - validates API keys against database
  */
 
 import { createMiddleware } from 'hono/factory';
+import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
-
-/**
- * API key patterns for validation
- */
-const API_KEY_PREFIX = 'omni_sk_';
-
-/**
- * Check if a scope allows the requested action
- */
-function scopeAllows(scopes: string[], requiredScope: string): boolean {
-  // Wildcard access
-  if (scopes.includes('*')) return true;
-
-  // Exact match
-  if (scopes.includes(requiredScope)) return true;
-
-  // Namespace wildcard (e.g., "instances:*" allows "instances:read")
-  const [namespace] = requiredScope.split(':');
-  if (scopes.includes(`${namespace}:*`)) return true;
-
-  return false;
-}
 
 /**
  * Authentication middleware
  *
  * Validates API key from x-api-key header or query parameter.
- * For now uses a test key; will be replaced with database lookup.
+ * Looks up the key in the database and validates its status, expiration, and scopes.
  */
 export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   // Get API key from header or query
@@ -49,30 +28,46 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     );
   }
 
-  // For development: accept test key
-  // TODO: Replace with database lookup for production
-  if (apiKey === 'test-key' || apiKey.startsWith(API_KEY_PREFIX)) {
-    const keyData: ApiKeyData = {
-      id: 'test-key-id',
-      name: 'Test Key',
-      scopes: ['*'], // Full access for test key
-      instanceIds: null, // All instances
-      expiresAt: null,
-    };
-
-    c.set('apiKey', keyData);
-    return next();
+  // Get the API key service from context
+  const services = c.get('services');
+  if (!services?.apiKeys) {
+    return c.json(
+      {
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'API key service not available',
+        },
+      },
+      500,
+    );
   }
 
-  return c.json(
-    {
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Invalid API key',
+  // Validate the API key against database
+  const validatedKey = await services.apiKeys.validate(apiKey);
+
+  if (!validatedKey) {
+    return c.json(
+      {
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Invalid API key',
+        },
       },
-    },
-    401,
-  );
+      401,
+    );
+  }
+
+  // Set validated key data in context
+  const keyData: ApiKeyData = {
+    id: validatedKey.id,
+    name: validatedKey.name,
+    scopes: validatedKey.scopes,
+    instanceIds: validatedKey.instanceIds,
+    expiresAt: null, // Already validated by service
+  };
+
+  c.set('apiKey', keyData);
+  return next();
 });
 
 /**
@@ -94,7 +89,7 @@ export function requireScope(scope: string) {
       );
     }
 
-    if (!scopeAllows(apiKey.scopes, scope)) {
+    if (!ApiKeyService.scopeAllows(apiKey.scopes, scope)) {
       return c.json(
         {
           error: {
@@ -129,13 +124,8 @@ export function requireInstanceAccess(instanceIdGetter: (c: unknown) => string) 
       );
     }
 
-    // Null instanceIds means access to all instances
-    if (apiKey.instanceIds === null) {
-      return next();
-    }
-
     const instanceId = instanceIdGetter(c);
-    if (!apiKey.instanceIds.includes(instanceId)) {
+    if (!ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
       return c.json(
         {
           error: {

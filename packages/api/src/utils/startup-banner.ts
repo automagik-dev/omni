@@ -67,6 +67,15 @@ function padLine(content: string, width: number): string {
 }
 
 /**
+ * API Key display info
+ */
+export interface ApiKeyDisplayInfo {
+  displayKey: string;
+  isNew: boolean;
+  isFromEnv: boolean;
+}
+
+/**
  * Print the startup banner
  */
 export function printStartupBanner(options: {
@@ -76,6 +85,7 @@ export function printStartupBanner(options: {
   docsPath?: string;
   healthPath?: string;
   metricsPath?: string;
+  apiKey?: ApiKeyDisplayInfo;
 }): void {
   const {
     version,
@@ -84,6 +94,7 @@ export function printStartupBanner(options: {
     docsPath = '/api/v2/docs',
     healthPath = '/api/v2/health',
     metricsPath = '/api/v2/metrics',
+    apiKey,
   } = options;
 
   const localIPs = getLocalIPs();
@@ -127,6 +138,27 @@ export function printStartupBanner(options: {
   addLine('API Docs', `${baseUrl}${docsPath}`, COLORS.cyan);
   addLine('Health', `${baseUrl}${healthPath}`, COLORS.yellow);
   addLine('Metrics', `${baseUrl}${metricsPath}`, COLORS.magenta);
+
+  // API Key section
+  if (apiKey) {
+    // Separator
+    lines.push(
+      `  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${' '.repeat(WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`,
+    );
+
+    if (apiKey.isNew) {
+      // New key generated - show full key with warning
+      addLine('API Key', apiKey.displayKey, COLORS.green);
+      const warningContent = `  ${COLORS.yellow}(Save this key - shown only once!)${COLORS.reset}`;
+      lines.push(
+        `  ${COLORS.dim}${BOX.vertical}${COLORS.reset} ${padLine(warningContent, WIDTH - 2)} ${COLORS.dim}${BOX.vertical}${COLORS.reset}`,
+      );
+    } else {
+      // Existing key - show masked
+      const label = apiKey.isFromEnv ? 'API Key (env)' : 'API Key';
+      addLine(label, apiKey.displayKey, COLORS.dim);
+    }
+  }
 
   // Box bottom
   lines.push(`  ${COLORS.dim}${BOX.bottomLeft}${BOX.horizontal.repeat(WIDTH)}${BOX.bottomRight}${COLORS.reset}`);

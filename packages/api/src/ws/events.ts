@@ -6,6 +6,7 @@
 
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+import { ApiKeyService } from '../services/api-keys';
 
 const log = createLogger('ws:events');
 
@@ -39,18 +40,26 @@ type ClientMessage = SubscribeMessage | UnsubscribeMessage;
  * Note: Bun has built-in WebSocket support, but Hono uses a different approach.
  * This is a placeholder for the WebSocket implementation pattern.
  */
-export function createEventWebSocketHandler(_db: Database, _eventBus: EventBus | null) {
+export function createEventWebSocketHandler(db: Database, _eventBus: EventBus | null) {
+  const apiKeyService = new ApiKeyService(db);
+
   return {
     /**
      * Handle WebSocket upgrade
      */
-    upgrade(req: Request): Response | null {
+    async upgrade(req: Request): Promise<Response | null> {
       // Extract API key from query or header
       const url = new URL(req.url);
       const apiKey = url.searchParams.get('api_key') ?? req.headers.get('x-api-key');
 
-      if (!apiKey || (apiKey !== 'test-key' && !apiKey.startsWith('omni_sk_'))) {
-        return new Response('Unauthorized', { status: 401 });
+      if (!apiKey) {
+        return new Response('Unauthorized: API key required', { status: 401 });
+      }
+
+      // Validate against database
+      const validatedKey = await apiKeyService.validate(apiKey);
+      if (!validatedKey) {
+        return new Response('Unauthorized: Invalid API key', { status: 401 });
       }
 
       // Bun-specific WebSocket upgrade

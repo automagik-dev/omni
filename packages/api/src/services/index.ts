@@ -8,6 +8,7 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { AccessService } from './access';
+import { ApiKeyService } from './api-keys';
 import { AutomationService } from './automations';
 import { ChatService } from './chats';
 import { DeadLetterService } from './dead-letters';
@@ -25,6 +26,7 @@ import { WebhookService } from './webhooks';
  * Service container
  */
 export interface Services {
+  apiKeys: ApiKeyService;
   instances: InstanceService;
   persons: PersonService;
   events: EventService;
@@ -44,10 +46,12 @@ export interface Services {
  * Create all services
  */
 export function createServices(db: Database, eventBus: EventBus | null): Services {
+  const apiKeys = new ApiKeyService(db);
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
 
   return {
+    apiKeys,
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),
     events: new EventService(db),
@@ -65,6 +69,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 }
 
 // Re-export service classes
+export { ApiKeyService, type ValidatedApiKey, type CreateApiKeyOptions, type CreateApiKeyResult } from './api-keys';
 export { InstanceService } from './instances';
 export { PersonService } from './persons';
 export { EventService } from './events';

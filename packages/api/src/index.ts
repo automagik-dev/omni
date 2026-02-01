@@ -273,6 +273,27 @@ async function main() {
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
 
+  // Initialize primary API key
+  log.info('Initializing API key');
+  let apiKeyInfo: { displayKey: string; isNew: boolean; isFromEnv: boolean } | undefined;
+  try {
+    const keyResult = await services.apiKeys.initializePrimaryKey();
+    apiKeyInfo = {
+      displayKey: keyResult.displayKey,
+      isNew: keyResult.isNew,
+      isFromEnv: keyResult.isFromEnv,
+    };
+    if (keyResult.isNew) {
+      log.info('Generated new primary API key');
+    } else if (keyResult.isFromEnv) {
+      log.info('Using primary API key from environment');
+    } else {
+      log.info('Using existing primary API key');
+    }
+  } catch (error) {
+    log.error('Failed to initialize primary API key', { error: String(error) });
+  }
+
   // Set up message persistence (writes to unified chats/messages tables)
   if (eventBus) {
     try {
@@ -297,6 +318,7 @@ async function main() {
     docsPath: '/api/v2/docs',
     healthPath: '/api/v2/health',
     metricsPath: '/api/v2/metrics',
+    apiKey: apiKeyInfo,
   });
   setupShutdownHandlers(server);
 }

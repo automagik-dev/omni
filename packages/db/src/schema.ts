@@ -45,6 +45,9 @@ export type RuleType = (typeof ruleTypes)[number];
 export const settingValueTypes = ['string', 'integer', 'boolean', 'json', 'secret'] as const;
 export type SettingValueType = (typeof settingValueTypes)[number];
 
+export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
+export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
+
 export const eventTypes = [
   'message.received',
   'message.sent',
@@ -245,6 +248,71 @@ export const agentProviders = pgTable(
     activeIdx: index('agent_providers_active_idx').on(table.isActive),
   }),
 );
+
+// ============================================================================
+// API KEYS
+// ============================================================================
+
+/**
+ * API keys for authentication.
+ * Each key has scopes that control access to resources.
+ *
+ * Key format: omni_sk_{32-char-random}
+ * Hash: SHA-256 of the full key (we only store the hash)
+ */
+export const apiKeys = pgTable(
+  'api_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+
+    // Security - store hash of key, not the key itself
+    // Key prefix stored for identification (first 8 chars after omni_sk_)
+    keyPrefix: varchar('key_prefix', { length: 12 }).notNull(),
+    keyHash: varchar('key_hash', { length: 64 }).notNull(), // SHA-256 hex
+
+    // Scopes define what the key can access
+    // Examples: ['*'], ['messages:read', 'messages:write'], ['instances:read']
+    scopes: text('scopes').array().notNull(),
+
+    // Instance restrictions (null = all instances)
+    instanceIds: uuid('instance_ids').array(),
+
+    // Status
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<ApiKeyStatus>(),
+
+    // Rate limiting (requests per minute, null = default)
+    rateLimit: integer('rate_limit'),
+
+    // Expiration (null = never expires)
+    expiresAt: timestamp('expires_at'),
+
+    // Audit
+    lastUsedAt: timestamp('last_used_at'),
+    lastUsedIp: varchar('last_used_ip', { length: 45 }), // IPv6 max length
+    usageCount: integer('usage_count').notNull().default(0),
+
+    // Revocation
+    revokedAt: timestamp('revoked_at'),
+    revokedBy: varchar('revoked_by', { length: 255 }),
+    revokeReason: text('revoke_reason'),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    createdBy: varchar('created_by', { length: 255 }),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    keyPrefixIdx: index('api_keys_key_prefix_idx').on(table.keyPrefix),
+    keyHashIdx: uniqueIndex('api_keys_key_hash_idx').on(table.keyHash),
+    statusIdx: index('api_keys_status_idx').on(table.status),
+    expiresAtIdx: index('api_keys_expires_at_idx').on(table.expiresAt),
+  }),
+);
+
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type NewApiKey = typeof apiKeys.$inferInsert;
 
 // ============================================================================
 // INSTANCES
