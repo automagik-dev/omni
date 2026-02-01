@@ -2,7 +2,7 @@
 
 > Sync message history, contacts, groups, and instance profile from channels with rate-limiting and configurable depth.
 
-**Status:** REVIEW
+**Status:** FIX-FIRST
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-rnc
@@ -455,3 +455,107 @@ CREATE TABLE omni_groups (
 ```
 
 Files are served via `GET /api/v2/media/{instanceId}/{path}` with proper MIME types and range request support for streaming.
+
+---
+
+## Review Verdict
+
+**Verdict:** FIX-FIRST
+**Date:** 2026-02-01
+**Reviewer:** REVIEW Agent
+
+### Quality Gates
+
+| Gate | Status | Evidence |
+|------|--------|----------|
+| Typecheck | PASS | 7/7 packages clean |
+| Lint | PASS | 272 files, no issues |
+| Tests | PASS | 646 pass, 0 fail |
+
+### Acceptance Criteria - Group A (Profile Sync & Job Infrastructure)
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Instance shows profile name/avatar/bio after connect | PASS | `profileBio`, `profileMetadata`, `profileSyncedAt` columns in schema |
+| Profile refreshes automatically on startup if stale | PASS | `ProfileSyncService.syncIfStale()` with 24h threshold |
+| Can trigger profile sync via API | PASS | `POST /instances/:id/sync` with `type: "profile"` |
+| Can create sync job via API | PASS | `POST /instances/:id/sync` endpoint implemented |
+| Job appears in `sync_jobs` table | PASS | Full schema with id, instanceId, status, type, config, progress |
+| Can poll job status | PASS | `GET /instances/:id/sync/:jobId` returns status and progress |
+| Events emitted at each stage | PASS | sync.started, sync.progress, sync.completed, sync.failed defined |
+
+**Group A: 100% PASS**
+
+### Acceptance Criteria - Group B (Message History Sync + Media)
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| WhatsApp: Can sync last 7 days of messages | FAIL | `fetchHistory()` not implemented in WhatsApp plugin |
+| Discord: Can sync last 7 days from a channel | FAIL | `fetchHistory()` not implemented in Discord plugin |
+| No duplicate messages in database | FAIL | No deduplication logic implemented |
+| Respects rate limits | FAIL | Rate limiter not implemented |
+| Progress updates visible via job status | PARTIAL | Job status exists but no actual sync runs |
+| Media files stored to disk when downloadMediaOnSync=true | PASS | `MediaStorageService` fully implemented |
+| Can serve stored media via endpoint | PASS | `GET /media/:instanceId/*` with range support |
+| All media metadata preserved in message record | PASS | `mediaMetadata` JSONB field in messages table |
+
+**Group B: 4/8 PASS (50%)**
+
+### Acceptance Criteria - Group C (Contacts & Groups Sync)
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| WhatsApp contacts appear as platform identities | FAIL | `fetchContacts()` not implemented |
+| Discord guild members synced | FAIL | `fetchGuilds()` not implemented |
+| Contacts linked to existing persons by phone match | FAIL | No contact sync logic |
+| Groups/guilds stored with metadata | FAIL | `omni_groups` table not created |
+| Daily refresh runs automatically | FAIL | No scheduler job for contact/profile refresh |
+
+**Group C: 0/5 PASS (0%)**
+
+### Security Findings
+
+| Severity | Issue | Location |
+|----------|-------|----------|
+| HIGH | Path traversal vulnerability - no validation against `../` in media endpoint | `packages/api/src/routes/v2/media.ts:30-32` |
+
+### Test Coverage Findings
+
+| Severity | Issue |
+|----------|-------|
+| MEDIUM | No unit tests for `SyncJobService`, `ProfileSyncService`, `MediaStorageService`, `HistorySyncService` |
+
+### Summary
+
+**Implemented (Group A - Infrastructure):**
+- ✅ All schema changes (instances + sync_jobs tables)
+- ✅ `getProfile()` in WhatsApp and Discord plugins
+- ✅ `ProfileSyncService` with staleness tracking
+- ✅ `SyncJobService` with full CRUD
+- ✅ All API endpoints for sync operations
+- ✅ Sync event types defined
+- ✅ `MediaStorageService` for filesystem storage
+- ✅ Media serving endpoint with range request support
+
+**Missing (Groups B & C - Core Sync Logic):**
+- ❌ `fetchHistory()` in plugins (the actual message fetching)
+- ❌ Rate limiter with exponential backoff
+- ❌ Message deduplication logic
+- ❌ NATS consumer/worker to process sync jobs
+- ❌ `fetchContacts()` / `fetchGuilds()` in plugins
+- ❌ `omni_groups` table
+- ❌ Scheduler jobs for daily refresh
+- ❌ Unit tests for new services
+
+### Recommendation
+
+**FIX-FIRST**: The infrastructure is solid, but the actual sync functionality is missing. Before shipping:
+
+1. **CRITICAL (Security):** Add path traversal validation to media endpoint
+2. **HIGH (Core Feature):** Implement `fetchHistory()` in WhatsApp and Discord plugins
+3. **HIGH (Core Feature):** Add NATS worker to process sync jobs
+4. **MEDIUM:** Add rate limiting and deduplication
+5. **MEDIUM:** Add unit tests for new services
+6. **LOW (Scope Reduction Option):** Group C (contacts/groups) could be deferred to a follow-up wish
+
+The wish can ship as **Phase 1: Profile Sync + Media Infrastructure** if Groups B and C are explicitly descoped and tracked as follow-up work.
