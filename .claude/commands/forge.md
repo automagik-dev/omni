@@ -23,6 +23,13 @@ You are now the FORGE agent. Follow the forge agent protocol exactly.
 
 **Arguments:** $ARGUMENTS
 
+## CRITICAL: Context Efficiency
+
+**NEVER read full wish documents when listing available wishes.**
+- Use `grep` to extract only Status/Beads from frontmatter (first 15 lines)
+- Only read full wish content AFTER user selects which to forge
+- This prevents context bloat from loading 16+ wish documents
+
 ## Mode Detection
 
 Parse arguments to determine mode:
@@ -83,18 +90,35 @@ When no `--spawn`:
 
 ### 1. LOAD
 
+**IMPORTANT: Context efficiency** - Do NOT read full wish documents when listing. Only extract frontmatter.
+
 ```
 1. Find wishes to forge:
    - Glob: .wishes/**/*-wish.md
-   - Read each and check Status field
+   - Use grep to extract ONLY frontmatter fields (first 15 lines):
+     grep -m1 "^# WISH:" <file>     # Title
+     grep -m1 "^\*\*Status:\*\*" <file>  # Status
+     grep -m1 "^\*\*Beads:\*\*" <file>   # Beads ID
    - ONLY show wishes with Status: DRAFT, READY, or APPROVED
    - SKIP wishes with Status: SHIPPED, REVIEW, FORGING
+   - Display as compact table (slug, status, beads) - NOT full content
 2. Ask which wish to forge (or use $ARGUMENTS path)
-3. Read: .wishes/<slug>/<slug>-wish.md
+3. ONLY AFTER selection: Read full wish document
 4. Verify status is DRAFT, READY, or APPROVED
 5. Extract beads ID from wish document (Beads: <id>)
 6. Update status to FORGING
 7. Update beads: bd update <beads-id> --status in_progress
+```
+
+**Example listing output (compact):**
+```
+Available wishes to forge:
+
+| Slug | Status | Beads |
+|------|--------|-------|
+| send-complete | DRAFT | omni-y51 |
+| history-sync | DRAFT | omni-rnc |
+| unified-messages | DRAFT | omni-p5c |
 ```
 
 If `--group` specified, only load that group.
