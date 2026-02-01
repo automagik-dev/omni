@@ -26,11 +26,13 @@ describe('Unified Messages', () => {
     const [instance] = await db
       .insert(instances)
       .values({
-        name: 'test-unified-messages',
-        channel: 'whatsapp',
-        status: 'disconnected',
+        name: `test-unified-messages-${Date.now()}`,
+        channel: 'whatsapp-baileys' as const,
       })
       .returning();
+    if (!instance) {
+      throw new Error('Failed to create test instance');
+    }
     testInstanceId = instance.id;
   });
 
@@ -54,7 +56,7 @@ describe('Unified Messages', () => {
         instanceId: testInstanceId,
         externalId: 'test-chat-001@g.us',
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
         name: 'Test Group',
       });
 
@@ -67,7 +69,7 @@ describe('Unified Messages', () => {
     test('should find or create a chat (create path)', async () => {
       const { chat, created } = await chatService.findOrCreate(testInstanceId, 'test-chat-002@s.whatsapp.net', {
         chatType: 'dm',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       expect(created).toBe(true);
@@ -78,12 +80,12 @@ describe('Unified Messages', () => {
     test('should find or create a chat (find path)', async () => {
       const { chat: first } = await chatService.findOrCreate(testInstanceId, 'test-chat-003@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const { chat: second, created } = await chatService.findOrCreate(testInstanceId, 'test-chat-003@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       expect(created).toBe(false);
@@ -93,7 +95,7 @@ describe('Unified Messages', () => {
     test('should add a participant', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-participants@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const participant = await chatService.addParticipant({
@@ -112,7 +114,7 @@ describe('Unified Messages', () => {
     test('should get participants', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-get-participants@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       await chatService.addParticipant({
@@ -134,7 +136,7 @@ describe('Unified Messages', () => {
     test('should archive and unarchive a chat', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-archive@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const archived = await chatService.archive(chat.id);
@@ -149,7 +151,7 @@ describe('Unified Messages', () => {
     test('should create a message', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-chat@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const message = await messageService.create({
@@ -173,7 +175,7 @@ describe('Unified Messages', () => {
     test('should find or create a message', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-findorcreate@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const { message: first, created: firstCreated } = await messageService.findOrCreate(chat.id, 'BAE5DEF456', {
@@ -201,7 +203,7 @@ describe('Unified Messages', () => {
     test('should record message edits', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-edit@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const message = await messageService.create({
@@ -230,7 +232,7 @@ describe('Unified Messages', () => {
     test('should add and remove reactions', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-reactions@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const message = await messageService.create({
@@ -270,7 +272,7 @@ describe('Unified Messages', () => {
     test('should update delivery status', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-delivery@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const message = await messageService.create({
@@ -293,7 +295,7 @@ describe('Unified Messages', () => {
     test('should get chat messages', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-list@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       // Create several messages
@@ -316,7 +318,7 @@ describe('Unified Messages', () => {
     test('should mark message as deleted', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-delete@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       const message = await messageService.create({
@@ -338,7 +340,7 @@ describe('Unified Messages', () => {
     test('should update chat lastMessageAt when message is created', async () => {
       const { chat: initialChat } = await chatService.findOrCreate(testInstanceId, 'test-chat-update@g.us', {
         chatType: 'group',
-        channel: 'whatsapp',
+        channel: 'whatsapp-baileys',
       });
 
       expect(initialChat.lastMessageAt).toBeNull();

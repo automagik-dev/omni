@@ -20,7 +20,6 @@ import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
-import { unifiedMessagesRoutes } from './unified-messages';
 import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -28,7 +27,7 @@ export const v2Routes = new Hono<{ Variables: AppVariables }>();
 // Mount all route modules
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);
-v2Routes.route('/messages', messagesRoutes);
+v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations
 v2Routes.route('/events', eventsRoutes);
 v2Routes.route('/persons', personsRoutes);
 v2Routes.route('/access', accessRoutes);
@@ -42,4 +41,3 @@ v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:sour
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/chats', chatsRoutes); // Unified chat model
-v2Routes.route('/unified-messages', unifiedMessagesRoutes); // Unified message model (source of truth)
