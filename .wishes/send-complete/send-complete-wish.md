@@ -2,7 +2,7 @@
 
 > Wire up stubbed message send API routes to channel plugins with unified person-ID resolution.
 
-**Status:** FIX-FIRST
+**Status:** REVIEW
 **Created:** 2026-02-01
 **Author:** WISH Agent
 **Beads:** omni-y51
