@@ -169,16 +169,43 @@ function routeError(c: Context, error: unknown): Response {
 }
 
 /**
+ * Determine if an error is a client error (4xx) vs server error (5xx)
+ */
+function isClientError(error: unknown): boolean {
+  // Expected client errors - don't log as ERROR
+  if (error instanceof ZodError) return true;
+  if (error instanceof NotFoundError) return true;
+  if (error instanceof ValidationError) return true;
+  if (error instanceof HTTPException && error.status < 500) return true;
+  if (error instanceof OmniError) {
+    const status = ERROR_STATUS_MAP[error.code] ?? 500;
+    return status < 500;
+  }
+  return false;
+}
+
+/**
  * Error handler for use with app.onError()
  * This is the recommended way to handle errors in Hono
  */
 export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c) => {
   const requestId = c.get('requestId') ?? 'unknown';
-  log.error('Request error', {
-    requestId,
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-  });
+
+  if (isClientError(error)) {
+    // Client errors (4xx) - log at debug level, no stack trace
+    log.debug('Client error', {
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } else {
+    // Server errors (5xx) - log at error level with stack trace
+    log.error('Server error', {
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
+
   return routeError(c, error);
 };
 
