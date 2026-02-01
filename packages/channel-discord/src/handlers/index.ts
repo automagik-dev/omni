@@ -11,3 +11,4 @@ export { setupMessageHandlers } from './messages';
 export { setupReactionHandlers } from './reactions';
 export { setupInteractionHandlers } from './interactions';
 export { setupAllEventHandlers } from './all-events';
+export { setupRawEventHandler, DEBUG_PAYLOADS } from './raw-events';

@@ -39,6 +39,7 @@ const createInstanceSchema = z.object({
   agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
+  token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
 });
 
 // Update instance schema
@@ -59,6 +60,48 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
       hasMore: result.hasMore,
       cursor: result.cursor,
     },
+  });
+});
+
+/**
+ * GET /instances/supported-channels - List supported channel types
+ *
+ * NOTE: This route MUST be defined before /:id to avoid being captured by the param
+ */
+instancesRoutes.get('/supported-channels', async (c) => {
+  const channelRegistry = c.get('channelRegistry');
+
+  // Get loaded plugins from registry
+  const loadedPlugins = channelRegistry ? channelRegistry.getAll() : [];
+
+  // Build dynamic list from loaded plugins
+  const loadedChannels = loadedPlugins.map((plugin) => ({
+    id: plugin.id,
+    name: plugin.name,
+    version: plugin.version,
+    loaded: true as const,
+    capabilities: plugin.capabilities,
+  }));
+
+  // Add static entries for channels that aren't loaded
+  const loadedIds = new Set(loadedPlugins.map((p) => p.id));
+
+  const staticChannels = [
+    {
+      id: 'whatsapp-cloud' as const,
+      name: 'WhatsApp Business Cloud',
+      description: 'Official WhatsApp Business API',
+      loaded: false as const,
+    },
+    { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
+    { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
+    { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
+  ];
+
+  const unloadedChannels = staticChannels.filter((ch) => !loadedIds.has(ch.id));
+
+  return c.json({
+    items: [...loadedChannels, ...unloadedChannels],
   });
 });
 
@@ -85,18 +128,22 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   // Create the database record first
   const instance = await services.instances.create(data);
 
+  // Build connection options
+  const connectionOptions: Record<string, unknown> = { forceNewQr: true };
+  if (data.token) {
+    connectionOptions.token = data.token;
+  }
+
   // Get the channel plugin and trigger connection
   if (channelRegistry) {
     const plugin = channelRegistry.get(data.channel as Parameters<typeof channelRegistry.get>[0]);
     if (plugin) {
       try {
-        // Trigger plugin connection with forceNewQr for fresh QR code
+        // Trigger plugin connection
         await plugin.connect(instance.id, {
           instanceId: instance.id,
           credentials: {},
-          options: {
-            forceNewQr: true,
-          },
+          options: connectionOptions,
         });
         log.info('Triggered connection', { instanceId: instance.id, channel: data.channel });
       } catch (error) {
@@ -291,19 +338,36 @@ instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (
   }
 });
 
+// Connect instance schema
+const connectInstanceSchema = z.object({
+  token: z.string().optional().describe('Bot token for Discord instances'),
+  forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+});
+
 /**
  * POST /instances/:id/connect - Connect instance
  *
- * Query params:
- * - forceNewQr: true - Clear auth state and force fresh QR code (for re-authentication)
+ * Body (optional):
+ * - token: Bot token for Discord instances
+ * - forceNewQr: Force new QR code for WhatsApp (re-authentication)
+ *
+ * Query params (deprecated, use body):
+ * - forceNewQr: true - Clear auth state and force fresh QR code
  */
-instancesRoutes.post('/:id/connect', async (c) => {
+instancesRoutes.post('/:id/connect', zValidator('json', connectInstanceSchema.optional()), async (c) => {
   const id = c.req.param('id');
-  const forceNewQr = c.req.query('forceNewQr') === 'true';
+  const body = c.req.valid('json') ?? {};
+  const forceNewQr = body.forceNewQr ?? c.req.query('forceNewQr') === 'true';
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
   const instance = await services.instances.getById(id);
+
+  // Build connection options
+  const connectionOptions: Record<string, unknown> = { forceNewQr };
+  if (body.token) {
+    connectionOptions.token = body.token;
+  }
 
   // Trigger connection via channel plugin
   if (channelRegistry) {
@@ -313,9 +377,7 @@ instancesRoutes.post('/:id/connect', async (c) => {
         await plugin.connect(id, {
           instanceId: id,
           credentials: {},
-          options: {
-            forceNewQr,
-          },
+          options: connectionOptions,
         });
       } catch (error) {
         return c.json(
@@ -473,46 +535,6 @@ instancesRoutes.post('/:id/logout', async (c) => {
   return c.json({
     success: true,
     message: 'Session cleared, re-authentication required',
-  });
-});
-
-/**
- * GET /instances/supported-channels - List supported channel types
- */
-instancesRoutes.get('/supported-channels', async (c) => {
-  const channelRegistry = c.get('channelRegistry');
-
-  // Get loaded plugins from registry
-  const loadedPlugins = channelRegistry ? channelRegistry.getAll() : [];
-
-  // Build dynamic list from loaded plugins
-  const loadedChannels = loadedPlugins.map((plugin) => ({
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    loaded: true as const,
-    capabilities: plugin.capabilities,
-  }));
-
-  // Add static entries for channels that aren't loaded
-  const loadedIds = new Set(loadedPlugins.map((p) => p.id));
-
-  const staticChannels = [
-    {
-      id: 'whatsapp-cloud' as const,
-      name: 'WhatsApp Business Cloud',
-      description: 'Official WhatsApp Business API',
-      loaded: false as const,
-    },
-    { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
-    { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
-    { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
-  ];
-
-  const unloadedChannels = staticChannels.filter((ch) => !loadedIds.has(ch.id));
-
-  return c.json({
-    items: [...loadedChannels, ...unloadedChannels],
   });
 });
 

@@ -15,6 +15,7 @@ import { Client, GatewayIntentBits, Partials } from 'discord.js';
  * - Typing indicators
  * - Presence (user status)
  * - Members (for mentions, user info)
+ * - Voice states (join/leave/mute)
  * - Polls
  *
  * @returns Configured Discord.js Client
@@ -41,6 +42,9 @@ export function createClient(): Client {
 
       // Members - for mentions, user info, member events
       GatewayIntentBits.GuildMembers,
+
+      // Voice - for voice channel join/leave/mute events
+      GatewayIntentBits.GuildVoiceStates,
 
       // Polls - for poll messages (Discord.js v14.18+)
       GatewayIntentBits.GuildMessagePolls,

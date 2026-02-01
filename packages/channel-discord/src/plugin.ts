@@ -25,6 +25,7 @@ import {
   setupConnectionHandlers,
   setupInteractionHandlers,
   setupMessageHandlers,
+  setupRawEventHandler,
   setupReactionHandlers,
 } from './handlers';
 import { sendMediaMessage } from './senders/media';
@@ -145,6 +146,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
       // Reconnection callback
       await this.createConnection(instanceId, config, token);
     });
+
+    // Setup raw event handler first (for DEBUG_PAYLOADS capture)
+    setupRawEventHandler(client, instanceId);
 
     setupMessageHandlers(client, this, instanceId);
     setupReactionHandlers(client, this, instanceId);
