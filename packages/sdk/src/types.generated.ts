@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Health check */
+        /**
+         * Health check
+         * @description Check the health status of the API and its dependencies.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -27,15 +30,238 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["HealthResponse"];
+                        "application/json": {
+                            /**
+                             * @description Overall health status
+                             * @enum {string}
+                             */
+                            status: "healthy" | "degraded" | "unhealthy";
+                            /** @description API version */
+                            version: string;
+                            /** @description Uptime in seconds */
+                            uptime: number;
+                            /**
+                             * Format: date-time
+                             * @description Current timestamp
+                             */
+                            timestamp: string;
+                            checks: {
+                                database: {
+                                    /**
+                                     * @description Check status
+                                     * @enum {string}
+                                     */
+                                    status: "ok" | "error";
+                                    /** @description Latency in milliseconds */
+                                    latency?: number;
+                                    /** @description Error message if status is error */
+                                    error?: string;
+                                    /** @description Additional details */
+                                    details?: {
+                                        [key: string]: unknown;
+                                    };
+                                };
+                                nats: {
+                                    /**
+                                     * @description Check status
+                                     * @enum {string}
+                                     */
+                                    status: "ok" | "error";
+                                    /** @description Latency in milliseconds */
+                                    latency?: number;
+                                    /** @description Error message if status is error */
+                                    error?: string;
+                                    /** @description Additional details */
+                                    details?: {
+                                        [key: string]: unknown;
+                                    };
+                                };
+                            };
+                            instances?: {
+                                /** @description Total instance count */
+                                total: number;
+                                /** @description Connected instance count */
+                                connected: number;
+                                /** @description Count by channel type */
+                                byChannel: {
+                                    [key: string]: number;
+                                };
+                            };
+                        };
                     };
                 };
-                /** @description System is unhealthy */
+                /** @description System is unhealthy or degraded */
                 503: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description Overall health status
+                             * @enum {string}
+                             */
+                            status: "healthy" | "degraded" | "unhealthy";
+                            /** @description API version */
+                            version: string;
+                            /** @description Uptime in seconds */
+                            uptime: number;
+                            /**
+                             * Format: date-time
+                             * @description Current timestamp
+                             */
+                            timestamp: string;
+                            checks: {
+                                database: {
+                                    /**
+                                     * @description Check status
+                                     * @enum {string}
+                                     */
+                                    status: "ok" | "error";
+                                    /** @description Latency in milliseconds */
+                                    latency?: number;
+                                    /** @description Error message if status is error */
+                                    error?: string;
+                                    /** @description Additional details */
+                                    details?: {
+                                        [key: string]: unknown;
+                                    };
+                                };
+                                nats: {
+                                    /**
+                                     * @description Check status
+                                     * @enum {string}
+                                     */
+                                    status: "ok" | "error";
+                                    /** @description Latency in milliseconds */
+                                    latency?: number;
+                                    /** @description Error message if status is error */
+                                    error?: string;
+                                    /** @description Additional details */
+                                    details?: {
+                                        [key: string]: unknown;
+                                    };
+                                };
+                            };
+                            instances?: {
+                                /** @description Total instance count */
+                                total: number;
+                                /** @description Connected instance count */
+                                connected: number;
+                                /** @description Count by channel type */
+                                byChannel: {
+                                    [key: string]: number;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System info
+         * @description Get system information and basic statistics.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description System information */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description API version */
+                            version: string;
+                            /** @description Environment */
+                            environment: string;
+                            /** @description Uptime in seconds */
+                            uptime: number;
+                            instances: {
+                                total: number;
+                                connected: number;
+                            };
+                            events: {
+                                today: number;
+                                total: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/_internal/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal health check
+         * @description Detailed health information for internal monitoring. Only accessible from localhost.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Internal health status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Health status */
+                            status: string;
+                            /** @description Service name */
+                            service: string;
+                            /** @description Process ID */
+                            pid: number;
+                            memory: {
+                                rss: number;
+                                heapTotal: number;
+                                heapUsed: number;
+                                external: number;
+                                arrayBuffers: number;
+                            };
+                        };
+                    };
                 };
             };
         };
@@ -54,13 +280,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List instances */
+        /**
+         * List all instances
+         * @description Get a paginated list of channel instances with optional filtering.
+         */
         get: {
             parameters: {
                 query?: {
-                    /** @description Filter by channel (comma-separated) */
                     channel?: string;
-                    /** @description Filter by status (active,inactive) */
                     status?: string;
                     limit?: number;
                     cursor?: string;
@@ -78,15 +305,67 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["Instance"][];
-                            meta?: components["schemas"]["PaginationMeta"];
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                id: string;
+                                /** @description Instance name */
+                                name: string;
+                                /**
+                                 * @description Channel type
+                                 * @enum {string}
+                                 */
+                                channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                                /** @description Whether instance is active */
+                                isActive: boolean;
+                                /** @description Whether this is the default instance for channel */
+                                isDefault: boolean;
+                                /** @description Connected profile name */
+                                profileName: string | null;
+                                /** @description Profile picture URL */
+                                profilePicUrl: string | null;
+                                /** @description Owner identifier */
+                                ownerIdentifier: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent provider UUID
+                                 */
+                                agentProviderId: string | null;
+                                /** @description Agent ID */
+                                agentId: string | null;
+                                /** @description Agent timeout in seconds */
+                                agentTimeout: number;
+                                /** @description Whether streaming is enabled */
+                                agentStreamMode: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
                         };
                     };
                 };
             };
         };
         put?: never;
-        /** Create instance */
+        /**
+         * Create new instance
+         * @description Create a new channel instance. For Discord, a bot token is required.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -94,16 +373,43 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: {
+            requestBody?: {
                 content: {
                     "application/json": {
+                        /** @description Unique name for the instance */
                         name: string;
-                        /** @enum {string} */
+                        /**
+                         * @description Channel type
+                         * @enum {string}
+                         */
                         channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
-                        /** Format: uuid */
+                        /**
+                         * Format: uuid
+                         * @description Reference to agent provider
+                         */
                         agentProviderId?: string;
-                        /** @default default */
+                        /**
+                         * @description Agent ID within the provider
+                         * @default default
+                         */
                         agentId?: string;
+                        /**
+                         * @description Agent timeout in seconds
+                         * @default 60
+                         */
+                        agentTimeout?: number;
+                        /**
+                         * @description Enable streaming responses
+                         * @default false
+                         */
+                        agentStreamMode?: boolean;
+                        /**
+                         * @description Set as default instance for channel
+                         * @default false
+                         */
+                        isDefault?: boolean;
+                        /** @description Bot token for Discord instances */
+                        token?: string;
                     };
                 };
             };
@@ -115,13 +421,136 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            data?: components["schemas"]["Instance"];
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                id: string;
+                                /** @description Instance name */
+                                name: string;
+                                /**
+                                 * @description Channel type
+                                 * @enum {string}
+                                 */
+                                channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                                /** @description Whether instance is active */
+                                isActive: boolean;
+                                /** @description Whether this is the default instance for channel */
+                                isDefault: boolean;
+                                /** @description Connected profile name */
+                                profileName: string | null;
+                                /** @description Profile picture URL */
+                                profilePicUrl: string | null;
+                                /** @description Owner identifier */
+                                ownerIdentifier: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent provider UUID
+                                 */
+                                agentProviderId: string | null;
+                                /** @description Agent ID */
+                                agentId: string | null;
+                                /** @description Agent timeout in seconds */
+                                agentTimeout: number;
+                                /** @description Whether streaming is enabled */
+                                agentStreamMode: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
                         };
                     };
                 };
-                400: components["responses"]["ValidationError"];
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/supported-channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List supported channel types
+         * @description Get a list of all supported channel types with their capabilities.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of supported channels */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * @description Channel type ID
+                                 * @enum {string}
+                                 */
+                                id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                                /** @description Human-readable channel name */
+                                name: string;
+                                /** @description Plugin version */
+                                version?: string;
+                                /** @description Channel description */
+                                description?: string;
+                                /** @description Whether plugin is loaded */
+                                loaded: boolean;
+                                /** @description Plugin capabilities */
+                                capabilities?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -135,7 +564,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get instance */
+        /**
+         * Get instance by ID
+         * @description Get details of a specific channel instance.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -154,16 +586,83 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            data?: components["schemas"]["Instance"];
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                id: string;
+                                /** @description Instance name */
+                                name: string;
+                                /**
+                                 * @description Channel type
+                                 * @enum {string}
+                                 */
+                                channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                                /** @description Whether instance is active */
+                                isActive: boolean;
+                                /** @description Whether this is the default instance for channel */
+                                isDefault: boolean;
+                                /** @description Connected profile name */
+                                profileName: string | null;
+                                /** @description Profile picture URL */
+                                profilePicUrl: string | null;
+                                /** @description Owner identifier */
+                                ownerIdentifier: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent provider UUID
+                                 */
+                                agentProviderId: string | null;
+                                /** @description Agent ID */
+                                agentId: string | null;
+                                /** @description Agent timeout in seconds */
+                                agentTimeout: number;
+                                /** @description Whether streaming is enabled */
+                                agentStreamMode: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
                         };
                     };
                 };
-                404: components["responses"]["NotFound"];
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
             };
         };
         put?: never;
         post?: never;
-        /** Delete instance */
+        /**
+         * Delete instance
+         * @description Delete a channel instance. This will disconnect the instance first.
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -180,14 +679,44 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
                 };
-                404: components["responses"]["NotFound"];
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
             };
         };
         options?: never;
         head?: never;
-        /** Update instance */
+        /**
+         * Update instance
+         * @description Update an existing channel instance.
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -199,7 +728,42 @@ export interface paths {
             };
             requestBody?: {
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        /** @description Unique name for the instance */
+                        name?: string;
+                        /**
+                         * @description Channel type
+                         * @enum {string}
+                         */
+                        channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                        /**
+                         * Format: uuid
+                         * @description Reference to agent provider
+                         */
+                        agentProviderId?: string;
+                        /**
+                         * @description Agent ID within the provider
+                         * @default default
+                         */
+                        agentId?: string;
+                        /**
+                         * @description Agent timeout in seconds
+                         * @default 60
+                         */
+                        agentTimeout?: number;
+                        /**
+                         * @description Enable streaming responses
+                         * @default false
+                         */
+                        agentStreamMode?: boolean;
+                        /**
+                         * @description Set as default instance for channel
+                         * @default false
+                         */
+                        isDefault?: boolean;
+                        /** @description Bot token for Discord instances */
+                        token?: string;
+                    };
                 };
             };
             responses: {
@@ -208,11 +772,699 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                id: string;
+                                /** @description Instance name */
+                                name: string;
+                                /**
+                                 * @description Channel type
+                                 * @enum {string}
+                                 */
+                                channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                                /** @description Whether instance is active */
+                                isActive: boolean;
+                                /** @description Whether this is the default instance for channel */
+                                isDefault: boolean;
+                                /** @description Connected profile name */
+                                profileName: string | null;
+                                /** @description Profile picture URL */
+                                profilePicUrl: string | null;
+                                /** @description Owner identifier */
+                                ownerIdentifier: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent provider UUID
+                                 */
+                                agentProviderId: string | null;
+                                /** @description Agent ID */
+                                agentId: string | null;
+                                /** @description Agent timeout in seconds */
+                                agentTimeout: number;
+                                /** @description Whether streaming is enabled */
+                                agentStreamMode: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
                 };
-                404: components["responses"]["NotFound"];
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
             };
         };
+        trace?: never;
+    };
+    "/instances/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get instance connection status
+         * @description Get the current connection status of a channel instance.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Instance status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /** @description Connection state */
+                                state: string;
+                                /** @description Whether instance is connected */
+                                isConnected: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description When connected
+                                 */
+                                connectedAt: string | null;
+                                /** @description Profile name */
+                                profileName: string | null;
+                                /** @description Profile picture URL */
+                                profilePicUrl: string | null;
+                                /** @description Owner identifier */
+                                ownerIdentifier: string | null;
+                                /** @description Status message */
+                                message?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/qr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get QR code for WhatsApp connection
+         * @description Get the QR code for connecting a WhatsApp instance.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description QR code data */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description QR code string */
+                                qr: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description QR code expiration
+                                 */
+                                expiresAt: string | null;
+                                /** @description Status message */
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not a WhatsApp instance */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request pairing code
+         * @description Request a pairing code as an alternative to QR code scanning.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Phone number in international format */
+                        phoneNumber: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Pairing code generated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Pairing code to enter on phone */
+                                code: string;
+                                /** @description Masked phone number */
+                                phoneNumber: string;
+                                /** @description Instructions for user */
+                                message: string;
+                                /** @description Seconds until code expires */
+                                expiresIn: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid operation */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect instance
+         * @description Initiate connection for a channel instance.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    forceNewQr?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Bot token for Discord instances */
+                        token?: string;
+                        /** @description Force new QR code for WhatsApp */
+                        forceNewQr?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Connection initiated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /** @description Connection status */
+                                status: string;
+                                /** @description Status message */
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Plugin not found */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect instance
+         * @description Disconnect a channel instance while preserving session data.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Instance disconnected */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart instance
+         * @description Restart a channel instance by disconnecting and reconnecting.
+         */
+        post: {
+            parameters: {
+                query?: {
+                    forceNewQr?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Restart initiated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /** @description Connection status */
+                                status: string;
+                                /** @description Status message */
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Plugin not found */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout instance
+         * @description Logout a channel instance, clearing all session data.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Session cleared */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/messages": {
@@ -224,7 +1476,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send text message */
+        /**
+         * Send text message
+         * @description Send a text message through a channel instance.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -232,13 +1487,19 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: {
+            requestBody?: {
                 content: {
                     "application/json": {
-                        /** Format: uuid */
+                        /**
+                         * Format: uuid
+                         * @description Instance ID to send from
+                         */
                         instanceId: string;
+                        /** @description Recipient (phone number or platform ID) */
                         to: string;
+                        /** @description Message text */
                         text: string;
+                        /** @description Message ID to reply to */
                         replyTo?: string;
                     };
                 };
@@ -249,9 +1510,662 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                            };
+                        };
+                    };
                 };
-                400: components["responses"]["ValidationError"];
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send media message
+         * @description Send an image, audio, video, or document through a channel instance.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID to send from
+                         */
+                        instanceId: string;
+                        /** @description Recipient */
+                        to: string;
+                        /**
+                         * @description Media type
+                         * @enum {string}
+                         */
+                        type: "image" | "audio" | "video" | "document";
+                        /**
+                         * Format: uri
+                         * @description Media URL
+                         */
+                        url?: string;
+                        /** @description Base64 encoded media */
+                        base64?: string;
+                        /** @description Filename for documents */
+                        filename?: string;
+                        /** @description Caption for media */
+                        caption?: string;
+                        /** @description Send audio as voice note */
+                        voiceNote?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Media sent */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/reaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send reaction
+         * @description React to a message with an emoji.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Chat ID */
+                        to: string;
+                        /** @description Message ID to react to */
+                        messageId: string;
+                        /** @description Emoji to react with */
+                        emoji: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Reaction sent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/sticker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send sticker
+         * @description Send a sticker through a channel instance.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Recipient */
+                        to: string;
+                        /**
+                         * Format: uri
+                         * @description Sticker URL
+                         */
+                        url?: string;
+                        /** @description Base64 encoded sticker */
+                        base64?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Sticker sent */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send contact card
+         * @description Send a contact card through a channel instance.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Recipient */
+                        to: string;
+                        contact: {
+                            /** @description Contact name */
+                            name: string;
+                            /** @description Phone number */
+                            phone?: string;
+                            /**
+                             * Format: email
+                             * @description Email address
+                             */
+                            email?: string;
+                            /** @description Organization */
+                            organization?: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Contact sent */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/location": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send location
+         * @description Send a location through a channel instance.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Recipient */
+                        to: string;
+                        /** @description Latitude */
+                        latitude: number;
+                        /** @description Longitude */
+                        longitude: number;
+                        /** @description Location name */
+                        name?: string;
+                        /** @description Address */
+                        address?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Location sent */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
             };
         };
         delete?: never;
@@ -267,13 +2181,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List events */
+        /**
+         * List events
+         * @description Get a paginated list of message events with optional filtering.
+         */
         get: {
             parameters: {
                 query?: {
                     channel?: string;
                     instanceId?: string;
+                    personId?: string;
                     eventType?: string;
+                    contentType?: string;
+                    direction?: "inbound" | "outbound";
                     since?: string;
                     until?: string;
                     search?: string;
@@ -293,8 +2213,549 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["Event"][];
-                            meta?: components["schemas"]["PaginationMeta"];
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                                total?: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get event analytics
+         * @description Get analytics summary for events.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    since?: string;
+                    until?: string;
+                    instanceId?: string;
+                    allTime?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Analytics data */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Total event count */
+                            totalEvents: number;
+                            /** @description Count by event type */
+                            byEventType: {
+                                [key: string]: number;
+                            };
+                            /** @description Count by channel */
+                            byChannel: {
+                                [key: string]: number;
+                            };
+                            byDirection: {
+                                inbound: number;
+                                outbound: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/timeline/{personId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get person timeline
+         * @description Get cross-channel timeline for a person.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    channels?: string;
+                    since?: string;
+                    until?: string;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    personId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Timeline events */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            personId: string;
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Advanced event search
+         * @description Search events with advanced filters and multiple output formats.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Full-text search query */
+                        query?: string;
+                        filters?: {
+                            /** @description Channel types */
+                            channel?: string[];
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId?: string;
+                            /**
+                             * Format: uuid
+                             * @description Person UUID
+                             */
+                            personId?: string;
+                            /** @description Event types */
+                            eventType?: string[];
+                            /** @description Content types */
+                            contentType?: string[];
+                            /**
+                             * @description Direction
+                             * @enum {string}
+                             */
+                            direction?: "inbound" | "outbound";
+                            /**
+                             * Format: date-time
+                             * @description Start date
+                             */
+                            since?: string;
+                            /**
+                             * Format: date-time
+                             * @description End date
+                             */
+                            until?: string;
+                        };
+                        /**
+                         * @description Response format
+                         * @default full
+                         * @enum {string}
+                         */
+                        format?: "full" | "summary" | "agent";
+                        /**
+                         * @description Max results
+                         * @default 50
+                         */
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Search results */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                            summary?: string;
+                            asContext?: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get event by ID
+         * @description Get details of a specific event.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Event details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Event not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/by-sender/{senderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get events by sender
+         * @description Get events from a specific sender.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    instanceId?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    senderId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Events from sender */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                            }[];
+                            meta: {
+                                total: number;
+                                hasMore: boolean;
+                            };
                         };
                     };
                 };
@@ -315,7 +2776,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search persons */
+        /**
+         * Search persons
+         * @description Search for persons by name, email, or phone.
+         */
         get: {
             parameters: {
                 query: {
@@ -328,14 +2792,39 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description List of persons */
+                /** @description Search results */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["Person"][];
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                id: string;
+                                /** @description Display name */
+                                displayName: string | null;
+                                /**
+                                 * Format: email
+                                 * @description Email address
+                                 */
+                                email: string | null;
+                                /** @description Phone number */
+                                phone: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
                         };
                     };
                 };
@@ -349,6 +2838,1184 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/persons/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get person by ID
+         * @description Get details of a specific person.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Person details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                id: string;
+                                /** @description Display name */
+                                displayName: string | null;
+                                /**
+                                 * Format: email
+                                 * @description Email address
+                                 */
+                                email: string | null;
+                                /** @description Phone number */
+                                phone: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Person not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/persons/{id}/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get person presence
+         * @description Get all identities and presence information for a person.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Presence data */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                person: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    id: string;
+                                    /** @description Display name */
+                                    displayName: string | null;
+                                    /**
+                                     * Format: email
+                                     * @description Email address
+                                     */
+                                    email: string | null;
+                                    /** @description Phone number */
+                                    phone: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description Creation timestamp
+                                     */
+                                    createdAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last update timestamp
+                                     */
+                                    updatedAt: string;
+                                };
+                                identities: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Identity UUID
+                                     */
+                                    id: string;
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    personId: string;
+                                    /** @description Channel type */
+                                    channel: string;
+                                    /** @description Platform user ID */
+                                    platformUserId: string;
+                                    /** @description Display name */
+                                    displayName: string | null;
+                                    /** @description Profile picture URL */
+                                    profilePicUrl: string | null;
+                                    /** @description Total messages */
+                                    messageCount: number;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last seen timestamp
+                                     */
+                                    lastSeenAt: string | null;
+                                }[];
+                                summary: {
+                                    totalMessages: number;
+                                    channels: string[];
+                                    /** Format: date-time */
+                                    lastSeenAt: string | null;
+                                };
+                                byChannel: {
+                                    [key: string]: {
+                                        identities: {
+                                            /**
+                                             * Format: uuid
+                                             * @description Identity UUID
+                                             */
+                                            id: string;
+                                            /**
+                                             * Format: uuid
+                                             * @description Person UUID
+                                             */
+                                            personId: string;
+                                            /** @description Channel type */
+                                            channel: string;
+                                            /** @description Platform user ID */
+                                            platformUserId: string;
+                                            /** @description Display name */
+                                            displayName: string | null;
+                                            /** @description Profile picture URL */
+                                            profilePicUrl: string | null;
+                                            /** @description Total messages */
+                                            messageCount: number;
+                                            /**
+                                             * Format: date-time
+                                             * @description Last seen timestamp
+                                             */
+                                            lastSeenAt: string | null;
+                                        }[];
+                                        messageCount: number;
+                                        /** Format: date-time */
+                                        lastSeenAt: string | null;
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Person not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/persons/{id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get person timeline
+         * @description Get cross-channel message timeline for a person.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    channels?: string;
+                    since?: string;
+                    until?: string;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Timeline events */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: unknown[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/persons/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link identities
+         * @description Link two identities to the same person.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description First identity ID
+                         */
+                        identityA: string;
+                        /**
+                         * Format: uuid
+                         * @description Second identity ID
+                         */
+                        identityB: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Identities linked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                id: string;
+                                /** @description Display name */
+                                displayName: string | null;
+                                /**
+                                 * Format: email
+                                 * @description Email address
+                                 */
+                                email: string | null;
+                                /** @description Phone number */
+                                phone: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Identity not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/persons/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlink identity
+         * @description Unlink an identity from its person.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Identity ID to unlink
+                         */
+                        identityId: string;
+                        /** @description Reason for unlinking */
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Identity unlinked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                person: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    id: string;
+                                    /** @description Display name */
+                                    displayName: string | null;
+                                    /**
+                                     * Format: email
+                                     * @description Email address
+                                     */
+                                    email: string | null;
+                                    /** @description Phone number */
+                                    phone: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description Creation timestamp
+                                     */
+                                    createdAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last update timestamp
+                                     */
+                                    updatedAt: string;
+                                };
+                                identity: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Identity UUID
+                                     */
+                                    id: string;
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    personId: string;
+                                    /** @description Channel type */
+                                    channel: string;
+                                    /** @description Platform user ID */
+                                    platformUserId: string;
+                                    /** @description Display name */
+                                    displayName: string | null;
+                                    /** @description Profile picture URL */
+                                    profilePicUrl: string | null;
+                                    /** @description Total messages */
+                                    messageCount: number;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last seen timestamp
+                                     */
+                                    lastSeenAt: string | null;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Identity not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/persons/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge persons
+         * @description Merge two persons into one.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Person to merge from (will be deleted)
+                         */
+                        sourcePersonId: string;
+                        /**
+                         * Format: uuid
+                         * @description Person to merge into (will be kept)
+                         */
+                        targetPersonId: string;
+                        /** @description Reason for merge */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Persons merged */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                person: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    id: string;
+                                    /** @description Display name */
+                                    displayName: string | null;
+                                    /**
+                                     * Format: email
+                                     * @description Email address
+                                     */
+                                    email: string | null;
+                                    /** @description Phone number */
+                                    phone: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description Creation timestamp
+                                     */
+                                    createdAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last update timestamp
+                                     */
+                                    updatedAt: string;
+                                };
+                                mergedIdentityIds: string[];
+                                /** Format: uuid */
+                                deletedPersonId: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Person not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhook-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List webhook sources
+         * @description Get all configured webhook sources.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    enabled?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of sources */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Source UUID
+                                 */
+                                id: string;
+                                /** @description Source name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Expected headers */
+                                expectedHeaders: {
+                                    [key: string]: boolean;
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create webhook source
+         * @description Create a new webhook source.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Unique source name */
+                        name: string;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Headers to validate */
+                        expectedHeaders?: {
+                            [key: string]: boolean;
+                        };
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Source created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Source UUID
+                                 */
+                                id: string;
+                                /** @description Source name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Expected headers */
+                                expectedHeaders: {
+                                    [key: string]: boolean;
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhook-sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get webhook source
+         * @description Get details of a specific webhook source.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Source details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Source UUID
+                                 */
+                                id: string;
+                                /** @description Source name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Expected headers */
+                                expectedHeaders: {
+                                    [key: string]: boolean;
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Source not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete webhook source
+         * @description Delete a webhook source.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Source deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Source not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update webhook source
+         * @description Update an existing webhook source.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Unique source name */
+                        name?: string;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Headers to validate */
+                        expectedHeaders?: {
+                            [key: string]: boolean;
+                        };
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Source updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Source UUID
+                                 */
+                                id: string;
+                                /** @description Source name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Expected headers */
+                                expectedHeaders: {
+                                    [key: string]: boolean;
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Source not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/webhooks/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive webhook
+         * @description Receive webhook from external system. Creates a custom event.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    source: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description Webhook received */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * Format: uuid
+                             * @description Created event ID
+                             */
+                            eventId: string;
+                            /** @description Webhook source name */
+                            source: string;
+                            /** @description Event type */
+                            eventType: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger custom event
+         * @description Manually trigger a custom event.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Event type (must start with custom.) */
+                        eventType: string;
+                        /** @description Event payload */
+                        payload: {
+                            [key: string]: unknown;
+                        };
+                        /** @description Correlation ID */
+                        correlationId?: string;
+                        /**
+                         * Format: uuid
+                         * @description Instance ID for context
+                         */
+                        instanceId?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Event triggered */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * Format: uuid
+                             * @description Created event ID
+                             */
+                            eventId: string;
+                            /** @description Webhook source name */
+                            source: string;
+                            /** @description Event type */
+                            eventType: string;
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/access/rules": {
         parameters: {
             query?: never;
@@ -356,7 +4023,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List access rules */
+        /**
+         * List access rules
+         * @description Get all access rules with optional filtering.
+         */
         get: {
             parameters: {
                 query?: {
@@ -369,21 +4039,77 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description List of access rules */
+                /** @description List of rules */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["AccessRule"][];
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Rule UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID (null for global)
+                                 */
+                                instanceId: string | null;
+                                /**
+                                 * @description Rule type
+                                 * @enum {string}
+                                 */
+                                ruleType: "allow" | "deny";
+                                /** @description Phone pattern */
+                                phonePattern: string | null;
+                                /** @description Platform user ID */
+                                platformUserId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /** @description Priority (higher = checked first) */
+                                priority: number;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Reason */
+                                reason: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Expiration
+                                 */
+                                expiresAt: string | null;
+                                /**
+                                 * @description Action
+                                 * @enum {string}
+                                 */
+                                action: "block" | "allow" | "silent_block";
+                                /** @description Custom block message */
+                                blockMessage: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
                         };
                     };
                 };
             };
         };
         put?: never;
-        /** Create access rule */
+        /**
+         * Create access rule
+         * @description Create a new access rule.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -391,17 +4117,53 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: {
+            requestBody?: {
                 content: {
                     "application/json": {
-                        /** Format: uuid */
-                        instanceId?: string;
-                        /** @enum {string} */
+                        /**
+                         * Format: uuid
+                         * @description Instance ID (null for global)
+                         */
+                        instanceId?: string | null;
+                        /**
+                         * @description Rule type
+                         * @enum {string}
+                         */
                         ruleType: "allow" | "deny";
+                        /** @description Phone pattern with wildcards */
                         phonePattern?: string;
+                        /** @description Exact platform user ID */
                         platformUserId?: string;
-                        /** @default 0 */
+                        /**
+                         * Format: uuid
+                         * @description Person ID
+                         */
+                        personId?: string;
+                        /**
+                         * @description Priority
+                         * @default 0
+                         */
                         priority?: number;
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                        /** @description Reason */
+                        reason?: string;
+                        /**
+                         * Format: date-time
+                         * @description Expiration
+                         */
+                        expiresAt?: string;
+                        /**
+                         * @description Action
+                         * @default block
+                         * @enum {string}
+                         */
+                        action?: "block" | "allow" | "silent_block";
+                        /** @description Custom block message */
+                        blockMessage?: string;
                     };
                 };
             };
@@ -411,7 +4173,518 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Rule UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID (null for global)
+                                 */
+                                instanceId: string | null;
+                                /**
+                                 * @description Rule type
+                                 * @enum {string}
+                                 */
+                                ruleType: "allow" | "deny";
+                                /** @description Phone pattern */
+                                phonePattern: string | null;
+                                /** @description Platform user ID */
+                                platformUserId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /** @description Priority (higher = checked first) */
+                                priority: number;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Reason */
+                                reason: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Expiration
+                                 */
+                                expiresAt: string | null;
+                                /**
+                                 * @description Action
+                                 * @enum {string}
+                                 */
+                                action: "block" | "allow" | "silent_block";
+                                /** @description Custom block message */
+                                blockMessage: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/access/rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get access rule
+         * @description Get details of a specific access rule.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Rule details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Rule UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID (null for global)
+                                 */
+                                instanceId: string | null;
+                                /**
+                                 * @description Rule type
+                                 * @enum {string}
+                                 */
+                                ruleType: "allow" | "deny";
+                                /** @description Phone pattern */
+                                phonePattern: string | null;
+                                /** @description Platform user ID */
+                                platformUserId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /** @description Priority (higher = checked first) */
+                                priority: number;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Reason */
+                                reason: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Expiration
+                                 */
+                                expiresAt: string | null;
+                                /**
+                                 * @description Action
+                                 * @enum {string}
+                                 */
+                                action: "block" | "allow" | "silent_block";
+                                /** @description Custom block message */
+                                blockMessage: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Rule not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete access rule
+         * @description Delete an access rule.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Rule deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Rule not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update access rule
+         * @description Update an existing access rule.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID (null for global)
+                         */
+                        instanceId?: string | null;
+                        /**
+                         * @description Rule type
+                         * @enum {string}
+                         */
+                        ruleType?: "allow" | "deny";
+                        /** @description Phone pattern with wildcards */
+                        phonePattern?: string;
+                        /** @description Exact platform user ID */
+                        platformUserId?: string;
+                        /**
+                         * Format: uuid
+                         * @description Person ID
+                         */
+                        personId?: string;
+                        /**
+                         * @description Priority
+                         * @default 0
+                         */
+                        priority?: number;
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                        /** @description Reason */
+                        reason?: string;
+                        /**
+                         * Format: date-time
+                         * @description Expiration
+                         */
+                        expiresAt?: string;
+                        /**
+                         * @description Action
+                         * @default block
+                         * @enum {string}
+                         */
+                        action?: "block" | "allow" | "silent_block";
+                        /** @description Custom block message */
+                        blockMessage?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Rule updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Rule UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID (null for global)
+                                 */
+                                instanceId: string | null;
+                                /**
+                                 * @description Rule type
+                                 * @enum {string}
+                                 */
+                                ruleType: "allow" | "deny";
+                                /** @description Phone pattern */
+                                phonePattern: string | null;
+                                /** @description Platform user ID */
+                                platformUserId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /** @description Priority (higher = checked first) */
+                                priority: number;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Reason */
+                                reason: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Expiration
+                                 */
+                                expiresAt: string | null;
+                                /**
+                                 * @description Action
+                                 * @enum {string}
+                                 */
+                                action: "block" | "allow" | "silent_block";
+                                /** @description Custom block message */
+                                blockMessage: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Rule not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/access/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check access
+         * @description Check if access is allowed for a user.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Platform user ID */
+                        platformUserId: string;
+                        /** @description Channel type */
+                        channel: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Access check result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Whether access is allowed */
+                                allowed: boolean;
+                                /** @description Matching rule if any */
+                                rule: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Rule UUID
+                                     */
+                                    id: string;
+                                    /**
+                                     * Format: uuid
+                                     * @description Instance UUID (null for global)
+                                     */
+                                    instanceId: string | null;
+                                    /**
+                                     * @description Rule type
+                                     * @enum {string}
+                                     */
+                                    ruleType: "allow" | "deny";
+                                    /** @description Phone pattern */
+                                    phonePattern: string | null;
+                                    /** @description Platform user ID */
+                                    platformUserId: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    personId: string | null;
+                                    /** @description Priority (higher = checked first) */
+                                    priority: number;
+                                    /** @description Whether enabled */
+                                    enabled: boolean;
+                                    /** @description Reason */
+                                    reason: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description Expiration
+                                     */
+                                    expiresAt: string | null;
+                                    /**
+                                     * @description Action
+                                     * @enum {string}
+                                     */
+                                    action: "block" | "allow" | "silent_block";
+                                    /** @description Custom block message */
+                                    blockMessage: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description Creation timestamp
+                                     */
+                                    createdAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description Last update timestamp
+                                     */
+                                    updatedAt: string;
+                                } | null;
+                                /** @description Reason for decision */
+                                reason: string | null;
+                            };
+                        };
+                    };
                 };
             };
         };
@@ -428,7 +4701,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List settings */
+        /**
+         * List settings
+         * @description Get all settings. Secret values are masked.
+         */
         get: {
             parameters: {
                 query?: {
@@ -447,7 +4723,338 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["Setting"][];
+                            items: {
+                                /** @description Setting key */
+                                key: string;
+                                /** @description Setting value (masked if secret) */
+                                value?: unknown;
+                                /** @description Category */
+                                category: string | null;
+                                /** @description Whether value is secret */
+                                isSecret: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Bulk update settings
+         * @description Update multiple settings at once.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Key-value pairs */
+                        settings: {
+                            [key: string]: unknown;
+                        };
+                        /** @description Reason for changes (audit) */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Settings updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description Setting key */
+                                key: string;
+                                /** @description Setting value (masked if secret) */
+                                value?: unknown;
+                                /** @description Category */
+                                category: string | null;
+                                /** @description Whether value is secret */
+                                isSecret: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get setting
+         * @description Get a specific setting by key.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Setting details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Setting key */
+                                key: string;
+                                /** @description Setting value (masked if secret) */
+                                value?: unknown;
+                                /** @description Category */
+                                category: string | null;
+                                /** @description Whether value is secret */
+                                isSecret: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Setting not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        /**
+         * Set setting
+         * @description Set a setting value.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Setting value */
+                        value?: unknown;
+                        /** @description Reason for change (audit) */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Setting updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Setting key */
+                                key: string;
+                                /** @description Setting value (masked if secret) */
+                                value?: unknown;
+                                /** @description Category */
+                                category: string | null;
+                                /** @description Whether value is secret */
+                                isSecret: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        /**
+         * Delete setting
+         * @description Delete a setting.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Setting deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Setting not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/{key}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get setting history
+         * @description Get change history for a setting.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    since?: string;
+                };
+                header?: never;
+                path: {
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Setting history */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description Old value (masked) */
+                                oldValue: string | null;
+                                /** @description New value (masked) */
+                                newValue: string | null;
+                                /** @description Who made the change */
+                                changedBy: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When changed
+                                 */
+                                changedAt: string;
+                                /** @description Reason for change */
+                                changeReason: string | null;
+                            }[];
                         };
                     };
                 };
@@ -468,7 +5075,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List providers */
+        /**
+         * List providers
+         * @description Get all agent providers.
+         */
         get: {
             parameters: {
                 query?: {
@@ -487,7 +5097,3761 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items?: components["schemas"]["Provider"][];
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Provider UUID
+                                 */
+                                id: string;
+                                /** @description Provider name */
+                                name: string;
+                                /**
+                                 * @description Provider schema type
+                                 * @enum {string}
+                                 */
+                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                /**
+                                 * Format: uri
+                                 * @description Base URL
+                                 */
+                                baseUrl: string;
+                                /** @description API key (masked) */
+                                apiKey: string | null;
+                                /** @description Schema config */
+                                schemaConfig: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description Default streaming */
+                                defaultStream: boolean;
+                                /** @description Default timeout (seconds) */
+                                defaultTimeout: number;
+                                /** @description Supports streaming */
+                                supportsStreaming: boolean;
+                                /** @description Supports images */
+                                supportsImages: boolean;
+                                /** @description Supports audio */
+                                supportsAudio: boolean;
+                                /** @description Supports documents */
+                                supportsDocuments: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Tags */
+                                tags: string[] | null;
+                                /** @description Whether active */
+                                isActive: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create provider
+         * @description Create a new agent provider.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Provider name */
+                        name: string;
+                        /**
+                         * @description Schema type
+                         * @default agno
+                         * @enum {string}
+                         */
+                        schema?: "agno" | "openai" | "anthropic" | "custom";
+                        /**
+                         * Format: uri
+                         * @description Base URL
+                         */
+                        baseUrl: string;
+                        /** @description API key (encrypted) */
+                        apiKey?: string;
+                        /** @description Schema config */
+                        schemaConfig?: {
+                            [key: string]: unknown;
+                        };
+                        /**
+                         * @description Default streaming
+                         * @default true
+                         */
+                        defaultStream?: boolean;
+                        /**
+                         * @description Default timeout
+                         * @default 60
+                         */
+                        defaultTimeout?: number;
+                        /**
+                         * @description Supports streaming
+                         * @default true
+                         */
+                        supportsStreaming?: boolean;
+                        /**
+                         * @description Supports images
+                         * @default false
+                         */
+                        supportsImages?: boolean;
+                        /**
+                         * @description Supports audio
+                         * @default false
+                         */
+                        supportsAudio?: boolean;
+                        /**
+                         * @description Supports documents
+                         * @default false
+                         */
+                        supportsDocuments?: boolean;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Tags */
+                        tags?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Provider created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Provider UUID
+                                 */
+                                id: string;
+                                /** @description Provider name */
+                                name: string;
+                                /**
+                                 * @description Provider schema type
+                                 * @enum {string}
+                                 */
+                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                /**
+                                 * Format: uri
+                                 * @description Base URL
+                                 */
+                                baseUrl: string;
+                                /** @description API key (masked) */
+                                apiKey: string | null;
+                                /** @description Schema config */
+                                schemaConfig: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description Default streaming */
+                                defaultStream: boolean;
+                                /** @description Default timeout (seconds) */
+                                defaultTimeout: number;
+                                /** @description Supports streaming */
+                                supportsStreaming: boolean;
+                                /** @description Supports images */
+                                supportsImages: boolean;
+                                /** @description Supports audio */
+                                supportsAudio: boolean;
+                                /** @description Supports documents */
+                                supportsDocuments: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Tags */
+                                tags: string[] | null;
+                                /** @description Whether active */
+                                isActive: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get provider
+         * @description Get details of a specific provider.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Provider details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Provider UUID
+                                 */
+                                id: string;
+                                /** @description Provider name */
+                                name: string;
+                                /**
+                                 * @description Provider schema type
+                                 * @enum {string}
+                                 */
+                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                /**
+                                 * Format: uri
+                                 * @description Base URL
+                                 */
+                                baseUrl: string;
+                                /** @description API key (masked) */
+                                apiKey: string | null;
+                                /** @description Schema config */
+                                schemaConfig: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description Default streaming */
+                                defaultStream: boolean;
+                                /** @description Default timeout (seconds) */
+                                defaultTimeout: number;
+                                /** @description Supports streaming */
+                                supportsStreaming: boolean;
+                                /** @description Supports images */
+                                supportsImages: boolean;
+                                /** @description Supports audio */
+                                supportsAudio: boolean;
+                                /** @description Supports documents */
+                                supportsDocuments: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Tags */
+                                tags: string[] | null;
+                                /** @description Whether active */
+                                isActive: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Provider not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete provider
+         * @description Delete an agent provider.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Provider deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Provider not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update provider
+         * @description Update an existing provider.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Provider name */
+                        name?: string;
+                        /**
+                         * @description Schema type
+                         * @default agno
+                         * @enum {string}
+                         */
+                        schema?: "agno" | "openai" | "anthropic" | "custom";
+                        /**
+                         * Format: uri
+                         * @description Base URL
+                         */
+                        baseUrl?: string;
+                        /** @description API key (encrypted) */
+                        apiKey?: string;
+                        /** @description Schema config */
+                        schemaConfig?: {
+                            [key: string]: unknown;
+                        };
+                        /**
+                         * @description Default streaming
+                         * @default true
+                         */
+                        defaultStream?: boolean;
+                        /**
+                         * @description Default timeout
+                         * @default 60
+                         */
+                        defaultTimeout?: number;
+                        /**
+                         * @description Supports streaming
+                         * @default true
+                         */
+                        supportsStreaming?: boolean;
+                        /**
+                         * @description Supports images
+                         * @default false
+                         */
+                        supportsImages?: boolean;
+                        /**
+                         * @description Supports audio
+                         * @default false
+                         */
+                        supportsAudio?: boolean;
+                        /**
+                         * @description Supports documents
+                         * @default false
+                         */
+                        supportsDocuments?: boolean;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Tags */
+                        tags?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Provider updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Provider UUID
+                                 */
+                                id: string;
+                                /** @description Provider name */
+                                name: string;
+                                /**
+                                 * @description Provider schema type
+                                 * @enum {string}
+                                 */
+                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                /**
+                                 * Format: uri
+                                 * @description Base URL
+                                 */
+                                baseUrl: string;
+                                /** @description API key (masked) */
+                                apiKey: string | null;
+                                /** @description Schema config */
+                                schemaConfig: {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** @description Default streaming */
+                                defaultStream: boolean;
+                                /** @description Default timeout (seconds) */
+                                defaultTimeout: number;
+                                /** @description Supports streaming */
+                                supportsStreaming: boolean;
+                                /** @description Supports images */
+                                supportsImages: boolean;
+                                /** @description Supports audio */
+                                supportsAudio: boolean;
+                                /** @description Supports documents */
+                                supportsDocuments: boolean;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Tags */
+                                tags: string[] | null;
+                                /** @description Whether active */
+                                isActive: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Provider not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/providers/{id}/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check provider health
+         * @description Check if provider is reachable and healthy.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Health check result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Whether healthy */
+                            healthy: boolean;
+                            /** @description Latency (ms) */
+                            latency: number | null;
+                            /** @description Error message */
+                            error: string | null;
+                        };
+                    };
+                };
+                /** @description Provider not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List provider agents
+         * @description List available agents from a provider.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Agent list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: unknown[];
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Provider not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream logs (SSE)
+         * @description Stream logs in real-time via Server-Sent Events. Heartbeat sent every 30 seconds.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    modules?: string;
+                    level?: "debug" | "info" | "warn" | "error";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description SSE stream of log entries */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get recent logs
+         * @description Get recent log entries from the in-memory buffer.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    modules?: string;
+                    level?: "debug" | "info" | "warn" | "error";
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Recent log entries */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description Timestamp (ms) */
+                                time: number;
+                                /**
+                                 * @description Log level
+                                 * @enum {string}
+                                 */
+                                level: "debug" | "info" | "warn" | "error";
+                                /** @description Module name */
+                                module: string;
+                                /** @description Log message */
+                                msg: string;
+                            }[];
+                            meta: {
+                                total: number;
+                                bufferSize: number;
+                                limit: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List dead letters
+         * @description Get dead letters with filtering.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    status?: string;
+                    eventType?: string;
+                    since?: string;
+                    until?: string;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of dead letters */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Dead letter UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Original event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "pending" | "retrying" | "resolved" | "abandoned";
+                                /** @description Error message */
+                                errorMessage: string;
+                                /** @description Error stack trace */
+                                errorStack: string | null;
+                                /** @description Retry attempts */
+                                retryCount: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Last retry timestamp
+                                 */
+                                lastRetryAt: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Resolution timestamp
+                                 */
+                                resolvedAt: string | null;
+                                /** @description Resolution note */
+                                resolutionNote: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get dead letter stats
+         * @description Get statistics about dead letters.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Statistics */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Total count */
+                                total: number;
+                                /** @description Pending count */
+                                pending: number;
+                                /** @description Retrying count */
+                                retrying: number;
+                                /** @description Resolved count */
+                                resolved: number;
+                                /** @description Abandoned count */
+                                abandoned: number;
+                                /** @description Count by event type */
+                                byEventType: {
+                                    [key: string]: number;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get dead letter
+         * @description Get details of a specific dead letter with payload.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Dead letter details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Dead letter UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Original event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "pending" | "retrying" | "resolved" | "abandoned";
+                                /** @description Error message */
+                                errorMessage: string;
+                                /** @description Error stack trace */
+                                errorStack: string | null;
+                                /** @description Retry attempts */
+                                retryCount: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Last retry timestamp
+                                 */
+                                lastRetryAt: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Resolution timestamp
+                                 */
+                                resolvedAt: string | null;
+                                /** @description Resolution note */
+                                resolutionNote: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry dead letter
+         * @description Manually retry a dead letter.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Retry result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            /** Format: uuid */
+                            deadLetterId?: string;
+                            error?: string;
+                        };
+                    };
+                };
+                /** @description Retry failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve dead letter
+         * @description Mark a dead letter as resolved with a note.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Resolution note */
+                        note: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Resolved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Dead letter UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Original event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "pending" | "retrying" | "resolved" | "abandoned";
+                                /** @description Error message */
+                                errorMessage: string;
+                                /** @description Error stack trace */
+                                errorStack: string | null;
+                                /** @description Retry attempts */
+                                retryCount: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Last retry timestamp
+                                 */
+                                lastRetryAt: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Resolution timestamp
+                                 */
+                                resolvedAt: string | null;
+                                /** @description Resolution note */
+                                resolutionNote: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dead-letters/{id}/abandon": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Abandon dead letter
+         * @description Give up on auto-retrying a dead letter.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Abandoned */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Dead letter UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Original event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "pending" | "retrying" | "resolved" | "abandoned";
+                                /** @description Error message */
+                                errorMessage: string;
+                                /** @description Error stack trace */
+                                errorStack: string | null;
+                                /** @description Retry attempts */
+                                retryCount: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Last retry timestamp
+                                 */
+                                lastRetryAt: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Resolution timestamp
+                                 */
+                                resolvedAt: string | null;
+                                /** @description Resolution note */
+                                resolutionNote: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/event-ops/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get event metrics
+         * @description Get event processing metrics.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Metrics */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Total events */
+                                total: number;
+                                /** @description Events today */
+                                today: number;
+                                /** @description Count by type */
+                                byType: {
+                                    [key: string]: number;
+                                };
+                                /** @description Count by channel */
+                                byChannel: {
+                                    [key: string]: number;
+                                };
+                                /** @description Avg processing time (ms) */
+                                avgProcessingTime: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/event-ops/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List replay sessions
+         * @description List all replay sessions.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Sessions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Session UUID
+                                 */
+                                id: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "running" | "completed" | "cancelled" | "failed";
+                                options: {
+                                    /**
+                                     * Format: date-time
+                                     * @description Start date (required)
+                                     */
+                                    since: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description End date
+                                     */
+                                    until?: string;
+                                    /** @description Event types to replay */
+                                    eventTypes?: string[];
+                                    /**
+                                     * Format: uuid
+                                     * @description Filter by instance
+                                     */
+                                    instanceId?: string;
+                                    /** @description Max events */
+                                    limit?: number;
+                                    /** @description Replay speed */
+                                    speedMultiplier?: number;
+                                    /** @description Skip already processed */
+                                    skipProcessed?: boolean;
+                                    /** @description Dry run mode */
+                                    dryRun?: boolean;
+                                };
+                                progress: {
+                                    total: number;
+                                    processed: number;
+                                    failed: number;
+                                    /** Format: date-time */
+                                    startedAt: string;
+                                    /** Format: date-time */
+                                    completedAt: string | null;
+                                };
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Start replay session
+         * @description Start an event replay session.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: date-time
+                         * @description Start date (required)
+                         */
+                        since: string;
+                        /**
+                         * Format: date-time
+                         * @description End date
+                         */
+                        until?: string;
+                        /** @description Event types to replay */
+                        eventTypes?: string[];
+                        /**
+                         * Format: uuid
+                         * @description Filter by instance
+                         */
+                        instanceId?: string;
+                        /** @description Max events */
+                        limit?: number;
+                        /** @description Replay speed */
+                        speedMultiplier?: number;
+                        /** @description Skip already processed */
+                        skipProcessed?: boolean;
+                        /** @description Dry run mode */
+                        dryRun?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Replay started */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Session UUID
+                                 */
+                                id: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "running" | "completed" | "cancelled" | "failed";
+                                options: {
+                                    /**
+                                     * Format: date-time
+                                     * @description Start date (required)
+                                     */
+                                    since: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description End date
+                                     */
+                                    until?: string;
+                                    /** @description Event types to replay */
+                                    eventTypes?: string[];
+                                    /**
+                                     * Format: uuid
+                                     * @description Filter by instance
+                                     */
+                                    instanceId?: string;
+                                    /** @description Max events */
+                                    limit?: number;
+                                    /** @description Replay speed */
+                                    speedMultiplier?: number;
+                                    /** @description Skip already processed */
+                                    skipProcessed?: boolean;
+                                    /** @description Dry run mode */
+                                    dryRun?: boolean;
+                                };
+                                progress: {
+                                    total: number;
+                                    processed: number;
+                                    failed: number;
+                                    /** Format: date-time */
+                                    startedAt: string;
+                                    /** Format: date-time */
+                                    completedAt: string | null;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid options */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/event-ops/replay/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get replay session
+         * @description Get status of a replay session.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Session status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Session UUID
+                                 */
+                                id: string;
+                                /**
+                                 * @description Status
+                                 * @enum {string}
+                                 */
+                                status: "running" | "completed" | "cancelled" | "failed";
+                                options: {
+                                    /**
+                                     * Format: date-time
+                                     * @description Start date (required)
+                                     */
+                                    since: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description End date
+                                     */
+                                    until?: string;
+                                    /** @description Event types to replay */
+                                    eventTypes?: string[];
+                                    /**
+                                     * Format: uuid
+                                     * @description Filter by instance
+                                     */
+                                    instanceId?: string;
+                                    /** @description Max events */
+                                    limit?: number;
+                                    /** @description Replay speed */
+                                    speedMultiplier?: number;
+                                    /** @description Skip already processed */
+                                    skipProcessed?: boolean;
+                                    /** @description Dry run mode */
+                                    dryRun?: boolean;
+                                };
+                                progress: {
+                                    total: number;
+                                    processed: number;
+                                    failed: number;
+                                    /** Format: date-time */
+                                    startedAt: string;
+                                    /** Format: date-time */
+                                    completedAt: string | null;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Cancel replay session
+         * @description Cancel a running replay session.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cancelled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Not running */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/event-ops/scheduled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run scheduled operations
+         * @description Manually trigger scheduled operations.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                deadLetterRetry: {
+                                    attempted: number;
+                                    succeeded: number;
+                                    failed: number;
+                                };
+                                payloadCleanup: {
+                                    deleted: number;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Prometheus metrics
+         * @description Get metrics in Prometheus text format (default) or JSON format.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Metrics in Prometheus or JSON format */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                        "application/json": {
+                            gauges?: {
+                                [key: string]: number;
+                            };
+                            counters?: {
+                                [key: string]: number;
+                            };
+                            histograms?: {
+                                [key: string]: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List automations
+         * @description Get all automations.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    enabled?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of automations */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create automation
+         * @description Create a new automation.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Name */
+                        name: string;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Trigger event type */
+                        triggerEventType: string;
+                        /** @description Conditions */
+                        triggerConditions?: {
+                            /** @description Dot notation field path */
+                            field: string;
+                            /**
+                             * @description Operator
+                             * @enum {string}
+                             */
+                            operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                            /** @description Value to compare */
+                            value?: unknown;
+                        }[];
+                        /** @description Actions */
+                        actions: ({
+                            /** @enum {string} */
+                            type: "webhook";
+                            config: {
+                                /** @description Webhook URL */
+                                url: string;
+                                /**
+                                 * @default POST
+                                 * @enum {string}
+                                 */
+                                method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                headers?: {
+                                    [key: string]: string;
+                                };
+                                bodyTemplate?: string;
+                                /** @default false */
+                                waitForResponse?: boolean;
+                                /** @default 30000 */
+                                timeoutMs?: number;
+                                responseAs?: string;
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "send_message";
+                            config: {
+                                instanceId?: string;
+                                to?: string;
+                                contentTemplate: string;
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "emit_event";
+                            config: {
+                                eventType: string;
+                                payloadTemplate?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "log";
+                            config: {
+                                /** @enum {string} */
+                                level: "debug" | "info" | "warn" | "error";
+                                message: string;
+                            };
+                        })[];
+                        /** @description Debounce config */
+                        debounce?: {
+                            /** @enum {string} */
+                            mode: "none" | "fixed" | "range" | "presence";
+                            delayMs?: number;
+                            minMs?: number;
+                            maxMs?: number;
+                            baseDelayMs?: number;
+                            maxWaitMs?: number;
+                            extendOnEvents?: string[];
+                        };
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                        /**
+                         * @description Priority
+                         * @default 0
+                         */
+                        priority?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get automation
+         * @description Get details of a specific automation.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Automation details */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete automation
+         * @description Delete an automation.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update automation
+         * @description Update an existing automation.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Name */
+                        name?: string;
+                        /** @description Description */
+                        description?: string;
+                        /** @description Trigger event type */
+                        triggerEventType?: string;
+                        /** @description Conditions */
+                        triggerConditions?: {
+                            /** @description Dot notation field path */
+                            field: string;
+                            /**
+                             * @description Operator
+                             * @enum {string}
+                             */
+                            operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                            /** @description Value to compare */
+                            value?: unknown;
+                        }[];
+                        /** @description Actions */
+                        actions?: ({
+                            /** @enum {string} */
+                            type: "webhook";
+                            config: {
+                                /** @description Webhook URL */
+                                url: string;
+                                /**
+                                 * @default POST
+                                 * @enum {string}
+                                 */
+                                method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                headers?: {
+                                    [key: string]: string;
+                                };
+                                bodyTemplate?: string;
+                                /** @default false */
+                                waitForResponse?: boolean;
+                                /** @default 30000 */
+                                timeoutMs?: number;
+                                responseAs?: string;
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "send_message";
+                            config: {
+                                instanceId?: string;
+                                to?: string;
+                                contentTemplate: string;
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "emit_event";
+                            config: {
+                                eventType: string;
+                                payloadTemplate?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                        } | {
+                            /** @enum {string} */
+                            type: "log";
+                            config: {
+                                /** @enum {string} */
+                                level: "debug" | "info" | "warn" | "error";
+                                message: string;
+                            };
+                        })[];
+                        /** @description Debounce config */
+                        debounce?: {
+                            /** @enum {string} */
+                            mode: "none" | "fixed" | "range" | "presence";
+                            delayMs?: number;
+                            minMs?: number;
+                            maxMs?: number;
+                            baseDelayMs?: number;
+                            maxWaitMs?: number;
+                            extendOnEvents?: string[];
+                        };
+                        /**
+                         * @description Whether enabled
+                         * @default true
+                         */
+                        enabled?: boolean;
+                        /**
+                         * @description Priority
+                         * @default 0
+                         */
+                        priority?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/automations/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable automation
+         * @description Enable an automation.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Enabled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable automation
+         * @description Disable an automation.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Disabled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                id: string;
+                                /** @description Name */
+                                name: string;
+                                /** @description Description */
+                                description: string | null;
+                                /** @description Trigger event type */
+                                triggerEventType: string;
+                                /** @description Conditions */
+                                triggerConditions: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                }[] | null;
+                                /** @description Actions */
+                                actions: ({
+                                    /** @enum {string} */
+                                    type: "webhook";
+                                    config: {
+                                        /** @description Webhook URL */
+                                        url: string;
+                                        /**
+                                         * @default POST
+                                         * @enum {string}
+                                         */
+                                        method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                        headers?: {
+                                            [key: string]: string;
+                                        };
+                                        bodyTemplate?: string;
+                                        /** @default false */
+                                        waitForResponse: boolean;
+                                        /** @default 30000 */
+                                        timeoutMs: number;
+                                        responseAs?: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "send_message";
+                                    config: {
+                                        instanceId?: string;
+                                        to?: string;
+                                        contentTemplate: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "emit_event";
+                                    config: {
+                                        eventType: string;
+                                        payloadTemplate?: {
+                                            [key: string]: unknown;
+                                        };
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "log";
+                                    config: {
+                                        /** @enum {string} */
+                                        level: "debug" | "info" | "warn" | "error";
+                                        message: string;
+                                    };
+                                })[];
+                                /** @description Debounce config */
+                                debounce: {
+                                    /** @enum {string} */
+                                    mode: "none" | "fixed" | "range" | "presence";
+                                    delayMs?: number;
+                                    minMs?: number;
+                                    maxMs?: number;
+                                    baseDelayMs?: number;
+                                    maxWaitMs?: number;
+                                    extendOnEvents?: string[];
+                                } | null;
+                                /** @description Whether enabled */
+                                enabled: boolean;
+                                /** @description Priority */
+                                priority: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description Last update timestamp
+                                 */
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test automation
+         * @description Test automation against a sample event (dry run).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        event: {
+                            /** @description Event type */
+                            type: string;
+                            /** @description Event payload */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Test result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            matched: boolean;
+                            conditionResults?: {
+                                condition: {
+                                    /** @description Dot notation field path */
+                                    field: string;
+                                    /**
+                                     * @description Operator
+                                     * @enum {string}
+                                     */
+                                    operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                    /** @description Value to compare */
+                                    value?: unknown;
+                                };
+                                passed: boolean;
+                            }[];
+                            wouldExecute?: ({
+                                /** @enum {string} */
+                                type: "webhook";
+                                config: {
+                                    /** @description Webhook URL */
+                                    url: string;
+                                    /**
+                                     * @default POST
+                                     * @enum {string}
+                                     */
+                                    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                                    headers?: {
+                                        [key: string]: string;
+                                    };
+                                    bodyTemplate?: string;
+                                    /** @default false */
+                                    waitForResponse: boolean;
+                                    /** @default 30000 */
+                                    timeoutMs: number;
+                                    responseAs?: string;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "send_message";
+                                config: {
+                                    instanceId?: string;
+                                    to?: string;
+                                    contentTemplate: string;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "emit_event";
+                                config: {
+                                    eventType: string;
+                                    payloadTemplate?: {
+                                        [key: string]: unknown;
+                                    };
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "log";
+                                config: {
+                                    /** @enum {string} */
+                                    level: "debug" | "info" | "warn" | "error";
+                                    message: string;
+                                };
+                            })[];
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations/{id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get automation logs
+         * @description Get execution logs for an automation.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Logs */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Log UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                automationId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Execution status
+                                 * @enum {string}
+                                 */
+                                status: "success" | "failed" | "skipped";
+                                /** @description Error message */
+                                error: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Execution timestamp
+                                 */
+                                executedAt: string;
+                                /** @description Duration (ms) */
+                                durationMs: number;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automation-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search automation logs
+         * @description Search execution logs across automations.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                    status?: "success" | "failed" | "skipped";
+                    eventType?: string;
+                    automationId?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Logs */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Log UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Automation UUID
+                                 */
+                                automationId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                eventId: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /**
+                                 * @description Execution status
+                                 * @enum {string}
+                                 */
+                                status: "success" | "failed" | "skipped";
+                                /** @description Error message */
+                                error: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description Execution timestamp
+                                 */
+                                executedAt: string;
+                                /** @description Duration (ms) */
+                                durationMs: number;
+                            }[];
+                            meta: {
+                                /** @description Whether there are more items */
+                                hasMore: boolean;
+                                /** @description Cursor for next page */
+                                cursor: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automation-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get automation metrics
+         * @description Get automation engine metrics.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Metrics */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Engine running */
+                            running: boolean;
+                            /** @description Total automations */
+                            totalAutomations: number;
+                            /** @description Enabled automations */
+                            enabledAutomations: number;
+                            /** @description Events processed */
+                            eventsProcessed: number;
+                            /** @description Actions executed */
+                            actionsExecuted: number;
+                            /** @description Failed actions */
+                            failedActions: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{eventId}/payloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List event payloads
+         * @description Get all payloads for an event (metadata only).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Payload list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Payload UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                eventId: string;
+                                /**
+                                 * @description Payload stage
+                                 * @enum {string}
+                                 */
+                                stage: "webhook_raw" | "agent_request" | "agent_response" | "channel_send" | "error";
+                                /** @description MIME type */
+                                mimeType: string;
+                                /** @description Size in bytes */
+                                sizeBytes: number;
+                                /** @description Whether data is available */
+                                hasData: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete event payloads
+         * @description Soft-delete all payloads for an event.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Deletion reason */
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Deleted count */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deleted: number;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{eventId}/payloads/{stage}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get event payload by stage
+         * @description Get a specific stage payload with decompressed data.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: string;
+                    stage: "webhook_raw" | "agent_request" | "agent_response" | "channel_send" | "error";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Payload with data */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Payload UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                eventId: string;
+                                /**
+                                 * @description Payload stage
+                                 * @enum {string}
+                                 */
+                                stage: "webhook_raw" | "agent_request" | "agent_response" | "channel_send" | "error";
+                                /** @description MIME type */
+                                mimeType: string;
+                                /** @description Size in bytes */
+                                sizeBytes: number;
+                                /** @description Whether data is available */
+                                hasData: boolean;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt: string;
+                                /** @description Decompressed payload data */
+                                payload?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid stage */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payload-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List payload configs
+         * @description Get all payload storage configurations.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Config list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description Event type pattern */
+                                eventType: string;
+                                /** @description Store webhook raw */
+                                storeWebhookRaw: boolean;
+                                /** @description Store agent request */
+                                storeAgentRequest: boolean;
+                                /** @description Store agent response */
+                                storeAgentResponse: boolean;
+                                /** @description Store channel send */
+                                storeChannelSend: boolean;
+                                /** @description Store errors */
+                                storeError: boolean;
+                                /** @description Retention in days */
+                                retentionDays: number;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payload-config/{eventType}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update payload config
+         * @description Update or create payload storage config for an event type.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventType: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Store webhook raw */
+                        storeWebhookRaw?: boolean;
+                        /** @description Store agent request */
+                        storeAgentRequest?: boolean;
+                        /** @description Store agent response */
+                        storeAgentResponse?: boolean;
+                        /** @description Store channel send */
+                        storeChannelSend?: boolean;
+                        /** @description Store errors */
+                        storeError?: boolean;
+                        /** @description Retention in days */
+                        retentionDays?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Updated config */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Event type pattern */
+                                eventType: string;
+                                /** @description Store webhook raw */
+                                storeWebhookRaw: boolean;
+                                /** @description Store agent request */
+                                storeAgentRequest: boolean;
+                                /** @description Store agent response */
+                                storeAgentResponse: boolean;
+                                /** @description Store channel send */
+                                storeChannelSend: boolean;
+                                /** @description Store errors */
+                                storeError: boolean;
+                                /** @description Retention in days */
+                                retentionDays: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payload-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get payload stats
+         * @description Get payload storage statistics.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Stats */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Total payloads */
+                                totalPayloads: number;
+                                /** @description Total size */
+                                totalSizeBytes: number;
+                                /** @description Count by stage */
+                                byStage: {
+                                    webhook_raw?: number;
+                                    agent_request?: number;
+                                    agent_response?: number;
+                                    channel_send?: number;
+                                    error?: number;
+                                };
+                                /**
+                                 * Format: date-time
+                                 * @description Oldest payload date
+                                 */
+                                oldestPayload: string | null;
+                            };
                         };
                     };
                 };
@@ -506,133 +8870,1672 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
-            error?: {
-                /** @description Error code */
+            error: {
+                /**
+                 * @description Error code
+                 * @example NOT_FOUND
+                 */
                 code: string;
-                /** @description Error message */
+                /** @description Human-readable error message */
                 message: string;
                 /** @description Additional error details */
-                details?: Record<string, never>;
-            };
-        };
-        Instance: {
-            /** Format: uuid */
-            id?: string;
-            name?: string;
-            /** @enum {string} */
-            channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
-            isActive?: boolean;
-            profileName?: string | null;
-            profilePicUrl?: string | null;
-            /** Format: date-time */
-            createdAt?: string;
-            /** Format: date-time */
-            updatedAt?: string;
-        };
-        Person: {
-            /** Format: uuid */
-            id?: string;
-            displayName?: string | null;
-            primaryPhone?: string | null;
-            primaryEmail?: string | null;
-            avatarUrl?: string | null;
-            /** Format: date-time */
-            createdAt?: string;
-        };
-        Event: {
-            /** Format: uuid */
-            id?: string;
-            eventType?: string;
-            channel?: string;
-            contentType?: string | null;
-            /** @enum {string} */
-            direction?: "inbound" | "outbound";
-            textContent?: string | null;
-            /** Format: date-time */
-            receivedAt?: string;
-        };
-        AccessRule: {
-            /** Format: uuid */
-            id?: string;
-            /** @enum {string} */
-            ruleType?: "allow" | "deny";
-            /** Format: uuid */
-            instanceId?: string | null;
-            phonePattern?: string | null;
-            platformUserId?: string | null;
-            priority?: number;
-            enabled?: boolean;
-        };
-        Setting: {
-            /** Format: uuid */
-            id?: string;
-            key?: string;
-            value?: string | null;
-            /** @enum {string} */
-            valueType?: "string" | "integer" | "boolean" | "json" | "secret";
-            category?: string | null;
-            description?: string | null;
-            isSecret?: boolean;
-        };
-        Provider: {
-            /** Format: uuid */
-            id?: string;
-            name?: string;
-            /** @enum {string} */
-            schema?: "openai" | "anthropic" | "agno" | "custom";
-            baseUrl?: string;
-            isActive?: boolean;
-            supportsStreaming?: boolean;
-            supportsImages?: boolean;
-            supportsAudio?: boolean;
-        };
-        HealthResponse: {
-            /** @enum {string} */
-            status?: "healthy" | "degraded" | "unhealthy";
-            version?: string;
-            uptime?: number;
-            /** Format: date-time */
-            timestamp?: string;
-            checks?: {
-                database?: Record<string, never>;
-                nats?: Record<string, never>;
+                details?: unknown;
             };
         };
         PaginationMeta: {
-            hasMore?: boolean;
-            cursor?: string | null;
-            total?: number | null;
+            /** @description Whether there are more items */
+            hasMore: boolean;
+            /** @description Cursor for next page */
+            cursor: string | null;
+        };
+        Success: {
+            /** @description Operation succeeded */
+            success: boolean;
+            /** @description Optional success message */
+            message?: string;
+        };
+        HealthCheck: {
+            /**
+             * @description Check status
+             * @enum {string}
+             */
+            status: "ok" | "error";
+            /** @description Latency in milliseconds */
+            latency?: number;
+            /** @description Error message if status is error */
+            error?: string;
+            /** @description Additional details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        HealthResponse: {
+            /**
+             * @description Overall health status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "unhealthy";
+            /** @description API version */
+            version: string;
+            /** @description Uptime in seconds */
+            uptime: number;
+            /**
+             * Format: date-time
+             * @description Current timestamp
+             */
+            timestamp: string;
+            checks: {
+                database: {
+                    /**
+                     * @description Check status
+                     * @enum {string}
+                     */
+                    status: "ok" | "error";
+                    /** @description Latency in milliseconds */
+                    latency?: number;
+                    /** @description Error message if status is error */
+                    error?: string;
+                    /** @description Additional details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
+                nats: {
+                    /**
+                     * @description Check status
+                     * @enum {string}
+                     */
+                    status: "ok" | "error";
+                    /** @description Latency in milliseconds */
+                    latency?: number;
+                    /** @description Error message if status is error */
+                    error?: string;
+                    /** @description Additional details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            instances?: {
+                /** @description Total instance count */
+                total: number;
+                /** @description Connected instance count */
+                connected: number;
+                /** @description Count by channel type */
+                byChannel: {
+                    [key: string]: number;
+                };
+            };
+        };
+        InfoResponse: {
+            /** @description API version */
+            version: string;
+            /** @description Environment */
+            environment: string;
+            /** @description Uptime in seconds */
+            uptime: number;
+            instances: {
+                total: number;
+                connected: number;
+            };
+            events: {
+                today: number;
+                total: number;
+            };
+        };
+        InternalHealthResponse: {
+            /** @description Health status */
+            status: string;
+            /** @description Service name */
+            service: string;
+            /** @description Process ID */
+            pid: number;
+            memory: {
+                rss: number;
+                heapTotal: number;
+                heapUsed: number;
+                external: number;
+                arrayBuffers: number;
+            };
+        };
+        Instance: {
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            id: string;
+            /** @description Instance name */
+            name: string;
+            /**
+             * @description Channel type
+             * @enum {string}
+             */
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            /** @description Whether instance is active */
+            isActive: boolean;
+            /** @description Whether this is the default instance for channel */
+            isDefault: boolean;
+            /** @description Connected profile name */
+            profileName: string | null;
+            /** @description Profile picture URL */
+            profilePicUrl: string | null;
+            /** @description Owner identifier */
+            ownerIdentifier: string | null;
+            /**
+             * Format: uuid
+             * @description Agent provider UUID
+             */
+            agentProviderId: string | null;
+            /** @description Agent ID */
+            agentId: string | null;
+            /** @description Agent timeout in seconds */
+            agentTimeout: number;
+            /** @description Whether streaming is enabled */
+            agentStreamMode: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateInstanceRequest: {
+            /** @description Unique name for the instance */
+            name: string;
+            /**
+             * @description Channel type
+             * @enum {string}
+             */
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            /**
+             * Format: uuid
+             * @description Reference to agent provider
+             */
+            agentProviderId?: string;
+            /**
+             * @description Agent ID within the provider
+             * @default default
+             */
+            agentId: string;
+            /**
+             * @description Agent timeout in seconds
+             * @default 60
+             */
+            agentTimeout: number;
+            /**
+             * @description Enable streaming responses
+             * @default false
+             */
+            agentStreamMode: boolean;
+            /**
+             * @description Set as default instance for channel
+             * @default false
+             */
+            isDefault: boolean;
+            /** @description Bot token for Discord instances */
+            token?: string;
+        };
+        InstanceStatus: {
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId: string;
+            /** @description Connection state */
+            state: string;
+            /** @description Whether instance is connected */
+            isConnected: boolean;
+            /**
+             * Format: date-time
+             * @description When connected
+             */
+            connectedAt: string | null;
+            /** @description Profile name */
+            profileName: string | null;
+            /** @description Profile picture URL */
+            profilePicUrl: string | null;
+            /** @description Owner identifier */
+            ownerIdentifier: string | null;
+            /** @description Status message */
+            message?: string;
+        };
+        QrCode: {
+            /** @description QR code string */
+            qr: string | null;
+            /**
+             * Format: date-time
+             * @description QR code expiration
+             */
+            expiresAt: string | null;
+            /** @description Status message */
+            message: string;
+        };
+        PairingCodeRequest: {
+            /** @description Phone number in international format */
+            phoneNumber: string;
+        };
+        PairingCode: {
+            /** @description Pairing code to enter on phone */
+            code: string;
+            /** @description Masked phone number */
+            phoneNumber: string;
+            /** @description Instructions for user */
+            message: string;
+            /** @description Seconds until code expires */
+            expiresIn: number;
+        };
+        ConnectInstanceRequest: {
+            /** @description Bot token for Discord instances */
+            token?: string;
+            /** @description Force new QR code for WhatsApp */
+            forceNewQr?: boolean;
+        };
+        ConnectResponse: {
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId: string;
+            /** @description Connection status */
+            status: string;
+            /** @description Status message */
+            message: string;
+        };
+        SupportedChannel: {
+            /**
+             * @description Channel type ID
+             * @enum {string}
+             */
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            /** @description Human-readable channel name */
+            name: string;
+            /** @description Plugin version */
+            version?: string;
+            /** @description Channel description */
+            description?: string;
+            /** @description Whether plugin is loaded */
+            loaded: boolean;
+            /** @description Plugin capabilities */
+            capabilities?: {
+                [key: string]: unknown;
+            };
+        };
+        MessageResponse: {
+            /** @description Internal message ID */
+            messageId: string;
+            /** @description External platform message ID */
+            externalMessageId: string;
+            /** @description Message status */
+            status: string;
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId?: string;
+            /** @description Recipient */
+            to?: string;
+            /** @description Media type if applicable */
+            mediaType?: string;
+        };
+        SendTextRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID to send from
+             */
+            instanceId: string;
+            /** @description Recipient (phone number or platform ID) */
+            to: string;
+            /** @description Message text */
+            text: string;
+            /** @description Message ID to reply to */
+            replyTo?: string;
+        };
+        SendMediaRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID to send from
+             */
+            instanceId: string;
+            /** @description Recipient */
+            to: string;
+            /**
+             * @description Media type
+             * @enum {string}
+             */
+            type: "image" | "audio" | "video" | "document";
+            /**
+             * Format: uri
+             * @description Media URL
+             */
+            url?: string;
+            /** @description Base64 encoded media */
+            base64?: string;
+            /** @description Filename for documents */
+            filename?: string;
+            /** @description Caption for media */
+            caption?: string;
+            /** @description Send audio as voice note */
+            voiceNote?: boolean;
+        };
+        SendReactionRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Chat ID */
+            to: string;
+            /** @description Message ID to react to */
+            messageId: string;
+            /** @description Emoji to react with */
+            emoji: string;
+        };
+        SendStickerRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Recipient */
+            to: string;
+            /**
+             * Format: uri
+             * @description Sticker URL
+             */
+            url?: string;
+            /** @description Base64 encoded sticker */
+            base64?: string;
+        };
+        SendContactRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Recipient */
+            to: string;
+            contact: {
+                /** @description Contact name */
+                name: string;
+                /** @description Phone number */
+                phone?: string;
+                /**
+                 * Format: email
+                 * @description Email address
+                 */
+                email?: string;
+                /** @description Organization */
+                organization?: string;
+            };
+        };
+        SendLocationRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Recipient */
+            to: string;
+            /** @description Latitude */
+            latitude: number;
+            /** @description Longitude */
+            longitude: number;
+            /** @description Location name */
+            name?: string;
+            /** @description Address */
+            address?: string;
+        };
+        Event: {
+            /**
+             * Format: uuid
+             * @description Event UUID
+             */
+            id: string;
+            /** @description Event type */
+            eventType: string;
+            /** @description Content type */
+            contentType: string | null;
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId: string;
+            /**
+             * Format: uuid
+             * @description Person UUID
+             */
+            personId: string | null;
+            /**
+             * @description Message direction
+             * @enum {string}
+             */
+            direction: "inbound" | "outbound";
+            /** @description Text content */
+            textContent: string | null;
+            /** @description Audio transcription */
+            transcription: string | null;
+            /** @description Image description */
+            imageDescription: string | null;
+            /**
+             * Format: date-time
+             * @description When event was received
+             */
+            receivedAt: string;
+            /**
+             * Format: date-time
+             * @description When event was processed
+             */
+            processedAt: string | null;
+        };
+        EventSummary: {
+            /**
+             * Format: uuid
+             * @description Event UUID
+             */
+            id: string;
+            /** @description Event type */
+            eventType: string;
+            /** @description Content type */
+            contentType: string | null;
+            /**
+             * Format: date-time
+             * @description When event was received
+             */
+            receivedAt: string;
+            /** @description First 100 chars of text */
+            textPreview: string | null;
+        };
+        EventAnalytics: {
+            /** @description Total event count */
+            totalEvents: number;
+            /** @description Count by event type */
+            byEventType: {
+                [key: string]: number;
+            };
+            /** @description Count by channel */
+            byChannel: {
+                [key: string]: number;
+            };
+            byDirection: {
+                inbound: number;
+                outbound: number;
+            };
+        };
+        EventSearch: {
+            /** @description Full-text search query */
+            query?: string;
+            filters?: {
+                /** @description Channel types */
+                channel?: string[];
+                /**
+                 * Format: uuid
+                 * @description Instance UUID
+                 */
+                instanceId?: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId?: string;
+                /** @description Event types */
+                eventType?: string[];
+                /** @description Content types */
+                contentType?: string[];
+                /**
+                 * @description Direction
+                 * @enum {string}
+                 */
+                direction?: "inbound" | "outbound";
+                /**
+                 * Format: date-time
+                 * @description Start date
+                 */
+                since?: string;
+                /**
+                 * Format: date-time
+                 * @description End date
+                 */
+                until?: string;
+            };
+            /**
+             * @description Response format
+             * @default full
+             * @enum {string}
+             */
+            format: "full" | "summary" | "agent";
+            /**
+             * @description Max results
+             * @default 50
+             */
+            limit: number;
+        };
+        Identity: {
+            /**
+             * Format: uuid
+             * @description Identity UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Person UUID
+             */
+            personId: string;
+            /** @description Channel type */
+            channel: string;
+            /** @description Platform user ID */
+            platformUserId: string;
+            /** @description Display name */
+            displayName: string | null;
+            /** @description Profile picture URL */
+            profilePicUrl: string | null;
+            /** @description Total messages */
+            messageCount: number;
+            /**
+             * Format: date-time
+             * @description Last seen timestamp
+             */
+            lastSeenAt: string | null;
+        };
+        Person: {
+            /**
+             * Format: uuid
+             * @description Person UUID
+             */
+            id: string;
+            /** @description Display name */
+            displayName: string | null;
+            /**
+             * Format: email
+             * @description Email address
+             */
+            email: string | null;
+            /** @description Phone number */
+            phone: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        PersonPresence: {
+            person: {
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                id: string;
+                /** @description Display name */
+                displayName: string | null;
+                /**
+                 * Format: email
+                 * @description Email address
+                 */
+                email: string | null;
+                /** @description Phone number */
+                phone: string | null;
+                /**
+                 * Format: date-time
+                 * @description Creation timestamp
+                 */
+                createdAt: string;
+                /**
+                 * Format: date-time
+                 * @description Last update timestamp
+                 */
+                updatedAt: string;
+            };
+            identities: {
+                /**
+                 * Format: uuid
+                 * @description Identity UUID
+                 */
+                id: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string;
+                /** @description Channel type */
+                channel: string;
+                /** @description Platform user ID */
+                platformUserId: string;
+                /** @description Display name */
+                displayName: string | null;
+                /** @description Profile picture URL */
+                profilePicUrl: string | null;
+                /** @description Total messages */
+                messageCount: number;
+                /**
+                 * Format: date-time
+                 * @description Last seen timestamp
+                 */
+                lastSeenAt: string | null;
+            }[];
+            summary: {
+                totalMessages: number;
+                channels: string[];
+                /** Format: date-time */
+                lastSeenAt: string | null;
+            };
+            byChannel: {
+                [key: string]: {
+                    identities: {
+                        /**
+                         * Format: uuid
+                         * @description Identity UUID
+                         */
+                        id: string;
+                        /**
+                         * Format: uuid
+                         * @description Person UUID
+                         */
+                        personId: string;
+                        /** @description Channel type */
+                        channel: string;
+                        /** @description Platform user ID */
+                        platformUserId: string;
+                        /** @description Display name */
+                        displayName: string | null;
+                        /** @description Profile picture URL */
+                        profilePicUrl: string | null;
+                        /** @description Total messages */
+                        messageCount: number;
+                        /**
+                         * Format: date-time
+                         * @description Last seen timestamp
+                         */
+                        lastSeenAt: string | null;
+                    }[];
+                    messageCount: number;
+                    /** Format: date-time */
+                    lastSeenAt: string | null;
+                };
+            };
+        };
+        LinkIdentitiesRequest: {
+            /**
+             * Format: uuid
+             * @description First identity ID
+             */
+            identityA: string;
+            /**
+             * Format: uuid
+             * @description Second identity ID
+             */
+            identityB: string;
+        };
+        UnlinkIdentityRequest: {
+            /**
+             * Format: uuid
+             * @description Identity ID to unlink
+             */
+            identityId: string;
+            /** @description Reason for unlinking */
+            reason: string;
+        };
+        MergePersonsRequest: {
+            /**
+             * Format: uuid
+             * @description Person to merge from (will be deleted)
+             */
+            sourcePersonId: string;
+            /**
+             * Format: uuid
+             * @description Person to merge into (will be kept)
+             */
+            targetPersonId: string;
+            /** @description Reason for merge */
+            reason?: string;
+        };
+        WebhookSource: {
+            /**
+             * Format: uuid
+             * @description Source UUID
+             */
+            id: string;
+            /** @description Source name */
+            name: string;
+            /** @description Description */
+            description: string | null;
+            /** @description Expected headers */
+            expectedHeaders: {
+                [key: string]: boolean;
+            } | null;
+            /** @description Whether enabled */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateWebhookSourceRequest: {
+            /** @description Unique source name */
+            name: string;
+            /** @description Description */
+            description?: string;
+            /** @description Headers to validate */
+            expectedHeaders?: {
+                [key: string]: boolean;
+            };
+            /**
+             * @description Whether enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        TriggerEventRequest: {
+            /** @description Event type (must start with custom.) */
+            eventType: string;
+            /** @description Event payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description Correlation ID */
+            correlationId?: string;
+            /**
+             * Format: uuid
+             * @description Instance ID for context
+             */
+            instanceId?: string;
+        };
+        WebhookReceiveResponse: {
+            /**
+             * Format: uuid
+             * @description Created event ID
+             */
+            eventId: string;
+            /** @description Webhook source name */
+            source: string;
+            /** @description Event type */
+            eventType: string;
+        };
+        AccessRule: {
+            /**
+             * Format: uuid
+             * @description Rule UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Instance UUID (null for global)
+             */
+            instanceId: string | null;
+            /**
+             * @description Rule type
+             * @enum {string}
+             */
+            ruleType: "allow" | "deny";
+            /** @description Phone pattern */
+            phonePattern: string | null;
+            /** @description Platform user ID */
+            platformUserId: string | null;
+            /**
+             * Format: uuid
+             * @description Person UUID
+             */
+            personId: string | null;
+            /** @description Priority (higher = checked first) */
+            priority: number;
+            /** @description Whether enabled */
+            enabled: boolean;
+            /** @description Reason */
+            reason: string | null;
+            /**
+             * Format: date-time
+             * @description Expiration
+             */
+            expiresAt: string | null;
+            /**
+             * @description Action
+             * @enum {string}
+             */
+            action: "block" | "allow" | "silent_block";
+            /** @description Custom block message */
+            blockMessage: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateAccessRuleRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID (null for global)
+             */
+            instanceId?: string | null;
+            /**
+             * @description Rule type
+             * @enum {string}
+             */
+            ruleType: "allow" | "deny";
+            /** @description Phone pattern with wildcards */
+            phonePattern?: string;
+            /** @description Exact platform user ID */
+            platformUserId?: string;
+            /**
+             * Format: uuid
+             * @description Person ID
+             */
+            personId?: string;
+            /**
+             * @description Priority
+             * @default 0
+             */
+            priority: number;
+            /**
+             * @description Whether enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** @description Reason */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description Expiration
+             */
+            expiresAt?: string;
+            /**
+             * @description Action
+             * @default block
+             * @enum {string}
+             */
+            action: "block" | "allow" | "silent_block";
+            /** @description Custom block message */
+            blockMessage?: string;
+        };
+        CheckAccessRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Platform user ID */
+            platformUserId: string;
+            /** @description Channel type */
+            channel: string;
+        };
+        CheckAccessResponse: {
+            /** @description Whether access is allowed */
+            allowed: boolean;
+            /** @description Matching rule if any */
+            rule: {
+                /**
+                 * Format: uuid
+                 * @description Rule UUID
+                 */
+                id: string;
+                /**
+                 * Format: uuid
+                 * @description Instance UUID (null for global)
+                 */
+                instanceId: string | null;
+                /**
+                 * @description Rule type
+                 * @enum {string}
+                 */
+                ruleType: "allow" | "deny";
+                /** @description Phone pattern */
+                phonePattern: string | null;
+                /** @description Platform user ID */
+                platformUserId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string | null;
+                /** @description Priority (higher = checked first) */
+                priority: number;
+                /** @description Whether enabled */
+                enabled: boolean;
+                /** @description Reason */
+                reason: string | null;
+                /**
+                 * Format: date-time
+                 * @description Expiration
+                 */
+                expiresAt: string | null;
+                /**
+                 * @description Action
+                 * @enum {string}
+                 */
+                action: "block" | "allow" | "silent_block";
+                /** @description Custom block message */
+                blockMessage: string | null;
+                /**
+                 * Format: date-time
+                 * @description Creation timestamp
+                 */
+                createdAt: string;
+                /**
+                 * Format: date-time
+                 * @description Last update timestamp
+                 */
+                updatedAt: string;
+            } | null;
+            /** @description Reason for decision */
+            reason: string | null;
+        };
+        Setting: {
+            /** @description Setting key */
+            key: string;
+            /** @description Setting value (masked if secret) */
+            value?: unknown;
+            /** @description Category */
+            category: string | null;
+            /** @description Whether value is secret */
+            isSecret: boolean;
+            /** @description Description */
+            description: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        SetSettingRequest: {
+            /** @description Setting value */
+            value?: unknown;
+            /** @description Reason for change (audit) */
+            reason?: string;
+        };
+        BulkUpdateSettingsRequest: {
+            /** @description Key-value pairs */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** @description Reason for changes (audit) */
+            reason?: string;
+        };
+        SettingHistory: {
+            /** @description Old value (masked) */
+            oldValue: string | null;
+            /** @description New value (masked) */
+            newValue: string | null;
+            /** @description Who made the change */
+            changedBy: string;
+            /**
+             * Format: date-time
+             * @description When changed
+             */
+            changedAt: string;
+            /** @description Reason for change */
+            changeReason: string | null;
+        };
+        Provider: {
+            /**
+             * Format: uuid
+             * @description Provider UUID
+             */
+            id: string;
+            /** @description Provider name */
+            name: string;
+            /**
+             * @description Provider schema type
+             * @enum {string}
+             */
+            schema: "agno" | "openai" | "anthropic" | "custom";
+            /**
+             * Format: uri
+             * @description Base URL
+             */
+            baseUrl: string;
+            /** @description API key (masked) */
+            apiKey: string | null;
+            /** @description Schema config */
+            schemaConfig: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Default streaming */
+            defaultStream: boolean;
+            /** @description Default timeout (seconds) */
+            defaultTimeout: number;
+            /** @description Supports streaming */
+            supportsStreaming: boolean;
+            /** @description Supports images */
+            supportsImages: boolean;
+            /** @description Supports audio */
+            supportsAudio: boolean;
+            /** @description Supports documents */
+            supportsDocuments: boolean;
+            /** @description Description */
+            description: string | null;
+            /** @description Tags */
+            tags: string[] | null;
+            /** @description Whether active */
+            isActive: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateProviderRequest: {
+            /** @description Provider name */
+            name: string;
+            /**
+             * @description Schema type
+             * @default agno
+             * @enum {string}
+             */
+            schema: "agno" | "openai" | "anthropic" | "custom";
+            /**
+             * Format: uri
+             * @description Base URL
+             */
+            baseUrl: string;
+            /** @description API key (encrypted) */
+            apiKey?: string;
+            /** @description Schema config */
+            schemaConfig?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description Default streaming
+             * @default true
+             */
+            defaultStream: boolean;
+            /**
+             * @description Default timeout
+             * @default 60
+             */
+            defaultTimeout: number;
+            /**
+             * @description Supports streaming
+             * @default true
+             */
+            supportsStreaming: boolean;
+            /**
+             * @description Supports images
+             * @default false
+             */
+            supportsImages: boolean;
+            /**
+             * @description Supports audio
+             * @default false
+             */
+            supportsAudio: boolean;
+            /**
+             * @description Supports documents
+             * @default false
+             */
+            supportsDocuments: boolean;
+            /** @description Description */
+            description?: string;
+            /** @description Tags */
+            tags?: string[];
+        };
+        ProviderHealth: {
+            /** @description Whether healthy */
+            healthy: boolean;
+            /** @description Latency (ms) */
+            latency: number | null;
+            /** @description Error message */
+            error: string | null;
+        };
+        LogEntry: {
+            /** @description Timestamp (ms) */
+            time: number;
+            /**
+             * @description Log level
+             * @enum {string}
+             */
+            level: "debug" | "info" | "warn" | "error";
+            /** @description Module name */
+            module: string;
+            /** @description Log message */
+            msg: string;
+        };
+        DeadLetter: {
+            /**
+             * Format: uuid
+             * @description Dead letter UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Original event UUID
+             */
+            eventId: string;
+            /** @description Event type */
+            eventType: string;
+            /**
+             * @description Status
+             * @enum {string}
+             */
+            status: "pending" | "retrying" | "resolved" | "abandoned";
+            /** @description Error message */
+            errorMessage: string;
+            /** @description Error stack trace */
+            errorStack: string | null;
+            /** @description Retry attempts */
+            retryCount: number;
+            /**
+             * Format: date-time
+             * @description Last retry timestamp
+             */
+            lastRetryAt: string | null;
+            /**
+             * Format: date-time
+             * @description Resolution timestamp
+             */
+            resolvedAt: string | null;
+            /** @description Resolution note */
+            resolutionNote: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+        };
+        DeadLetterStats: {
+            /** @description Total count */
+            total: number;
+            /** @description Pending count */
+            pending: number;
+            /** @description Retrying count */
+            retrying: number;
+            /** @description Resolved count */
+            resolved: number;
+            /** @description Abandoned count */
+            abandoned: number;
+            /** @description Count by event type */
+            byEventType: {
+                [key: string]: number;
+            };
+        };
+        ResolveDeadLetterRequest: {
+            /** @description Resolution note */
+            note: string;
+        };
+        ReplayOptions: {
+            /**
+             * Format: date-time
+             * @description Start date (required)
+             */
+            since: string;
+            /**
+             * Format: date-time
+             * @description End date
+             */
+            until?: string;
+            /** @description Event types to replay */
+            eventTypes?: string[];
+            /**
+             * Format: uuid
+             * @description Filter by instance
+             */
+            instanceId?: string;
+            /** @description Max events */
+            limit?: number;
+            /** @description Replay speed */
+            speedMultiplier?: number;
+            /** @description Skip already processed */
+            skipProcessed?: boolean;
+            /** @description Dry run mode */
+            dryRun?: boolean;
+        };
+        ReplaySession: {
+            /**
+             * Format: uuid
+             * @description Session UUID
+             */
+            id: string;
+            /**
+             * @description Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "cancelled" | "failed";
+            options: {
+                /**
+                 * Format: date-time
+                 * @description Start date (required)
+                 */
+                since: string;
+                /**
+                 * Format: date-time
+                 * @description End date
+                 */
+                until?: string;
+                /** @description Event types to replay */
+                eventTypes?: string[];
+                /**
+                 * Format: uuid
+                 * @description Filter by instance
+                 */
+                instanceId?: string;
+                /** @description Max events */
+                limit?: number;
+                /** @description Replay speed */
+                speedMultiplier?: number;
+                /** @description Skip already processed */
+                skipProcessed?: boolean;
+                /** @description Dry run mode */
+                dryRun?: boolean;
+            };
+            progress: {
+                total: number;
+                processed: number;
+                failed: number;
+                /** Format: date-time */
+                startedAt: string;
+                /** Format: date-time */
+                completedAt: string | null;
+            };
+        };
+        EventMetrics: {
+            /** @description Total events */
+            total: number;
+            /** @description Events today */
+            today: number;
+            /** @description Count by type */
+            byType: {
+                [key: string]: number;
+            };
+            /** @description Count by channel */
+            byChannel: {
+                [key: string]: number;
+            };
+            /** @description Avg processing time (ms) */
+            avgProcessingTime: number;
+        };
+        ScheduledOpsResult: {
+            deadLetterRetry: {
+                attempted: number;
+                succeeded: number;
+                failed: number;
+            };
+            payloadCleanup: {
+                deleted: number;
+            };
+        };
+        Automation: {
+            /**
+             * Format: uuid
+             * @description Automation UUID
+             */
+            id: string;
+            /** @description Name */
+            name: string;
+            /** @description Description */
+            description: string | null;
+            /** @description Trigger event type */
+            triggerEventType: string;
+            /** @description Conditions */
+            triggerConditions: {
+                /** @description Dot notation field path */
+                field: string;
+                /**
+                 * @description Operator
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Value to compare */
+                value?: unknown;
+            }[] | null;
+            /** @description Actions */
+            actions: ({
+                /** @enum {string} */
+                type: "webhook";
+                config: {
+                    /** @description Webhook URL */
+                    url: string;
+                    /**
+                     * @default POST
+                     * @enum {string}
+                     */
+                    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                    headers?: {
+                        [key: string]: string;
+                    };
+                    bodyTemplate?: string;
+                    /** @default false */
+                    waitForResponse: boolean;
+                    /** @default 30000 */
+                    timeoutMs: number;
+                    responseAs?: string;
+                };
+            } | {
+                /** @enum {string} */
+                type: "send_message";
+                config: {
+                    instanceId?: string;
+                    to?: string;
+                    contentTemplate: string;
+                };
+            } | {
+                /** @enum {string} */
+                type: "emit_event";
+                config: {
+                    eventType: string;
+                    payloadTemplate?: {
+                        [key: string]: unknown;
+                    };
+                };
+            } | {
+                /** @enum {string} */
+                type: "log";
+                config: {
+                    /** @enum {string} */
+                    level: "debug" | "info" | "warn" | "error";
+                    message: string;
+                };
+            })[];
+            /** @description Debounce config */
+            debounce: {
+                /** @enum {string} */
+                mode: "none" | "fixed" | "range" | "presence";
+                delayMs?: number;
+                minMs?: number;
+                maxMs?: number;
+                baseDelayMs?: number;
+                maxWaitMs?: number;
+                extendOnEvents?: string[];
+            } | null;
+            /** @description Whether enabled */
+            enabled: boolean;
+            /** @description Priority */
+            priority: number;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateAutomationRequest: {
+            /** @description Name */
+            name: string;
+            /** @description Description */
+            description?: string;
+            /** @description Trigger event type */
+            triggerEventType: string;
+            /** @description Conditions */
+            triggerConditions?: {
+                /** @description Dot notation field path */
+                field: string;
+                /**
+                 * @description Operator
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Value to compare */
+                value?: unknown;
+            }[];
+            /** @description Actions */
+            actions: ({
+                /** @enum {string} */
+                type: "webhook";
+                config: {
+                    /** @description Webhook URL */
+                    url: string;
+                    /**
+                     * @default POST
+                     * @enum {string}
+                     */
+                    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+                    headers?: {
+                        [key: string]: string;
+                    };
+                    bodyTemplate?: string;
+                    /** @default false */
+                    waitForResponse: boolean;
+                    /** @default 30000 */
+                    timeoutMs: number;
+                    responseAs?: string;
+                };
+            } | {
+                /** @enum {string} */
+                type: "send_message";
+                config: {
+                    instanceId?: string;
+                    to?: string;
+                    contentTemplate: string;
+                };
+            } | {
+                /** @enum {string} */
+                type: "emit_event";
+                config: {
+                    eventType: string;
+                    payloadTemplate?: {
+                        [key: string]: unknown;
+                    };
+                };
+            } | {
+                /** @enum {string} */
+                type: "log";
+                config: {
+                    /** @enum {string} */
+                    level: "debug" | "info" | "warn" | "error";
+                    message: string;
+                };
+            })[];
+            /** @description Debounce config */
+            debounce?: {
+                /** @enum {string} */
+                mode: "none" | "fixed" | "range" | "presence";
+                delayMs?: number;
+                minMs?: number;
+                maxMs?: number;
+                baseDelayMs?: number;
+                maxWaitMs?: number;
+                extendOnEvents?: string[];
+            };
+            /**
+             * @description Whether enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * @description Priority
+             * @default 0
+             */
+            priority: number;
+        };
+        AutomationLog: {
+            /**
+             * Format: uuid
+             * @description Log UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Automation UUID
+             */
+            automationId: string;
+            /**
+             * Format: uuid
+             * @description Event UUID
+             */
+            eventId: string;
+            /** @description Event type */
+            eventType: string;
+            /**
+             * @description Execution status
+             * @enum {string}
+             */
+            status: "success" | "failed" | "skipped";
+            /** @description Error message */
+            error: string | null;
+            /**
+             * Format: date-time
+             * @description Execution timestamp
+             */
+            executedAt: string;
+            /** @description Duration (ms) */
+            durationMs: number;
+        };
+        TestAutomationRequest: {
+            event: {
+                /** @description Event type */
+                type: string;
+                /** @description Event payload */
+                payload: {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        AutomationMetrics: {
+            /** @description Engine running */
+            running: boolean;
+            /** @description Total automations */
+            totalAutomations: number;
+            /** @description Enabled automations */
+            enabledAutomations: number;
+            /** @description Events processed */
+            eventsProcessed: number;
+            /** @description Actions executed */
+            actionsExecuted: number;
+            /** @description Failed actions */
+            failedActions: number;
+        };
+        PayloadMetadata: {
+            /**
+             * Format: uuid
+             * @description Payload UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Event UUID
+             */
+            eventId: string;
+            /**
+             * @description Payload stage
+             * @enum {string}
+             */
+            stage: "webhook_raw" | "agent_request" | "agent_response" | "channel_send" | "error";
+            /** @description MIME type */
+            mimeType: string;
+            /** @description Size in bytes */
+            sizeBytes: number;
+            /** @description Whether data is available */
+            hasData: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+        };
+        PayloadWithData: {
+            /**
+             * Format: uuid
+             * @description Payload UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Event UUID
+             */
+            eventId: string;
+            /**
+             * @description Payload stage
+             * @enum {string}
+             */
+            stage: "webhook_raw" | "agent_request" | "agent_response" | "channel_send" | "error";
+            /** @description MIME type */
+            mimeType: string;
+            /** @description Size in bytes */
+            sizeBytes: number;
+            /** @description Whether data is available */
+            hasData: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /** @description Decompressed payload data */
+            payload?: unknown;
+        };
+        PayloadConfig: {
+            /** @description Event type pattern */
+            eventType: string;
+            /** @description Store webhook raw */
+            storeWebhookRaw: boolean;
+            /** @description Store agent request */
+            storeAgentRequest: boolean;
+            /** @description Store agent response */
+            storeAgentResponse: boolean;
+            /** @description Store channel send */
+            storeChannelSend: boolean;
+            /** @description Store errors */
+            storeError: boolean;
+            /** @description Retention in days */
+            retentionDays: number;
+        };
+        UpdatePayloadConfigRequest: {
+            /** @description Store webhook raw */
+            storeWebhookRaw?: boolean;
+            /** @description Store agent request */
+            storeAgentRequest?: boolean;
+            /** @description Store agent response */
+            storeAgentResponse?: boolean;
+            /** @description Store channel send */
+            storeChannelSend?: boolean;
+            /** @description Store errors */
+            storeError?: boolean;
+            /** @description Retention in days */
+            retentionDays?: number;
+        };
+        DeletePayloadsRequest: {
+            /** @description Deletion reason */
+            reason: string;
+        };
+        PayloadStats: {
+            /** @description Total payloads */
+            totalPayloads: number;
+            /** @description Total size */
+            totalSizeBytes: number;
+            /** @description Count by stage */
+            byStage: {
+                webhook_raw?: number;
+                agent_request?: number;
+                agent_response?: number;
+                channel_send?: number;
+                error?: number;
+            };
+            /**
+             * Format: date-time
+             * @description Oldest payload date
+             */
+            oldestPayload: string | null;
         };
     };
-    responses: {
-        /** @description Authentication required */
-        Unauthorized: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
-        };
-        /** @description Resource not found */
-        NotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
-        };
-        /** @description Validation error */
-        ValidationError: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
-        };
-    };
+    responses: never;
     parameters: never;
     requestBodies: never;
     headers: never;

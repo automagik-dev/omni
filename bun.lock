@@ -32,8 +32,10 @@
         "zod": "^3.24.1",
       },
       "devDependencies": {
+        "@asteasolutions/zod-to-openapi": "7.3.4",
         "@types/qrcode-terminal": "^0.12.2",
         "bun-types": "^1.1.42",
+        "openapi3-ts": "^4.5.0",
         "qrcode-terminal": "^0.12.0",
         "typescript": "^5.7.3",
       },
