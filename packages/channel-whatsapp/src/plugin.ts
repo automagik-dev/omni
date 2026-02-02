@@ -72,6 +72,69 @@ export interface FetchHistoryResult {
 }
 
 /**
+ * Contact from sync
+ */
+export interface SyncContact {
+  platformUserId: string;
+  name?: string;
+  phone?: string;
+  profilePicUrl?: string;
+  isGroup: boolean;
+  isBusiness?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Options for fetchContacts method
+ */
+export interface FetchContactsOptions {
+  /** Callback for progress updates */
+  onProgress?: (fetched: number) => void;
+  /** Callback for each contact */
+  onContact?: (contact: SyncContact) => void;
+}
+
+/**
+ * Result of fetchContacts operation
+ */
+export interface FetchContactsResult {
+  totalFetched: number;
+  contacts: SyncContact[];
+}
+
+/**
+ * Group from sync
+ */
+export interface SyncGroup {
+  externalId: string;
+  name?: string;
+  description?: string;
+  memberCount?: number;
+  createdAt?: Date;
+  createdBy?: string;
+  isReadOnly?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Options for fetchGroups method
+ */
+export interface FetchGroupsOptions {
+  /** Callback for progress updates */
+  onProgress?: (fetched: number) => void;
+  /** Callback for each group */
+  onGroup?: (group: SyncGroup) => void;
+}
+
+/**
+ * Result of fetchGroups operation
+ */
+export interface FetchGroupsResult {
+  totalFetched: number;
+  groups: SyncGroup[];
+}
+
+/**
  * WhatsApp connection options - passed per instance
  * All options have sensible defaults and can be overridden
  */
@@ -138,6 +201,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       totalFetched: number;
     }
   >();
+
+  /** Cached contacts from sync events per instance */
+  private contactsCache = new Map<string, Map<string, SyncContact>>();
 
   /**
    * Plugin-specific initialization
@@ -323,8 +389,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
+      // Handle audio conversion for voice notes (PTT)
+      let processedMessage = message;
+      if (message.content.type === 'audio' && message.metadata?.ptt === true) {
+        processedMessage = await this.processAudioForVoiceNote(message);
+      }
+
       // Build message content based on type
-      const content = this.buildContent(message);
+      const content = this.buildContent(processedMessage);
 
       // Send with optional reply
       const result = await sock.sendMessage(
@@ -371,6 +443,47 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         retryable: waError.retryable,
         timestamp: Date.now(),
       };
+    }
+  }
+
+  /**
+   * Process audio for voice note, converting to OGG/OPUS if needed
+   */
+  private async processAudioForVoiceNote(message: OutgoingMessage): Promise<OutgoingMessage> {
+    const { convertAudioForVoiceNote } = await import('./utils/audio-converter');
+
+    const mediaUrl = message.content.mediaUrl;
+    if (!mediaUrl) {
+      return message;
+    }
+
+    try {
+      const result = await convertAudioForVoiceNote(mediaUrl, message.content.mimeType);
+
+      if (result) {
+        // Audio was converted, update message to use buffer
+        this.logger.info('Audio converted to OGG/OPUS for voice note');
+        return {
+          ...message,
+          content: {
+            ...message.content,
+            // Store buffer in metadata for the builder to use
+            mimeType: result.mimeType,
+          },
+          metadata: {
+            ...message.metadata,
+            audioBuffer: result.buffer,
+          },
+        };
+      }
+
+      // No conversion needed
+      return message;
+    } catch (error) {
+      this.logger.warn('Audio conversion failed, sending as-is', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return message;
     }
   }
 
@@ -604,6 +717,99 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
     } finally {
       this.historySyncCallbacks.delete(instanceId);
+    }
+  }
+
+  /**
+   * Fetch contacts for an instance.
+   *
+   * WhatsApp contacts are received through events (contacts.upsert, messaging-history.set).
+   * This method returns the cached contacts that have been received since connection.
+   *
+   * @param instanceId - Instance to fetch contacts for
+   * @param options - Fetch options including callbacks
+   * @returns Promise with fetched contacts
+   */
+  async fetchContacts(instanceId: string, options: FetchContactsOptions = {}): Promise<FetchContactsResult> {
+    // Validate instance is connected
+    this.getSocket(instanceId);
+
+    // Get cached contacts for this instance
+    const instanceContacts = this.contactsCache.get(instanceId);
+    const contacts: SyncContact[] = [];
+
+    if (instanceContacts) {
+      for (const contact of instanceContacts.values()) {
+        contacts.push(contact);
+        options.onContact?.(contact);
+      }
+      options.onProgress?.(contacts.length);
+    }
+
+    this.logger.info('Contacts fetch complete', {
+      instanceId,
+      totalContacts: contacts.length,
+    });
+
+    return {
+      totalFetched: contacts.length,
+      contacts,
+    };
+  }
+
+  /**
+   * Fetch groups for an instance.
+   *
+   * Uses the Baileys groupFetchAllParticipating() method to get all groups
+   * the user is participating in.
+   *
+   * @param instanceId - Instance to fetch groups for
+   * @param options - Fetch options including callbacks
+   * @returns Promise with fetched groups
+   */
+  async fetchGroups(instanceId: string, options: FetchGroupsOptions = {}): Promise<FetchGroupsResult> {
+    const sock = this.getSocket(instanceId);
+    const groups: SyncGroup[] = [];
+
+    try {
+      // Fetch all groups the user is participating in
+      const allGroups = await sock.groupFetchAllParticipating();
+
+      for (const [jid, metadata] of Object.entries(allGroups)) {
+        const group: SyncGroup = {
+          externalId: jid,
+          name: metadata.subject || undefined,
+          description: metadata.desc || undefined,
+          memberCount: metadata.participants?.length,
+          createdAt: metadata.creation ? new Date(metadata.creation * 1000) : undefined,
+          createdBy: metadata.owner || undefined,
+          isReadOnly: metadata.announce ?? false,
+          metadata: {
+            size: metadata.size,
+            restrict: metadata.restrict,
+            isCommunity: metadata.isCommunity,
+            isCommunityAnnounce: metadata.isCommunityAnnounce,
+            linkedParent: metadata.linkedParent,
+          },
+        };
+
+        groups.push(group);
+        options.onGroup?.(group);
+        options.onProgress?.(groups.length);
+      }
+
+      this.logger.info('Groups fetch complete', {
+        instanceId,
+        totalGroups: groups.length,
+      });
+
+      return {
+        totalFetched: groups.length,
+        groups,
+      };
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
     }
   }
 
@@ -980,16 +1186,90 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle contacts upsert (new contacts)
    * @internal
    */
-  handleContactsUpsert(_instanceId: string, _contacts: unknown[]): void {
-    // TODO: Emit contacts.upsert event
+  handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
+    // Get or create contacts cache for this instance
+    let cache = this.contactsCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.contactsCache.set(instanceId, cache);
+    }
+
+    for (const contact of contacts) {
+      const c = contact as {
+        id: string;
+        lid?: string;
+        phoneNumber?: string;
+        name?: string;
+        notify?: string;
+        verifiedName?: string;
+        imgUrl?: string | null;
+        status?: string;
+      };
+
+      // Skip group JIDs (they're handled separately)
+      const isGroup = c.id.endsWith('@g.us');
+
+      // Extract phone number from JID if not provided
+      const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
+
+      const syncContact: SyncContact = {
+        platformUserId: c.id,
+        name: c.name || c.notify || c.verifiedName || undefined,
+        phone,
+        profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
+        isGroup,
+        isBusiness: !!c.verifiedName,
+        metadata: {
+          lid: c.lid,
+          status: c.status,
+          notify: c.notify,
+          verifiedName: c.verifiedName,
+        },
+      };
+
+      cache.set(c.id, syncContact);
+    }
+
+    this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
   }
 
   /**
    * Handle contacts update
    * @internal
    */
-  handleContactsUpdate(_instanceId: string, _updates: unknown[]): void {
-    // TODO: Emit contacts.update event
+  handleContactsUpdate(instanceId: string, updates: unknown[]): void {
+    const cache = this.contactsCache.get(instanceId);
+    if (!cache) return;
+
+    for (const update of updates) {
+      this.applyContactUpdate(cache, update);
+    }
+
+    this.logger.debug('Contacts updated', { instanceId, count: updates.length });
+  }
+
+  /**
+   * Apply a single contact update to the cache
+   * @internal
+   */
+  private applyContactUpdate(cache: Map<string, SyncContact>, update: unknown): void {
+    const u = update as {
+      id: string;
+      name?: string;
+      notify?: string;
+      verifiedName?: string;
+      imgUrl?: string | null;
+    };
+
+    const existing = cache.get(u.id);
+    if (!existing) return;
+
+    // Merge updates into existing contact
+    existing.name = u.name || existing.name || u.notify;
+    if (u.imgUrl && u.imgUrl !== 'changed') existing.profilePicUrl = u.imgUrl;
+    if (u.verifiedName) existing.isBusiness = true;
+
+    cache.set(u.id, existing);
   }
 
   /**
@@ -1056,16 +1336,22 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       syncType?: proto.HistorySync.HistorySyncType | null;
     },
   ): void {
-    const { messages, progress, isLatest, syncType } = history;
+    const { contacts, messages, progress, isLatest, syncType } = history;
     const syncState = this.historySyncCallbacks.get(instanceId);
 
     this.logger.debug('Processing history sync batch', {
       instanceId,
       messageCount: messages.length,
+      contactCount: contacts.length,
       progress: progress ?? 'unknown',
       isLatest,
       syncType,
     });
+
+    // Process contacts from history sync
+    if (contacts.length > 0) {
+      this.handleContactsUpsert(instanceId, contacts);
+    }
 
     // Process each message in the history
     for (const msg of messages) {

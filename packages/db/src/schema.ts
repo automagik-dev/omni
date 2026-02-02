@@ -616,6 +616,58 @@ export const chatParticipants = pgTable(
 );
 
 // ============================================================================
+// GROUPS (Synced Groups/Guilds)
+// ============================================================================
+
+/**
+ * Group entity - represents a WhatsApp group or Discord guild.
+ * Synced from channel plugins via fetchGroups()/fetchGuilds().
+ *
+ * @see contacts-groups-sync wish
+ */
+export const omniGroups = pgTable(
+  'omni_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+
+    // ---- Identity ----
+    externalId: varchar('external_id', { length: 255 }).notNull(), // Group JID or Guild ID
+    channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
+
+    // ---- Metadata ----
+    name: varchar('name', { length: 255 }),
+    description: text('description'),
+    iconUrl: text('icon_url'),
+    memberCount: integer('member_count'),
+
+    // ---- Ownership ----
+    ownerId: varchar('owner_id', { length: 255 }), // Platform user ID of owner
+    createdBy: varchar('created_by', { length: 255 }), // Platform user ID of creator
+
+    // ---- Settings ----
+    isReadOnly: boolean('is_read_only').notNull().default(false),
+    isCommunity: boolean('is_community').notNull().default(false),
+
+    // ---- Platform-specific metadata ----
+    platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
+
+    // ---- Sync tracking ----
+    syncedAt: timestamp('synced_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    instanceExternalIdx: uniqueIndex('omni_groups_instance_external_idx').on(table.instanceId, table.externalId),
+    instanceIdx: index('omni_groups_instance_idx').on(table.instanceId),
+    channelIdx: index('omni_groups_channel_idx').on(table.channel),
+    nameIdx: index('omni_groups_name_idx').on(table.name),
+  }),
+);
+
+// ============================================================================
 // MESSAGES (Source of Truth)
 // ============================================================================
 
@@ -1330,6 +1382,9 @@ export type NewChat = typeof chats.$inferInsert;
 
 export type ChatParticipant = typeof chatParticipants.$inferSelect;
 export type NewChatParticipant = typeof chatParticipants.$inferInsert;
+
+export type OmniGroup = typeof omniGroups.$inferSelect;
+export type NewOmniGroup = typeof omniGroups.$inferInsert;
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;

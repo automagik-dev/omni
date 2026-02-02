@@ -88,6 +88,76 @@ export interface FetchHistoryResult {
 }
 
 /**
+ * Contact from sync (guild member)
+ */
+export interface SyncContact {
+  platformUserId: string;
+  name?: string;
+  username?: string;
+  discriminator?: string;
+  profilePicUrl?: string;
+  isBot?: boolean;
+  guildId?: string;
+  roles?: string[];
+  joinedAt?: Date;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Options for fetchContacts method
+ */
+export interface FetchContactsOptions {
+  /** Guild ID to fetch members from (required) */
+  guildId: string;
+  /** Maximum number of members to fetch (default: 1000) */
+  limit?: number;
+  /** Callback for progress updates */
+  onProgress?: (fetched: number) => void;
+  /** Callback for each contact */
+  onContact?: (contact: SyncContact) => void;
+}
+
+/**
+ * Result of fetchContacts operation
+ */
+export interface FetchContactsResult {
+  totalFetched: number;
+  contacts: SyncContact[];
+}
+
+/**
+ * Guild from sync
+ */
+export interface SyncGuild {
+  externalId: string;
+  name: string;
+  description?: string;
+  memberCount?: number;
+  iconUrl?: string;
+  ownerId?: string;
+  createdAt?: Date;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Options for fetchGuilds method
+ */
+export interface FetchGuildsOptions {
+  /** Callback for progress updates */
+  onProgress?: (fetched: number) => void;
+  /** Callback for each guild */
+  onGuild?: (guild: SyncGuild) => void;
+}
+
+/**
+ * Result of fetchGuilds operation
+ */
+export interface FetchGuildsResult {
+  totalFetched: number;
+  guilds: SyncGuild[];
+}
+
+/**
  * Discord Channel Plugin
  *
  * Extends BaseChannelPlugin to provide Discord messaging via discord.js.
@@ -260,9 +330,33 @@ export class DiscordPlugin extends BaseChannelPlugin {
 
       switch (content.type) {
         case 'text': {
-          const text = content.text ?? '';
-          const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
-          messageId = messageIds[0] ?? ''; // Return first chunk's ID
+          // Check if this is actually an embed request via metadata
+          if (message.metadata?.embed) {
+            const embedData = message.metadata.embed as {
+              title?: string;
+              description?: string;
+              color?: number;
+              url?: string;
+              timestamp?: string;
+              footer?: { text: string; iconUrl?: string };
+              author?: { name: string; url?: string; iconUrl?: string };
+              thumbnail?: string;
+              image?: string;
+              fields?: Array<{ name: string; value: string; inline?: boolean }>;
+            };
+            const { sendEmbedMessage } = await import('./senders/embeds');
+            // Convert timestamp from string to Date if present
+            const embedOptions = {
+              ...embedData,
+              timestamp: embedData.timestamp ? new Date(embedData.timestamp) : undefined,
+            };
+            messageId = await sendEmbedMessage(client, channelId, embedOptions, content.text, message.replyTo);
+          } else {
+            // Regular text message
+            const text = content.text ?? '';
+            const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
+            messageId = messageIds[0] ?? ''; // Return first chunk's ID
+          }
           break;
         }
 
@@ -282,11 +376,40 @@ export class DiscordPlugin extends BaseChannelPlugin {
         }
 
         case 'reaction': {
-          if (!content.emoji || !message.replyTo) {
-            throw new DiscordError(ErrorCode.SEND_FAILED, 'Reaction requires emoji and target message');
+          // Target message ID can come from content.targetMessageId or message.replyTo
+          const targetMessageId = content.targetMessageId || message.replyTo;
+          if (!content.emoji || !targetMessageId) {
+            throw new DiscordError(ErrorCode.SEND_FAILED, 'Reaction requires emoji and target message ID');
           }
-          await addReaction(client, channelId, message.replyTo, content.emoji);
-          messageId = message.replyTo; // Reaction doesn't create a new message
+          await addReaction(client, channelId, targetMessageId, content.emoji);
+          messageId = targetMessageId; // Reaction doesn't create a new message
+          break;
+        }
+
+        case 'poll': {
+          const pollData = message.metadata?.poll as
+            | {
+                question: string;
+                answers: string[];
+                durationHours?: number;
+                multiSelect?: boolean;
+              }
+            | undefined;
+          if (!pollData) {
+            throw new DiscordError(ErrorCode.SEND_FAILED, 'Poll data required in metadata');
+          }
+          const { sendPollMessage } = await import('./senders/poll');
+          messageId = await sendPollMessage(
+            client,
+            channelId,
+            {
+              question: pollData.question,
+              answers: pollData.answers,
+              durationHours: pollData.durationHours,
+              multiSelect: pollData.multiSelect,
+            },
+            message.replyTo,
+          );
           break;
         }
 
@@ -625,6 +748,120 @@ export class DiscordPlugin extends BaseChannelPlugin {
     }
 
     return messages;
+  }
+
+  /**
+   * Fetch guild members (contacts) for a Discord instance.
+   *
+   * Discord allows fetching members from guilds the bot is in.
+   *
+   * @param instanceId - Instance to fetch contacts for
+   * @param options - Fetch options including guild ID and callbacks
+   * @returns Promise with fetched contacts
+   */
+  async fetchContacts(instanceId: string, options: FetchContactsOptions): Promise<FetchContactsResult> {
+    const client = this.getClient(instanceId);
+    const limit = options.limit ?? 1000;
+    const contacts: SyncContact[] = [];
+
+    // Fetch the guild
+    const guild = await client.guilds.fetch(options.guildId);
+    if (!guild) {
+      throw new DiscordError(ErrorCode.NOT_FOUND, `Guild ${options.guildId} not found`);
+    }
+
+    try {
+      // Fetch members with limit
+      const members = await guild.members.fetch({ limit });
+
+      for (const member of members.values()) {
+        const contact: SyncContact = {
+          platformUserId: member.user.id,
+          name: member.nickname || member.user.displayName,
+          username: member.user.username,
+          discriminator: member.user.discriminator || undefined,
+          profilePicUrl: member.user.displayAvatarURL({ size: 256 }),
+          isBot: member.user.bot,
+          guildId: guild.id,
+          roles: member.roles.cache.map((r) => r.name),
+          joinedAt: member.joinedAt || undefined,
+          metadata: {
+            guildName: guild.name,
+            premiumSince: member.premiumSince?.toISOString(),
+            pending: member.pending,
+          },
+        };
+
+        contacts.push(contact);
+        options.onContact?.(contact);
+        options.onProgress?.(contacts.length);
+      }
+
+      this.logger.info('Guild members fetch complete', {
+        instanceId,
+        guildId: options.guildId,
+        totalMembers: contacts.length,
+      });
+
+      return {
+        totalFetched: contacts.length,
+        contacts,
+      };
+    } catch (error) {
+      throw mapDiscordError(error);
+    }
+  }
+
+  /**
+   * Fetch all guilds (servers) for a Discord instance.
+   *
+   * Returns all guilds the bot is a member of.
+   *
+   * @param instanceId - Instance to fetch guilds for
+   * @param options - Fetch options including callbacks
+   * @returns Promise with fetched guilds
+   */
+  async fetchGuilds(instanceId: string, options: FetchGuildsOptions = {}): Promise<FetchGuildsResult> {
+    const client = this.getClient(instanceId);
+    const guilds: SyncGuild[] = [];
+
+    try {
+      // Get all guilds the bot is in
+      for (const guild of client.guilds.cache.values()) {
+        const syncGuild: SyncGuild = {
+          externalId: guild.id,
+          name: guild.name,
+          description: guild.description || undefined,
+          memberCount: guild.memberCount,
+          iconUrl: guild.iconURL({ size: 256 }) || undefined,
+          ownerId: guild.ownerId,
+          createdAt: guild.createdAt,
+          metadata: {
+            features: guild.features,
+            preferredLocale: guild.preferredLocale,
+            verified: guild.verified,
+            partnered: guild.partnered,
+            vanityURLCode: guild.vanityURLCode,
+          },
+        };
+
+        guilds.push(syncGuild);
+        options.onGuild?.(syncGuild);
+        options.onProgress?.(guilds.length);
+      }
+
+      this.logger.info('Guilds fetch complete', {
+        instanceId,
+        totalGuilds: guilds.length,
+      });
+
+      return {
+        totalFetched: guilds.length,
+        guilds,
+      };
+    } catch (error) {
+      throw mapDiscordError(error);
+    }
   }
 
   /**

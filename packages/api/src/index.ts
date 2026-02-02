@@ -307,7 +307,7 @@ async function main() {
   // Set up sync worker (processes sync jobs)
   if (eventBus && globalChannelRegistry) {
     try {
-      await setupSyncWorker(eventBus, services, globalChannelRegistry);
+      await setupSyncWorker(eventBus, services, globalChannelRegistry, db);
     } catch (error) {
       log.error('Failed to set up sync worker', { error: String(error) });
     }

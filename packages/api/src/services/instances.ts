@@ -79,6 +79,13 @@ export class InstanceService {
   }
 
   /**
+   * List all active instances
+   */
+  async listActive(): Promise<Instance[]> {
+    return this.db.select().from(instances).where(eq(instances.isActive, true));
+  }
+
+  /**
    * Get instance by ID
    */
   async getById(id: string): Promise<Instance> {

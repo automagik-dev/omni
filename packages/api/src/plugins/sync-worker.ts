@@ -11,7 +11,9 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import type { SyncJobConfig, SyncJobType } from '@omni/db';
+import type { Database, SyncJobConfig, SyncJobType } from '@omni/db';
+import { omniGroups } from '@omni/db';
+import { and, eq } from 'drizzle-orm';
 import type { Services } from '../services';
 
 const log = createLogger('sync-worker');
@@ -90,11 +92,21 @@ function parseSyncDepth(depth?: string): Date | undefined {
 /**
  * Set up sync worker - subscribes to sync events and processes jobs
  */
+/**
+ * Database reference for direct table access
+ * Set during setupSyncWorker initialization
+ */
+let db: Database | null = null;
+
 export async function setupSyncWorker(
   eventBus: EventBus,
   services: Services,
   channelRegistry: ChannelRegistry,
+  database?: Database,
 ): Promise<void> {
+  if (database) {
+    db = database;
+  }
   try {
     // Subscribe to sync.started events
     await eventBus.subscribe(
@@ -127,14 +139,10 @@ export async function setupSyncWorker(
               await services.syncJobs.complete(jobId);
               break;
             case 'contacts':
-              // Contacts sync - to be implemented
-              log.warn('Contacts sync not yet implemented', { jobId });
-              await services.syncJobs.complete(jobId);
+              await processContactsSync(jobId, instanceId, channelType, config, services, channelRegistry);
               break;
             case 'groups':
-              // Groups sync - to be implemented
-              log.warn('Groups sync not yet implemented', { jobId });
-              await services.syncJobs.complete(jobId);
+              await processGroupsSync(jobId, instanceId, channelType, config, services, channelRegistry);
               break;
             case 'all':
               // All sync - process each type
@@ -319,4 +327,325 @@ function mapContentType(
     default:
       return 'text';
   }
+}
+
+/**
+ * Process contacts sync
+ */
+async function processContactsSync(
+  jobId: string,
+  instanceId: string,
+  channelType: ChannelType,
+  config: SyncJobConfig,
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): Promise<void> {
+  const plugin = channelRegistry.get(channelType);
+  if (!plugin) {
+    throw new Error(`No plugin found for channel type: ${channelType}`);
+  }
+
+  // Check if plugin supports fetchContacts
+  if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
+    log.warn('Plugin does not support fetchContacts', { channelType });
+    await services.syncJobs.complete(jobId);
+    return;
+  }
+
+  let fetched = 0;
+  let stored = 0;
+  let linked = 0;
+
+  log.info('Starting contacts sync', {
+    jobId,
+    instanceId,
+    channelType,
+  });
+
+  // Build fetch options based on channel type
+  const fetchOptions: Record<string, unknown> = {
+    onProgress: async (count: number) => {
+      await services.syncJobs.updateProgress(jobId, {
+        fetched: count,
+        stored,
+        duplicates: 0,
+      });
+    },
+    onContact: async (contact: unknown) => {
+      fetched++;
+
+      const c = contact as {
+        platformUserId: string;
+        name?: string;
+        phone?: string;
+        profilePicUrl?: string;
+        isGroup?: boolean;
+        isBusiness?: boolean;
+        guildId?: string;
+        metadata?: Record<string, unknown>;
+      };
+
+      // Skip groups - they're handled separately
+      if (c.isGroup) return;
+
+      try {
+        const result = await services.persons.findOrCreateIdentity(
+          {
+            channel: channelType,
+            instanceId,
+            platformUserId: c.platformUserId,
+            platformUsername: c.name,
+            profilePicUrl: c.profilePicUrl,
+            profileData: c.metadata,
+          },
+          {
+            matchByPhone: c.phone,
+            createPerson: true,
+            displayName: c.name,
+          },
+        );
+
+        if (result.isNew) stored++;
+        if (result.wasLinked) linked++;
+      } catch (error) {
+        log.warn('Failed to store synced contact', {
+          platformUserId: c.platformUserId,
+          error: String(error),
+        });
+      }
+    },
+  };
+
+  // For Discord, we need a guild ID from config
+  if (channelType === 'discord' && config.channelId) {
+    fetchOptions.guildId = config.channelId;
+  }
+
+  // Call fetchContacts
+  await plugin.fetchContacts(instanceId, fetchOptions);
+
+  // Update final progress
+  await services.syncJobs.updateProgress(jobId, {
+    fetched,
+    stored,
+    duplicates: 0,
+  });
+
+  // Complete the job
+  await services.syncJobs.complete(jobId);
+
+  log.info('Contacts sync completed', {
+    jobId,
+    fetched,
+    stored,
+    linked,
+  });
+}
+
+/**
+ * Process groups sync
+ */
+async function processGroupsSync(
+  jobId: string,
+  instanceId: string,
+  channelType: ChannelType,
+  _config: SyncJobConfig,
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): Promise<void> {
+  const plugin = channelRegistry.get(channelType);
+  if (!plugin) {
+    throw new Error(`No plugin found for channel type: ${channelType}`);
+  }
+
+  // Check if plugin supports fetchGroups (WhatsApp) or fetchGuilds (Discord)
+  const fetchMethod = channelType === 'discord' ? 'fetchGuilds' : 'fetchGroups';
+  if (!(fetchMethod in plugin) || typeof plugin[fetchMethod as keyof typeof plugin] !== 'function') {
+    log.warn(`Plugin does not support ${fetchMethod}`, { channelType });
+    await services.syncJobs.complete(jobId);
+    return;
+  }
+
+  if (!db) {
+    throw new Error('Database not initialized for sync worker');
+  }
+
+  // Capture db reference for use in closures
+  const database = db;
+
+  let fetched = 0;
+  let stored = 0;
+  let updated = 0;
+
+  log.info('Starting groups sync', {
+    jobId,
+    instanceId,
+    channelType,
+  });
+
+  // Build fetch options
+  const fetchOptions: Record<string, unknown> = {
+    onProgress: async (count: number) => {
+      await services.syncJobs.updateProgress(jobId, {
+        fetched: count,
+        stored,
+        duplicates: updated,
+      });
+    },
+    onGroup: async (group: unknown) => {
+      fetched++;
+
+      const g = group as {
+        externalId: string;
+        name?: string;
+        description?: string;
+        memberCount?: number;
+        iconUrl?: string;
+        ownerId?: string;
+        createdBy?: string;
+        createdAt?: Date;
+        isReadOnly?: boolean;
+        metadata?: Record<string, unknown>;
+      };
+
+      try {
+        // Check if group already exists
+        const [existing] = await database
+          .select()
+          .from(omniGroups)
+          .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
+          .limit(1);
+
+        if (existing) {
+          // Update existing group
+          await database
+            .update(omniGroups)
+            .set({
+              name: g.name,
+              description: g.description,
+              iconUrl: g.iconUrl,
+              memberCount: g.memberCount,
+              ownerId: g.ownerId,
+              isReadOnly: g.isReadOnly ?? false,
+              platformMetadata: g.metadata,
+              syncedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(omniGroups.id, existing.id));
+          updated++;
+        } else {
+          // Create new group
+          await database.insert(omniGroups).values({
+            instanceId,
+            externalId: g.externalId,
+            channel: channelType,
+            name: g.name,
+            description: g.description,
+            iconUrl: g.iconUrl,
+            memberCount: g.memberCount,
+            ownerId: g.ownerId,
+            createdBy: g.createdBy,
+            isReadOnly: g.isReadOnly ?? false,
+            isCommunity: false,
+            platformMetadata: g.metadata,
+            syncedAt: new Date(),
+          });
+          stored++;
+        }
+      } catch (error) {
+        log.warn('Failed to store synced group', {
+          externalId: g.externalId,
+          error: String(error),
+        });
+      }
+    },
+    // Discord uses onGuild
+    onGuild: async (guild: unknown) => {
+      fetched++;
+
+      const g = guild as {
+        externalId: string;
+        name: string;
+        description?: string;
+        memberCount?: number;
+        iconUrl?: string;
+        ownerId?: string;
+        createdAt?: Date;
+        metadata?: Record<string, unknown>;
+      };
+
+      try {
+        // Check if guild already exists
+        const [existing] = await database
+          .select()
+          .from(omniGroups)
+          .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
+          .limit(1);
+
+        if (existing) {
+          // Update existing guild
+          await database
+            .update(omniGroups)
+            .set({
+              name: g.name,
+              description: g.description,
+              iconUrl: g.iconUrl,
+              memberCount: g.memberCount,
+              ownerId: g.ownerId,
+              platformMetadata: g.metadata,
+              syncedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(omniGroups.id, existing.id));
+          updated++;
+        } else {
+          // Create new guild
+          await database.insert(omniGroups).values({
+            instanceId,
+            externalId: g.externalId,
+            channel: channelType,
+            name: g.name,
+            description: g.description,
+            iconUrl: g.iconUrl,
+            memberCount: g.memberCount,
+            ownerId: g.ownerId,
+            isReadOnly: false,
+            isCommunity: false,
+            platformMetadata: g.metadata,
+            syncedAt: new Date(),
+          });
+          stored++;
+        }
+      } catch (error) {
+        log.warn('Failed to store synced guild', {
+          externalId: g.externalId,
+          error: String(error),
+        });
+      }
+    },
+  };
+
+  // Call the appropriate fetch method
+  const fetchFn = plugin[fetchMethod as keyof typeof plugin] as (
+    instanceId: string,
+    options: Record<string, unknown>,
+  ) => Promise<void>;
+  await fetchFn.call(plugin, instanceId, fetchOptions);
+
+  // Update final progress
+  await services.syncJobs.updateProgress(jobId, {
+    fetched,
+    stored,
+    duplicates: updated,
+  });
+
+  // Complete the job
+  await services.syncJobs.complete(jobId);
+
+  log.info('Groups sync completed', {
+    jobId,
+    fetched,
+    stored,
+    updated,
+  });
 }

@@ -4,9 +4,17 @@
 
 import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
+import type { ChannelType } from '@omni/core/types';
 import type { Database } from '@omni/db';
-import { type NewPerson, type Person, type PlatformIdentity, persons, platformIdentities } from '@omni/db';
-import { desc, eq, ilike, or, sql } from 'drizzle-orm';
+import {
+  type NewPerson,
+  type NewPlatformIdentity,
+  type Person,
+  type PlatformIdentity,
+  persons,
+  platformIdentities,
+} from '@omni/db';
+import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -195,6 +203,190 @@ export class PersonService {
     }
 
     return updated;
+  }
+
+  /**
+   * Link options for identity creation
+   */
+  private async findPersonToLink(linkOptions: {
+    matchByPhone?: string;
+    matchByEmail?: string;
+    createPerson?: boolean;
+    displayName?: string;
+  }): Promise<{ personId?: string; wasLinked: boolean }> {
+    // Try matching by phone
+    if (linkOptions.matchByPhone) {
+      const [matchedPerson] = await this.db
+        .select()
+        .from(persons)
+        .where(eq(persons.primaryPhone, linkOptions.matchByPhone))
+        .limit(1);
+      if (matchedPerson) {
+        return { personId: matchedPerson.id, wasLinked: true };
+      }
+    }
+
+    // Try matching by email if not matched by phone
+    if (linkOptions.matchByEmail) {
+      const [matchedPerson] = await this.db
+        .select()
+        .from(persons)
+        .where(eq(persons.primaryEmail, linkOptions.matchByEmail))
+        .limit(1);
+      if (matchedPerson) {
+        return { personId: matchedPerson.id, wasLinked: true };
+      }
+    }
+
+    // Create a new person if requested and no match found
+    if (linkOptions.createPerson) {
+      const [newPerson] = await this.db
+        .insert(persons)
+        .values({
+          displayName: linkOptions.displayName,
+          primaryPhone: linkOptions.matchByPhone,
+          primaryEmail: linkOptions.matchByEmail,
+        })
+        .returning();
+      if (newPerson) {
+        return { personId: newPerson.id, wasLinked: false };
+      }
+    }
+
+    return { wasLinked: false };
+  }
+
+  /**
+   * Update existing identity and return result
+   */
+  private async updateExistingIdentity(
+    existing: PlatformIdentity,
+    data: Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'>,
+  ): Promise<{ identity: PlatformIdentity; person: Person | null; isNew: boolean; wasLinked: boolean }> {
+    const [updated] = await this.db
+      .update(platformIdentities)
+      .set({
+        platformUsername: data.platformUsername ?? existing.platformUsername,
+        profilePicUrl: data.profilePicUrl ?? existing.profilePicUrl,
+        profileData: data.profileData ?? existing.profileData,
+        lastSeenAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(platformIdentities.id, existing.id))
+      .returning();
+
+    if (!updated) {
+      throw new Error('Failed to update identity');
+    }
+
+    let person: Person | null = null;
+    if (updated.personId) {
+      person = await this.getById(updated.personId);
+    }
+
+    return { identity: updated, person, isNew: false, wasLinked: false };
+  }
+
+  /**
+   * Find or create a platform identity.
+   * If the identity exists, updates it with new data.
+   * If not, creates a new identity and optionally links it to an existing person.
+   *
+   * @param data - Identity data including channel, instanceId, platformUserId
+   * @param linkOptions - Options for automatic linking
+   * @returns The created/updated identity and whether it's new
+   */
+  async findOrCreateIdentity(
+    data: Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'> & {
+      personId?: string;
+    },
+    linkOptions?: {
+      matchByPhone?: string;
+      matchByEmail?: string;
+      createPerson?: boolean;
+      displayName?: string;
+    },
+  ): Promise<{ identity: PlatformIdentity; person: Person | null; isNew: boolean; wasLinked: boolean }> {
+    const instanceId = data.instanceId;
+    if (!instanceId) {
+      throw new Error('instanceId is required');
+    }
+
+    // Check if identity already exists
+    const existing = await this.db
+      .select()
+      .from(platformIdentities)
+      .where(
+        and(
+          eq(platformIdentities.channel, data.channel),
+          eq(platformIdentities.instanceId, instanceId),
+          eq(platformIdentities.platformUserId, data.platformUserId),
+        ),
+      )
+      .limit(1);
+
+    if (existing[0]) {
+      return this.updateExistingIdentity(existing[0], data);
+    }
+
+    // Try to find a person to link to
+    let personId: string | undefined = data.personId;
+    let wasLinked = false;
+
+    if (!personId && linkOptions) {
+      const linkResult = await this.findPersonToLink(linkOptions);
+      personId = linkResult.personId;
+      wasLinked = linkResult.wasLinked;
+    }
+
+    // Create the identity
+    const linkedBy = wasLinked ? 'phone_match' : personId ? 'initial' : undefined;
+    const linkReason = wasLinked ? `Matched by ${linkOptions?.matchByPhone ? 'phone' : 'email'}` : undefined;
+
+    const [created] = await this.db
+      .insert(platformIdentities)
+      .values({
+        ...data,
+        personId,
+        linkedBy,
+        confidence: wasLinked ? 90 : 100,
+        linkReason,
+      })
+      .returning();
+
+    if (!created) {
+      throw new Error('Failed to create identity');
+    }
+
+    let person: Person | null = null;
+    if (personId) {
+      person = await this.getById(personId);
+    }
+
+    return { identity: created, person, isNew: true, wasLinked };
+  }
+
+  /**
+   * Get identity by platform user ID
+   */
+  async getIdentityByPlatformId(
+    channel: ChannelType,
+    instanceId: string,
+    platformUserId: string,
+  ): Promise<PlatformIdentity | null> {
+    const [identity] = await this.db
+      .select()
+      .from(platformIdentities)
+      .where(
+        and(
+          eq(platformIdentities.channel, channel),
+          eq(platformIdentities.instanceId, instanceId),
+          eq(platformIdentities.platformUserId, platformUserId),
+        ),
+      )
+      .limit(1);
+
+    return identity || null;
   }
 
   /**
