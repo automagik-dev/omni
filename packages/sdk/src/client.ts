@@ -575,6 +575,119 @@ export interface AuthValidateResponse {
   scopes: string[];
 }
 
+// ============================================================================
+// Presence & Read Receipt Types (api-completeness)
+// ============================================================================
+
+/**
+ * Body for sending presence indicator
+ */
+export interface SendPresenceBody {
+  instanceId: string;
+  to: string;
+  type: 'typing' | 'recording' | 'paused';
+  duration?: number;
+}
+
+/**
+ * Response from sending presence
+ */
+export interface SendPresenceResult {
+  instanceId: string;
+  chatId: string;
+  type: string;
+  duration: number;
+}
+
+/**
+ * Body for marking a single message as read
+ */
+export interface MarkMessageReadBody {
+  instanceId: string;
+}
+
+/**
+ * Body for marking multiple messages as read
+ */
+export interface BatchMarkReadBody {
+  instanceId: string;
+  chatId: string;
+  messageIds: string[];
+}
+
+/**
+ * Body for marking entire chat as read
+ */
+export interface MarkChatReadBody {
+  instanceId: string;
+}
+
+/**
+ * Response from marking messages as read
+ */
+export interface MarkReadResult {
+  messageId?: string;
+  externalMessageId?: string;
+  chatId?: string;
+  instanceId?: string;
+  messageCount?: number;
+}
+
+/**
+ * Query parameters for listing contacts
+ */
+export interface ListContactsParams {
+  limit?: number;
+  cursor?: string;
+  guildId?: string; // Required for Discord
+}
+
+/**
+ * Query parameters for listing groups
+ */
+export interface ListGroupsParams {
+  limit?: number;
+  cursor?: string;
+}
+
+/**
+ * User profile from channel
+ */
+export interface UserProfile {
+  platformUserId: string;
+  displayName?: string;
+  avatarUrl?: string;
+  bio?: string;
+  phone?: string;
+  platformMetadata?: Record<string, unknown>;
+}
+
+/**
+ * Contact from channel
+ */
+export interface Contact {
+  platformUserId: string;
+  displayName?: string;
+  phone?: string;
+  avatarUrl?: string;
+  isGroup: boolean;
+  isBusiness?: boolean;
+  platformMetadata?: Record<string, unknown>;
+}
+
+/**
+ * Group from channel
+ */
+export interface Group {
+  externalId: string;
+  name?: string;
+  description?: string;
+  memberCount?: number;
+  createdAt?: string;
+  avatarUrl?: string;
+  platformMetadata?: Record<string, unknown>;
+}
+
 /**
  * Helper to throw API error from response
  */
@@ -836,6 +949,62 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!json?.data) throw new OmniApiError('Sync job not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
+
+      /**
+       * List contacts for an instance
+       */
+      async listContacts(
+        id: string,
+        params?: ListContactsParams,
+      ): Promise<{ items: Contact[]; meta: { totalFetched: number; hasMore: boolean; cursor?: string } }> {
+        const query = new URLSearchParams();
+        if (params?.limit) query.set('limit', String(params.limit));
+        if (params?.cursor) query.set('cursor', params.cursor);
+        if (params?.guildId) query.set('guildId', params.guildId);
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/contacts?${query}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as {
+          items?: Contact[];
+          meta?: { totalFetched: number; hasMore: boolean; cursor?: string };
+        };
+        return { items: json?.items ?? [], meta: json?.meta ?? { totalFetched: 0, hasMore: false } };
+      },
+
+      /**
+       * List groups for an instance
+       */
+      async listGroups(
+        id: string,
+        params?: ListGroupsParams,
+      ): Promise<{ items: Group[]; meta: { totalFetched: number; hasMore: boolean; cursor?: string } }> {
+        const query = new URLSearchParams();
+        if (params?.limit) query.set('limit', String(params.limit));
+        if (params?.cursor) query.set('cursor', params.cursor);
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/groups?${query}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as {
+          items?: Group[];
+          meta?: { totalFetched: number; hasMore: boolean; cursor?: string };
+        };
+        return { items: json?.items ?? [], meta: json?.meta ?? { totalFetched: 0, hasMore: false } };
+      },
+
+      /**
+       * Get user profile from channel
+       */
+      async getUserProfile(id: string, userId: string): Promise<UserProfile> {
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/users/${userId}/profile`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: UserProfile };
+        if (!json?.data) throw new OmniApiError('User profile not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
     },
 
     // ========================================================================
@@ -1005,6 +1174,20 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
       },
+
+      /**
+       * Mark entire chat as read
+       */
+      async markRead(id: string, body: MarkChatReadBody): Promise<MarkReadResult> {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/read`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: MarkReadResult };
+        return json?.data ?? { chatId: id, instanceId: body.instanceId };
+      },
     },
 
     // ========================================================================
@@ -1096,6 +1279,48 @@ export function createOmniClient(config: OmniClientConfig) {
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
         return json?.data ?? { messageId: '', status: 'sent' };
       },
+
+      /**
+       * Send presence indicator (typing, recording, etc.)
+       */
+      async sendPresence(body: SendPresenceBody): Promise<SendPresenceResult> {
+        const resp = await fetch(`${baseUrl}/api/v2/messages/send/presence`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: SendPresenceResult };
+        return json?.data ?? { instanceId: body.instanceId, chatId: body.to, type: body.type, duration: body.duration ?? 5000 };
+      },
+
+      /**
+       * Mark a single message as read
+       */
+      async markRead(messageId: string, body: MarkMessageReadBody): Promise<MarkReadResult> {
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/read`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: MarkReadResult };
+        return json?.data ?? { messageId };
+      },
+
+      /**
+       * Mark multiple messages as read in batch
+       */
+      async batchMarkRead(body: BatchMarkReadBody): Promise<MarkReadResult> {
+        const resp = await fetch(`${baseUrl}/api/v2/messages/read`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: MarkReadResult };
+        return json?.data ?? { chatId: body.chatId, instanceId: body.instanceId, messageCount: body.messageIds.length };
+      },
     },
 
     // ========================================================================
@@ -1138,6 +1363,43 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data?.items ?? [];
+      },
+
+      /**
+       * Get a person by ID
+       */
+      async get(id: string): Promise<Person> {
+        const { data, error, response } = await client.GET('/persons/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      /**
+       * Get person presence (all identities and activity summary)
+       */
+      async presence(id: string): Promise<{
+        person: Person;
+        identities: Array<Record<string, unknown>>;
+        summary: Record<string, unknown>;
+        byChannel: Record<string, unknown>;
+      }> {
+        const resp = await fetch(`${baseUrl}/api/v2/persons/${id}/presence`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as {
+          data?: {
+            person: Person;
+            identities: Array<Record<string, unknown>>;
+            summary: Record<string, unknown>;
+            byChannel: Record<string, unknown>;
+          };
+        };
+        if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
       },
     },
 

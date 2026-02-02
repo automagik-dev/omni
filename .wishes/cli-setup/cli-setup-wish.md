@@ -2,10 +2,11 @@
 
 > LLM-optimized command-line interface for managing Omni instances and sending messages.
 
-**Status:** DRAFT
+**Status:** IN_PROGRESS
 **Created:** 2026-01-29
-**Updated:** 2026-02-02 (complete SDK parity - Phase 1)
+**Updated:** 2026-02-02 (SDK methods for presence, read receipts, contacts, groups, profiles)
 **Author:** WISH Agent
+**Beads:** omni-v2-clg
 
 ---
 

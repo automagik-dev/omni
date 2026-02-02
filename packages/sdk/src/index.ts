@@ -108,6 +108,18 @@ export type {
   // Instance types
   ConnectInstanceBody,
   RequestPairingCodeBody,
+  ListContactsParams,
+  ListGroupsParams,
+  Contact,
+  Group,
+  UserProfile,
+  // Presence & Read types
+  SendPresenceBody,
+  SendPresenceResult,
+  MarkMessageReadBody,
+  BatchMarkReadBody,
+  MarkChatReadBody,
+  MarkReadResult,
 } from './client';
 
 // Errors
