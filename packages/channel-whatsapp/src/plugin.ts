@@ -598,10 +598,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Mark messages as read
+   *
+   * @param instanceId - Instance ID
+   * @param chatId - Chat ID (JID or phone number)
+   * @param messageIds - Array of message IDs, or ['all'] to mark entire chat as read
    */
   async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
+
+    // Handle 'all' marker - marks entire chat as read
+    if (messageIds.length === 1 && messageIds[0] === 'all') {
+      await this.markChatAsRead(instanceId, chatId);
+      return;
+    }
 
     const keys = messageIds.map((id) => ({
       remoteJid: jid,
@@ -610,6 +620,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }));
 
     await sock.readMessages(keys);
+  }
+
+  /**
+   * Mark entire chat as read
+   *
+   * Uses presence update to mark all unread messages in the chat as read.
+   *
+   * @param instanceId - Instance ID
+   * @param chatId - Chat ID (JID or phone number)
+   */
+  async markChatAsRead(instanceId: string, chatId: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+
+    // Send presence update and read all messages
+    await sock.sendPresenceUpdate('available', jid);
+    await sock.readMessages([{ remoteJid: jid, id: 'all', fromMe: false }]);
   }
 
   /**

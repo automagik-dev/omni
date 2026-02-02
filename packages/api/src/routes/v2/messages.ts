@@ -1282,9 +1282,11 @@ messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), as
 
   // If recording type and plugin is discord, still use sendTyping (Discord only supports typing)
   // WhatsApp plugin handles all three types internally
-  await (
-    plugin as { sendTyping: (instanceId: string, chatId: string, duration?: number) => Promise<void> }
-  ).sendTyping(instanceId, resolvedTo, effectiveDuration);
+  await (plugin as { sendTyping: (instanceId: string, chatId: string, duration?: number) => Promise<void> }).sendTyping(
+    instanceId,
+    resolvedTo,
+    effectiveDuration,
+  );
 
   return c.json({
     success: true,
@@ -1333,7 +1335,7 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   if (chat.instanceId !== instanceId) {
     throw new OmniError({
       code: ERROR_CODES.VALIDATION,
-      message: 'Instance ID does not match the message\'s instance',
+      message: "Instance ID does not match the message's instance",
       context: { instanceId, messageInstanceId: chat.instanceId },
       recoverable: false,
     });
@@ -1407,7 +1409,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
     if (chat.instanceId !== instanceId) {
       throw new OmniError({
         code: ERROR_CODES.VALIDATION,
-        message: 'Instance ID does not match the chat\'s instance',
+        message: "Instance ID does not match the chat's instance",
         context: { instanceId, chatInstanceId: chat.instanceId },
         recoverable: false,
       });

@@ -168,6 +168,120 @@ export interface ChannelPlugin {
    */
   sendTyping?(instanceId: string, chatId: string, duration?: number): Promise<void>;
 
+  /**
+   * Mark messages as read
+   *
+   * Optional - only implement if canReceiveReadReceipts capability is true.
+   * Sends read receipts for the specified messages.
+   *
+   * @param instanceId - Instance to mark messages read for
+   * @param chatId - Chat ID containing the messages
+   * @param messageIds - Array of message IDs to mark as read, or ['all'] to mark entire chat
+   */
+  markAsRead?(instanceId: string, chatId: string, messageIds: string[]): Promise<void>;
+
+  /**
+   * Mark entire chat as read
+   *
+   * Optional - convenience method to mark all messages in a chat as read.
+   * If not implemented, markAsRead with ['all'] will be used.
+   *
+   * @param instanceId - Instance to mark chat read for
+   * @param chatId - Chat ID to mark as read
+   */
+  markChatAsRead?(instanceId: string, chatId: string): Promise<void>;
+
+  // ─────────────────────────────────────────────────────────────
+  // Profile & Contacts (Optional)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Get the profile of the connected account
+   *
+   * Optional - implement to support profile sync.
+   *
+   * @param instanceId - Instance to get profile for
+   * @returns Profile information
+   */
+  getProfile?(instanceId: string): Promise<{
+    name?: string;
+    avatarUrl?: string;
+    bio?: string;
+    ownerIdentifier?: string;
+    platformMetadata: Record<string, unknown>;
+  }>;
+
+  /**
+   * Fetch profile for a specific user
+   *
+   * Optional - implement to support user profile lookup.
+   *
+   * @param instanceId - Instance to use
+   * @param userId - User ID (platform-specific format)
+   * @returns User profile data
+   */
+  fetchUserProfile?(
+    instanceId: string,
+    userId: string,
+  ): Promise<{
+    displayName?: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+    platformData?: Record<string, unknown>;
+  }>;
+
+  /**
+   * Fetch contacts for an instance
+   *
+   * Optional - implement to support contacts listing.
+   *
+   * @param instanceId - Instance to fetch contacts for
+   * @param options - Platform-specific options (e.g., guildId for Discord)
+   * @returns Contacts list with metadata
+   */
+  fetchContacts?(
+    instanceId: string,
+    options: Record<string, unknown>,
+  ): Promise<{
+    totalFetched: number;
+    contacts: Array<{
+      platformUserId: string;
+      name?: string;
+      phone?: string;
+      profilePicUrl?: string;
+      isGroup: boolean;
+      isBusiness?: boolean;
+      metadata?: Record<string, unknown>;
+    }>;
+  }>;
+
+  /**
+   * Fetch groups for an instance
+   *
+   * Optional - implement to support groups listing.
+   *
+   * @param instanceId - Instance to fetch groups for
+   * @param options - Platform-specific options
+   * @returns Groups list with metadata
+   */
+  fetchGroups?(
+    instanceId: string,
+    options: Record<string, unknown>,
+  ): Promise<{
+    totalFetched: number;
+    groups: Array<{
+      externalId: string;
+      name?: string;
+      description?: string;
+      memberCount?: number;
+      createdAt?: Date;
+      createdBy?: string;
+      isReadOnly?: boolean;
+      metadata?: Record<string, unknown>;
+    }>;
+  }>;
+
   // ─────────────────────────────────────────────────────────────
   // Health
   // ─────────────────────────────────────────────────────────────

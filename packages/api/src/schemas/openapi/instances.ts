@@ -99,6 +99,45 @@ export const ConnectResponseSchema = z.object({
 });
 
 /**
+ * User profile response schema
+ */
+export const UserProfileSchema = z.object({
+  platformUserId: z.string().openapi({ description: 'Platform user ID' }),
+  displayName: z.string().optional().openapi({ description: 'Display name' }),
+  avatarUrl: z.string().optional().openapi({ description: 'Avatar URL' }),
+  bio: z.string().optional().openapi({ description: 'Bio/status' }),
+  phone: z.string().optional().openapi({ description: 'Phone number' }),
+  platformMetadata: z.record(z.unknown()).optional().openapi({ description: 'Platform-specific data' }),
+});
+
+/**
+ * Contact response schema
+ */
+export const ContactSchema = z.object({
+  platformUserId: z.string().openapi({ description: 'Platform user ID' }),
+  displayName: z.string().optional().openapi({ description: 'Display name' }),
+  phone: z.string().optional().openapi({ description: 'Phone number' }),
+  avatarUrl: z.string().optional().openapi({ description: 'Avatar URL' }),
+  isGroup: z.boolean().openapi({ description: 'Whether this is a group' }),
+  isBusiness: z.boolean().optional().openapi({ description: 'Whether this is a business account' }),
+  platformMetadata: z.record(z.unknown()).optional().openapi({ description: 'Platform-specific metadata' }),
+});
+
+/**
+ * Group response schema
+ */
+export const GroupSchema = z.object({
+  externalId: z.string().openapi({ description: 'External group ID' }),
+  name: z.string().optional().openapi({ description: 'Group name' }),
+  description: z.string().optional().openapi({ description: 'Group description' }),
+  memberCount: z.number().optional().openapi({ description: 'Number of members' }),
+  createdAt: z.string().datetime().optional().openapi({ description: 'Creation timestamp' }),
+  createdBy: z.string().optional().openapi({ description: 'Creator ID' }),
+  isReadOnly: z.boolean().optional().openapi({ description: 'Whether group is read-only' }),
+  platformMetadata: z.record(z.unknown()).optional().openapi({ description: 'Platform-specific metadata' }),
+});
+
+/**
  * Supported channel schema
  */
 export const SupportedChannelSchema = z.object({
@@ -123,6 +162,9 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.register('ConnectInstanceRequest', ConnectInstanceSchema);
   registry.register('ConnectResponse', ConnectResponseSchema);
   registry.register('SupportedChannel', SupportedChannelSchema);
+  registry.register('UserProfile', UserProfileSchema);
+  registry.register('Contact', ContactSchema);
+  registry.register('Group', GroupSchema);
 
   // Register paths
   registry.registerPath({
@@ -531,6 +573,110 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           'application/json': { schema: ErrorSchema },
         },
       },
+    },
+  });
+
+  // Profile & Contacts endpoints
+  registry.registerPath({
+    method: 'get',
+    path: '/instances/{id}/users/{userId}/profile',
+    tags: ['Instances', 'Profiles'],
+    summary: 'Fetch user profile',
+    description: 'Fetch profile information for a specific user on this channel.',
+    request: {
+      params: z.object({
+        id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+        userId: z.string().openapi({ description: 'User ID (platform-specific format)' }),
+      }),
+    },
+    responses: {
+      200: {
+        description: 'User profile',
+        content: {
+          'application/json': { schema: z.object({ data: UserProfileSchema }) },
+        },
+      },
+      400: { description: 'Not supported', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+      500: { description: 'Profile fetch failed', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: '/instances/{id}/contacts',
+    tags: ['Instances', 'Contacts'],
+    summary: 'List contacts',
+    description: 'List contacts for an instance. For Discord, requires guildId query parameter.',
+    request: {
+      params: z.object({
+        id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+      }),
+      query: z.object({
+        limit: z.number().int().min(1).max(1000).default(100).openapi({ description: 'Maximum items to return' }),
+        cursor: z.string().optional().openapi({ description: 'Pagination cursor' }),
+        guildId: z.string().optional().openapi({ description: 'Guild ID (required for Discord)' }),
+      }),
+    },
+    responses: {
+      200: {
+        description: 'Contacts list',
+        content: {
+          'application/json': {
+            schema: z.object({
+              items: z.array(ContactSchema),
+              meta: z.object({
+                totalFetched: z.number(),
+                hasMore: z.boolean(),
+                cursor: z.string().optional(),
+              }),
+            }),
+          },
+        },
+      },
+      400: {
+        description: 'Not supported or missing guildId',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+      500: { description: 'Contacts fetch failed', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: '/instances/{id}/groups',
+    tags: ['Instances', 'Groups'],
+    summary: 'List groups',
+    description: 'List groups the instance is participating in.',
+    request: {
+      params: z.object({
+        id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+      }),
+      query: z.object({
+        limit: z.number().int().min(1).max(1000).default(100).openapi({ description: 'Maximum items to return' }),
+        cursor: z.string().optional().openapi({ description: 'Pagination cursor' }),
+      }),
+    },
+    responses: {
+      200: {
+        description: 'Groups list',
+        content: {
+          'application/json': {
+            schema: z.object({
+              items: z.array(GroupSchema),
+              meta: z.object({
+                totalFetched: z.number(),
+                hasMore: z.boolean(),
+                cursor: z.string().optional(),
+              }),
+            }),
+          },
+        },
+      },
+      400: { description: 'Not supported', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+      500: { description: 'Groups fetch failed', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 }

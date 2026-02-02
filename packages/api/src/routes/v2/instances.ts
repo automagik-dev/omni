@@ -787,4 +787,254 @@ instancesRoutes.get('/:id/sync', async (c) => {
   });
 });
 
+// ============================================================================
+// PROFILE & CONTACTS ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /instances/:id/users/:userId/profile - Fetch user profile
+ *
+ * Fetches profile information for a specific user on this channel.
+ * Useful for getting profile pics, bios, business info etc.
+ */
+instancesRoutes.get('/:id/users/:userId/profile', async (c) => {
+  const id = c.req.param('id');
+  const userId = c.req.param('userId');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  // Check if plugin supports user profile fetching
+  if (!('fetchUserProfile' in plugin) || typeof plugin.fetchUserProfile !== 'function') {
+    return c.json(
+      {
+        error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support user profile fetching` },
+      },
+      400,
+    );
+  }
+
+  try {
+    type ProfileResult = {
+      displayName?: string;
+      avatarUrl?: string;
+      bio?: string;
+      phone?: string;
+      platformData?: Record<string, unknown>;
+    };
+
+    const profile = await (
+      plugin as { fetchUserProfile: (instanceId: string, userId: string) => Promise<ProfileResult> }
+    ).fetchUserProfile(id, userId);
+
+    return c.json({
+      data: {
+        platformUserId: userId,
+        displayName: profile.displayName,
+        avatarUrl: profile.avatarUrl,
+        bio: profile.bio,
+        phone: profile.phone,
+        platformMetadata: profile.platformData,
+      },
+    });
+  } catch (error) {
+    const message = `Failed to fetch user profile: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'PROFILE_FETCH_FAILED', message } }, 500);
+  }
+});
+
+// List contacts query schema
+const listContactsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  cursor: z.string().optional(),
+  guildId: z.string().optional().describe('Guild ID (required for Discord)'),
+});
+
+/**
+ * GET /instances/:id/contacts - List contacts for an instance
+ *
+ * Returns cached contacts from the channel plugin.
+ * For Discord, requires guildId query parameter.
+ */
+instancesRoutes.get('/:id/contacts', zValidator('query', listContactsQuerySchema), async (c) => {
+  const id = c.req.param('id');
+  const { limit, guildId } = c.req.valid('query');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  // Check if plugin supports contacts fetching
+  if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support contacts fetching` } },
+      400,
+    );
+  }
+
+  try {
+    type Contact = {
+      platformUserId: string;
+      name?: string;
+      phone?: string;
+      profilePicUrl?: string;
+      isGroup: boolean;
+      isBusiness?: boolean;
+      metadata?: Record<string, unknown>;
+    };
+
+    type FetchContactsResult = {
+      totalFetched: number;
+      contacts: Contact[];
+    };
+
+    // Build options based on channel type
+    const fetchOptions: Record<string, unknown> = {};
+    if (instance.channel === 'discord') {
+      if (!guildId) {
+        return c.json(
+          { error: { code: 'VALIDATION_ERROR', message: 'guildId is required for Discord instances' } },
+          400,
+        );
+      }
+      fetchOptions.guildId = guildId;
+      fetchOptions.limit = limit;
+    }
+
+    const result = await (
+      plugin as {
+        fetchContacts: (instanceId: string, options: Record<string, unknown>) => Promise<FetchContactsResult>;
+      }
+    ).fetchContacts(id, fetchOptions);
+
+    // Apply limit for non-Discord (WhatsApp returns all cached contacts)
+    const contacts = result.contacts.slice(0, limit);
+
+    return c.json({
+      items: contacts.map((contact) => ({
+        platformUserId: contact.platformUserId,
+        displayName: contact.name,
+        phone: contact.phone,
+        avatarUrl: contact.profilePicUrl,
+        isGroup: contact.isGroup,
+        isBusiness: contact.isBusiness,
+        platformMetadata: contact.metadata,
+      })),
+      meta: {
+        totalFetched: result.totalFetched,
+        hasMore: contacts.length < result.contacts.length,
+        cursor: undefined, // TODO: implement pagination cursor
+      },
+    });
+  } catch (error) {
+    const message = `Failed to fetch contacts: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'CONTACTS_FETCH_FAILED', message } }, 500);
+  }
+});
+
+// List groups query schema
+const listGroupsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  cursor: z.string().optional(),
+});
+
+/**
+ * GET /instances/:id/groups - List groups for an instance
+ *
+ * Returns groups the instance is participating in.
+ */
+instancesRoutes.get('/:id/groups', zValidator('query', listGroupsQuerySchema), async (c) => {
+  const id = c.req.param('id');
+  const { limit } = c.req.valid('query');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  // Check if plugin supports groups fetching
+  if (!('fetchGroups' in plugin) || typeof plugin.fetchGroups !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support groups fetching` } },
+      400,
+    );
+  }
+
+  try {
+    type Group = {
+      externalId: string;
+      name?: string;
+      description?: string;
+      memberCount?: number;
+      createdAt?: Date;
+      createdBy?: string;
+      isReadOnly?: boolean;
+      metadata?: Record<string, unknown>;
+    };
+
+    type FetchGroupsResult = {
+      totalFetched: number;
+      groups: Group[];
+    };
+
+    const result = await (
+      plugin as { fetchGroups: (instanceId: string, options: Record<string, unknown>) => Promise<FetchGroupsResult> }
+    ).fetchGroups(id, {});
+
+    // Apply limit
+    const groups = result.groups.slice(0, limit);
+
+    return c.json({
+      items: groups.map((group) => ({
+        externalId: group.externalId,
+        name: group.name,
+        description: group.description,
+        memberCount: group.memberCount,
+        createdAt: group.createdAt?.toISOString(),
+        createdBy: group.createdBy,
+        isReadOnly: group.isReadOnly,
+        platformMetadata: group.metadata,
+      })),
+      meta: {
+        totalFetched: result.totalFetched,
+        hasMore: groups.length < result.groups.length,
+        cursor: undefined, // TODO: implement pagination cursor
+      },
+    });
+  } catch (error) {
+    const message = `Failed to fetch groups: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'GROUPS_FETCH_FAILED', message } }, 500);
+  }
+});
+
 export { instancesRoutes };

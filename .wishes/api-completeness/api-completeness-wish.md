@@ -2,7 +2,7 @@
 
 > Expose all channel plugin capabilities through the unified API and SDK.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-02-02
 **Author:** WISH Agent
 **Beads:** omni-cju

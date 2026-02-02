@@ -1542,6 +1542,396 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{id}/users/{userId}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch user profile
+         * @description Fetch profile information for a specific user on this channel.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    userId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description User profile */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Platform user ID */
+                                platformUserId: string;
+                                /** @description Display name */
+                                displayName?: string;
+                                /** @description Avatar URL */
+                                avatarUrl?: string;
+                                /** @description Bio/status */
+                                bio?: string;
+                                /** @description Phone number */
+                                phone?: string;
+                                /** @description Platform-specific data */
+                                platformMetadata?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Profile fetch failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/contacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List contacts
+         * @description List contacts for an instance. For Discord, requires guildId query parameter.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                    guildId?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Contacts list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description Platform user ID */
+                                platformUserId: string;
+                                /** @description Display name */
+                                displayName?: string;
+                                /** @description Phone number */
+                                phone?: string;
+                                /** @description Avatar URL */
+                                avatarUrl?: string;
+                                /** @description Whether this is a group */
+                                isGroup: boolean;
+                                /** @description Whether this is a business account */
+                                isBusiness?: boolean;
+                                /** @description Platform-specific metadata */
+                                platformMetadata?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            meta: {
+                                totalFetched: number;
+                                hasMore: boolean;
+                                cursor?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not supported or missing guildId */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Contacts fetch failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List groups
+         * @description List groups the instance is participating in.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Groups list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description External group ID */
+                                externalId: string;
+                                /** @description Group name */
+                                name?: string;
+                                /** @description Group description */
+                                description?: string;
+                                /** @description Number of members */
+                                memberCount?: number;
+                                /**
+                                 * Format: date-time
+                                 * @description Creation timestamp
+                                 */
+                                createdAt?: string;
+                                /** @description Creator ID */
+                                createdBy?: string;
+                                /** @description Whether group is read-only */
+                                isReadOnly?: boolean;
+                                /** @description Platform-specific metadata */
+                                platformMetadata?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            meta: {
+                                totalFetched: number;
+                                hasMore: boolean;
+                                cursor?: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Groups fetch failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/messages": {
         parameters: {
             query?: never;
@@ -2221,6 +2611,456 @@ export interface paths {
                     };
                 };
                 /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/send/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send presence indicator
+         * @description Send typing/recording indicator in a chat. Auto-pauses after duration. WhatsApp supports typing, recording, paused. Discord only supports typing.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID to send from
+                         */
+                        instanceId: string;
+                        /** @description Chat ID to show presence in */
+                        to: string;
+                        /**
+                         * @description Presence type
+                         * @enum {string}
+                         */
+                        type: "typing" | "recording" | "paused";
+                        /**
+                         * @description Duration in ms before auto-pause (default 5000, 0 = until paused)
+                         * @default 5000
+                         */
+                        duration?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Presence sent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Instance ID
+                                 */
+                                instanceId: string;
+                                /** @description Chat ID where presence was sent */
+                                chatId: string;
+                                /** @description Presence type sent */
+                                type: string;
+                                /** @description Duration in ms */
+                                duration: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error or capability not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark message as read
+         * @description Send read receipt for a specific message. WhatsApp only.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Message marked as read */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            data: {
+                                /** @description Internal message ID (if single message) */
+                                messageId?: string;
+                                /** @description External message ID */
+                                externalMessageId?: string;
+                                /** @description Chat ID */
+                                chatId?: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance ID
+                                 */
+                                instanceId?: string;
+                                /** @description Number of messages marked (batch only) */
+                                messageCount?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error or capability not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Message not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark multiple messages as read
+         * @description Send read receipts for multiple messages in a single chat. WhatsApp only.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                        /** @description Chat ID containing the messages */
+                        chatId: string;
+                        /** @description Message IDs to mark as read */
+                        messageIds: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Messages marked as read */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            data: {
+                                /** @description Internal message ID (if single message) */
+                                messageId?: string;
+                                /** @description External message ID */
+                                externalMessageId?: string;
+                                /** @description Chat ID */
+                                chatId?: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance ID
+                                 */
+                                instanceId?: string;
+                                /** @description Number of messages marked (batch only) */
+                                messageCount?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error or capability not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Instance or chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark entire chat as read
+         * @description Mark all unread messages in a chat as read. WhatsApp only.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID
+                         */
+                        instanceId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Chat marked as read */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            data: {
+                                /** @description Internal message ID (if single message) */
+                                messageId?: string;
+                                /** @description External message ID */
+                                externalMessageId?: string;
+                                /** @description Chat ID */
+                                chatId?: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance ID
+                                 */
+                                instanceId?: string;
+                                /** @description Number of messages marked (batch only) */
+                                messageCount?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Validation error or capability not supported */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description Chat not found */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -9262,6 +10102,63 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        UserProfile: {
+            /** @description Platform user ID */
+            platformUserId: string;
+            /** @description Display name */
+            displayName?: string;
+            /** @description Avatar URL */
+            avatarUrl?: string;
+            /** @description Bio/status */
+            bio?: string;
+            /** @description Phone number */
+            phone?: string;
+            /** @description Platform-specific data */
+            platformMetadata?: {
+                [key: string]: unknown;
+            };
+        };
+        Contact: {
+            /** @description Platform user ID */
+            platformUserId: string;
+            /** @description Display name */
+            displayName?: string;
+            /** @description Phone number */
+            phone?: string;
+            /** @description Avatar URL */
+            avatarUrl?: string;
+            /** @description Whether this is a group */
+            isGroup: boolean;
+            /** @description Whether this is a business account */
+            isBusiness?: boolean;
+            /** @description Platform-specific metadata */
+            platformMetadata?: {
+                [key: string]: unknown;
+            };
+        };
+        Group: {
+            /** @description External group ID */
+            externalId: string;
+            /** @description Group name */
+            name?: string;
+            /** @description Group description */
+            description?: string;
+            /** @description Number of members */
+            memberCount?: number;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt?: string;
+            /** @description Creator ID */
+            createdBy?: string;
+            /** @description Whether group is read-only */
+            isReadOnly?: boolean;
+            /** @description Platform-specific metadata */
+            platformMetadata?: {
+                [key: string]: unknown;
+            };
+        };
         MessageResponse: {
             /** @description Internal message ID */
             messageId: string;
@@ -9386,6 +10283,78 @@ export interface components {
             name?: string;
             /** @description Address */
             address?: string;
+        };
+        SendPresenceRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID to send from
+             */
+            instanceId: string;
+            /** @description Chat ID to show presence in */
+            to: string;
+            /**
+             * @description Presence type
+             * @enum {string}
+             */
+            type: "typing" | "recording" | "paused";
+            /**
+             * @description Duration in ms before auto-pause (default 5000, 0 = until paused)
+             * @default 5000
+             */
+            duration: number;
+        };
+        PresenceResponse: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Chat ID where presence was sent */
+            chatId: string;
+            /** @description Presence type sent */
+            type: string;
+            /** @description Duration in ms */
+            duration: number;
+        };
+        MarkMessageReadRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+        };
+        MarkBatchReadRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+            /** @description Chat ID containing the messages */
+            chatId: string;
+            /** @description Message IDs to mark as read */
+            messageIds: string[];
+        };
+        MarkChatReadRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId: string;
+        };
+        ReadReceiptResponse: {
+            /** @description Internal message ID (if single message) */
+            messageId?: string;
+            /** @description External message ID */
+            externalMessageId?: string;
+            /** @description Chat ID */
+            chatId?: string;
+            /**
+             * Format: uuid
+             * @description Instance ID
+             */
+            instanceId?: string;
+            /** @description Number of messages marked (batch only) */
+            messageCount?: number;
         };
         Event: {
             /**

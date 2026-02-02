@@ -74,6 +74,55 @@ export const SendLocationSchema = z.object({
   address: z.string().optional().openapi({ description: 'Address' }),
 });
 
+// Send presence request
+export const SendPresenceSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID to send from' }),
+  to: z.string().min(1).openapi({ description: 'Chat ID to show presence in' }),
+  type: z.enum(['typing', 'recording', 'paused']).openapi({ description: 'Presence type' }),
+  duration: z
+    .number()
+    .int()
+    .min(0)
+    .max(30000)
+    .optional()
+    .default(5000)
+    .openapi({ description: 'Duration in ms before auto-pause (default 5000, 0 = until paused)' }),
+});
+
+// Presence response
+export const PresenceResponseSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID' }),
+  chatId: z.string().openapi({ description: 'Chat ID where presence was sent' }),
+  type: z.string().openapi({ description: 'Presence type sent' }),
+  duration: z.number().openapi({ description: 'Duration in ms' }),
+});
+
+// Mark message read request
+export const MarkMessageReadSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID' }),
+});
+
+// Mark batch read request
+export const MarkBatchReadSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID' }),
+  chatId: z.string().min(1).openapi({ description: 'Chat ID containing the messages' }),
+  messageIds: z.array(z.string().min(1)).min(1).max(100).openapi({ description: 'Message IDs to mark as read' }),
+});
+
+// Mark chat read request
+export const MarkChatReadSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID' }),
+});
+
+// Read receipt response
+export const ReadReceiptResponseSchema = z.object({
+  messageId: z.string().optional().openapi({ description: 'Internal message ID (if single message)' }),
+  externalMessageId: z.string().optional().openapi({ description: 'External message ID' }),
+  chatId: z.string().optional().openapi({ description: 'Chat ID' }),
+  instanceId: z.string().uuid().optional().openapi({ description: 'Instance ID' }),
+  messageCount: z.number().optional().openapi({ description: 'Number of messages marked (batch only)' }),
+});
+
 export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.register('MessageResponse', MessageResponseSchema);
   registry.register('SendTextRequest', SendTextSchema);
@@ -82,6 +131,12 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.register('SendStickerRequest', SendStickerSchema);
   registry.register('SendContactRequest', SendContactSchema);
   registry.register('SendLocationRequest', SendLocationSchema);
+  registry.register('SendPresenceRequest', SendPresenceSchema);
+  registry.register('PresenceResponse', PresenceResponseSchema);
+  registry.register('MarkMessageReadRequest', MarkMessageReadSchema);
+  registry.register('MarkBatchReadRequest', MarkBatchReadSchema);
+  registry.register('MarkChatReadRequest', MarkChatReadSchema);
+  registry.register('ReadReceiptResponse', ReadReceiptResponseSchema);
 
   registry.registerPath({
     method: 'post',
@@ -179,6 +234,103 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  // Presence endpoint
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/send/presence',
+    tags: ['Messages', 'Presence'],
+    summary: 'Send presence indicator',
+    description:
+      'Send typing/recording indicator in a chat. Auto-pauses after duration. WhatsApp supports typing, recording, paused. Discord only supports typing.',
+    request: { body: { content: { 'application/json': { schema: SendPresenceSchema } } } },
+    responses: {
+      200: {
+        description: 'Presence sent',
+        content: { 'application/json': { schema: z.object({ success: z.boolean(), data: PresenceResponseSchema }) } },
+      },
+      400: {
+        description: 'Validation error or capability not supported',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  // Mark single message as read
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/{id}/read',
+    tags: ['Messages', 'Read Receipts'],
+    summary: 'Mark message as read',
+    description: 'Send read receipt for a specific message. WhatsApp only.',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Message ID' }) }),
+      body: { content: { 'application/json': { schema: MarkMessageReadSchema } } },
+    },
+    responses: {
+      200: {
+        description: 'Message marked as read',
+        content: {
+          'application/json': { schema: z.object({ success: z.boolean(), data: ReadReceiptResponseSchema }) },
+        },
+      },
+      400: {
+        description: 'Validation error or capability not supported',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Message not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  // Mark batch messages as read
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/read',
+    tags: ['Messages', 'Read Receipts'],
+    summary: 'Mark multiple messages as read',
+    description: 'Send read receipts for multiple messages in a single chat. WhatsApp only.',
+    request: { body: { content: { 'application/json': { schema: MarkBatchReadSchema } } } },
+    responses: {
+      200: {
+        description: 'Messages marked as read',
+        content: {
+          'application/json': { schema: z.object({ success: z.boolean(), data: ReadReceiptResponseSchema }) },
+        },
+      },
+      400: {
+        description: 'Validation error or capability not supported',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Instance or chat not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  // Mark chat as read
+  registry.registerPath({
+    method: 'post',
+    path: '/chats/{id}/read',
+    tags: ['Chats', 'Read Receipts'],
+    summary: 'Mark entire chat as read',
+    description: 'Mark all unread messages in a chat as read. WhatsApp only.',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Chat ID' }) }),
+      body: { content: { 'application/json': { schema: MarkChatReadSchema } } },
+    },
+    responses: {
+      200: {
+        description: 'Chat marked as read',
+        content: {
+          'application/json': { schema: z.object({ success: z.boolean(), data: ReadReceiptResponseSchema }) },
+        },
+      },
+      400: {
+        description: 'Validation error or capability not supported',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Chat not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 }

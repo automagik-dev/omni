@@ -5,12 +5,56 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { ChannelTypeSchema } from '@omni/core';
+import type { ChannelRegistry } from '@omni/channel-sdk';
+import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
+import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import type { Services } from '../../services';
 import type { AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Get validated plugin for an instance with capability check
+ */
+async function getPluginForInstance(
+  services: Services,
+  channelRegistry: ChannelRegistry | null | undefined,
+  instanceId: string,
+  requiredCapability?: 'canReceiveReadReceipts',
+) {
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  if (requiredCapability && !plugin.capabilities[requiredCapability]) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support read receipts`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  return { instance, plugin };
+}
 
 // Chat type schema
 const ChatTypeSchema = z.enum([
@@ -272,6 +316,76 @@ chatsRoutes.get('/by-external', async (c) => {
   }
 
   return c.json({ data: chat });
+});
+
+// Mark chat as read schema
+const markChatReadSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+});
+
+/**
+ * POST /chats/:id/read - Mark entire chat as read
+ *
+ * Sends read receipt for all unread messages in the chat.
+ * This is a convenience endpoint that marks the entire chat as read at once.
+ *
+ * Note: For WhatsApp, this uses presence update to mark all messages read.
+ * For channels that don't support this, returns an error.
+ */
+chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) => {
+  const chatId = c.req.param('id');
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Get chat from our database
+  const chat = await services.chats.getById(chatId);
+
+  // Verify instance matches
+  if (chat.instanceId !== instanceId) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: "Instance ID does not match the chat's instance",
+      context: { instanceId, chatInstanceId: chat.instanceId },
+      recoverable: false,
+    });
+  }
+
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    channelRegistry,
+    instanceId,
+    'canReceiveReadReceipts',
+  );
+
+  // Check if plugin has markChatAsRead method (preferred) or markAsRead
+  if ('markChatAsRead' in plugin && typeof plugin.markChatAsRead === 'function') {
+    await (plugin as { markChatAsRead: (instanceId: string, chatId: string) => Promise<void> }).markChatAsRead(
+      instanceId,
+      chat.externalId,
+    );
+  } else if ('markAsRead' in plugin && typeof plugin.markAsRead === 'function') {
+    // Fall back to markAsRead with 'all' marker (WhatsApp style)
+    await (
+      plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
+    ).markAsRead(instanceId, chat.externalId, ['all']);
+  } else {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement markAsRead or markChatAsRead`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      chatId,
+      externalChatId: chat.externalId,
+      instanceId,
+    },
+  });
 });
 
 export { chatsRoutes };
