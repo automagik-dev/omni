@@ -40,6 +40,16 @@ await omni.messages.send({
 
 ## API Reference
 
+### Authentication
+
+```typescript
+// Validate the current API key
+const auth = await omni.auth.validate();
+console.log(auth.valid);     // true
+console.log(auth.keyName);   // 'primary' or custom name
+console.log(auth.scopes);    // ['*'] or specific scopes
+```
+
 ### Instances
 
 ```typescript
@@ -67,17 +77,144 @@ await omni.instances.update('uuid', { name: 'New Name' });
 
 // Delete an instance
 await omni.instances.delete('uuid');
+
+// Get instance status
+const status = await omni.instances.status('uuid');
+console.log(status.state, status.isConnected);
+
+// Get QR code (WhatsApp)
+const qr = await omni.instances.qr('uuid');
+console.log(qr.qr); // Base64 QR image
+
+// Connect/disconnect/restart
+await omni.instances.connect('uuid');
+await omni.instances.disconnect('uuid');
+await omni.instances.restart('uuid', true /* forceNewQr */);
+
+// Request pairing code (WhatsApp)
+const pair = await omni.instances.pair('uuid', { phoneNumber: '+1234567890' });
+console.log(pair.code);
+
+// Logout (clear session)
+await omni.instances.logout('uuid');
+```
+
+### Chats
+
+```typescript
+// List chats
+const { items, meta } = await omni.chats.list({
+  instanceId: 'uuid',
+  channel: 'whatsapp-baileys',
+  chatType: 'dm',
+  search: 'john',
+  includeArchived: false,
+  limit: 50,
+});
+
+// Get a chat
+const chat = await omni.chats.get('chat-uuid');
+
+// Create a chat
+const chat = await omni.chats.create({
+  instanceId: 'uuid',
+  externalId: 'external-chat-id',
+  chatType: 'dm',
+  channel: 'whatsapp-baileys',
+  name: 'Chat Name',
+});
+
+// Update a chat
+await omni.chats.update('chat-uuid', { name: 'New Name' });
+
+// Archive/unarchive
+await omni.chats.archive('chat-uuid');
+await omni.chats.unarchive('chat-uuid');
+
+// Get messages
+const messages = await omni.chats.getMessages('chat-uuid', {
+  limit: 50,
+  before: 'cursor',
+});
+
+// Participants
+const participants = await omni.chats.listParticipants('chat-uuid');
+await omni.chats.addParticipant('chat-uuid', { platformUserId: '123' });
+await omni.chats.removeParticipant('chat-uuid', '123');
+
+// Delete a chat
+await omni.chats.delete('chat-uuid');
 ```
 
 ### Messages
 
 ```typescript
 // Send a text message
-await omni.messages.send({
+const result = await omni.messages.send({
   instanceId: 'instance-uuid',
   to: '1234567890',
   text: 'Hello!',
-  replyTo: 'optional-message-id', // for replies
+  replyTo: 'optional-message-id',
+});
+console.log(result.messageId);
+
+// Send media
+await omni.messages.sendMedia({
+  instanceId: 'uuid',
+  to: '1234567890',
+  type: 'image', // 'image' | 'audio' | 'video' | 'document'
+  url: 'https://example.com/image.jpg',
+  caption: 'Check this out!',
+});
+
+// Send reaction
+await omni.messages.sendReaction({
+  instanceId: 'uuid',
+  to: '1234567890',
+  messageId: 'msg-id',
+  emoji: '👍',
+});
+
+// Send sticker
+await omni.messages.sendSticker({
+  instanceId: 'uuid',
+  to: '1234567890',
+  url: 'https://example.com/sticker.webp',
+});
+
+// Send contact
+await omni.messages.sendContact({
+  instanceId: 'uuid',
+  to: '1234567890',
+  contact: { name: 'John', phone: '+1234567890' },
+});
+
+// Send location
+await omni.messages.sendLocation({
+  instanceId: 'uuid',
+  to: '1234567890',
+  latitude: 37.7749,
+  longitude: -122.4194,
+  name: 'San Francisco',
+});
+
+// Discord-specific: Send poll
+await omni.messages.sendPoll({
+  instanceId: 'uuid',
+  to: 'channel-id',
+  question: 'Favorite color?',
+  answers: ['Red', 'Blue', 'Green'],
+  durationHours: 24,
+});
+
+// Discord-specific: Send embed
+await omni.messages.sendEmbed({
+  instanceId: 'uuid',
+  to: 'channel-id',
+  title: 'My Embed',
+  description: 'Some content',
+  color: 0x00ff00,
+  fields: [{ name: 'Field', value: 'Value', inline: true }],
 });
 ```
 
@@ -143,6 +280,158 @@ const providers = await omni.providers.list({
 });
 ```
 
+### Logs
+
+```typescript
+// Get recent logs
+const { items, meta } = await omni.logs.recent({
+  modules: 'api,whatsapp:*',
+  level: 'info', // 'debug' | 'info' | 'warn' | 'error'
+  limit: 100,
+});
+```
+
+### Automations
+
+```typescript
+// List automations
+const automations = await omni.automations.list({ enabled: true });
+
+// Get an automation
+const automation = await omni.automations.get('uuid');
+
+// Create an automation
+const automation = await omni.automations.create({
+  name: 'Auto-reply',
+  triggerEventType: 'message.received',
+  triggerConditions: [
+    { field: 'payload.content.text', operator: 'contains', value: 'hello' },
+  ],
+  actions: [
+    {
+      type: 'send_message',
+      config: { contentTemplate: 'Hi there!' },
+    },
+  ],
+  enabled: true,
+});
+
+// Enable/disable
+await omni.automations.enable('uuid');
+await omni.automations.disable('uuid');
+
+// Test (dry run)
+const result = await omni.automations.test('uuid', {
+  event: { type: 'message.received', payload: { content: { text: 'hello' } } },
+});
+console.log(result.matched);
+
+// Get logs
+const { items } = await omni.automations.getLogs('uuid');
+
+// Delete
+await omni.automations.delete('uuid');
+```
+
+### Dead Letters
+
+```typescript
+// List failed events
+const { items, meta } = await omni.deadLetters.list({
+  status: 'pending', // comma-separated: pending,retrying,resolved,abandoned
+  eventType: 'message.received',
+  since: '2024-01-01T00:00:00Z',
+  limit: 50,
+});
+
+// Get statistics
+const stats = await omni.deadLetters.stats();
+console.log(stats.pending, stats.resolved);
+
+// Get details
+const dl = await omni.deadLetters.get('uuid');
+
+// Retry
+await omni.deadLetters.retry('uuid');
+
+// Resolve (mark as fixed)
+await omni.deadLetters.resolve('uuid', { note: 'Fixed manually' });
+
+// Abandon (give up)
+await omni.deadLetters.abandon('uuid');
+```
+
+### Event Ops
+
+```typescript
+// Get event metrics
+const metrics = await omni.eventOps.metrics();
+
+// Start a replay session
+const session = await omni.eventOps.startReplay({
+  since: '2024-01-01T00:00:00Z',
+  until: '2024-01-31T23:59:59Z',
+  eventTypes: ['message.received'],
+  instanceId: 'uuid',
+  dryRun: true,
+});
+
+// List/get replay sessions
+const sessions = await omni.eventOps.listReplays();
+const session = await omni.eventOps.getReplay('session-id');
+
+// Cancel a replay
+await omni.eventOps.cancelReplay('session-id');
+```
+
+### Webhooks
+
+```typescript
+// List webhook sources
+const sources = await omni.webhooks.listSources({ enabled: true });
+
+// Create a webhook source
+const source = await omni.webhooks.createSource({
+  name: 'github',
+  description: 'GitHub webhooks',
+  enabled: true,
+});
+
+// Update/delete
+await omni.webhooks.updateSource('uuid', { enabled: false });
+await omni.webhooks.deleteSource('uuid');
+
+// Trigger a custom event
+await omni.webhooks.trigger({
+  eventType: 'custom.my-event',
+  payload: { foo: 'bar' },
+  correlationId: 'optional-id',
+});
+```
+
+### Payloads
+
+```typescript
+// List payloads for an event
+const payloads = await omni.payloads.listForEvent('event-uuid');
+
+// Get specific stage payload
+const payload = await omni.payloads.getStage('event-uuid', 'webhook_raw');
+
+// Delete payloads
+await omni.payloads.delete('event-uuid', { reason: 'GDPR request' });
+
+// Manage configs
+const configs = await omni.payloads.listConfigs();
+await omni.payloads.updateConfig('message.received', {
+  storeWebhookRaw: true,
+  retentionDays: 30,
+});
+
+// Get statistics
+const stats = await omni.payloads.stats();
+```
+
 ### System
 
 ```typescript
@@ -191,13 +480,23 @@ import type {
   Instance,
   Person,
   Event,
+  Chat,
+  Message,
+  ChatParticipant,
   AccessRule,
   Setting,
   Provider,
+  Automation,
+  DeadLetter,
+  WebhookSource,
+  PayloadConfig,
+  ReplaySession,
+  LogEntry,
   HealthResponse,
   PaginationMeta,
   Channel,
   PaginatedResponse,
+  AuthValidateResponse,
 } from '@omni/sdk';
 ```
 

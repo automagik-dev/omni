@@ -63,6 +63,7 @@ export const securitySchemes = {
  */
 export const apiTags = [
   { name: 'System', description: 'System health and info' },
+  { name: 'Auth', description: 'API key validation' },
   { name: 'Instances', description: 'Channel instance management' },
   { name: 'Messages', description: 'Send messages' },
   { name: 'Events', description: 'Message events/traces' },

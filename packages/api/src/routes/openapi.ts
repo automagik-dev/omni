@@ -22,6 +22,7 @@ registry.registerComponent('securitySchemes', 'ApiKeyAuth', securitySchemes.ApiK
 
 // Import schema registrations to populate the registry
 import { registerAccessSchemas } from '../schemas/openapi/access';
+import { registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerCommonSchemas } from '../schemas/openapi/common';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
@@ -40,6 +41,7 @@ import { registerWebhookSchemas } from '../schemas/openapi/webhooks';
 
 // Register all schemas
 registerCommonSchemas(registry);
+registerAuthSchemas(registry);
 registerHealthSchemas(registry);
 registerInstanceSchemas(registry);
 registerMessageSchemas(registry);

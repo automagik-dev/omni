@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
+import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { chatsRoutes } from './chats';
 import { deadLettersRoutes } from './dead-letters';
@@ -26,6 +27,7 @@ import { webhooksRoutes } from './webhooks';
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
 // Mount all route modules
+v2Routes.route('/auth', authRoutes);
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);
 v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations

@@ -4,6 +4,81 @@
  */
 
 export interface paths {
+    "/api/v2/auth/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate API key
+         * @description Validate the provided API key and return key information. Used by CLI login flow.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description API key is valid */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Whether the API key is valid */
+                                valid: boolean;
+                                /**
+                                 * @description Truncated key prefix for identification
+                                 * @example omni_sk_abc12345...
+                                 */
+                                keyPrefix: string;
+                                /**
+                                 * @description Key name (primary or custom name)
+                                 * @example primary
+                                 */
+                                keyName: string;
+                                /**
+                                 * @description Scopes granted to this key
+                                 * @example [
+                                 *       "*"
+                                 *     ]
+                                 */
+                                scopes: string[];
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid API key */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -8893,6 +8968,29 @@ export interface components {
             success: boolean;
             /** @description Optional success message */
             message?: string;
+        };
+        AuthValidateResponse: {
+            data: {
+                /** @description Whether the API key is valid */
+                valid: boolean;
+                /**
+                 * @description Truncated key prefix for identification
+                 * @example omni_sk_abc12345...
+                 */
+                keyPrefix: string;
+                /**
+                 * @description Key name (primary or custom name)
+                 * @example primary
+                 */
+                keyName: string;
+                /**
+                 * @description Scopes granted to this key
+                 * @example [
+                 *       "*"
+                 *     ]
+                 */
+                scopes: string[];
+            };
         };
         HealthCheck: {
             /**
