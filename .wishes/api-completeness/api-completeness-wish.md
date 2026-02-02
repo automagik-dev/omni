@@ -225,3 +225,72 @@ if (!plugin.capabilities.canSendTyping) {
 1. **Presence** - Most requested, enables agent UX
 2. **Read receipts** - Completes WhatsApp feature set
 3. **Profile fetching** - Useful for agents
+
+---
+
+## Review Verdict
+
+**Verdict:** FIX-FIRST
+**Date:** 2026-02-02
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `POST /messages/send/presence` endpoint | CODE EXISTS | Implemented in `messages.ts:1256-1300` - NOT TESTED |
+| `POST /messages/:id/read` endpoint | CODE EXISTS | Implemented in `messages.ts:1324-1374` - NOT TESTED |
+| `POST /messages/read` batch endpoint | CODE EXISTS | Implemented in `messages.ts:1381-1432` - NOT TESTED |
+| `POST /chats/:id/read` endpoint | CODE EXISTS | Implemented in `chats.ts:335-389` - NOT TESTED |
+| `GET /instances/:id/users/:userId/profile` | CODE EXISTS | Implemented in `instances.ts:800-855` - NOT TESTED |
+| `GET /instances/:id/contacts` | CODE EXISTS | Implemented in `instances.ts:870-954` - NOT TESTED |
+| `GET /instances/:id/groups` | CODE EXISTS | Implemented in `instances.ts:967-1038` - NOT TESTED |
+| OpenAPI schema updates | PASS | All endpoints documented in `schemas/openapi/` |
+| WhatsApp plugin methods | CODE EXISTS | Methods implemented - NOT TESTED |
+| Discord plugin methods | CODE EXISTS | Methods implemented - NOT TESTED |
+| Capability checks | CODE EXISTS | Error paths implemented - NOT TESTED |
+| Quality checks pass | PASS | `make check` passes (typecheck, lint, 646 tests) |
+| **Unit tests for new endpoints** | FAIL | No tests added |
+| **Manual API testing** | FAIL | Not performed |
+
+### Findings
+
+**BLOCKING: No test coverage for new functionality**
+
+- Code exists and compiles, but no tests verify actual behavior
+- None of the new endpoints have been manually tested
+- Cannot confirm the acceptance criteria actually work
+
+### Required Before SHIP
+
+1. **Add unit tests** for all 7 new endpoints in `packages/api/src/routes/v2/__tests__/`:
+
+   **Presence tests** (`messages-presence.test.ts`):
+   - `POST /messages/send/presence` - success with typing
+   - `POST /messages/send/presence` - success with recording (WhatsApp)
+   - `POST /messages/send/presence` - success with paused
+   - `POST /messages/send/presence` - error when channel doesn't support typing
+   - `POST /messages/send/presence` - validates duration bounds (0-30000)
+
+   **Read receipt tests** (`messages-read.test.ts`):
+   - `POST /messages/:id/read` - success marks single message
+   - `POST /messages/:id/read` - error when channel doesn't support read receipts
+   - `POST /messages/read` - success batch marks multiple messages
+   - `POST /messages/read` - validates messageIds array (1-100)
+   - `POST /chats/:id/read` - success marks entire chat
+
+   **Profile/contacts tests** (`instances-profiles.test.ts`):
+   - `GET /instances/:id/users/:userId/profile` - success returns profile
+   - `GET /instances/:id/users/:userId/profile` - error when not supported
+   - `GET /instances/:id/contacts` - success returns contacts list
+   - `GET /instances/:id/contacts` - Discord requires guildId
+   - `GET /instances/:id/groups` - success returns groups list
+   - `GET /instances/:id/groups` - error when not supported
+
+2. **Test approach**: Mock the channel plugin methods (`sendTyping`, `markAsRead`, `fetchUserProfile`, `fetchContacts`, `fetchGroups`) and verify:
+   - Correct plugin method is called with correct arguments
+   - Response shape matches OpenAPI schema
+   - Capability errors return proper error codes
+
+### Recommendation
+
+Back to FORGE to add tests. Code structure looks correct but untested code is unverified code.
