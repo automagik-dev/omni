@@ -43,7 +43,7 @@ interface TestResult {
 const results: TestResult[] = [];
 
 async function api(endpoint: string, data: unknown): Promise<{ success: boolean; data?: unknown; error?: string }> {
-  const start = Date.now();
+  const _start = Date.now();
   try {
     const res = await fetch(`${API_URL}${endpoint}`, {
       method: 'POST',

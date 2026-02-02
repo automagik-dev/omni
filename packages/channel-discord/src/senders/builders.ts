@@ -51,7 +51,7 @@ export function buildMessageContent(message: OutgoingMessage): MessageCreateOpti
   const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
   let mentionPrefix = '';
   if (mentions && mentions.length > 0) {
-    mentionPrefix = formatMentions(mentions).join(' ') + ' ';
+    mentionPrefix = `${formatMentions(mentions).join(' ')} `;
   }
 
   switch (content.type) {

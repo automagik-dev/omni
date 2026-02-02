@@ -151,7 +151,7 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // ============================================================================
   // HISTORY SYNC - Initial chat/message sync
   // ============================================================================
-  sock.ev.on('messaging-history.set', (history) => {
+  sock.ev.on('messaging-history.set', async (history) => {
     const { chats, contacts, messages, progress, syncType } = history;
     waLog.info('History sync', {
       chats: chats.length,
@@ -168,7 +168,7 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
         progress,
         syncType,
       });
-    plugin.handleHistorySync(instanceId, history);
+    await plugin.handleHistorySync(instanceId, history);
   });
 
   // ============================================================================

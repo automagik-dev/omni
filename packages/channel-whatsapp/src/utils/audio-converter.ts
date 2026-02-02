@@ -160,7 +160,6 @@ export async function convertAudioForVoiceNote(
   // Check if ffmpeg is available
   const ffmpegAvailable = await isFFmpegAvailable();
   if (!ffmpegAvailable) {
-    console.warn('[audio-converter] ffmpeg not available, sending audio as-is (may not play as voice note)');
     return null;
   }
 
@@ -211,7 +210,6 @@ export async function convertBufferForVoiceNote(
   // Check if ffmpeg is available
   const ffmpegAvailable = await isFFmpegAvailable();
   if (!ffmpegAvailable) {
-    console.warn('[audio-converter] ffmpeg not available, sending audio as-is (may not play as voice note)');
     return null;
   }
 
@@ -269,7 +267,7 @@ export async function getAudioDuration(filePath: string): Promise<number | null>
     ffprobe.on('close', (code) => {
       if (code === 0 && stdout.trim()) {
         const duration = Number.parseFloat(stdout.trim());
-        resolve(isNaN(duration) ? null : duration);
+        resolve(Number.isNaN(duration) ? null : duration);
       } else {
         resolve(null);
       }

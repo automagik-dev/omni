@@ -1490,7 +1490,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Processes messages from `messaging-history.set` event
    * @internal
    */
-  handleHistorySync(
+  async handleHistorySync(
     instanceId: string,
     history: {
       chats: unknown[];
@@ -1500,7 +1500,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       progress?: number | null;
       syncType?: proto.HistorySync.HistorySyncType | null;
     },
-  ): void {
+  ): Promise<void> {
     const { contacts, messages, progress, isLatest, syncType } = history;
     const syncState = this.historySyncCallbacks.get(instanceId);
 
@@ -1519,8 +1519,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     // Process each message in the history
-    for (const msg of messages) {
-      this.processHistoryMessage(msg, syncState);
+    // Process in parallel for better performance, but limit concurrency
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+      const batch = messages.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map((msg) => this.processHistoryMessage(instanceId, msg, syncState)));
     }
 
     // Report progress and completion
@@ -1529,12 +1532,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Process a single message from history sync
+   *
+   * When syncState is provided (explicit fetch job), calls the callback.
+   * When syncState is undefined (initial connection), emits via emitMessageReceived
+   * to ensure messages are stored in the database.
+   *
    * @internal
    */
-  private processHistoryMessage(
+  private async processHistoryMessage(
+    instanceId: string,
     msg: WAMessage,
     syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
-  ): void {
+  ): Promise<void> {
     if (!msg.key?.id || !msg.key?.remoteJid) return;
 
     const timestamp = this.getMessageTimestamp(msg);
@@ -1549,6 +1558,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     const chatId = msg.key.remoteJid;
     const { id: senderId } = fromJid(msg.key.fromMe ? chatId : msg.key.participant || chatId);
+    const isFromMe = msg.key.fromMe ?? false;
 
     const historyMessage: HistorySyncMessage = {
       externalId: msg.key.id,
@@ -1556,13 +1566,32 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       from: senderId,
       timestamp,
       content,
-      isFromMe: msg.key.fromMe ?? false,
+      isFromMe,
       rawPayload: msg,
     };
 
-    // Call message callback if registered
-    syncState?.onMessage?.(historyMessage);
-    if (syncState) syncState.totalFetched++;
+    // If we have an active sync callback, use it
+    if (syncState?.onMessage) {
+      syncState.onMessage(historyMessage);
+      syncState.totalFetched++;
+    } else {
+      // No active sync job - this is initial connection history sync
+      // Emit the message so it gets stored in the database
+      // Note: We store isFromMe messages too for history completeness
+      await this.emitMessageReceived({
+        instanceId,
+        externalId: msg.key.id,
+        chatId,
+        from: senderId,
+        content: {
+          type: content.type as ContentType,
+          text: content.text || content.caption,
+          mediaUrl: content.mediaUrl,
+          mimeType: content.mimeType,
+        },
+        rawPayload: msg as unknown as Record<string, unknown>,
+      });
+    }
   }
 
   /**

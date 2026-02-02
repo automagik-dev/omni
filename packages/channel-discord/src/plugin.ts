@@ -399,7 +399,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
                     return `<@${m.id}>`;
                 }
               });
-              text = mentionStrings.join(' ') + ' ' + text;
+              text = `${mentionStrings.join(' ')} ${text}`;
             }
 
             const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);

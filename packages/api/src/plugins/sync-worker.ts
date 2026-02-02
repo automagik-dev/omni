@@ -180,7 +180,9 @@ export async function setupSyncWorker(
 async function buildWhatsAppAnchors(
   instanceId: string,
   _services: Services,
-): Promise<Array<{ chatJid: string; messageKey: { remoteJid: string; id: string; fromMe: boolean }; timestamp: number }>> {
+): Promise<
+  Array<{ chatJid: string; messageKey: { remoteJid: string; id: string; fromMe: boolean }; timestamp: number }>
+> {
   if (!db) {
     log.warn('Database not available for building anchors');
     return [];
@@ -221,7 +223,7 @@ async function buildWhatsAppAnchors(
     is_from_me: boolean;
     message_key: { id: string; remoteJid: string; fromMe: boolean } | null;
   }>) {
-    if (row.message_key && row.message_key.id && row.message_key.remoteJid) {
+    if (row.message_key?.id && row.message_key.remoteJid) {
       anchors.push({
         chatJid: row.chat_jid,
         messageKey: {
