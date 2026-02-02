@@ -9,7 +9,6 @@ import type { OutgoingMessage } from '@omni/channel-sdk';
 import type { AnyMessageContent } from '@whiskeysockets/baileys';
 import { toJid } from '../jid';
 import { ErrorCode, WhatsAppError } from '../utils/errors';
-import { buildPixContent } from './pix';
 
 type ContentBuilder = (message: OutgoingMessage, buildVCard: VCardBuilder) => AnyMessageContent;
 type VCardBuilder = (contact: { name: string; phone?: string; email?: string }) => string;
@@ -239,21 +238,10 @@ const buildPoll: ContentBuilder = (message) => {
 };
 
 /**
- * Build PIX payment message content (Brazil)
- */
-const buildPix: ContentBuilder = (message) => {
-  if (!message.content.pix) {
-    throw new WhatsAppError(ErrorCode.SEND_FAILED, 'PIX content missing pix data');
-  }
-  return buildPixContent({
-    merchantName: message.content.pix.merchantName,
-    key: message.content.pix.key,
-    keyType: message.content.pix.keyType,
-  });
-};
-
-/**
  * Map of content type to builder function
+ *
+ * Note: PIX messages are handled specially in plugin.ts using baileys_helpers
+ * and don't go through this builder system.
  */
 const contentBuilders: Record<string, ContentBuilder> = {
   text: buildText,
@@ -266,7 +254,6 @@ const contentBuilders: Record<string, ContentBuilder> = {
   contact: buildContact,
   reaction: buildReaction,
   poll: buildPoll,
-  pix: buildPix,
 };
 
 /**

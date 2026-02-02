@@ -23,7 +23,7 @@ import { resetConnectionState, setupConnectionHandlers } from './handlers/connec
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
-import { buildPixProtoMessage } from './senders/pix';
+import { sendPixMessage as sendPixMessageHelper } from './senders/pix';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -557,10 +557,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Send a PIX payment message using relayMessage
+   * Send a PIX payment message using baileys_helpers
    *
-   * PIX messages require relayMessage because Baileys' sendMessage
-   * doesn't support interactive native flow messages natively.
+   * PIX messages require special handling with additionalNodes
+   * (biz, interactive, native_flow) for WhatsApp to render them.
    */
   private async sendPixMessage(
     instanceId: string,
@@ -568,20 +568,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     jid: string,
     message: OutgoingMessage,
   ): Promise<SendResult> {
-    const { generateMessageID } = await import('@whiskeysockets/baileys');
-
     const pixData = message.content.pix!;
-    const protoMessage = buildPixProtoMessage({
+
+    this.logger.debug('Sending PIX message via hydratedTemplate', { jid, pixData });
+
+    const messageId = await sendPixMessageHelper(sock, jid, {
       merchantName: pixData.merchantName,
       key: pixData.key,
       keyType: pixData.keyType,
     });
 
-    const messageId = generateMessageID();
-
-    this.logger.debug('Sending PIX message via relayMessage', { jid, messageId, pixData });
-
-    await sock.relayMessage(jid, protoMessage, { messageId });
+    if (!messageId) {
+      throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Failed to send PIX message');
+    }
 
     // Emit sent event
     await this.emitMessageSent({

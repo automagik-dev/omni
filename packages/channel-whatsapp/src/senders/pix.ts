@@ -3,10 +3,13 @@
  *
  * Sends native WhatsApp PIX "copia e cola" messages using
  * interactiveMessage with payment_info button.
+ *
+ * Uses baileys_helpers getButtonArgs for proper additionalNodes (biz, native_flow).
  */
 
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
-import { generateMessageID } from '@whiskeysockets/baileys';
+import type { WASocket } from '@whiskeysockets/baileys';
+import { generateMessageID, generateWAMessageFromContent, isJidGroup } from '@whiskeysockets/baileys';
+import { getButtonArgs } from 'baileys_helpers';
 
 /**
  * PIX key types supported by WhatsApp
@@ -46,13 +49,12 @@ export function isValidPixData(data: PixData): boolean {
 }
 
 /**
- * Build PIX message content
+ * Build PIX button params JSON
  *
- * Creates an interactive message with native payment_info button
- * that displays the PIX "copia e cola" interface.
+ * Creates the payment_settings structure for PIX "copia e cola".
  */
-export function buildPixContent(data: PixData): AnyMessageContent {
-  const buttonParamsJson = JSON.stringify({
+export function buildPixButtonParams(data: PixData): string {
+  return JSON.stringify({
     payment_settings: [
       {
         type: 'pix_static_code',
@@ -64,48 +66,26 @@ export function buildPixContent(data: PixData): AnyMessageContent {
       },
     ],
   });
-
-  // Simple structure matching received PIX messages
-  // Cast through unknown because AnyMessageContent doesn't include interactiveMessage
-  return {
-    interactiveMessage: {
-      nativeFlowMessage: {
-        buttons: [
-          {
-            name: 'payment_info',
-            buttonParamsJson,
-          },
-        ],
-      },
-    },
-  } as unknown as AnyMessageContent;
 }
 
 /**
- * Build raw PIX proto message for relayMessage
+ * Send a PIX payment message using relayMessage with additionalNodes
  *
- * This bypasses Baileys' content validation which doesn't support
- * interactive messages natively.
- *
- * Structure based on real received PIX messages from fixtures.
+ * Uses baileys_helpers getButtonArgs to build proper additionalNodes (biz, native_flow).
+ * Bypasses validation that would reject payment_info button.
  */
-export function buildPixProtoMessage(data: PixData) {
-  const buttonParamsJson = JSON.stringify({
-    payment_settings: [
-      {
-        type: 'pix_static_code',
-        pix_static_code: {
-          merchant_name: data.merchantName,
-          key: data.key,
-          key_type: data.keyType,
-        },
-      },
-    ],
-  });
+export async function sendPixMessage(
+  sock: WASocket,
+  jid: string,
+  data: PixData,
+  _replyToId?: string,
+): Promise<string | undefined> {
+  const buttonParamsJson = buildPixButtonParams(data);
 
-  // Simple structure matching received PIX messages
-  return {
+  // Build the interactive message content
+  const content = {
     interactiveMessage: {
+      body: { text: `PIX: ${data.merchantName}` },
       nativeFlowMessage: {
         buttons: [
           {
@@ -116,26 +96,33 @@ export function buildPixProtoMessage(data: PixData) {
       },
     },
   };
-}
 
-/**
- * Send a PIX payment message using relayMessage
- *
- * Uses relayMessage to bypass Baileys' content type validation
- * which doesn't support interactive messages.
- */
-export async function sendPixMessage(
-  sock: WASocket,
-  jid: string,
-  data: PixData,
-  _replyToId?: string,
-): Promise<string | undefined> {
+  // Get user JID for message generation
+  const userJid = sock.authState?.creds?.me?.id || sock.user?.id || '';
   const messageId = generateMessageID();
-  const message = buildPixProtoMessage(data);
 
-  await sock.relayMessage(jid, message, {
+  // Generate the full message using Baileys
+  const fullMsg = generateWAMessageFromContent(jid, content, {
+    userJid,
     messageId,
+    timestamp: new Date(),
   });
 
-  return messageId;
+  // Get the additionalNodes for payment_info button
+  // This adds: { tag: 'biz', attrs: { native_flow_name: 'payment_info' } }
+  const buttonsNode = getButtonArgs(fullMsg.message!);
+  const additionalNodes: unknown[] = [buttonsNode];
+
+  // For private chats, add the bot node
+  if (!isJidGroup(jid)) {
+    additionalNodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+  }
+
+  // Relay the message with the additional nodes
+  await sock.relayMessage(jid, fullMsg.message!, {
+    messageId: fullMsg.key.id!,
+    additionalNodes: additionalNodes as Parameters<typeof sock.relayMessage>[2]['additionalNodes'],
+  });
+
+  return fullMsg.key.id ?? undefined;
 }

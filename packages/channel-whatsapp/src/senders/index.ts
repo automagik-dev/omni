@@ -51,7 +51,7 @@ export { forwardMessage } from './forward';
 
 // PIX
 export {
-  buildPixContent,
+  buildPixButtonParams,
   sendPixMessage,
   isValidPixData,
   type PixData,
