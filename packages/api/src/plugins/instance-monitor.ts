@@ -106,11 +106,14 @@ async function connectInstance(instance: { id: string; channel: string }, regist
 
 /**
  * Process a single batch result and update counters
+ *
+ * Note: Failed reconnections do NOT mark instance as inactive.
+ * The InstanceMonitor will retry with exponential backoff.
  */
 async function handleBatchResult(
   result: PromiseSettledResult<string>,
   instance: { id: string; name: string },
-  db: Database,
+  _db: Database,
   results: ReconnectResults,
 ): Promise<void> {
   if (result.status === 'fulfilled') {
@@ -120,8 +123,12 @@ async function handleBatchResult(
     results.failed++;
     const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
     results.errors.push({ instanceId: instance.id, error });
-    logger.error('Instance reconnection failed', { instanceId: instance.id, name: instance.name, error });
-    await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
+    logger.warn('Instance reconnection failed at startup, monitor will retry', {
+      instanceId: instance.id,
+      name: instance.name,
+      error,
+    });
+    // Don't mark as inactive - let InstanceMonitor handle retries with backoff
   }
 }
 
