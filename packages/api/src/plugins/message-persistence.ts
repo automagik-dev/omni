@@ -48,6 +48,24 @@ const CONTENT_TYPE_MAP: Record<string, MessageType> = {
 };
 
 /**
+ * WhatsApp internal JID suffixes that don't represent real chats.
+ * These are used for device sync, broadcasts, and channels - not user conversations.
+ *
+ * @lid - Linked Device ID (device-to-device sync)
+ * @broadcast - Status broadcasts and broadcast lists
+ * @newsletter - WhatsApp Channels (one-way broadcasts)
+ */
+const INTERNAL_JID_SUFFIXES = ['@lid', '@broadcast', '@newsletter'];
+
+/**
+ * Check if a chat ID is an internal WhatsApp JID that should be skipped.
+ * These don't represent real conversations and shouldn't be stored as chats.
+ */
+function isInternalWhatsAppJid(chatId: string): boolean {
+  return INTERNAL_JID_SUFFIXES.some((suffix) => chatId.endsWith(suffix));
+}
+
+/**
  * Map content type to message type
  */
 function mapContentType(contentType: string | undefined): MessageType {
@@ -412,6 +430,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         try {
           if (!metadata.instanceId) return;
 
+          // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
+          if (isInternalWhatsAppJid(payload.chatId)) return;
+
           // Find the chat
           const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
           if (!chat) {
@@ -457,6 +478,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
         try {
           if (!metadata.instanceId) return;
+
+          // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
+          if (isInternalWhatsAppJid(payload.chatId)) return;
 
           // Find the chat
           const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
