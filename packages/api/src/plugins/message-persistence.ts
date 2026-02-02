@@ -16,6 +16,7 @@ import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni
 import { createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import type { Services } from '../services';
+import { getPlugin } from './loader';
 
 const log = createLogger('message-persistence');
 
@@ -124,6 +125,40 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               identityId: identity.id,
               personId: person?.id,
             });
+
+            // Fetch profile from channel plugin and update identity
+            try {
+              const plugin = await getPlugin(channel);
+              if (plugin && 'fetchUserProfile' in plugin) {
+                const fetchProfile = plugin.fetchUserProfile as (
+                  instanceId: string,
+                  userId: string,
+                ) => Promise<{
+                  displayName?: string;
+                  avatarUrl?: string;
+                  bio?: string;
+                  platformData?: Record<string, unknown>;
+                }>;
+
+                const profile = await fetchProfile.call(plugin, metadata.instanceId, payload.from);
+
+                if (profile.avatarUrl || profile.bio || profile.platformData) {
+                  await services.persons.updateIdentityProfile(identity.id, profile);
+                  log.debug('Updated identity with profile data', {
+                    identityId: identity.id,
+                    hasAvatar: !!profile.avatarUrl,
+                    hasBio: !!profile.bio,
+                    hasPlatformData: !!profile.platformData,
+                  });
+                }
+              }
+            } catch (profileError) {
+              // Don't fail message processing if profile fetch fails
+              log.warn('Failed to fetch profile for new identity', {
+                identityId: identity.id,
+                error: String(profileError),
+              });
+            }
           }
         }
 

@@ -390,6 +390,36 @@ export class PersonService {
   }
 
   /**
+   * Update identity profile data (avatar, bio, platform-specific data)
+   */
+  async updateIdentityProfile(
+    identityId: string,
+    profile: {
+      displayName?: string;
+      avatarUrl?: string;
+      bio?: string;
+      platformData?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    await this.db
+      .update(platformIdentities)
+      .set({
+        platformUsername: profile.displayName,
+        profilePicUrl: profile.avatarUrl,
+        profileData: profile.platformData
+          ? {
+              bio: profile.bio,
+              ...profile.platformData,
+            }
+          : profile.bio
+            ? { bio: profile.bio }
+            : undefined,
+        updatedAt: new Date(),
+      })
+      .where(eq(platformIdentities.id, identityId));
+  }
+
+  /**
    * Link two identities to the same person
    */
   async linkIdentities(identityAId: string, identityBId: string): Promise<Person> {

@@ -685,6 +685,74 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Fetch profile info for a specific user/contact
+   *
+   * @param instanceId - Instance to use
+   * @param userId - User JID (e.g., 5511999999999@s.whatsapp.net)
+   * @returns Profile data including name, avatar, bio, phone
+   */
+  async fetchUserProfile(
+    instanceId: string,
+    userId: string,
+  ): Promise<{
+    displayName?: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+    platformData?: Record<string, unknown>;
+  }> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(userId);
+
+    let avatarUrl: string | undefined;
+    let bio: string | undefined;
+
+    // Try to get profile picture
+    try {
+      avatarUrl = await sock.profilePictureUrl(jid, 'image');
+    } catch {
+      // Profile picture might not be set or not accessible
+    }
+
+    // Try to get status (bio)
+    try {
+      const statusResult = await sock.fetchStatus(jid);
+      if (Array.isArray(statusResult) && statusResult.length > 0) {
+        const firstStatus = statusResult[0] as { status?: string };
+        bio = firstStatus?.status;
+      }
+    } catch {
+      // Status might not be available
+    }
+
+    // Extract phone number from JID
+    const { id: phoneNumber } = fromJid(jid);
+    const phone = phoneNumber ? `+${phoneNumber}` : undefined;
+
+    // Try to get business profile
+    let platformData: Record<string, unknown> | undefined;
+    try {
+      const businessProfile = await sock.getBusinessProfile(jid);
+      if (businessProfile) {
+        platformData = {
+          isBusiness: true,
+          businessDescription: businessProfile.description,
+          businessCategory: businessProfile.category,
+        };
+      }
+    } catch {
+      // Not a business account
+    }
+
+    return {
+      avatarUrl,
+      bio,
+      phone,
+      platformData,
+    };
+  }
+
+  /**
    * Fetch message history for an instance.
    *
    * WhatsApp syncs history automatically on connection via the `messaging-history.set` event.

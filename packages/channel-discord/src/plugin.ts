@@ -627,6 +627,56 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Fetch profile info for a specific Discord user
+   *
+   * @param instanceId - Instance to use
+   * @param userId - Discord user ID
+   * @returns Profile data including username, avatar, banner, bio
+   */
+  async fetchUserProfile(
+    instanceId: string,
+    userId: string,
+  ): Promise<{
+    displayName?: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+    platformData?: Record<string, unknown>;
+  }> {
+    const client = this.getClient(instanceId);
+
+    try {
+      // Fetch full user to get all profile data including banner
+      const user = await client.users.fetch(userId, { force: true });
+
+      const platformData: Record<string, unknown> = {
+        username: user.username,
+        globalName: user.globalName,
+        discriminator: user.discriminator,
+        isBot: user.bot,
+        flags: user.flags?.bitfield,
+        createdAt: user.createdAt?.toISOString(),
+      };
+
+      // Get banner if available
+      const bannerUrl = user.bannerURL({ size: 512 });
+      if (bannerUrl) {
+        platformData.bannerUrl = bannerUrl;
+      }
+
+      return {
+        displayName: user.globalName || user.username,
+        avatarUrl: user.displayAvatarURL({ size: 256 }),
+        bio: undefined, // Discord user bios require OAuth2 - not available via bot
+        platformData,
+      };
+    } catch (error) {
+      this.logger.warn('Failed to fetch user profile', { userId, error: String(error) });
+      return {};
+    }
+  }
+
+  /**
    * Fetch message history from a Discord channel.
    *
    * Discord provides a proper API for fetching historical messages using
