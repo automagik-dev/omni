@@ -1,0 +1,29 @@
+{
+  "name": "@omni/cli",
+  "version": "0.0.1",
+  "description": "LLM-optimized CLI for Omni v2",
+  "type": "module",
+  "bin": {
+    "omni": "./bin/omni"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "dev": "bun run ./src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@omni/sdk": "workspace:*",
+    "chalk": "^5.4.0",
+    "commander": "^13.1.0",
+    "ora": "^8.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.3",
+    "typescript": "^5.7.3"
+  }
+}
