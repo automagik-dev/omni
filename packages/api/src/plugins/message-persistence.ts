@@ -80,10 +80,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           return;
         }
 
+        const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+
         // Find or create chat
         const { chat } = await services.chats.findOrCreate(metadata.instanceId, payload.chatId, {
           chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
-          channel: (metadata.channelType ?? 'whatsapp') as ChannelType,
+          channel,
           name: payload.rawPayload?.chatName as string | undefined,
         });
 
@@ -92,6 +94,37 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           await services.chats.findOrCreateParticipant(chat.id, payload.from, {
             displayName: payload.rawPayload?.pushName as string | undefined,
           });
+        }
+
+        // Auto-create Person + PlatformIdentity for sender if doesn't exist
+        let senderPersonId = metadata.personId;
+        let senderPlatformIdentityId = metadata.platformIdentityId;
+
+        if (payload.from && !senderPlatformIdentityId) {
+          const displayName = payload.rawPayload?.pushName as string | undefined;
+          const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
+            {
+              channel,
+              instanceId: metadata.instanceId,
+              platformUserId: payload.from,
+              platformUsername: displayName,
+            },
+            {
+              createPerson: true,
+              displayName,
+            },
+          );
+
+          senderPlatformIdentityId = identity.id;
+          senderPersonId = person?.id;
+
+          if (isNew) {
+            log.debug('Auto-created identity for sender', {
+              platformUserId: payload.from,
+              identityId: identity.id,
+              personId: person?.id,
+            });
+          }
         }
 
         // Extract raw payload info safely
@@ -104,11 +137,11 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           messageType: mapContentType(payload.content.type),
           textContent: payload.content.text,
           platformTimestamp: new Date(event.timestamp),
-          // Sender info
+          // Sender info (use resolved identity)
           senderPlatformUserId: payload.from,
           senderDisplayName: rawPayload?.pushName as string | undefined,
-          senderPersonId: metadata.personId,
-          senderPlatformIdentityId: metadata.platformIdentityId,
+          senderPersonId: senderPersonId,
+          senderPlatformIdentityId: senderPlatformIdentityId,
           isFromMe: false,
           // Media
           hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),

@@ -320,9 +320,33 @@ export class DiscordPlugin extends BaseChannelPlugin {
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const client = this.getClient(instanceId);
-    const channelId = message.to;
+    let channelId = message.to;
 
     try {
+      // Resolve channel ID - if 'to' is a user ID, create a DM channel
+      try {
+        await client.channels.fetch(channelId);
+      } catch (channelError) {
+        // Channel fetch failed - might be a user ID, try to create DM
+        if ((channelError as { code?: number }).code === 10003) {
+          // Unknown Channel error - try as user ID
+          this.logger.debug('Channel not found, trying as user ID for DM', { to: channelId });
+          try {
+            const user = await client.users.fetch(channelId);
+            this.logger.debug('Fetched user, creating DM channel', { userId: user.id, username: user.username });
+            const dmChannel = await user.createDM();
+            channelId = dmChannel.id;
+            this.logger.info('Created DM channel for user', { userId: message.to, dmChannelId: channelId });
+          } catch (userError) {
+            this.logger.error('Failed to create DM channel', { userId: channelId, error: String(userError) });
+            // Neither channel nor user - rethrow original error
+            throw channelError;
+          }
+        } else {
+          throw channelError;
+        }
+      }
+
       let messageId: string;
 
       // Handle different content types
