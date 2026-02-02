@@ -17,7 +17,7 @@ export function createPersonsCommand(): Command {
   persons
     .command('search <query>')
     .description('Search for persons')
-    .option('--limit <n>', 'Limit results', Number.parseInt, 20)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .action(async (query: string, options: { limit?: number }) => {
       const client = getClient();
 

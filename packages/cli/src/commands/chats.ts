@@ -213,7 +213,7 @@ export function createChatsCommand(): Command {
   chats
     .command('messages <id>')
     .description('Get chat messages')
-    .option('--limit <n>', 'Limit results', Number.parseInt, 20)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
     .action(async (id: string, options: { limit?: number; before?: string; after?: string }) => {

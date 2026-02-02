@@ -56,7 +56,7 @@ export function createEventsCommand(): Command {
     .option('--type <type>', 'Filter by event type')
     .option('--since <time>', 'Events since (e.g., 24h, 7d, or ISO timestamp)')
     .option('--until <time>', 'Events until (ISO timestamp)')
-    .option('--limit <n>', 'Limit results', Number.parseInt, 50)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 50)
     .action(
       async (options: {
         instance?: string;
@@ -99,7 +99,7 @@ export function createEventsCommand(): Command {
     .command('search <query>')
     .description('Search events by content')
     .option('--since <time>', 'Events since (e.g., 24h, 7d)')
-    .option('--limit <n>', 'Limit results', Number.parseInt, 50)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 50)
     .action(async (query: string, options: { since?: string; limit?: number }) => {
       const client = getClient();
 
@@ -129,7 +129,7 @@ export function createEventsCommand(): Command {
   events
     .command('timeline <personId>')
     .description('Show event timeline for a person')
-    .option('--limit <n>', 'Limit results', Number.parseInt, 50)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 50)
     .action(async (personId: string, options: { limit?: number }) => {
       const client = getClient();
 
