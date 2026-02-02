@@ -54,6 +54,60 @@ export type {
   CreateAccessRuleBody,
   ListSettingsParams,
   ListProvidersParams,
+  // Sync types
+  StartSyncBody,
+  ListSyncsParams,
+  SyncProfileResult,
+  SyncJobCreated,
+  SyncJobSummary,
+  SyncJobStatus,
+  // Auth types
+  AuthValidateResponse,
+  // Chat types
+  Chat,
+  Message,
+  ChatParticipant,
+  ListChatsParams,
+  CreateChatBody,
+  UpdateChatBody,
+  AddParticipantBody,
+  ListChatMessagesParams,
+  // Automation types
+  Automation,
+  ListAutomationsParams,
+  CreateAutomationBody,
+  TestAutomationBody,
+  ListAutomationLogsParams,
+  // Dead letter types
+  DeadLetter,
+  ListDeadLettersParams,
+  ResolveDeadLetterBody,
+  // Webhook types
+  WebhookSource,
+  ListWebhookSourcesParams,
+  CreateWebhookSourceBody,
+  TriggerEventBody,
+  // Payload types
+  PayloadConfig,
+  UpdatePayloadConfigBody,
+  DeletePayloadsBody,
+  // Event ops types
+  ReplaySession,
+  StartReplayBody,
+  // Log types
+  LogEntry,
+  ListLogsParams,
+  // Message types
+  SendMediaBody,
+  SendReactionBody,
+  SendStickerBody,
+  SendContactBody,
+  SendLocationBody,
+  SendPollBody,
+  SendEmbedBody,
+  // Instance types
+  ConnectInstanceBody,
+  RequestPairingCodeBody,
 } from './client';
 
 // Errors

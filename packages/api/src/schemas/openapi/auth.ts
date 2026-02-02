@@ -11,7 +11,9 @@ import { z } from '../../lib/zod-openapi';
 export const AuthValidateResponseSchema = z.object({
   data: z.object({
     valid: z.boolean().openapi({ description: 'Whether the API key is valid' }),
-    keyPrefix: z.string().openapi({ description: 'Truncated key prefix for identification', example: 'omni_sk_abc12345...' }),
+    keyPrefix: z
+      .string()
+      .openapi({ description: 'Truncated key prefix for identification', example: 'omni_sk_abc12345...' }),
     keyName: z.string().openapi({ description: 'Key name (primary or custom name)', example: 'primary' }),
     scopes: z.array(z.string()).openapi({ description: 'Scopes granted to this key', example: ['*'] }),
   }),

@@ -261,7 +261,18 @@ export interface CreateAutomationBody {
   triggerEventType: string;
   triggerConditions?: Array<{
     field: string;
-    operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains' | 'exists' | 'not_exists' | 'regex';
+    operator:
+      | 'eq'
+      | 'neq'
+      | 'gt'
+      | 'lt'
+      | 'gte'
+      | 'lte'
+      | 'contains'
+      | 'not_contains'
+      | 'exists'
+      | 'not_exists'
+      | 'regex';
     value?: unknown;
   }>;
   actions: Array<{
@@ -499,6 +510,62 @@ export interface RequestPairingCodeBody {
 }
 
 /**
+ * Result of profile sync
+ */
+export interface SyncProfileResult {
+  type: 'profile';
+  status: string;
+  profile: {
+    name?: string | null;
+    avatarUrl?: string | null;
+    bio?: string | null;
+    platformMetadata?: Record<string, unknown> | null;
+    syncedAt?: string | null;
+  } | null;
+}
+
+/**
+ * Sync job created response
+ */
+export interface SyncJobCreated {
+  jobId: string;
+  instanceId: string;
+  type: string;
+  status: string;
+  config: Record<string, unknown>;
+  message: string;
+}
+
+/**
+ * Sync job summary (for list)
+ */
+export interface SyncJobSummary {
+  jobId: string;
+  type: string;
+  status: string;
+  progressPercent?: number | null;
+  createdAt: string;
+  completedAt?: string | null;
+}
+
+/**
+ * Sync job status (detailed)
+ */
+export interface SyncJobStatus {
+  jobId: string;
+  instanceId: string;
+  type: string;
+  status: string;
+  config: Record<string, unknown>;
+  progress?: Record<string, unknown> | null;
+  progressPercent?: number | null;
+  errorMessage?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+/**
  * Auth validation response
  */
 export interface AuthValidateResponse {
@@ -703,7 +770,10 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Request pairing code for WhatsApp
        */
-      async pair(id: string, body: RequestPairingCodeBody): Promise<{ code: string; phoneNumber: string; message: string; expiresIn: number }> {
+      async pair(
+        id: string,
+        body: RequestPairingCodeBody,
+      ): Promise<{ code: string; phoneNumber: string; message: string; expiresIn: number }> {
         const { data, error, response } = await client.POST('/instances/{id}/pair', {
           params: { path: { id } },
           body,
@@ -712,8 +782,60 @@ export function createOmniClient(config: OmniClientConfig) {
         return data?.data ?? { code: '', phoneNumber: '', message: '', expiresIn: 0 };
       },
 
-      // Note: Sync operations removed - not in current OpenAPI spec
-      // Will be added when SDK types are regenerated
+      /**
+       * Sync instance profile immediately
+       */
+      async syncProfile(id: string): Promise<SyncProfileResult> {
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync/profile`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: SyncProfileResult };
+        return json?.data ?? { type: 'profile', status: 'unknown', profile: null };
+      },
+
+      /**
+       * Start a sync job (messages, contacts, groups, or all)
+       */
+      async startSync(id: string, body: StartSyncBody): Promise<SyncJobCreated> {
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: SyncJobCreated };
+        return json?.data ?? { jobId: '', instanceId: id, type: body.type, status: 'pending', config: {}, message: '' };
+      },
+
+      /**
+       * List sync jobs for an instance
+       */
+      async listSyncs(id: string, params?: ListSyncsParams): Promise<PaginatedResponse<SyncJobSummary>> {
+        const query = new URLSearchParams();
+        if (params?.status) query.set('status', params.status);
+        if (params?.limit) query.set('limit', String(params.limit));
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync?${query}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { items?: SyncJobSummary[]; meta?: PaginationMeta };
+        return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
+      },
+
+      /**
+       * Get sync job status
+       */
+      async getSyncStatus(id: string, jobId: string): Promise<SyncJobStatus> {
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync/${jobId}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: SyncJobStatus };
+        if (!json?.data) throw new OmniApiError('Sync job not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
     },
 
     // ========================================================================
@@ -1098,7 +1220,9 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Get recent logs
        */
-      async recent(params?: ListLogsParams): Promise<{ items: LogEntry[]; meta: { total: number; bufferSize: number; limit: number } }> {
+      async recent(
+        params?: ListLogsParams,
+      ): Promise<{ items: LogEntry[]; meta: { total: number; bufferSize: number; limit: number } }> {
         const { data, error, response } = await client.GET('/logs/recent', {
           params: { query: params },
         });
@@ -1190,7 +1314,8 @@ export function createOmniClient(config: OmniClientConfig) {
           params: { path: { id } },
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to enable automation', 'ENABLE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to enable automation', 'ENABLE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1202,7 +1327,8 @@ export function createOmniClient(config: OmniClientConfig) {
           params: { path: { id } },
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to disable automation', 'DISABLE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to disable automation', 'DISABLE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1221,7 +1347,10 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Get logs for an automation
        */
-      async getLogs(id: string, params?: { limit?: number; cursor?: string }): Promise<PaginatedResponse<Record<string, unknown>>> {
+      async getLogs(
+        id: string,
+        params?: { limit?: number; cursor?: string },
+      ): Promise<PaginatedResponse<Record<string, unknown>>> {
         const { data, error, response } = await client.GET('/automations/{id}/logs', {
           params: { path: { id }, query: params },
         });
@@ -1264,7 +1393,13 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Get dead letter statistics
        */
-      async stats(): Promise<{ pending: number; retrying: number; resolved: number; abandoned: number; total: number }> {
+      async stats(): Promise<{
+        pending: number;
+        retrying: number;
+        resolved: number;
+        abandoned: number;
+        total: number;
+      }> {
         const { data, error, response } = await client.GET('/dead-letters/stats');
         throwIfError(response, error);
         return data?.data ?? { pending: 0, retrying: 0, resolved: 0, abandoned: 0, total: 0 };
@@ -1290,7 +1425,8 @@ export function createOmniClient(config: OmniClientConfig) {
           body,
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to resolve dead letter', 'RESOLVE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to resolve dead letter', 'RESOLVE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1302,7 +1438,8 @@ export function createOmniClient(config: OmniClientConfig) {
           params: { path: { id } },
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to abandon dead letter', 'ABANDON_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to abandon dead letter', 'ABANDON_FAILED', undefined, response.status);
         return data.data;
       },
     },
@@ -1403,7 +1540,8 @@ export function createOmniClient(config: OmniClientConfig) {
       async createSource(body: CreateWebhookSourceBody): Promise<WebhookSource> {
         const { data, error, response } = await client.POST('/webhook-sources', { body });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to create webhook source', 'CREATE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to create webhook source', 'CREATE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1416,7 +1554,8 @@ export function createOmniClient(config: OmniClientConfig) {
           body,
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to update webhook source', 'UPDATE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to update webhook source', 'UPDATE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1462,7 +1601,10 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Get a specific stage payload
        */
-      async getStage(eventId: string, stage: 'webhook_raw' | 'agent_request' | 'agent_response' | 'channel_send' | 'error'): Promise<{ payload?: unknown }> {
+      async getStage(
+        eventId: string,
+        stage: 'webhook_raw' | 'agent_request' | 'agent_response' | 'channel_send' | 'error',
+      ): Promise<{ payload?: unknown }> {
         const { data, error, response } = await client.GET('/events/{eventId}/payloads/{stage}', {
           params: { path: { eventId, stage } },
         });
@@ -1501,14 +1643,19 @@ export function createOmniClient(config: OmniClientConfig) {
           body,
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to update payload config', 'UPDATE_FAILED', undefined, response.status);
+        if (!data?.data)
+          throw new OmniApiError('Failed to update payload config', 'UPDATE_FAILED', undefined, response.status);
         return data.data;
       },
 
       /**
        * Get payload statistics
        */
-      async stats(): Promise<{ totalPayloads: number; totalSizeBytes: number; byStage: Record<string, number | undefined> }> {
+      async stats(): Promise<{
+        totalPayloads: number;
+        totalSizeBytes: number;
+        byStage: Record<string, number | undefined>;
+      }> {
         const { data, error, response } = await client.GET('/payload-stats');
         throwIfError(response, error);
         return data?.data ?? { totalPayloads: 0, totalSizeBytes: 0, byStage: {} };

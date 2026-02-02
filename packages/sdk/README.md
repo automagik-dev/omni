@@ -97,6 +97,29 @@ console.log(pair.code);
 
 // Logout (clear session)
 await omni.instances.logout('uuid');
+
+// Sync profile immediately
+const profile = await omni.instances.syncProfile('uuid');
+console.log(profile.profile?.name);
+
+// Start a sync job (messages, contacts, groups, or all)
+const job = await omni.instances.startSync('uuid', {
+  type: 'messages',      // 'profile' | 'messages' | 'contacts' | 'groups' | 'all'
+  depth: '30d',          // '7d' | '30d' | '90d' | '1y' | 'all'
+  channelId: 'optional', // For specific chat/channel
+  downloadMedia: true,   // Download media files
+});
+console.log(job.jobId);
+
+// List sync jobs
+const { items } = await omni.instances.listSyncs('uuid', {
+  status: 'running', // Filter by status
+  limit: 20,
+});
+
+// Get sync job status
+const status = await omni.instances.getSyncStatus('uuid', job.jobId);
+console.log(status.status, status.progressPercent);
 ```
 
 ### Chats
@@ -497,6 +520,10 @@ import type {
   Channel,
   PaginatedResponse,
   AuthValidateResponse,
+  SyncProfileResult,
+  SyncJobCreated,
+  SyncJobSummary,
+  SyncJobStatus,
 } from '@omni/sdk';
 ```
 

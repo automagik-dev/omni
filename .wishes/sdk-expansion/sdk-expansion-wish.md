@@ -251,3 +251,79 @@ get chats() {
 
 - `cli-setup` - CLI needs complete SDK
 - Future SDK consumers
+
+---
+
+## Review Verdict
+
+**Verdict:** FIX-FIRST
+**Date:** 2026-02-02
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| **Group A: Auth Endpoint** | | |
+| `POST /api/v2/auth/validate` exists | PASS | `packages/api/src/routes/v2/auth.ts:18` |
+| Returns `{ valid, keyPrefix, keyName, scopes }` | PASS | Response includes all fields |
+| Invalid key returns 401 | PASS | Auth middleware rejects invalid keys |
+| Endpoint documented in OpenAPI | PASS | `packages/api/src/schemas/openapi/auth.ts` registered |
+| **Group B: SDK Wrapper Methods** | | |
+| Chats methods (11 methods) | PASS | All implemented in `client.ts:727-886` |
+| Auth.validate() | PASS | Implemented at `client.ts:559-569` |
+| Logs.recent() | PASS | Implemented at `client.ts:1101-1107` |
+| Automations (9 methods) | PASS | All implemented at `client.ts:1119-1231` |
+| Dead Letters (6 methods) | PASS | All implemented at `client.ts:1240-1308` |
+| Event Ops (5 methods) | PASS | All implemented at `client.ts:1317-1367` |
+| Webhooks (6 methods) | PASS | All implemented at `client.ts:1376-1441` |
+| Payloads (6 methods) | PASS | All implemented at `client.ts:1450-1516` |
+| Messages expanded (7 methods) | PASS | All implemented at `client.ts:895-977` |
+| Instances sync operations | **FAIL** | Missing: `syncProfile`, `startSync`, `listSyncs`, `getSyncStatus` |
+| SDK patterns consistent | PASS | All methods follow existing error/response patterns |
+| TypeScript types correct | PASS | `make typecheck` passes |
+| **Group C: Types & Docs** | | |
+| Types regenerated | PASS | `types.generated.ts` includes auth endpoint |
+| README updated | PASS | All 16+ resource groups documented |
+| SDK builds | PASS | `bun run build` succeeds |
+| **Quality Gates** | | |
+| `make check` passes | **FAIL** | Lint errors (formatting + complexity) |
+
+### Findings
+
+| Severity | Finding |
+|----------|---------|
+| **HIGH** | Missing SDK methods for sync operations - API has endpoints at `POST /instances/:id/sync/profile`, `POST /instances/:id/sync`, `GET /instances/:id/sync`, `GET /instances/:id/sync/:jobId` but SDK doesn't wrap them |
+| **MEDIUM** | Lint errors in `make check` - formatting issues in SDK client and complexity warnings in API routes |
+| LOW | `logs.stream()` SSE endpoint not wrapped (acknowledged in wish spec as "may need different approach") |
+
+### Security Assessment
+
+- ✅ No hardcoded credentials
+- ✅ API key in header, not URL
+- ✅ Auth middleware validates before handlers
+- ✅ Error responses don't leak sensitive data
+- ✅ Scopes field supports future fine-grained access
+
+### Required Fixes Before Ship
+
+1. **Add missing sync methods to SDK** (`packages/sdk/src/client.ts`):
+   ```typescript
+   instances.syncProfile(id)        // POST /instances/:id/sync/profile
+   instances.startSync(id, body)    // POST /instances/:id/sync
+   instances.listSyncs(id, params?) // GET /instances/:id/sync
+   instances.getSyncStatus(id, jobId) // GET /instances/:id/sync/:jobId
+   ```
+
+2. **Fix lint errors** - Run `make lint-fix` and address remaining issues:
+   - Formatting in `packages/sdk/src/client.ts`
+   - Formatting in `packages/api/src/schemas/openapi/auth.ts`
+   - Complexity warnings in API routes (refactor if feasible)
+
+3. **Update SDK README** with sync method documentation
+
+4. **Verify `make check` passes** after fixes
+
+### Recommendation
+
+Address the HIGH and MEDIUM findings above, then re-run `/review sdk-expansion`.
