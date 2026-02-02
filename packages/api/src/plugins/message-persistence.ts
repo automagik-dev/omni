@@ -103,9 +103,10 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
           });
 
-          // Find or create participant
+          // Find or create participant - truncate platformUserId for varchar(255)
           if (payload.from) {
-            await services.chats.findOrCreateParticipant(chat.id, payload.from, {
+            const participantUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
+            await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
               displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
             });
           }
@@ -229,7 +230,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Record participant activity
           if (payload.from) {
-            await services.chats.recordParticipantActivity(chat.id, payload.from);
+            const activityUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
+            await services.chats.recordParticipantActivity(chat.id, activityUserId);
           }
         } catch (error) {
           log.error('Failed to persist message.received to unified model', {
