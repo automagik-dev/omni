@@ -324,9 +324,13 @@ instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (
     const code = await (
       plugin as unknown as { requestPairingCode: (id: string, phone: string) => Promise<string> }
     ).requestPairingCode(id, phoneNumber);
+
+    // Format code as XXXX-XXXX for readability
+    const formattedCode = code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+
     return c.json({
       data: {
-        code,
+        code: formattedCode,
         phoneNumber: phoneNumber.replace(/(\d{4})(\d+)(\d{2})/, '$1****$3'),
         message: 'Enter this code on your WhatsApp mobile app: Settings > Linked Devices > Link with phone number',
         expiresIn: 60, // seconds
