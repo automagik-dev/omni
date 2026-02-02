@@ -37,11 +37,13 @@ function toMentionJid(phoneOrJid: string): string {
  */
 const buildText: ContentBuilder = (message) => {
   // Check for forward in metadata - forward takes precedence
-  const forwardData = message.metadata?.forward as {
-    messageId: string;
-    fromChatId: string;
-    rawPayload?: Record<string, unknown>;
-  } | undefined;
+  const forwardData = message.metadata?.forward as
+    | {
+        messageId: string;
+        fromChatId: string;
+        rawPayload?: Record<string, unknown>;
+      }
+    | undefined;
 
   if (forwardData) {
     // If we have the full rawPayload from DB, use it directly for proper forwarding
@@ -213,11 +215,13 @@ const buildReaction: ContentBuilder = (message) => {
  * { poll: { name: string, values: string[], selectableCount: number } }
  */
 const buildPoll: ContentBuilder = (message) => {
-  const pollData = message.metadata?.poll as {
-    question: string;
-    answers: string[];
-    multiSelect?: boolean;
-  } | undefined;
+  const pollData = message.metadata?.poll as
+    | {
+        question: string;
+        answers: string[];
+        multiSelect?: boolean;
+      }
+    | undefined;
 
   if (!pollData) {
     throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Poll content missing poll data in metadata');

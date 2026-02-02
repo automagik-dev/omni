@@ -63,12 +63,7 @@ async function api(endpoint: string, data: unknown): Promise<{ success: boolean;
   }
 }
 
-async function test(
-  name: string,
-  channel: string,
-  endpoint: string,
-  data: unknown,
-): Promise<TestResult> {
+async function test(name: string, channel: string, endpoint: string, data: unknown): Promise<TestResult> {
   const start = Date.now();
   const res = await api(endpoint, data);
   const result: TestResult = {
@@ -370,9 +365,11 @@ async function main() {
 
   if (failed > 0) {
     console.log('\n❌ Failed tests:');
-    results.filter((r) => !r.success).forEach((r) => {
-      console.log(`  - [${r.channel}] ${r.name}: ${r.error}`);
-    });
+    results
+      .filter((r) => !r.success)
+      .forEach((r) => {
+        console.log(`  - [${r.channel}] ${r.name}: ${r.error}`);
+      });
     process.exit(1);
   }
 

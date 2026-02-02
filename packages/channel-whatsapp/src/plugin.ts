@@ -406,7 +406,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
         const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
         const replyToText = message.metadata?.replyToText as string | undefined;
-        this.logger.debug('Sending with reply', { replyTo: message.replyTo, jid, replyToFromMe, hasRawPayload: !!replyToRawPayload, hasText: !!replyToText });
+        this.logger.debug('Sending with reply', {
+          replyTo: message.replyTo,
+          jid,
+          replyToFromMe,
+          hasRawPayload: !!replyToRawPayload,
+          hasText: !!replyToText,
+        });
 
         // If we have the full rawPayload, use it directly (this is a WAMessage)
         if (replyToRawPayload) {
