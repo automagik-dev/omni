@@ -239,9 +239,6 @@ const buildPoll: ContentBuilder = (message) => {
 
 /**
  * Map of content type to builder function
- *
- * Note: PIX messages are handled specially in plugin.ts using baileys_helpers
- * and don't go through this builder system.
  */
 const contentBuilders: Record<string, ContentBuilder> = {
   text: buildText,

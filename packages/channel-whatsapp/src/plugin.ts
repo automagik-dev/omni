@@ -23,7 +23,6 @@ import { resetConnectionState, setupConnectionHandlers } from './handlers/connec
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
-import { sendPixMessage as sendPixMessageHelper } from './senders/pix';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -410,11 +409,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
-      // Handle PIX messages specially - requires relayMessage to bypass validation
-      if (message.content.type === 'pix' && message.content.pix) {
-        return await this.sendPixMessage(instanceId, sock, jid, message);
-      }
-
       // Handle audio conversion for voice notes (PTT)
       let processedMessage = message;
       if (message.content.type === 'audio' && message.metadata?.ptt === true) {
@@ -554,51 +548,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       });
       return message;
     }
-  }
-
-  /**
-   * Send a PIX payment message using baileys_helpers
-   *
-   * PIX messages require special handling with additionalNodes
-   * (biz, interactive, native_flow) for WhatsApp to render them.
-   */
-  private async sendPixMessage(
-    instanceId: string,
-    sock: WASocket,
-    jid: string,
-    message: OutgoingMessage,
-  ): Promise<SendResult> {
-    const pixData = message.content.pix!;
-
-    this.logger.debug('Sending PIX message via hydratedTemplate', { jid, pixData });
-
-    const messageId = await sendPixMessageHelper(sock, jid, {
-      merchantName: pixData.merchantName,
-      key: pixData.key,
-      keyType: pixData.keyType,
-    });
-
-    if (!messageId) {
-      throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Failed to send PIX message');
-    }
-
-    // Emit sent event
-    await this.emitMessageSent({
-      instanceId,
-      externalId: messageId,
-      chatId: jid,
-      to: message.to,
-      content: {
-        type: 'pix',
-        text: `PIX: ${pixData.merchantName}`,
-      },
-    });
-
-    return {
-      success: true,
-      messageId,
-      timestamp: Date.now(),
-    };
   }
 
   /**

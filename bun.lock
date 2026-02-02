@@ -76,7 +76,6 @@
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "@whiskeysockets/baileys": "^7.0.0-rc.9",
-        "baileys_helpers": "^1.0.16",
         "node-cache": "^5.1.2",
         "pino": "^9.6.0",
       },
@@ -377,8 +376,6 @@
     "async-mutex": ["async-mutex@0.5.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-1A94B18jkJ3DYq284ohPxoXbfTA5HsQ7/Mf4DEhcyLx3Bz27Rh59iScbB6EPiP+B+joue6YCxcMXSbFC1tZKwA=="],
 
     "atomic-sleep": ["atomic-sleep@1.0.0", "", {}, "sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ=="],
-
-    "baileys_helpers": ["baileys_helpers@1.0.16", "", {}, "sha512-WyU4QmKoV1Xt/UXaDn+LivJ/GpyCTCG+DtuduTzYVY3QaFxyrMPBWYHg0i2lTO6au9oeHL/pU8YvtTcj+bl2QQ=="],
 
     "balanced-match": ["balanced-match@1.0.2", "", {}, "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw=="],
 

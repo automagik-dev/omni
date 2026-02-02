@@ -49,14 +49,5 @@ export {
 // Forward
 export { forwardMessage } from './forward';
 
-// PIX
-export {
-  buildPixButtonParams,
-  sendPixMessage,
-  isValidPixData,
-  type PixData,
-  type PixKeyType,
-} from './pix';
-
 // Unified content builder
 export { buildMessageContent } from './builders';
