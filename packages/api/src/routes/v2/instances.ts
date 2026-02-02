@@ -693,9 +693,10 @@ instancesRoutes.post('/:id/sync', zValidator('json', syncRequestSchema), async (
     return c.json({ error: { code: 'JOB_EXISTS', message: `A ${type} sync job is already running` } }, 409);
   }
 
-  // Create sync job
+  // Create sync job with channelType for proper event routing
   const job = await services.syncJobs.create({
     instanceId: id,
+    channelType: instance.channel,
     type,
     config: { depth: depth ?? '7d', channelId, downloadMedia: downloadMedia ?? instance.downloadMediaOnSync },
   });

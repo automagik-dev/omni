@@ -109,7 +109,7 @@ export async function setupSyncWorker(
   }
   try {
     // Subscribe to sync.started events
-    // Use explicit pattern to match exact subject (events published without channel/instance metadata)
+    // Events now include channelType/instanceId metadata, so hierarchical filtering works
     await eventBus.subscribe(
       'sync.started',
       async (event) => {
@@ -163,8 +163,6 @@ export async function setupSyncWorker(
         durable: 'sync-worker',
         queue: 'sync-workers',
         startFrom: 'new',
-        // Use exact pattern since events are published without channel/instance hierarchy
-        pattern: 'sync.started',
       },
     );
 

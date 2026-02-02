@@ -6,6 +6,7 @@
 
 import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
+import type { ChannelType } from '@omni/core/types';
 import type { Database } from '@omni/db';
 import {
   type JobStatus,
@@ -20,6 +21,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 
 export interface CreateSyncJobOptions {
   instanceId: string;
+  channelType: ChannelType;
   type: SyncJobType;
   config?: SyncJobConfig;
 }
@@ -46,10 +48,11 @@ export class SyncJobService {
    * Create a new sync job
    */
   async create(options: CreateSyncJobOptions): Promise<SyncJob> {
-    const { instanceId, type, config = {} } = options;
+    const { instanceId, channelType, type, config = {} } = options;
 
     const jobData: NewSyncJob = {
       instanceId,
+      channel: channelType,
       type,
       status: 'pending',
       config,
@@ -62,14 +65,18 @@ export class SyncJobService {
       throw new Error('Failed to create sync job');
     }
 
-    // Emit sync.started event
+    // Emit sync.started event with proper metadata for hierarchical subjects
     if (this.eventBus) {
-      await this.eventBus.publish('sync.started', {
-        jobId: created.id,
-        instanceId,
-        type,
-        config,
-      });
+      await this.eventBus.publish(
+        'sync.started',
+        {
+          jobId: created.id,
+          instanceId,
+          type,
+          config,
+        },
+        { instanceId, channelType },
+      );
     }
 
     return created;
@@ -194,14 +201,18 @@ export class SyncJobService {
       throw new NotFoundError('SyncJob', id);
     }
 
-    // Emit progress event
+    // Emit progress event with proper metadata for hierarchical subjects
     if (this.eventBus) {
-      await this.eventBus.publish('sync.progress', {
-        jobId: id,
-        instanceId: job.instanceId,
-        type: job.type,
-        progress: updatedProgress,
-      });
+      await this.eventBus.publish(
+        'sync.progress',
+        {
+          jobId: id,
+          instanceId: job.instanceId,
+          type: job.type,
+          progress: updatedProgress,
+        },
+        { instanceId: job.instanceId, channelType: job.channel },
+      );
     }
 
     return updated;
@@ -226,14 +237,18 @@ export class SyncJobService {
       throw new NotFoundError('SyncJob', id);
     }
 
-    // Emit completed event
+    // Emit completed event with proper metadata for hierarchical subjects
     if (this.eventBus) {
-      await this.eventBus.publish('sync.completed', {
-        jobId: id,
-        instanceId: job.instanceId,
-        type: job.type,
-        progress: job.progress,
-      });
+      await this.eventBus.publish(
+        'sync.completed',
+        {
+          jobId: id,
+          instanceId: job.instanceId,
+          type: job.type,
+          progress: job.progress,
+        },
+        { instanceId: job.instanceId, channelType: job.channel },
+      );
     }
 
     return updated;
@@ -259,14 +274,18 @@ export class SyncJobService {
       throw new NotFoundError('SyncJob', id);
     }
 
-    // Emit failed event
+    // Emit failed event with proper metadata for hierarchical subjects
     if (this.eventBus) {
-      await this.eventBus.publish('sync.failed', {
-        jobId: id,
-        instanceId: job.instanceId,
-        type: job.type,
-        error: errorMessage,
-      });
+      await this.eventBus.publish(
+        'sync.failed',
+        {
+          jobId: id,
+          instanceId: job.instanceId,
+          type: job.type,
+          error: errorMessage,
+        },
+        { instanceId: job.instanceId, channelType: job.channel },
+      );
     }
 
     return updated;

@@ -1057,6 +1057,7 @@ export const syncJobs = pgTable(
     instanceId: uuid('instance_id')
       .notNull()
       .references(() => instances.id, { onDelete: 'cascade' }),
+    channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
 
     // ---- Job Type ----
     type: varchar('type', { length: 50 }).notNull().$type<SyncJobType>(),

@@ -38,9 +38,9 @@ describe('streams', () => {
       expect(config.subjects).toEqual(['custom.>']);
     });
 
-    test('SYSTEM stream captures system.> subjects', () => {
+    test('SYSTEM stream captures system.> and sync.> subjects', () => {
       const config = STREAM_CONFIGS.SYSTEM;
-      expect(config.subjects).toEqual(['system.>']);
+      expect(config.subjects).toEqual(['system.>', 'sync.>']);
     });
   });
 

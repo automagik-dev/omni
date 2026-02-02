@@ -115,6 +115,7 @@ export function setupScheduler(services: Services): void {
           try {
             await services.syncJobs.create({
               instanceId: instance.id,
+              channelType: instance.channel,
               type: 'contacts',
               config: {},
             });
@@ -154,6 +155,7 @@ export function setupScheduler(services: Services): void {
           try {
             await services.syncJobs.create({
               instanceId: instance.id,
+              channelType: instance.channel,
               type: 'groups',
               config: {},
             });
