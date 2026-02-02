@@ -85,7 +85,9 @@ type PluginCapability =
   | 'canSendPoll'
   | 'canSendSticker'
   | 'canSendContact'
-  | 'canSendLocation';
+  | 'canSendLocation'
+  | 'canSendTyping'
+  | 'canReceiveReadReceipts';
 
 /**
  * Get validated plugin for an instance with capability check
@@ -125,6 +127,8 @@ async function getPluginForInstance(
       canSendSticker: 'sending stickers',
       canSendContact: 'sending contacts',
       canSendLocation: 'sending locations',
+      canSendTyping: 'sending typing indicators',
+      canReceiveReadReceipts: 'read receipts',
     };
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
@@ -405,11 +409,13 @@ messagesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const query = c.req.valid('query');
   const services = c.get('services');
 
-  const result = await services.messages.list(query);
+  // Run list and count in parallel for efficiency
+  const [result, total] = await Promise.all([services.messages.list(query), services.messages.count(query)]);
 
   return c.json({
     items: result.items,
     meta: {
+      total,
       hasMore: result.hasMore,
       cursor: result.cursor,
     },
@@ -1219,6 +1225,208 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
     },
     201,
   );
+});
+
+// ============================================================================
+// Presence Routes
+// ============================================================================
+
+// Send presence schema
+const sendPresenceSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID to send from'),
+  to: z.string().min(1).describe('Chat ID to show presence in'),
+  type: z.enum(['typing', 'recording', 'paused']).describe('Presence type'),
+  duration: z
+    .number()
+    .int()
+    .min(0)
+    .max(30000)
+    .optional()
+    .default(5000)
+    .describe('Duration in ms before auto-pause (default 5000, 0 = until paused)'),
+});
+
+/**
+ * POST /messages/send/presence - Send presence indicator (typing, recording)
+ *
+ * Shows typing/recording indicator in a chat. Auto-pauses after duration.
+ * - WhatsApp: supports typing, recording, paused
+ * - Discord: supports typing only (recording/paused treated as typing)
+ */
+messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), async (c) => {
+  const { instanceId, to, type, duration } = c.req.valid('json');
+  const services = c.get('services');
+
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    instanceId,
+    'canSendTyping',
+  );
+
+  // Resolve recipient (handles person ID to platform ID resolution)
+  const resolvedTo = await resolveRecipient(to, instance.channel, services);
+
+  // Check if plugin has sendTyping method
+  if (!('sendTyping' in plugin) || typeof plugin.sendTyping !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement sendTyping`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // For paused type, send with 0 duration to immediately stop
+  const effectiveDuration = type === 'paused' ? 0 : duration;
+
+  // If recording type and plugin is discord, still use sendTyping (Discord only supports typing)
+  // WhatsApp plugin handles all three types internally
+  await (
+    plugin as { sendTyping: (instanceId: string, chatId: string, duration?: number) => Promise<void> }
+  ).sendTyping(instanceId, resolvedTo, effectiveDuration);
+
+  return c.json({
+    success: true,
+    data: {
+      instanceId,
+      chatId: resolvedTo,
+      type,
+      duration: effectiveDuration,
+    },
+  });
+});
+
+// ============================================================================
+// Read Receipt Routes
+// ============================================================================
+
+// Mark single message as read schema
+const markMessageReadSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+});
+
+// Mark batch messages as read schema
+const markBatchReadSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  chatId: z.string().min(1).describe('Chat ID containing the messages'),
+  messageIds: z.array(z.string().min(1)).min(1).max(100).describe('Message IDs to mark as read'),
+});
+
+/**
+ * POST /messages/:id/read - Mark a single message as read
+ *
+ * Sends read receipt for a specific message.
+ * Note: Requires the message to exist in our database to get chat context.
+ */
+messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), async (c) => {
+  const messageId = c.req.param('id');
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Get message from our database
+  const message = await services.messages.getById(messageId);
+  const chat = await services.chats.getById(message.chatId);
+
+  // Verify instance matches
+  if (chat.instanceId !== instanceId) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: 'Instance ID does not match the message\'s instance',
+      context: { instanceId, messageInstanceId: chat.instanceId },
+      recoverable: false,
+    });
+  }
+
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    channelRegistry,
+    instanceId,
+    'canReceiveReadReceipts',
+  );
+
+  // Check if plugin has markAsRead method
+  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement markAsRead`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Call plugin with external message ID
+  await (
+    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
+  ).markAsRead(instanceId, chat.externalId, [message.externalId]);
+
+  return c.json({
+    success: true,
+    data: {
+      messageId,
+      externalMessageId: message.externalId,
+      chatId: message.chatId,
+    },
+  });
+});
+
+/**
+ * POST /messages/read - Mark multiple messages as read (batch)
+ *
+ * Sends read receipts for multiple messages in a single chat.
+ */
+messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) => {
+  const { instanceId, chatId, messageIds } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    channelRegistry,
+    instanceId,
+    'canReceiveReadReceipts',
+  );
+
+  // Check if plugin has markAsRead method
+  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement markAsRead`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // chatId can be either external chat ID or internal UUID
+  // Try to resolve as UUID first, fall back to external ID
+  let externalChatId = chatId;
+  const UUID_REGEX_LOCAL = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (UUID_REGEX_LOCAL.test(chatId)) {
+    const chat = await services.chats.getById(chatId);
+    if (chat.instanceId !== instanceId) {
+      throw new OmniError({
+        code: ERROR_CODES.VALIDATION,
+        message: 'Instance ID does not match the chat\'s instance',
+        context: { instanceId, chatInstanceId: chat.instanceId },
+        recoverable: false,
+      });
+    }
+    externalChatId = chat.externalId;
+  }
+
+  await (
+    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
+  ).markAsRead(instanceId, externalChatId, messageIds);
+
+  return c.json({
+    success: true,
+    data: {
+      instanceId,
+      chatId: externalChatId,
+      messageCount: messageIds.length,
+    },
+  });
 });
 
 // ============================================================================

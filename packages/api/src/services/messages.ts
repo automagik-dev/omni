@@ -22,7 +22,7 @@ import {
   chats,
   messages,
 } from '@omni/db';
-import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 
 export interface ListMessagesOptions {
   chatId?: string;
@@ -174,6 +174,69 @@ export class MessageService {
       hasMore,
       cursor: lastItem?.platformTimestamp.toISOString(),
     };
+  }
+
+  /**
+   * Count total messages matching filters
+   */
+  async count(options: Omit<ListMessagesOptions, 'limit' | 'cursor'> = {}): Promise<number> {
+    const { chatId, source, messageType, status, hasMedia, senderPersonId, since, until, search } = options;
+
+    const conditions = [];
+
+    if (chatId) {
+      conditions.push(eq(messages.chatId, chatId));
+    }
+
+    if (source?.length) {
+      conditions.push(inArray(messages.source, source));
+    }
+
+    if (messageType?.length) {
+      conditions.push(inArray(messages.messageType, messageType));
+    }
+
+    if (status?.length) {
+      conditions.push(inArray(messages.status, status));
+    }
+
+    if (hasMedia !== undefined) {
+      conditions.push(eq(messages.hasMedia, hasMedia));
+    }
+
+    if (senderPersonId) {
+      conditions.push(eq(messages.senderPersonId, senderPersonId));
+    }
+
+    if (since) {
+      conditions.push(gte(messages.platformTimestamp, since));
+    }
+
+    if (until) {
+      conditions.push(lte(messages.platformTimestamp, until));
+    }
+
+    if (search) {
+      const searchPattern = `%${search}%`;
+      conditions.push(
+        or(
+          ilike(messages.textContent, searchPattern),
+          ilike(messages.transcription, searchPattern),
+          ilike(messages.imageDescription, searchPattern),
+          ilike(messages.documentExtraction, searchPattern),
+        ),
+      );
+    }
+
+    // Exclude deleted messages by default
+    conditions.push(sql`${messages.deletedAt} IS NULL`);
+
+    const result = await this.db
+      .select({ count: count() })
+      .from(messages)
+      .where(conditions.length ? and(...conditions) : undefined);
+
+    return result[0]?.count ?? 0;
   }
 
   /**
