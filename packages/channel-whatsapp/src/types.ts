@@ -569,6 +569,70 @@ export interface WAMessageReceiptUpdate {
 }
 
 // ============================================================================
+// PIX PAYMENT MESSAGE
+// ============================================================================
+
+/**
+ * PIX key type values
+ */
+export type WAPixKeyType = 'PHONE' | 'EMAIL' | 'CPF' | 'EVP';
+
+/**
+ * PIX static code payment settings
+ */
+export interface WAPixStaticCode {
+  /** Merchant/receiver name */
+  merchant_name: string;
+  /** PIX key value */
+  key: string;
+  /** Type of PIX key */
+  key_type: WAPixKeyType;
+}
+
+/**
+ * PIX payment settings
+ */
+export interface WAPixPaymentSetting {
+  /** Payment type - always 'pix_static_code' for PIX copia e cola */
+  type: 'pix_static_code';
+  /** PIX static code data */
+  pix_static_code: WAPixStaticCode;
+}
+
+/**
+ * PIX payment info button
+ */
+export interface WAPixButton {
+  /** Button name - always 'payment_info' for PIX */
+  name: 'payment_info';
+  /** JSON string containing payment settings */
+  buttonParamsJson: string;
+}
+
+/**
+ * PIX interactive message (native flow)
+ *
+ * @example
+ * {
+ *   "interactiveMessage": {
+ *     "nativeFlowMessage": {
+ *       "buttons": [{
+ *         "name": "payment_info",
+ *         "buttonParamsJson": "{\"payment_settings\":[{\"type\":\"pix_static_code\",\"pix_static_code\":{\"merchant_name\":\"Store Name\",\"key\":\"email@example.com\",\"key_type\":\"EMAIL\"}}]}"
+ *       }]
+ *     }
+ *   }
+ * }
+ */
+export interface WAPixMessage {
+  interactiveMessage: {
+    nativeFlowMessage: {
+      buttons: WAPixButton[];
+    };
+  };
+}
+
+// ============================================================================
 // FULL MESSAGE WRAPPER
 // ============================================================================
 
