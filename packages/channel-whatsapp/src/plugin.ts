@@ -46,6 +46,22 @@ export interface HistorySyncMessage {
 }
 
 /**
+ * Anchor point for fetching older messages in a chat
+ */
+export interface MessageAnchor {
+  /** Chat JID (e.g., "5511999999999@s.whatsapp.net") */
+  chatJid: string;
+  /** Message key of the oldest message we have */
+  messageKey: {
+    remoteJid: string;
+    id: string;
+    fromMe: boolean;
+  };
+  /** Timestamp of the oldest message (Unix ms) */
+  timestamp: number;
+}
+
+/**
  * Options for fetchHistory method
  */
 export interface FetchHistoryOptions {
@@ -61,6 +77,10 @@ export interface FetchHistoryOptions {
   fetchMore?: boolean;
   /** Max messages to fetch when using fetchMore */
   maxMessages?: number;
+  /** Number of messages to fetch per chat (default: 50) */
+  count?: number;
+  /** Anchor points for specific chats - if provided, actively fetches older messages */
+  anchors?: MessageAnchor[];
 }
 
 /**
@@ -761,20 +781,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Fetch message history for an instance.
    *
-   * WhatsApp syncs history automatically on connection via the `messaging-history.set` event.
-   * This method:
-   * 1. Sets up callbacks to process history as it arrives
-   * 2. Optionally requests additional history via `fetchMessageHistory`
-   * 3. Returns collected messages or streams them via callbacks
+   * This method actively requests older messages using Baileys' fetchMessageHistory API.
+   * It requires anchor points (oldest known messages per chat) to request older messages.
+   *
+   * Flow:
+   * 1. Sets up callbacks to process history as it arrives via `messaging-history.set`
+   * 2. For each anchor, calls `sock.fetchMessageHistory()` to request older messages
+   * 3. Waits for responses and processes them via callbacks
+   * 4. Returns collected messages
    *
    * @param instanceId - Instance to fetch history for
-   * @param options - Fetch options including date range and callbacks
+   * @param options - Fetch options including anchors for per-chat fetching
    * @returns Promise that resolves when sync is complete or timeout
    */
   async fetchHistory(instanceId: string, options: FetchHistoryOptions = {}): Promise<FetchHistoryResult> {
-    // Validate instance is connected (throws if not)
-    this.getSocket(instanceId);
+    const sock = this.getSocket(instanceId);
     const messages: HistorySyncMessage[] = [];
+    const count = options.count ?? 50;
 
     const syncState = {
       since: options.since,
@@ -791,35 +814,66 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.historySyncCallbacks.set(instanceId, syncState);
 
     try {
-      // If fetchMore is requested and we have existing messages, request more history
-      if (options.fetchMore && options.maxMessages) {
-        // Get oldest message in the chat to use as anchor
-        // For now, we'll rely on the automatic history sync
-        // In the future, we could use sock.fetchMessageHistory() to request more
-        this.logger.debug('Additional history fetch requested', {
+      // If anchors are provided, actively fetch older messages for each chat
+      if (options.anchors && options.anchors.length > 0) {
+        this.logger.info('Actively fetching history for chats', {
           instanceId,
-          maxMessages: options.maxMessages,
+          chatCount: options.anchors.length,
+          countPerChat: count,
         });
 
-        // Note: fetchMessageHistory requires an existing message key and timestamp
-        // which we don't have at this point. The initial sync via messaging-history.set
-        // handles the bulk of history. For on-demand fetching of older messages,
-        // we would need to track the oldest synced message.
+        // Fetch history for each chat with an anchor
+        for (const anchor of options.anchors) {
+          try {
+            this.logger.debug('Fetching history for chat', {
+              instanceId,
+              chatJid: anchor.chatJid,
+              anchorId: anchor.messageKey.id,
+              timestamp: new Date(anchor.timestamp).toISOString(),
+            });
+
+            // Call Baileys fetchMessageHistory
+            // This triggers messaging-history.set events with the older messages
+            await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
+
+            // Small delay between requests to avoid rate limiting
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          } catch (error) {
+            this.logger.warn('Failed to fetch history for chat', {
+              instanceId,
+              chatJid: anchor.chatJid,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            // Continue with other chats
+          }
+        }
+
+        // Wait for all messaging-history.set events to be processed
+        // Give enough time for all responses to arrive
+        const waitTime = Math.min(options.anchors.length * 2000, 30000);
+        this.logger.debug('Waiting for history responses', { waitTime });
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      } else {
+        // No anchors provided - fall back to passive waiting for initial sync
+        this.logger.info('No anchors provided, waiting for passive history sync', { instanceId });
+
+        const timeout = 60000;
+        const startTime = Date.now();
+
+        await new Promise<void>((resolve) => {
+          const checkComplete = setInterval(() => {
+            const state = this.historySyncCallbacks.get(instanceId);
+            if (!state || Date.now() - startTime > timeout) {
+              clearInterval(checkComplete);
+              resolve();
+            }
+          }, 1000);
+        });
       }
 
-      // Wait for history sync to complete or timeout
-      // WhatsApp history sync is progressive - we wait for isLatest or progress=100
-      const timeout = 60000; // 60 second timeout
-      const startTime = Date.now();
-
-      await new Promise<void>((resolve) => {
-        const checkComplete = setInterval(() => {
-          const state = this.historySyncCallbacks.get(instanceId);
-          if (!state || Date.now() - startTime > timeout) {
-            clearInterval(checkComplete);
-            resolve();
-          }
-        }, 1000);
+      this.logger.info('History fetch completed', {
+        instanceId,
+        totalMessages: messages.length,
       });
 
       return {

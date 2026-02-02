@@ -13,7 +13,7 @@ import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import type { Database, SyncJobConfig, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
 
 const log = createLogger('sync-worker');
@@ -174,6 +174,71 @@ export async function setupSyncWorker(
 }
 
 /**
+ * Build message anchors for WhatsApp history fetch
+ * Gets the oldest message per chat to use as anchor points
+ */
+async function buildWhatsAppAnchors(
+  instanceId: string,
+  _services: Services,
+): Promise<Array<{ chatJid: string; messageKey: { remoteJid: string; id: string; fromMe: boolean }; timestamp: number }>> {
+  if (!db) {
+    log.warn('Database not available for building anchors');
+    return [];
+  }
+
+  // Query oldest message per chat that has a raw_payload with key
+  // Using raw SQL for the complex DISTINCT ON query
+  const result = await db.execute(sql`
+    WITH oldest_messages AS (
+      SELECT DISTINCT ON (c.external_id)
+        c.external_id as chat_jid,
+        m.external_id,
+        m.platform_timestamp,
+        m.is_from_me,
+        m.raw_payload->'key' as message_key
+      FROM messages m
+      JOIN chats c ON m.chat_id = c.id
+      WHERE c.instance_id = ${instanceId}
+        AND c.channel = 'whatsapp-baileys'
+        AND m.raw_payload IS NOT NULL
+        AND m.raw_payload::text != 'null'
+        AND m.raw_payload->'key' IS NOT NULL
+      ORDER BY c.external_id, m.platform_timestamp ASC
+    )
+    SELECT * FROM oldest_messages
+  `);
+
+  const anchors: Array<{
+    chatJid: string;
+    messageKey: { remoteJid: string; id: string; fromMe: boolean };
+    timestamp: number;
+  }> = [];
+
+  for (const row of result as unknown as Array<{
+    chat_jid: string;
+    external_id: string;
+    platform_timestamp: Date;
+    is_from_me: boolean;
+    message_key: { id: string; remoteJid: string; fromMe: boolean } | null;
+  }>) {
+    if (row.message_key && row.message_key.id && row.message_key.remoteJid) {
+      anchors.push({
+        chatJid: row.chat_jid,
+        messageKey: {
+          remoteJid: row.message_key.remoteJid,
+          id: row.message_key.id,
+          fromMe: row.message_key.fromMe ?? row.is_from_me,
+        },
+        timestamp: new Date(row.platform_timestamp).getTime(),
+      });
+    }
+  }
+
+  log.info('Built WhatsApp anchors', { instanceId, anchorCount: anchors.length });
+  return anchors;
+}
+
+/**
  * Process message history sync
  */
 async function processMessageSync(
@@ -210,10 +275,23 @@ async function processMessageSync(
     since: since?.toISOString(),
   });
 
-  // For Discord, we need a channel ID from config
+  // Build anchors for WhatsApp to enable active history fetching
+  let anchors: Array<{
+    chatJid: string;
+    messageKey: { remoteJid: string; id: string; fromMe: boolean };
+    timestamp: number;
+  }> = [];
+
+  if (channelType === 'whatsapp-baileys') {
+    anchors = await buildWhatsAppAnchors(instanceId, services);
+    log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length });
+  }
+
   const fetchOptions: Record<string, unknown> = {
     since,
     until: new Date(),
+    count: 50, // Messages per chat
+    anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
       await services.syncJobs.updateProgress(jobId, {
         fetched: count,
