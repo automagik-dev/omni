@@ -539,7 +539,7 @@ export const chats = pgTable(
 
     // ---- Activity ----
     lastMessageAt: timestamp('last_message_at'),
-    lastMessagePreview: varchar('last_message_preview', { length: 255 }),
+    lastMessagePreview: text('last_message_preview'),
 
     // ---- Settings ----
     settings: jsonb('settings').$type<ChatSettings>(),
