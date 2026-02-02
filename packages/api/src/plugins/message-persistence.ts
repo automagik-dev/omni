@@ -110,7 +110,11 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             });
             chat = result.chat;
           } catch (chatError) {
-            log.error('Failed at findOrCreate chat', { externalId: payload.externalId, chatExternalId, error: String(chatError) });
+            log.error('Failed at findOrCreate chat', {
+              externalId: payload.externalId,
+              chatExternalId,
+              error: String(chatError),
+            });
             throw chatError;
           }
 
@@ -122,7 +126,11 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
                 displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
               });
             } catch (participantError) {
-              log.error('Failed at findOrCreateParticipant', { externalId: payload.externalId, participantUserId, error: String(participantError) });
+              log.error('Failed at findOrCreateParticipant', {
+                externalId: payload.externalId,
+                participantUserId,
+                error: String(participantError),
+              });
               throw participantError;
             }
           }
@@ -135,6 +143,10 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
             // Note: platformUserId (JID) should never exceed 255 chars in practice
             const platformUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
+            // Extract phone number from WhatsApp JID (e.g., "5551999999999@s.whatsapp.net" -> "5551999999999")
+            const phoneNumber = channel.startsWith('whatsapp')
+              ? platformUserId.split('@')[0]?.replace(/\D/g, '')
+              : undefined;
             let identity: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['identity'];
             let person: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['person'];
             let isNew: boolean;
@@ -149,13 +161,18 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
                 {
                   createPerson: true,
                   displayName,
+                  matchByPhone: phoneNumber,
                 },
               );
               identity = result.identity;
               person = result.person;
               isNew = result.isNew;
             } catch (identityError) {
-              log.error('Failed at findOrCreateIdentity', { externalId: payload.externalId, platformUserId, error: String(identityError) });
+              log.error('Failed at findOrCreateIdentity', {
+                externalId: payload.externalId,
+                platformUserId,
+                error: String(identityError),
+              });
               throw identityError;
             }
 
@@ -248,7 +265,11 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           };
 
           try {
-            const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, messageOptions);
+            const { message, created } = await services.messages.findOrCreate(
+              chat.id,
+              messageExternalId,
+              messageOptions,
+            );
 
             if (created) {
               log.debug('Created message', {
@@ -282,7 +303,10 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             try {
               await services.chats.recordParticipantActivity(chat.id, activityUserId);
             } catch (activityError) {
-              log.error('Failed at recordParticipantActivity', { externalId: payload.externalId, error: String(activityError) });
+              log.error('Failed at recordParticipantActivity', {
+                externalId: payload.externalId,
+                error: String(activityError),
+              });
               throw activityError;
             }
           }
@@ -330,6 +354,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'last',
+        concurrency: 10, // Process up to 10 messages in parallel
       },
     );
 
@@ -395,6 +420,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'last',
+        concurrency: 10,
       },
     );
 
@@ -440,6 +466,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'last',
+        concurrency: 10,
       },
     );
 
@@ -484,6 +511,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'last',
+        concurrency: 10,
       },
     );
 
