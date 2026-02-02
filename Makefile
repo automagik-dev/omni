@@ -4,7 +4,7 @@
 .PHONY: help install dev dev-api dev-services dev-stop build clean \
         test test-watch test-api test-db typecheck lint lint-fix format check \
         db-push db-migrate db-studio db-reset \
-        ensure-nats start stop restart logs status \
+        ensure-nats ensure-ffmpeg check-ffmpeg start stop restart logs status \
         kill-ghosts reset sdk-generate \
         migrate-messages migrate-messages-dry
 
@@ -58,6 +58,8 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  make ensure-nats   Download NATS binary if missing"
+	@echo "  make ensure-ffmpeg Install ffmpeg (for WhatsApp voice note conversion)"
+	@echo "  make check-ffmpeg  Check if ffmpeg is installed"
 	@echo "  make reset         Full clean and reinstall"
 
 # ============================================================================
@@ -284,3 +286,71 @@ migrate-messages:
 	@echo "WARNING: This will migrate events to the unified messages schema."
 	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
 	cd packages/api && bun run scripts/migrate-events-to-messages.ts
+
+# ============================================================================
+# FFmpeg Setup (for WhatsApp voice note conversion)
+# ============================================================================
+
+# Check if ffmpeg is installed
+check-ffmpeg:
+	@echo "Checking ffmpeg installation..."
+	@if command -v ffmpeg >/dev/null 2>&1; then \
+		echo "✓ ffmpeg is installed"; \
+		ffmpeg -version 2>&1 | head -1; \
+		echo ""; \
+		echo "Checking for libopus codec support..."; \
+		if ffmpeg -encoders 2>/dev/null | grep -q libopus; then \
+			echo "✓ libopus codec available"; \
+		else \
+			echo "⚠️  libopus codec not available (voice note conversion may not work)"; \
+		fi; \
+	else \
+		echo "✗ ffmpeg is NOT installed"; \
+		echo ""; \
+		echo "Run 'make ensure-ffmpeg' to install it"; \
+	fi
+
+# Install ffmpeg with opus support (auto-detects OS)
+ensure-ffmpeg:
+	@echo "Installing ffmpeg..."
+	@if command -v ffmpeg >/dev/null 2>&1; then \
+		echo "✓ ffmpeg is already installed"; \
+		$(MAKE) check-ffmpeg; \
+	elif [ "$$(uname)" = "Darwin" ]; then \
+		echo "Detected macOS - using Homebrew..."; \
+		if command -v brew >/dev/null 2>&1; then \
+			brew install ffmpeg; \
+		else \
+			echo "✗ Homebrew not found. Please install it first:"; \
+			echo "  /bin/bash -c \"\$$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""; \
+			exit 1; \
+		fi; \
+	elif [ -f /etc/debian_version ]; then \
+		echo "Detected Debian/Ubuntu - using apt..."; \
+		sudo apt-get update && sudo apt-get install -y ffmpeg; \
+	elif [ -f /etc/fedora-release ]; then \
+		echo "Detected Fedora - using dnf..."; \
+		sudo dnf install -y ffmpeg; \
+	elif [ -f /etc/arch-release ]; then \
+		echo "Detected Arch Linux - using pacman..."; \
+		sudo pacman -S --noconfirm ffmpeg; \
+	elif [ -f /etc/alpine-release ]; then \
+		echo "Detected Alpine - using apk..."; \
+		sudo apk add --no-cache ffmpeg; \
+	elif grep -qi microsoft /proc/version 2>/dev/null; then \
+		echo "Detected WSL - using apt..."; \
+		sudo apt-get update && sudo apt-get install -y ffmpeg; \
+	else \
+		echo "✗ Could not detect OS. Please install ffmpeg manually:"; \
+		echo ""; \
+		echo "  macOS:        brew install ffmpeg"; \
+		echo "  Ubuntu/Debian: sudo apt install ffmpeg"; \
+		echo "  Fedora:       sudo dnf install ffmpeg"; \
+		echo "  Arch:         sudo pacman -S ffmpeg"; \
+		echo "  Alpine:       apk add ffmpeg"; \
+		echo "  Windows:      choco install ffmpeg"; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "✓ ffmpeg installation complete!"
+	@$(MAKE) check-ffmpeg

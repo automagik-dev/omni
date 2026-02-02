@@ -8,6 +8,36 @@ import type { OutgoingMessage } from '@omni/channel-sdk';
 import type { MessageCreateOptions } from 'discord.js';
 
 /**
+ * Format mentions array to Discord mention strings
+ *
+ * Converts structured mentions to Discord format:
+ * - user: <@USER_ID>
+ * - role: <@&ROLE_ID>
+ * - channel: <#CHANNEL_ID>
+ * - everyone: @everyone
+ * - here: @here
+ */
+function formatMentions(mentions: Array<{ id: string; type?: string }>): string[] {
+  return mentions.map((m) => {
+    const type = m.type || 'user';
+    switch (type) {
+      case 'user':
+        return `<@${m.id}>`;
+      case 'role':
+        return `<@&${m.id}>`;
+      case 'channel':
+        return `<#${m.id}>`;
+      case 'everyone':
+        return '@everyone';
+      case 'here':
+        return '@here';
+      default:
+        return `<@${m.id}>`;
+    }
+  });
+}
+
+/**
  * Build Discord message content from OutgoingMessage
  *
  * @param message - Outgoing message to convert
@@ -17,9 +47,16 @@ export function buildMessageContent(message: OutgoingMessage): MessageCreateOpti
   const options: MessageCreateOptions = {};
   const content = message.content;
 
+  // Check for mentions in metadata
+  const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
+  let mentionPrefix = '';
+  if (mentions && mentions.length > 0) {
+    mentionPrefix = formatMentions(mentions).join(' ') + ' ';
+  }
+
   switch (content.type) {
     case 'text':
-      options.content = content.text;
+      options.content = mentionPrefix + (content.text || '');
       break;
 
     case 'image':
@@ -34,9 +71,11 @@ export function buildMessageContent(message: OutgoingMessage): MessageCreateOpti
           },
         ];
       }
-      // Add caption as content if present
+      // Add caption as content if present (with mentions)
       if (content.text || content.caption) {
-        options.content = content.text || content.caption;
+        options.content = mentionPrefix + (content.text || content.caption);
+      } else if (mentionPrefix) {
+        options.content = mentionPrefix.trim();
       }
       break;
 
@@ -51,9 +90,11 @@ export function buildMessageContent(message: OutgoingMessage): MessageCreateOpti
       throw new Error('Reactions should be sent via addReaction, not sendMessage');
 
     default:
-      // Fall back to text content if available
+      // Fall back to text content if available (with mentions)
       if (content.text) {
-        options.content = content.text;
+        options.content = mentionPrefix + content.text;
+      } else if (mentionPrefix) {
+        options.content = mentionPrefix.trim();
       } else {
         throw new Error(`Unsupported content type: ${content.type}`);
       }
