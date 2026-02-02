@@ -20,6 +20,10 @@ import { getPlugin } from './loader';
 
 const log = createLogger('message-persistence');
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
 /**
  * Truncate string to max length (safe for varchar columns)
  */
@@ -29,48 +33,265 @@ function truncate(str: string | undefined | null, maxLength: number): string | u
 }
 
 /**
+ * Content type to message type mapping
+ */
+const CONTENT_TYPE_MAP: Record<string, MessageType> = {
+  audio: 'audio',
+  image: 'image',
+  video: 'video',
+  document: 'document',
+  sticker: 'sticker',
+  contact: 'contact',
+  location: 'location',
+  poll: 'poll',
+  poll_update: 'poll',
+};
+
+/**
  * Map content type to message type
  */
 function mapContentType(contentType: string | undefined): MessageType {
-  switch (contentType) {
-    case 'audio':
-      return 'audio';
-    case 'image':
-      return 'image';
-    case 'video':
-      return 'video';
-    case 'document':
-      return 'document';
-    case 'sticker':
-      return 'sticker';
-    case 'contact':
-      return 'contact';
-    case 'location':
-      return 'location';
-    case 'poll':
-    case 'poll_update':
-      return 'poll';
-    default:
-      return 'text';
-  }
+  return CONTENT_TYPE_MAP[contentType ?? ''] ?? 'text';
 }
 
 /**
  * Infer chat type from context
  */
 function inferChatType(chatId: string, isGroup?: boolean): ChatType {
-  // WhatsApp group IDs end with @g.us, DMs end with @s.whatsapp.net
-  if (chatId.includes('@g.us') || chatId.includes('@broadcast')) {
-    return 'group';
-  }
-  if (chatId.includes('@newsletter')) {
-    return 'channel';
-  }
-  if (isGroup) {
-    return 'group';
-  }
+  if (chatId.includes('@g.us') || chatId.includes('@broadcast')) return 'group';
+  if (chatId.includes('@newsletter')) return 'channel';
+  if (isGroup) return 'group';
   return 'dm';
 }
+
+/**
+ * Find long string fields in an object (for debugging varchar issues)
+ */
+function findLongStrings(obj: unknown, prefix = '', minLength = 200): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!obj || typeof obj !== 'object') return result;
+
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    const fullKey = `${prefix}${key}`;
+    if (typeof val === 'string' && val.length > minLength) {
+      result[fullKey] = val.length;
+    } else if (val && typeof val === 'object') {
+      Object.assign(result, findLongStrings(val, `${fullKey}.`, minLength));
+    }
+  }
+  return result;
+}
+
+/**
+ * Extract platform timestamp from raw payload
+ */
+function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefined, fallback: number): Date {
+  if (!rawPayload?.messageTimestamp) return new Date(fallback);
+
+  const ts = rawPayload.messageTimestamp;
+  const tsNum = typeof ts === 'number' ? ts : typeof ts === 'string' ? Number(ts) : null;
+  if (!tsNum || Number.isNaN(tsNum)) return new Date(fallback);
+
+  // WhatsApp timestamps are in seconds, convert to milliseconds
+  return new Date(tsNum < 1e12 ? tsNum * 1000 : tsNum);
+}
+
+/**
+ * Extract phone number from WhatsApp JID
+ */
+function extractPhoneFromJid(jid: string, channel: string): string | undefined {
+  if (!channel.startsWith('whatsapp')) return undefined;
+  return jid.split('@')[0]?.replace(/\D/g, '');
+}
+
+// ============================================================================
+// Identity Processing
+// ============================================================================
+
+interface IdentityResult {
+  personId: string | undefined;
+  platformIdentityId: string | undefined;
+}
+
+/**
+ * Process sender identity - find or create person + platform identity
+ */
+async function processSenderIdentity(
+  services: Services,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; personId?: string; platformIdentityId?: string; channelType?: string },
+  channel: ChannelType,
+): Promise<IdentityResult> {
+  // Return existing if already resolved
+  if (metadata.platformIdentityId) {
+    return { personId: metadata.personId, platformIdentityId: metadata.platformIdentityId };
+  }
+
+  if (!payload.from) {
+    return { personId: metadata.personId, platformIdentityId: undefined };
+  }
+
+  const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
+  const platformUserId = truncate(payload.from, 255) ?? payload.from;
+  const phoneNumber = extractPhoneFromJid(platformUserId, channel);
+
+  const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
+    { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
+    { createPerson: true, displayName, matchByPhone: phoneNumber },
+  );
+
+  // Fetch profile for new identities (non-blocking)
+  if (isNew) {
+    log.debug('Auto-created identity for sender', {
+      platformUserId: payload.from,
+      identityId: identity.id,
+      personId: person?.id,
+    });
+    fetchAndUpdateProfile(services, channel, metadata.instanceId, payload.from, identity.id).catch(() => {});
+  }
+
+  return { personId: person?.id, platformIdentityId: identity.id };
+}
+
+/**
+ * Fetch user profile from channel plugin and update identity (non-blocking)
+ */
+async function fetchAndUpdateProfile(
+  services: Services,
+  channel: ChannelType,
+  instanceId: string,
+  userId: string,
+  identityId: string,
+): Promise<void> {
+  try {
+    const plugin = await getPlugin(channel);
+    if (!plugin || !('fetchUserProfile' in plugin)) return;
+
+    const fetchProfile = plugin.fetchUserProfile as (
+      instanceId: string,
+      userId: string,
+    ) => Promise<{ displayName?: string; avatarUrl?: string; bio?: string; platformData?: Record<string, unknown> }>;
+
+    const profile = await fetchProfile.call(plugin, instanceId, userId);
+    if (profile.avatarUrl || profile.bio || profile.platformData) {
+      await services.persons.updateIdentityProfile(identityId, profile);
+      log.debug('Updated identity with profile data', {
+        identityId,
+        hasAvatar: !!profile.avatarUrl,
+        hasBio: !!profile.bio,
+      });
+    }
+  } catch (error) {
+    log.warn('Failed to fetch profile for new identity', { identityId, error: String(error) });
+  }
+}
+
+// ============================================================================
+// Message Received Handler
+// ============================================================================
+
+interface MessageMetadata {
+  instanceId: string;
+  personId?: string;
+  platformIdentityId?: string;
+  channelType?: string;
+}
+
+/**
+ * Handle message.received event - main processing logic
+ */
+async function handleMessageReceived(
+  services: Services,
+  payload: MessageReceivedPayload,
+  metadata: MessageMetadata,
+  eventTimestamp: number,
+): Promise<void> {
+  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
+  const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
+  const rawPayload = payload.rawPayload;
+
+  // Step 1: Find or create chat
+  const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
+    chatType: inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined),
+    channel,
+    name: truncate(rawPayload?.chatName as string | undefined, 255),
+  });
+
+  // Step 2: Find or create participant
+  if (payload.from) {
+    const participantUserId = truncate(payload.from, 255) ?? payload.from;
+    await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
+      displayName: truncate(rawPayload?.pushName as string | undefined, 255),
+    });
+  }
+
+  // Step 3: Process sender identity
+  const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
+
+  // Step 4: Build and create message
+  const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
+  const platformTimestamp = extractPlatformTimestamp(rawPayload, eventTimestamp);
+
+  const { created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
+    source: 'realtime',
+    messageType: mapContentType(payload.content.type),
+    textContent: payload.content.text,
+    platformTimestamp,
+    senderPlatformUserId: truncate(payload.from, 255),
+    senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
+    senderPersonId: personId,
+    senderPlatformIdentityId: platformIdentityId,
+    isFromMe: false,
+    hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
+    mediaMimeType: truncate(payload.content.mimeType, 100),
+    mediaUrl: payload.content.mediaUrl,
+    replyToExternalId: truncate(payload.replyToId, 255),
+    quotedText: quotedMessage?.conversation as string | undefined,
+    quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
+    rawPayload,
+  });
+
+  if (created) {
+    log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
+  }
+
+  // Step 5: Record participant activity
+  if (payload.from) {
+    const activityUserId = truncate(payload.from, 255) ?? payload.from;
+    await services.chats.recordParticipantActivity(chat.id, activityUserId);
+  }
+}
+
+/**
+ * Log detailed error info for message.received failures
+ */
+function logMessageReceivedError(payload: MessageReceivedPayload, error: unknown): void {
+  const rawPayload = payload.rawPayload;
+  const quotedMsg = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
+  const longFields = findLongStrings(rawPayload, 'raw.');
+
+  log.error('Failed to persist message.received to unified model', {
+    externalId: payload.externalId,
+    error: String(error),
+    fieldLengths: {
+      chatId: payload.chatId?.length,
+      from: payload.from?.length,
+      pushName: (rawPayload?.pushName as string)?.length,
+      chatName: (rawPayload?.chatName as string)?.length,
+      mimeType: payload.content?.mimeType?.length,
+      replyToId: payload.replyToId?.length,
+      quotedPushName: (quotedMsg?.pushName as string)?.length,
+      quotedParticipant: (quotedMsg?.participant as string)?.length,
+    },
+    longFields: Object.keys(longFields).length > 0 ? longFields : undefined,
+  });
+}
+
+// ============================================================================
+// Main Setup
+// ============================================================================
 
 /**
  * Set up message persistence - subscribes to message events and writes to chats/messages tables
@@ -87,264 +308,21 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
+        // Skip if no instance ID
+        if (!metadata.instanceId) {
+          log.debug('Skipping message without instanceId', { externalId: payload.externalId });
+          return;
+        }
+
         try {
-          // Skip if no instance ID
-          if (!metadata.instanceId) {
-            log.debug('Skipping message without instanceId', { externalId: payload.externalId });
-            return;
-          }
-
-          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-
-          // Truncate IDs for varchar(255) safety
-          const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
-          const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
-
-          // Find or create chat
-          let chat: Awaited<ReturnType<typeof services.chats.findOrCreate>>['chat'];
-          try {
-            const result = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
-              chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
-              channel,
-              name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
-            });
-            chat = result.chat;
-          } catch (chatError) {
-            log.error('Failed at findOrCreate chat', {
-              externalId: payload.externalId,
-              chatExternalId,
-              error: String(chatError),
-            });
-            throw chatError;
-          }
-
-          // Find or create participant - truncate platformUserId for varchar(255)
-          if (payload.from) {
-            const participantUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            try {
-              await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
-                displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
-              });
-            } catch (participantError) {
-              log.error('Failed at findOrCreateParticipant', {
-                externalId: payload.externalId,
-                participantUserId,
-                error: String(participantError),
-              });
-              throw participantError;
-            }
-          }
-
-          // Auto-create Person + PlatformIdentity for sender if doesn't exist
-          let senderPersonId = metadata.personId;
-          let senderPlatformIdentityId = metadata.platformIdentityId;
-
-          if (payload.from && !senderPlatformIdentityId) {
-            const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
-            // Note: platformUserId (JID) should never exceed 255 chars in practice
-            const platformUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            // Extract phone number from WhatsApp JID (e.g., "5551999999999@s.whatsapp.net" -> "5551999999999")
-            const phoneNumber = channel.startsWith('whatsapp')
-              ? platformUserId.split('@')[0]?.replace(/\D/g, '')
-              : undefined;
-            let identity: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['identity'];
-            let person: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['person'];
-            let isNew: boolean;
-            try {
-              const result = await services.persons.findOrCreateIdentity(
-                {
-                  channel,
-                  instanceId: metadata.instanceId,
-                  platformUserId,
-                  platformUsername: displayName,
-                },
-                {
-                  createPerson: true,
-                  displayName,
-                  matchByPhone: phoneNumber,
-                },
-              );
-              identity = result.identity;
-              person = result.person;
-              isNew = result.isNew;
-            } catch (identityError) {
-              log.error('Failed at findOrCreateIdentity', {
-                externalId: payload.externalId,
-                platformUserId,
-                error: String(identityError),
-              });
-              throw identityError;
-            }
-
-            senderPlatformIdentityId = identity.id;
-            senderPersonId = person?.id;
-
-            if (isNew) {
-              log.debug('Auto-created identity for sender', {
-                platformUserId: payload.from,
-                identityId: identity.id,
-                personId: person?.id,
-              });
-
-              // Fetch profile from channel plugin and update identity
-              try {
-                const plugin = await getPlugin(channel);
-                if (plugin && 'fetchUserProfile' in plugin) {
-                  const fetchProfile = plugin.fetchUserProfile as (
-                    instanceId: string,
-                    userId: string,
-                  ) => Promise<{
-                    displayName?: string;
-                    avatarUrl?: string;
-                    bio?: string;
-                    platformData?: Record<string, unknown>;
-                  }>;
-
-                  const profile = await fetchProfile.call(plugin, metadata.instanceId, payload.from);
-
-                  if (profile.avatarUrl || profile.bio || profile.platformData) {
-                    await services.persons.updateIdentityProfile(identity.id, profile);
-                    log.debug('Updated identity with profile data', {
-                      identityId: identity.id,
-                      hasAvatar: !!profile.avatarUrl,
-                      hasBio: !!profile.bio,
-                      hasPlatformData: !!profile.platformData,
-                    });
-                  }
-                }
-              } catch (profileError) {
-                // Don't fail message processing if profile fetch fails
-                log.warn('Failed to fetch profile for new identity', {
-                  identityId: identity.id,
-                  error: String(profileError),
-                });
-              }
-            }
-          }
-
-          // Extract raw payload info safely
-          const rawPayload = payload.rawPayload;
-          const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
-
-          // Extract platform timestamp from raw payload if available (for history sync messages)
-          // WhatsApp messageTimestamp is in Unix seconds, fallback to event timestamp
-          let platformTimestamp = new Date(event.timestamp);
-          if (rawPayload?.messageTimestamp) {
-            const ts = rawPayload.messageTimestamp;
-            const tsNum = typeof ts === 'number' ? ts : typeof ts === 'string' ? Number(ts) : null;
-            if (tsNum && !Number.isNaN(tsNum)) {
-              // WhatsApp timestamps are in seconds, convert to milliseconds
-              platformTimestamp = new Date(tsNum < 1e12 ? tsNum * 1000 : tsNum);
-            }
-          }
-
-          // Create message - build options first to log on error
-          const messageOptions = {
-            source: 'realtime' as const,
-            messageType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
-            platformTimestamp,
-            // Sender info (use resolved identity) - truncate varchar(255) fields
-            senderPlatformUserId: truncate(payload.from, 255),
-            senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
-            senderPersonId: senderPersonId,
-            senderPlatformIdentityId: senderPlatformIdentityId,
-            isFromMe: false,
-            // Media - truncate mediaMimeType for varchar(100)
-            hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
-            mediaMimeType: truncate(payload.content.mimeType, 100),
-            mediaUrl: payload.content.mediaUrl,
-            // Reply info - truncate varchar(255) fields
-            replyToExternalId: truncate(payload.replyToId, 255),
-            quotedText: quotedMessage?.conversation as string | undefined,
-            quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
-            // Forward info
-            isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
-            // Raw data
-            rawPayload: rawPayload,
-          };
-
-          try {
-            const { message, created } = await services.messages.findOrCreate(
-              chat.id,
-              messageExternalId,
-              messageOptions,
-            );
-
-            if (created) {
-              log.debug('Created message', {
-                messageId: message.id,
-                externalId: payload.externalId,
-                chatId: chat.id,
-              });
-            }
-          } catch (messageError) {
-            log.error('Failed at messages.findOrCreate', {
-              externalId: payload.externalId,
-              chatId: chat.id,
-              error: String(messageError),
-              optionLengths: {
-                messageExternalId: messageExternalId?.length,
-                senderPlatformUserId: messageOptions.senderPlatformUserId?.length,
-                senderDisplayName: messageOptions.senderDisplayName?.length,
-                mediaMimeType: messageOptions.mediaMimeType?.length,
-                replyToExternalId: messageOptions.replyToExternalId?.length,
-                quotedSenderName: messageOptions.quotedSenderName?.length,
-                textContent: messageOptions.textContent?.length,
-                quotedText: messageOptions.quotedText?.length,
-              },
-            });
-            throw messageError;
-          }
-
-          // Record participant activity
-          if (payload.from) {
-            const activityUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            try {
-              await services.chats.recordParticipantActivity(chat.id, activityUserId);
-            } catch (activityError) {
-              log.error('Failed at recordParticipantActivity', {
-                externalId: payload.externalId,
-                error: String(activityError),
-              });
-              throw activityError;
-            }
-          }
+          await handleMessageReceived(
+            services,
+            payload,
+            { ...metadata, instanceId: metadata.instanceId },
+            event.timestamp,
+          );
         } catch (error) {
-          // Log ALL field lengths to debug varchar(255) issues
-          const rawPayload = payload.rawPayload;
-          const quotedMsg = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
-
-          // Find any string field > 200 chars in rawPayload
-          const longFields: Record<string, number> = {};
-          const checkLongStrings = (obj: unknown, prefix = ''): void => {
-            if (!obj || typeof obj !== 'object') return;
-            for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-              if (typeof val === 'string' && val.length > 200) {
-                longFields[`${prefix}${key}`] = val.length;
-              } else if (typeof val === 'object' && val !== null) {
-                checkLongStrings(val, `${prefix}${key}.`);
-              }
-            }
-          };
-          checkLongStrings(rawPayload, 'raw.');
-
-          log.error('Failed to persist message.received to unified model', {
-            externalId: payload.externalId,
-            error: String(error),
-            fieldLengths: {
-              chatId: payload.chatId?.length,
-              from: payload.from?.length,
-              pushName: (rawPayload?.pushName as string)?.length,
-              chatName: (rawPayload?.chatName as string)?.length,
-              mimeType: payload.content?.mimeType?.length,
-              replyToId: payload.replyToId?.length,
-              quotedPushName: (quotedMsg?.pushName as string)?.length,
-              quotedParticipant: (quotedMsg?.participant as string)?.length,
-            },
-            longFields: Object.keys(longFields).length > 0 ? longFields : undefined,
-          });
-          // Re-throw to trigger NATS retry mechanism
+          logMessageReceivedError(payload, error);
           throw error;
         }
       },

@@ -31,7 +31,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import type { OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
+import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
 import { ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
@@ -59,24 +59,11 @@ function isUUID(value: string): boolean {
 
 /**
  * Resolve recipient - handles both Omni person IDs and platform IDs
- *
- * Per DEC-1: Auto-detect recipient format (UUID = person, otherwise = platform ID)
- * Per DEC-2: If person has multiple identities on channel, use most recently active
- *
- * @param to - Recipient identifier (UUID or platform ID)
- * @param channelType - The channel type to resolve for
- * @param services - Service container
- * @returns The platform-specific user ID
  */
 async function resolveRecipient(to: string, channelType: string, services: Services): Promise<string> {
-  // If not a UUID, treat as platform-specific ID directly
-  if (!isUUID(to)) {
-    return to;
-  }
+  if (!isUUID(to)) return to;
 
-  // It's a UUID - resolve person to platform identity
   const identity = await services.persons.getIdentityForChannel(to, channelType);
-
   if (!identity) {
     throw new OmniError({
       code: ERROR_CODES.RECIPIENT_NOT_ON_CHANNEL,
@@ -85,8 +72,120 @@ async function resolveRecipient(to: string, channelType: string, services: Servi
       recoverable: false,
     });
   }
-
   return identity.platformUserId;
+}
+
+/**
+ * Plugin capability keys
+ */
+type PluginCapability =
+  | 'canSendText'
+  | 'canSendMedia'
+  | 'canSendReaction'
+  | 'canSendPoll'
+  | 'canSendSticker'
+  | 'canSendContact'
+  | 'canSendLocation';
+
+/**
+ * Get validated plugin for an instance with capability check
+ */
+async function getPluginForInstance(
+  services: Services,
+  channelRegistry: ChannelRegistry | null | undefined,
+  instanceId: string,
+  requiredCapability?: PluginCapability,
+) {
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  if (requiredCapability && !plugin.capabilities[requiredCapability]) {
+    const capabilityNames: Record<PluginCapability, string> = {
+      canSendText: 'sending text messages',
+      canSendMedia: 'sending media',
+      canSendReaction: 'sending reactions',
+      canSendPoll: 'sending polls',
+      canSendSticker: 'sending stickers',
+      canSendContact: 'sending contacts',
+      canSendLocation: 'sending locations',
+    };
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support ${capabilityNames[requiredCapability]}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  return { instance, plugin };
+}
+
+/**
+ * Look up reply context (isFromMe, rawPayload, text) for a message being replied to
+ */
+async function getReplyContext(
+  services: Services,
+  instanceId: string,
+  chatExternalId: string,
+  replyToId: string,
+): Promise<{ replyToFromMe?: boolean; replyToRawPayload?: Record<string, unknown>; replyToText?: string }> {
+  const chat = await services.chats.getByExternalId(instanceId, chatExternalId);
+  if (!chat) return {};
+
+  const originalMessage = await services.messages.getByExternalId(chat.id, replyToId);
+  if (!originalMessage) return {};
+
+  return {
+    replyToFromMe: originalMessage.isFromMe,
+    replyToRawPayload: originalMessage.rawPayload as Record<string, unknown> | undefined,
+    replyToText: originalMessage.textContent ?? undefined,
+  };
+}
+
+/**
+ * Handle send result and throw error if failed
+ */
+function handleSendResult(
+  result: {
+    success: boolean;
+    messageId?: string;
+    error?: string;
+    errorCode?: string;
+    retryable?: boolean;
+    timestamp?: number;
+  },
+  context: { channelType: string; instanceId: string; operation: string },
+): void {
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? `Failed to ${context.operation}`,
+      context: {
+        channelType: context.channelType,
+        instanceId: context.instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
 }
 
 // ============================================================================
@@ -514,91 +613,27 @@ messagesRoutes.patch(
 messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
   const { instanceId, to, text, replyTo, mentions } = c.req.valid('json');
   const services = c.get('services');
-  const channelRegistry = c.get('channelRegistry');
 
-  // Verify instance exists
-  const instance = await services.instances.getById(instanceId);
-
-  // Get channel plugin
-  if (!channelRegistry) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
-      message: 'Channel registry not available',
-      recoverable: false,
-    });
-  }
-
-  const plugin = channelRegistry.get(instance.channel as ChannelType);
-  if (!plugin) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
-      message: `No plugin found for channel: ${instance.channel}`,
-      context: { channelType: instance.channel },
-      recoverable: false,
-    });
-  }
-
-  // Check if plugin supports text messaging
-  if (!plugin.capabilities.canSendText) {
-    throw new OmniError({
-      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
-      message: `Channel ${instance.channel} does not support sending text messages`,
-      context: { channelType: instance.channel },
-      recoverable: false,
-    });
-  }
-
-  // Resolve recipient (handles person ID to platform ID resolution)
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    instanceId,
+    'canSendText',
+  );
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Look up original message data when replying
-  let replyToFromMe: boolean | undefined;
-  let replyToRawPayload: Record<string, unknown> | undefined;
-  let replyToText: string | undefined;
-  if (replyTo) {
-    const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
-    if (chat) {
-      const originalMessage = await services.messages.getByExternalId(chat.id, replyTo);
-      if (originalMessage) {
-        replyToFromMe = originalMessage.isFromMe;
-        replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
-        replyToText = originalMessage.textContent ?? undefined;
-      }
-    }
-  }
+  // Get reply context if replying
+  const replyContext = replyTo ? await getReplyContext(services, instanceId, resolvedTo, replyTo) : {};
 
-  // Build outgoing message with mentions support
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
-    content: {
-      type: 'text',
-      text,
-    } as OutgoingContent,
+    content: { type: 'text', text } as OutgoingContent,
     replyTo,
-    metadata: {
-      ...(mentions ? { mentions } : {}),
-      ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
-      ...(replyToRawPayload ? { replyToRawPayload } : {}),
-      ...(replyToText ? { replyToText } : {}),
-    },
+    metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
   };
 
-  // Send via channel plugin
   const result = await plugin.sendMessage(instanceId, outgoingMessage);
-
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send message',
-      context: {
-        channelType: instance.channel,
-        instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send message' });
 
   return c.json(
     {
@@ -1262,64 +1297,21 @@ const deleteMessageChannelSchema = z.object({
 messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
-  const channelRegistry = c.get('channelRegistry');
 
-  // Verify instance exists
-  const instance = await services.instances.getById(data.instanceId);
-
-  // Get channel plugin
-  if (!channelRegistry) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
-      message: 'Channel registry not available',
-      recoverable: false,
-    });
-  }
-
-  const plugin = channelRegistry.get(instance.channel as ChannelType);
-  if (!plugin) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
-      message: `No plugin found for channel: ${instance.channel}`,
-      context: { channelType: instance.channel },
-      recoverable: false,
-    });
-  }
-
-  // Check if plugin supports polls
-  if (!plugin.capabilities.canSendPoll) {
-    throw new OmniError({
-      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
-      message: `Channel ${instance.channel} does not support sending polls`,
-      context: { channelType: instance.channel },
-      recoverable: false,
-    });
-  }
-
-  // Resolve recipient
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    data.instanceId,
+    'canSendPoll',
+  );
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  // Look up original message's isFromMe when replying
-  let replyToFromMe: boolean | undefined;
-  let replyToRawPayload: Record<string, unknown> | undefined;
-  if (data.replyTo) {
-    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
-    if (chat) {
-      const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
-      if (originalMessage) {
-        replyToFromMe = originalMessage.isFromMe;
-        replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
-      }
-    }
-  }
+  // Get reply context if replying
+  const replyContext = data.replyTo ? await getReplyContext(services, data.instanceId, resolvedTo, data.replyTo) : {};
 
-  // Build outgoing message for poll
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
-    content: {
-      type: 'poll',
-      text: data.question,
-    } as OutgoingContent,
+    content: { type: 'poll', text: data.question } as OutgoingContent,
     metadata: {
       poll: {
         question: data.question,
@@ -1327,39 +1319,15 @@ messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) 
         durationHours: data.durationHours ?? 24,
         multiSelect: data.multiSelect ?? false,
       },
-      ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
-      ...(replyToRawPayload ? { replyToRawPayload } : {}),
+      ...replyContext,
     },
     replyTo: data.replyTo,
   };
 
-  // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send poll' });
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send poll',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
-
-  return c.json(
-    {
-      data: {
-        messageId: result.messageId,
-        status: 'sent',
-        timestamp: result.timestamp,
-      },
-    },
-    201,
-  );
+  return c.json({ data: { messageId: result.messageId, status: 'sent', timestamp: result.timestamp } }, 201);
 });
 
 /**

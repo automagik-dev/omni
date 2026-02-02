@@ -365,11 +365,9 @@ async function main() {
 
   if (failed > 0) {
     console.log('\n❌ Failed tests:');
-    results
-      .filter((r) => !r.success)
-      .forEach((r) => {
-        console.log(`  - [${r.channel}] ${r.name}: ${r.error}`);
-      });
+    for (const r of results.filter((r) => !r.success)) {
+      console.log(`  - [${r.channel}] ${r.name}: ${r.error}`);
+    }
     process.exit(1);
   }
 

@@ -24,28 +24,63 @@ export async function isFFmpegAvailable(): Promise<boolean> {
 }
 
 /**
+ * Audio format detection patterns
+ */
+const MIME_FORMAT_MAP: Array<{ patterns: string[]; format: string }> = [
+  { patterns: ['ogg', 'opus'], format: 'ogg' },
+  { patterns: ['mp3', 'mpeg'], format: 'mp3' },
+  { patterns: ['wav'], format: 'wav' },
+  { patterns: ['m4a', 'mp4'], format: 'm4a' },
+  { patterns: ['webm'], format: 'webm' },
+  { patterns: ['aac'], format: 'aac' },
+];
+
+const URL_EXTENSION_MAP: Record<string, string> = {
+  '.ogg': 'ogg',
+  '.opus': 'ogg',
+  '.mp3': 'mp3',
+  '.wav': 'wav',
+  '.m4a': 'm4a',
+  '.webm': 'webm',
+  '.aac': 'aac',
+};
+
+/**
+ * Detect format from MIME type
+ */
+function detectFromMime(mimeType: string): string | null {
+  for (const { patterns, format } of MIME_FORMAT_MAP) {
+    if (patterns.some((p) => mimeType.includes(p))) {
+      return format;
+    }
+  }
+  return null;
+}
+
+/**
+ * Detect format from URL extension
+ */
+function detectFromUrl(url: string): string | null {
+  const urlLower = url.toLowerCase();
+  for (const [ext, format] of Object.entries(URL_EXTENSION_MAP)) {
+    if (urlLower.includes(ext)) {
+      return format;
+    }
+  }
+  return null;
+}
+
+/**
  * Get the audio format from MIME type or URL
  */
 export function getAudioFormat(mimeType?: string, url?: string): string | null {
   if (mimeType) {
-    if (mimeType.includes('ogg') || mimeType.includes('opus')) return 'ogg';
-    if (mimeType.includes('mp3') || mimeType.includes('mpeg')) return 'mp3';
-    if (mimeType.includes('wav')) return 'wav';
-    if (mimeType.includes('m4a') || mimeType.includes('mp4')) return 'm4a';
-    if (mimeType.includes('webm')) return 'webm';
-    if (mimeType.includes('aac')) return 'aac';
+    const format = detectFromMime(mimeType);
+    if (format) return format;
   }
-
   if (url) {
-    const urlLower = url.toLowerCase();
-    if (urlLower.includes('.ogg') || urlLower.includes('.opus')) return 'ogg';
-    if (urlLower.includes('.mp3')) return 'mp3';
-    if (urlLower.includes('.wav')) return 'wav';
-    if (urlLower.includes('.m4a')) return 'm4a';
-    if (urlLower.includes('.webm')) return 'webm';
-    if (urlLower.includes('.aac')) return 'aac';
+    return detectFromUrl(url);
   }
-
   return null;
 }
 

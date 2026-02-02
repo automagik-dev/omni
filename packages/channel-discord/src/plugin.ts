@@ -42,6 +42,166 @@ import type {
 } from './types';
 import { DiscordError, ErrorCode, mapDiscordError } from './utils/errors';
 
+// ============================================================================
+// Send Message Helpers
+// ============================================================================
+
+/**
+ * Format a single mention to Discord format
+ */
+function formatSingleMention(mention: { id: string; type?: string }): string {
+  const type = mention.type || 'user';
+  switch (type) {
+    case 'user':
+      return `<@${mention.id}>`;
+    case 'role':
+      return `<@&${mention.id}>`;
+    case 'channel':
+      return `<#${mention.id}>`;
+    case 'everyone':
+      return '@everyone';
+    case 'here':
+      return '@here';
+    default:
+      return `<@${mention.id}>`;
+  }
+}
+
+/**
+ * Format mentions array to Discord mention strings
+ */
+function formatMentionsToText(mentions: Array<{ id: string; type?: string }>): string {
+  return mentions.map(formatSingleMention).join(' ');
+}
+
+/**
+ * Resolve channel ID - creates DM channel if necessary
+ */
+async function resolveChannelId(
+  client: Client,
+  channelId: string,
+  logger: {
+    debug: (msg: string, ctx?: Record<string, unknown>) => void;
+    info: (msg: string, ctx?: Record<string, unknown>) => void;
+    error: (msg: string, ctx?: Record<string, unknown>) => void;
+  },
+): Promise<string> {
+  try {
+    await client.channels.fetch(channelId);
+    return channelId;
+  } catch (channelError) {
+    // Channel fetch failed - might be a user ID, try to create DM
+    if ((channelError as { code?: number }).code !== 10003) throw channelError;
+
+    logger.debug('Channel not found, trying as user ID for DM', { to: channelId });
+    try {
+      const user = await client.users.fetch(channelId);
+      logger.debug('Fetched user, creating DM channel', { userId: user.id, username: user.username });
+      const dmChannel = await user.createDM();
+      logger.info('Created DM channel for user', { userId: channelId, dmChannelId: dmChannel.id });
+      return dmChannel.id;
+    } catch (userError) {
+      logger.error('Failed to create DM channel', { userId: channelId, error: String(userError) });
+      throw channelError; // Rethrow original error
+    }
+  }
+}
+
+/**
+ * Send text content (with optional embed)
+ */
+async function sendTextContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  const content = message.content;
+
+  // Handle embed request via metadata
+  if (message.metadata?.embed) {
+    const embedData = message.metadata.embed as {
+      title?: string;
+      description?: string;
+      color?: number;
+      url?: string;
+      timestamp?: string;
+      footer?: { text: string; iconUrl?: string };
+      author?: { name: string; url?: string; iconUrl?: string };
+      thumbnail?: string;
+      image?: string;
+      fields?: Array<{ name: string; value: string; inline?: boolean }>;
+    };
+    const { sendEmbedMessage } = await import('./senders/embeds');
+    const embedOptions = { ...embedData, timestamp: embedData.timestamp ? new Date(embedData.timestamp) : undefined };
+    return sendEmbedMessage(client, channelId, embedOptions, content.text, message.replyTo);
+  }
+
+  // Regular text message with mentions
+  let text = content.text ?? '';
+  const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
+  if (mentions?.length) {
+    text = `${formatMentionsToText(mentions)} ${text}`;
+  }
+
+  const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
+  return messageIds[0] ?? '';
+}
+
+/**
+ * Send media content (image, audio, video, document)
+ */
+async function sendMediaContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  const content = message.content;
+  const base64 = message.metadata?.base64 as string | undefined;
+
+  if (base64) {
+    const buffer = Buffer.from(base64, 'base64');
+    const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
+    return sendMediaBuffer(client, channelId, buffer, {
+      filename,
+      caption: content.text || content.caption,
+      replyToId: message.replyTo,
+    });
+  }
+
+  if (!content.mediaUrl) {
+    throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL or base64 required');
+  }
+
+  return sendMediaMessage(client, channelId, content.mediaUrl, {
+    caption: content.text || content.caption,
+    filename: content.filename,
+    replyToId: message.replyTo,
+  });
+}
+
+/**
+ * Send reaction
+ */
+async function sendReactionContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  const content = message.content;
+  const targetMessageId = content.targetMessageId || message.replyTo;
+  if (!content.emoji || !targetMessageId) {
+    throw new DiscordError(ErrorCode.SEND_FAILED, 'Reaction requires emoji and target message ID');
+  }
+  await addReaction(client, channelId, targetMessageId, content.emoji);
+  return targetMessageId;
+}
+
+/**
+ * Send poll
+ */
+async function sendPollContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  const pollData = message.metadata?.poll as
+    | { question: string; answers: string[]; durationHours?: number; multiSelect?: boolean }
+    | undefined;
+  if (!pollData) {
+    throw new DiscordError(ErrorCode.SEND_FAILED, 'Poll data required in metadata');
+  }
+  const { sendPollMessage } = await import('./senders/poll');
+  return sendPollMessage(client, channelId, pollData, message.replyTo);
+}
+
+// ============================================================================
+// Types
+// ============================================================================
+
 /**
  * Message from history sync
  */
@@ -323,187 +483,21 @@ export class DiscordPlugin extends BaseChannelPlugin {
     let channelId = message.to;
 
     try {
-      // Resolve channel ID - if 'to' is a user ID, create a DM channel
-      try {
-        await client.channels.fetch(channelId);
-      } catch (channelError) {
-        // Channel fetch failed - might be a user ID, try to create DM
-        if ((channelError as { code?: number }).code === 10003) {
-          // Unknown Channel error - try as user ID
-          this.logger.debug('Channel not found, trying as user ID for DM', { to: channelId });
-          try {
-            const user = await client.users.fetch(channelId);
-            this.logger.debug('Fetched user, creating DM channel', { userId: user.id, username: user.username });
-            const dmChannel = await user.createDM();
-            channelId = dmChannel.id;
-            this.logger.info('Created DM channel for user', { userId: message.to, dmChannelId: channelId });
-          } catch (userError) {
-            this.logger.error('Failed to create DM channel', { userId: channelId, error: String(userError) });
-            // Neither channel nor user - rethrow original error
-            throw channelError;
-          }
-        } else {
-          throw channelError;
-        }
-      }
+      channelId = await resolveChannelId(client, channelId, this.logger);
+      const messageId = await this.dispatchMessageByType(client, channelId, message);
 
-      let messageId: string;
-
-      // Handle different content types
-      const content = message.content;
-
-      switch (content.type) {
-        case 'text': {
-          // Check if this is actually an embed request via metadata
-          if (message.metadata?.embed) {
-            const embedData = message.metadata.embed as {
-              title?: string;
-              description?: string;
-              color?: number;
-              url?: string;
-              timestamp?: string;
-              footer?: { text: string; iconUrl?: string };
-              author?: { name: string; url?: string; iconUrl?: string };
-              thumbnail?: string;
-              image?: string;
-              fields?: Array<{ name: string; value: string; inline?: boolean }>;
-            };
-            const { sendEmbedMessage } = await import('./senders/embeds');
-            // Convert timestamp from string to Date if present
-            const embedOptions = {
-              ...embedData,
-              timestamp: embedData.timestamp ? new Date(embedData.timestamp) : undefined,
-            };
-            messageId = await sendEmbedMessage(client, channelId, embedOptions, content.text, message.replyTo);
-          } else {
-            // Regular text message - handle mentions if present
-            let text = content.text ?? '';
-
-            // Process mentions from metadata
-            const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
-            if (mentions && mentions.length > 0) {
-              const mentionStrings = mentions.map((m) => {
-                const type = m.type || 'user';
-                switch (type) {
-                  case 'user':
-                    return `<@${m.id}>`;
-                  case 'role':
-                    return `<@&${m.id}>`;
-                  case 'channel':
-                    return `<#${m.id}>`;
-                  case 'everyone':
-                    return '@everyone';
-                  case 'here':
-                    return '@here';
-                  default:
-                    return `<@${m.id}>`;
-                }
-              });
-              text = `${mentionStrings.join(' ')} ${text}`;
-            }
-
-            const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
-            messageId = messageIds[0] ?? ''; // Return first chunk's ID
-          }
-          break;
-        }
-
-        case 'image':
-        case 'audio':
-        case 'video':
-        case 'document': {
-          // Check if base64 is provided in metadata (for external URLs that can't be embedded)
-          const base64 = message.metadata?.base64 as string | undefined;
-
-          if (base64) {
-            // Send from buffer (base64 decoded)
-            const buffer = Buffer.from(base64, 'base64');
-            const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
-            messageId = await sendMediaBuffer(client, channelId, buffer, {
-              filename,
-              caption: content.text || content.caption,
-              replyToId: message.replyTo,
-            });
-          } else {
-            // Send from URL
-            if (!content.mediaUrl) {
-              throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL or base64 required');
-            }
-
-            // Let media sender infer filename from URL/headers if not provided
-            // This allows proper filename extraction for inline display
-            messageId = await sendMediaMessage(client, channelId, content.mediaUrl, {
-              caption: content.text || content.caption,
-              filename: content.filename, // undefined if not provided - sender will infer
-              replyToId: message.replyTo,
-            });
-          }
-          break;
-        }
-
-        case 'reaction': {
-          // Target message ID can come from content.targetMessageId or message.replyTo
-          const targetMessageId = content.targetMessageId || message.replyTo;
-          if (!content.emoji || !targetMessageId) {
-            throw new DiscordError(ErrorCode.SEND_FAILED, 'Reaction requires emoji and target message ID');
-          }
-          await addReaction(client, channelId, targetMessageId, content.emoji);
-          messageId = targetMessageId; // Reaction doesn't create a new message
-          break;
-        }
-
-        case 'poll': {
-          const pollData = message.metadata?.poll as
-            | {
-                question: string;
-                answers: string[];
-                durationHours?: number;
-                multiSelect?: boolean;
-              }
-            | undefined;
-          if (!pollData) {
-            throw new DiscordError(ErrorCode.SEND_FAILED, 'Poll data required in metadata');
-          }
-          const { sendPollMessage } = await import('./senders/poll');
-          messageId = await sendPollMessage(
-            client,
-            channelId,
-            {
-              question: pollData.question,
-              answers: pollData.answers,
-              durationHours: pollData.durationHours,
-              multiSelect: pollData.multiSelect,
-            },
-            message.replyTo,
-          );
-          break;
-        }
-
-        default:
-          throw new DiscordError(ErrorCode.SEND_FAILED, `Unsupported content type: ${content.type}`);
-      }
-
-      // Emit sent event
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
         chatId: channelId,
         to: message.to,
-        content: {
-          type: content.type,
-          text: content.text,
-        },
+        content: { type: message.content.type, text: message.content.text },
         replyToId: message.replyTo,
       });
 
-      return {
-        success: true,
-        messageId,
-        timestamp: Date.now(),
-      };
+      return { success: true, messageId, timestamp: Date.now() };
     } catch (error) {
       const discordError = mapDiscordError(error);
-
       await this.emitMessageFailed({
         instanceId,
         chatId: channelId,
@@ -511,7 +505,6 @@ export class DiscordPlugin extends BaseChannelPlugin {
         errorCode: discordError.code,
         retryable: discordError.retryable,
       });
-
       return {
         success: false,
         error: discordError.message,
@@ -519,6 +512,27 @@ export class DiscordPlugin extends BaseChannelPlugin {
         retryable: discordError.retryable,
         timestamp: Date.now(),
       };
+    }
+  }
+
+  /**
+   * Dispatch message to appropriate handler based on content type
+   */
+  private async dispatchMessageByType(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+    switch (message.content.type) {
+      case 'text':
+        return sendTextContent(client, channelId, message);
+      case 'image':
+      case 'audio':
+      case 'video':
+      case 'document':
+        return sendMediaContent(client, channelId, message);
+      case 'reaction':
+        return sendReactionContent(client, channelId, message);
+      case 'poll':
+        return sendPollContent(client, channelId, message);
+      default:
+        throw new DiscordError(ErrorCode.SEND_FAILED, `Unsupported content type: ${message.content.type}`);
     }
   }
 

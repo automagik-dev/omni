@@ -779,20 +779,68 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Fetch history for anchors (active fetching)
+   */
+  private async fetchAnchorsHistory(
+    sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
+    anchors: NonNullable<FetchHistoryOptions['anchors']>,
+    count: number,
+  ): Promise<void> {
+    this.logger.info('Actively fetching history for chats', {
+      instanceId,
+      chatCount: anchors.length,
+      countPerChat: count,
+    });
+
+    for (const anchor of anchors) {
+      try {
+        this.logger.debug('Fetching history for chat', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          anchorId: anchor.messageKey.id,
+          timestamp: new Date(anchor.timestamp).toISOString(),
+        });
+        await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
+        await new Promise((resolve) => setTimeout(resolve, 500)); // Rate limit delay
+      } catch (error) {
+        this.logger.warn('Failed to fetch history for chat', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const waitTime = Math.min(anchors.length * 2000, 30000);
+    this.logger.debug('Waiting for history responses', { waitTime });
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  }
+
+  /**
+   * Wait for passive history sync (no anchors)
+   */
+  private async waitForPassiveSync(instanceId: string): Promise<void> {
+    this.logger.info('No anchors provided, waiting for passive history sync', { instanceId });
+    const timeout = 60000;
+    const startTime = Date.now();
+
+    await new Promise<void>((resolve) => {
+      const checkComplete = setInterval(() => {
+        const state = this.historySyncCallbacks.get(instanceId);
+        if (!state || Date.now() - startTime > timeout) {
+          clearInterval(checkComplete);
+          resolve();
+        }
+      }, 1000);
+    });
+  }
+
+  /**
    * Fetch message history for an instance.
    *
-   * This method actively requests older messages using Baileys' fetchMessageHistory API.
-   * It requires anchor points (oldest known messages per chat) to request older messages.
-   *
-   * Flow:
-   * 1. Sets up callbacks to process history as it arrives via `messaging-history.set`
-   * 2. For each anchor, calls `sock.fetchMessageHistory()` to request older messages
-   * 3. Waits for responses and processes them via callbacks
-   * 4. Returns collected messages
-   *
-   * @param instanceId - Instance to fetch history for
-   * @param options - Fetch options including anchors for per-chat fetching
-   * @returns Promise that resolves when sync is complete or timeout
+   * Uses Baileys `fetchMessageHistory` to request older messages for specific chats.
+   * This triggers `messaging-history.set` events with the older messages.
    */
   async fetchHistory(instanceId: string, options: FetchHistoryOptions = {}): Promise<FetchHistoryResult> {
     const sock = this.getSocket(instanceId);
@@ -814,72 +862,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.historySyncCallbacks.set(instanceId, syncState);
 
     try {
-      // If anchors are provided, actively fetch older messages for each chat
-      if (options.anchors && options.anchors.length > 0) {
-        this.logger.info('Actively fetching history for chats', {
-          instanceId,
-          chatCount: options.anchors.length,
-          countPerChat: count,
-        });
-
-        // Fetch history for each chat with an anchor
-        for (const anchor of options.anchors) {
-          try {
-            this.logger.debug('Fetching history for chat', {
-              instanceId,
-              chatJid: anchor.chatJid,
-              anchorId: anchor.messageKey.id,
-              timestamp: new Date(anchor.timestamp).toISOString(),
-            });
-
-            // Call Baileys fetchMessageHistory
-            // This triggers messaging-history.set events with the older messages
-            await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
-
-            // Small delay between requests to avoid rate limiting
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          } catch (error) {
-            this.logger.warn('Failed to fetch history for chat', {
-              instanceId,
-              chatJid: anchor.chatJid,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            // Continue with other chats
-          }
-        }
-
-        // Wait for all messaging-history.set events to be processed
-        // Give enough time for all responses to arrive
-        const waitTime = Math.min(options.anchors.length * 2000, 30000);
-        this.logger.debug('Waiting for history responses', { waitTime });
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      if (options.anchors?.length) {
+        await this.fetchAnchorsHistory(sock, instanceId, options.anchors, count);
       } else {
-        // No anchors provided - fall back to passive waiting for initial sync
-        this.logger.info('No anchors provided, waiting for passive history sync', { instanceId });
-
-        const timeout = 60000;
-        const startTime = Date.now();
-
-        await new Promise<void>((resolve) => {
-          const checkComplete = setInterval(() => {
-            const state = this.historySyncCallbacks.get(instanceId);
-            if (!state || Date.now() - startTime > timeout) {
-              clearInterval(checkComplete);
-              resolve();
-            }
-          }, 1000);
-        });
+        await this.waitForPassiveSync(instanceId);
       }
 
-      this.logger.info('History fetch completed', {
-        instanceId,
-        totalMessages: messages.length,
-      });
-
-      return {
-        totalFetched: messages.length,
-        messages,
-      };
+      this.logger.info('History fetch completed', { instanceId, totalMessages: messages.length });
+      return { totalFetched: messages.length, messages };
     } finally {
       this.historySyncCallbacks.delete(instanceId);
     }
