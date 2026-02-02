@@ -1053,6 +1053,108 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
 });
 
 // ============================================================================
+// PIX Route (WhatsApp Brazil)
+// ============================================================================
+
+// PIX key types
+const pixKeyTypeSchema = z.enum(['PHONE', 'EMAIL', 'CPF', 'EVP']);
+
+// Send PIX schema
+const sendPixSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  to: z.string().min(1).describe('Recipient phone number or person ID'),
+  merchantName: z.string().min(1).describe('Merchant/receiver name'),
+  key: z.string().min(1).describe('PIX key value'),
+  keyType: pixKeyTypeSchema.describe('PIX key type'),
+});
+
+/**
+ * POST /messages/send/pix - Send PIX payment message (WhatsApp Brazil)
+ */
+messagesRoutes.post('/send/pix', zValidator('json', sendPixSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(data.instanceId);
+
+  // PIX is WhatsApp-only
+  if (instance.channel !== 'whatsapp-baileys') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: 'PIX messages are only supported on WhatsApp',
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Resolve recipient
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  // Build outgoing message for PIX
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: {
+      type: 'pix',
+      pix: {
+        merchantName: data.merchantName,
+        key: data.key,
+        keyType: data.keyType,
+      },
+    } as OutgoingContent,
+  };
+
+  // Send via channel plugin
+  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? 'Failed to send PIX message',
+      context: {
+        channelType: instance.channel,
+        instanceId: data.instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        externalMessageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+// ============================================================================
 // Forward Route (WhatsApp)
 // ============================================================================
 

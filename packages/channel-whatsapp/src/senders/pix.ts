@@ -6,6 +6,7 @@
  */
 
 import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import { generateMessageID, getUrlInfo } from '@whiskeysockets/baileys';
 
 /**
  * PIX key types supported by WhatsApp
@@ -49,6 +50,9 @@ export function isValidPixData(data: PixData): boolean {
  *
  * Creates an interactive message with native payment_info button
  * that displays the PIX "copia e cola" interface.
+ *
+ * The message must be wrapped in viewOnceMessage for Baileys to
+ * properly handle the interactive message structure.
  */
 export function buildPixContent(data: PixData): AnyMessageContent {
   const buttonParamsJson = JSON.stringify({
@@ -64,38 +68,82 @@ export function buildPixContent(data: PixData): AnyMessageContent {
     ],
   });
 
-  // Cast through unknown because AnyMessageContent doesn't include interactiveMessage
-  // but Baileys accepts it at runtime for native flow messages
+  // Wrap in viewOnceMessage for proper Baileys handling
+  // Cast through unknown because AnyMessageContent doesn't include these types
   return {
-    interactiveMessage: {
-      nativeFlowMessage: {
-        buttons: [
-          {
-            name: 'payment_info',
-            buttonParamsJson,
+    viewOnceMessage: {
+      message: {
+        interactiveMessage: {
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'payment_info',
+                buttonParamsJson,
+              },
+            ],
           },
-        ],
+        },
       },
     },
   } as unknown as AnyMessageContent;
 }
 
 /**
- * Send a PIX payment message
+ * Build raw PIX proto message for relayMessage
+ *
+ * This bypasses Baileys' content validation which doesn't support
+ * interactive messages natively.
+ */
+export function buildPixProtoMessage(data: PixData) {
+  const buttonParamsJson = JSON.stringify({
+    payment_settings: [
+      {
+        type: 'pix_static_code',
+        pix_static_code: {
+          merchant_name: data.merchantName,
+          key: data.key,
+          key_type: data.keyType,
+        },
+      },
+    ],
+  });
+
+  return {
+    viewOnceMessage: {
+      message: {
+        interactiveMessage: {
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'payment_info',
+                buttonParamsJson,
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Send a PIX payment message using relayMessage
+ *
+ * Uses relayMessage to bypass Baileys' content type validation
+ * which doesn't support interactive messages.
  */
 export async function sendPixMessage(
   sock: WASocket,
   jid: string,
   data: PixData,
-  replyToId?: string,
+  _replyToId?: string,
 ): Promise<string | undefined> {
-  const content = buildPixContent(data);
+  const messageId = generateMessageID();
+  const message = buildPixProtoMessage(data);
 
-  const result = await sock.sendMessage(
-    jid,
-    content,
-    replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
-  );
+  await sock.relayMessage(jid, message, {
+    messageId,
+  });
 
-  return result?.key?.id ?? undefined;
+  return messageId;
 }

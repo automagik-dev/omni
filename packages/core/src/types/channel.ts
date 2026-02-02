@@ -21,6 +21,7 @@ export const CONTENT_TYPES = [
   'event',
   'live_location',
   'product',
+  'pix',
   // Meta types (message lifecycle)
   'edit',
   'delete',

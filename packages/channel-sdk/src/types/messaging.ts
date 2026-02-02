@@ -46,6 +46,13 @@ export interface OutgoingContent {
     name?: string;
     address?: string;
   };
+
+  /** PIX payment details (for pix type, WhatsApp Brazil) */
+  pix?: {
+    merchantName: string;
+    key: string;
+    keyType: 'PHONE' | 'EMAIL' | 'CPF' | 'EVP';
+  };
 }
 
 /**
