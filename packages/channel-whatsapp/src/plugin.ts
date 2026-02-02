@@ -402,16 +402,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Baileys requires key.fromMe and a message object for quoted messages
       let quotedOptions: { quoted: unknown } | undefined;
       if (message.replyTo) {
-        // Get fromMe and rawPayload from metadata (looked up by API)
+        // Get fromMe, rawPayload, and text from metadata (looked up by API)
         const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
         const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
-        this.logger.debug('Sending with reply', { replyTo: message.replyTo, jid, replyToFromMe, hasRawPayload: !!replyToRawPayload });
+        const replyToText = message.metadata?.replyToText as string | undefined;
+        this.logger.debug('Sending with reply', { replyTo: message.replyTo, jid, replyToFromMe, hasRawPayload: !!replyToRawPayload, hasText: !!replyToText });
 
         // If we have the full rawPayload, use it directly (this is a WAMessage)
         if (replyToRawPayload) {
           quotedOptions = { quoted: replyToRawPayload };
         } else {
-          // Fallback: construct minimal quoted object
+          // Fallback: construct quoted object with text content for preview
           quotedOptions = {
             quoted: {
               key: {
@@ -419,7 +420,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
                 remoteJid: jid,
                 fromMe: replyToFromMe,
               },
-              message: {},
+              message: replyToText ? { conversation: replyToText } : {},
             },
           };
         }

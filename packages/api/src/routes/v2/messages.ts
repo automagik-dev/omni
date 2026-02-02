@@ -554,6 +554,7 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
   // Look up original message data when replying
   let replyToFromMe: boolean | undefined;
   let replyToRawPayload: Record<string, unknown> | undefined;
+  let replyToText: string | undefined;
   if (replyTo) {
     const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
     if (chat) {
@@ -561,6 +562,7 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
       if (originalMessage) {
         replyToFromMe = originalMessage.isFromMe;
         replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
+        replyToText = originalMessage.textContent ?? undefined;
       }
     }
   }
@@ -577,6 +579,7 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
       ...(mentions ? { mentions } : {}),
       ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
       ...(replyToRawPayload ? { replyToRawPayload } : {}),
+      ...(replyToText ? { replyToText } : {}),
     },
   };
 
