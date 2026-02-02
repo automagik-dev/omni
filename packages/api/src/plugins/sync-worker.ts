@@ -292,7 +292,7 @@ async function processMessageSync(
   const fetchOptions: Record<string, unknown> = {
     since,
     until: new Date(),
-    count: 50, // Messages per chat
+    count: 100, // Messages per chat (recursive fetching will get more)
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
       await services.syncJobs.updateProgress(jobId, {
