@@ -805,6 +805,39 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     };
   }
 
+  /** Chat tracking data for history fetch */
+  private createMessageTracker(anchors: NonNullable<FetchHistoryOptions['anchors']>) {
+    const messagesPerChat = new Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>();
+    for (const anchor of anchors) {
+      messagesPerChat.set(anchor.chatJid, { count: 0, oldest: null });
+    }
+    return messagesPerChat;
+  }
+
+  /** Build new anchors from chats that have more messages */
+  private buildNextAnchors(
+    messagesPerChat: Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>,
+    threshold: number,
+  ): { anchors: NonNullable<FetchHistoryOptions['anchors']>; totalFetched: number } {
+    const newAnchors: NonNullable<FetchHistoryOptions['anchors']> = [];
+    let totalFetched = 0;
+
+    for (const [chatJid, data] of messagesPerChat) {
+      totalFetched += data.count;
+      if (data.count < threshold || !data.oldest?.key) continue;
+
+      const key = data.oldest.key as { remoteJid?: string; id?: string; fromMe?: boolean };
+      if (!key.remoteJid || !key.id) continue;
+
+      newAnchors.push({
+        chatJid,
+        messageKey: { remoteJid: key.remoteJid, id: key.id, fromMe: key.fromMe ?? false },
+        timestamp: data.oldest.timestamp,
+      });
+    }
+    return { anchors: newAnchors, totalFetched };
+  }
+
   /**
    * Fetch history for anchors (active fetching with recursive pagination)
    *
@@ -819,12 +852,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     anchors: NonNullable<FetchHistoryOptions['anchors']>,
     count: number,
     depth = 0,
-    maxDepth = 50, // Safety limit to prevent infinite loops
+    maxDepth = 50,
   ): Promise<void> {
-    if (anchors.length === 0 || depth >= maxDepth) {
-      if (depth >= maxDepth) {
-        this.logger.warn('Max fetch depth reached', { instanceId, depth, maxDepth });
-      }
+    if (anchors.length === 0) return;
+    if (depth >= maxDepth) {
+      this.logger.warn('Max fetch depth reached', { instanceId, depth, maxDepth });
       return;
     }
 
@@ -835,61 +867,26 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       depth,
     });
 
-    // Track messages received per chat in this round
-    const messagesPerChat = new Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>();
-
-    // Initialize tracking for each chat
-    for (const anchor of anchors) {
-      messagesPerChat.set(anchor.chatJid, { count: 0, oldest: null });
-    }
-
-    // Get the sync state to intercept messages
+    const messagesPerChat = this.createMessageTracker(anchors);
     const syncState = this.historySyncCallbacks.get(instanceId);
     const originalOnMessage = syncState?.onMessage;
 
     // Wrap onMessage to track messages per chat
     if (syncState) {
       syncState.onMessage = (msg) => {
-        // Call original handler
         originalOnMessage?.(msg);
-
-        // Track per-chat counts and oldest message
         const chatData = messagesPerChat.get(msg.chatId);
-        if (chatData) {
-          chatData.count++;
-          const msgTimestamp = msg.timestamp.getTime();
-          if (!chatData.oldest || msgTimestamp < chatData.oldest.timestamp) {
-            chatData.oldest = {
-              key: (msg.rawPayload as { key?: unknown })?.key,
-              timestamp: msgTimestamp,
-            };
-          }
+        if (!chatData) return;
+        chatData.count++;
+        const msgTimestamp = msg.timestamp.getTime();
+        if (!chatData.oldest || msgTimestamp < chatData.oldest.timestamp) {
+          chatData.oldest = { key: (msg.rawPayload as { key?: unknown })?.key, timestamp: msgTimestamp };
         }
       };
     }
 
     // Fetch history for each anchor
-    for (const anchor of anchors) {
-      try {
-        this.logger.debug('Fetching history for chat', {
-          instanceId,
-          chatJid: anchor.chatJid,
-          anchorId: anchor.messageKey.id,
-          timestamp: new Date(anchor.timestamp).toISOString(),
-          depth,
-        });
-        await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
-        await new Promise((resolve) => setTimeout(resolve, 300)); // Rate limit delay (reduced from 500ms)
-      } catch (error) {
-        this.logger.warn('Failed to fetch history for chat', {
-          instanceId,
-          chatJid: anchor.chatJid,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Remove from tracking so we don't try to fetch more
-        messagesPerChat.delete(anchor.chatJid);
-      }
-    }
+    await this.fetchAllAnchors(sock, instanceId, anchors, count, depth, messagesPerChat);
 
     // Wait for history responses
     const waitTime = Math.min(anchors.length * 1500, 20000);
@@ -901,40 +898,48 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       syncState.onMessage = originalOnMessage;
     }
 
-    // Build new anchors for chats that returned `count` messages (indicating more exist)
-    const newAnchors: NonNullable<FetchHistoryOptions['anchors']> = [];
-    let totalFetchedThisRound = 0;
-
-    for (const [chatJid, data] of messagesPerChat) {
-      totalFetchedThisRound += data.count;
-
-      // If we got `count` or more messages, there's probably more
-      if (data.count >= count && data.oldest?.key) {
-        const key = data.oldest.key as { remoteJid?: string; id?: string; fromMe?: boolean };
-        if (key.remoteJid && key.id) {
-          newAnchors.push({
-            chatJid,
-            messageKey: {
-              remoteJid: key.remoteJid,
-              id: key.id,
-              fromMe: key.fromMe ?? false,
-            },
-            timestamp: data.oldest.timestamp,
-          });
-        }
-      }
-    }
+    const { anchors: newAnchors, totalFetched } = this.buildNextAnchors(messagesPerChat, count);
 
     this.logger.info('Fetch round completed', {
       instanceId,
       depth,
-      totalFetchedThisRound,
+      totalFetchedThisRound: totalFetched,
       chatsWithMore: newAnchors.length,
     });
 
-    // Recursively fetch more if there are chats with more messages
     if (newAnchors.length > 0) {
       await this.fetchAnchorsHistory(sock, instanceId, newAnchors, count, depth + 1, maxDepth);
+    }
+  }
+
+  /** Fetch history for all anchors with rate limiting */
+  private async fetchAllAnchors(
+    sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
+    anchors: NonNullable<FetchHistoryOptions['anchors']>,
+    count: number,
+    depth: number,
+    messagesPerChat: Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>,
+  ): Promise<void> {
+    for (const anchor of anchors) {
+      try {
+        this.logger.debug('Fetching history for chat', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          anchorId: anchor.messageKey.id,
+          timestamp: new Date(anchor.timestamp).toISOString(),
+          depth,
+        });
+        await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      } catch (error) {
+        this.logger.warn('Failed to fetch history for chat', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        messagesPerChat.delete(anchor.chatJid);
+      }
     }
   }
 
