@@ -354,3 +354,16 @@ ensure-ffmpeg:
 	@echo ""
 	@echo "✓ ffmpeg installation complete!"
 	@$(MAKE) check-ffmpeg
+
+# Integration test for messaging
+test-messaging:
+	@echo "Running messaging integration tests..."
+	bun --env-file=.env scripts/test-messaging.ts
+
+test-messaging-whatsapp:
+	@echo "Running WhatsApp integration tests..."
+	bun --env-file=.env scripts/test-messaging.ts --channel=whatsapp
+
+test-messaging-discord:
+	@echo "Running Discord integration tests..."
+	bun --env-file=.env scripts/test-messaging.ts --channel=discord
