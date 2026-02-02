@@ -54,6 +54,8 @@ export interface SubscribeOptions {
   retryDelayMs?: number;
   /** How long to wait for ack before redelivery (ms) */
   ackWaitMs?: number;
+  /** Maximum concurrent message handlers (default: 1 = sequential) */
+  concurrency?: number;
 }
 
 /**

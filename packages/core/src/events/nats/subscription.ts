@@ -41,12 +41,15 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
     handler,
     maxRetries = DEFAULT_CONSUMER_CONFIG.maxRetries,
     retryDelayMs = DEFAULT_CONSUMER_CONFIG.retryDelayMs,
+    concurrency = 1,
     onDeadLetter,
   } = options;
 
   const subscriptionId = crypto.randomUUID();
   const abortController = new AbortController();
   let isActive = true;
+  let activeCount = 0;
+  const pendingMessages: Array<() => void> = [];
 
   // Start message processing loop
   processMessages();
@@ -56,11 +59,29 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
       for await (const msg of consumer) {
         if (!isActive) break;
 
-        try {
-          await processMessage(msg);
-        } catch (error) {
-          log.error('Error processing message', { subscriptionId, error: String(error) });
+        // Wait if at concurrency limit
+        if (activeCount >= concurrency) {
+          await new Promise<void>((resolve) => pendingMessages.push(resolve));
         }
+
+        activeCount++;
+
+        // Process message without awaiting (fire and forget with semaphore)
+        processMessage(msg)
+          .catch((error) => {
+            log.error('Error processing message', { subscriptionId, error: String(error) });
+          })
+          .finally(() => {
+            activeCount--;
+            // Wake up next waiting message
+            const next = pendingMessages.shift();
+            if (next) next();
+          });
+      }
+
+      // Wait for all active messages to complete before exiting
+      while (activeCount > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     } catch (error) {
       if (isActive) {
