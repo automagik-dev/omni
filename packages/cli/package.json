@@ -14,6 +14,7 @@
     "dev": "bun run ./src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist"
   },
   "dependencies": {
