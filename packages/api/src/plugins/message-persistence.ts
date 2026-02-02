@@ -96,8 +96,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
 
+          // Truncate IDs for varchar(255) safety
+          const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
+          const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
+
           // Find or create chat
-          const { chat } = await services.chats.findOrCreate(metadata.instanceId, payload.chatId, {
+          const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
             chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
             channel,
             name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
@@ -195,7 +199,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           }
 
           // Create message
-          const { message, created } = await services.messages.findOrCreate(chat.id, payload.externalId, {
+          const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
             source: 'realtime',
             messageType: mapContentType(payload.content.type),
             textContent: payload.content.text,
@@ -206,9 +210,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             senderPersonId: senderPersonId,
             senderPlatformIdentityId: senderPlatformIdentityId,
             isFromMe: false,
-            // Media
+            // Media - truncate mediaMimeType for varchar(100)
             hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
-            mediaMimeType: payload.content.mimeType,
+            mediaMimeType: truncate(payload.content.mimeType, 100),
             mediaUrl: payload.content.mediaUrl,
             // Reply info - truncate varchar(255) fields
             replyToExternalId: truncate(payload.replyToId, 255),
@@ -265,14 +269,18 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             return;
           }
 
+          // Truncate IDs for varchar(255) safety
+          const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
+          const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
+
           // Find or create chat
-          const { chat } = await services.chats.findOrCreate(metadata.instanceId, payload.chatId, {
+          const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
             chatType: inferChatType(payload.chatId),
             channel: (metadata.channelType ?? 'whatsapp') as ChannelType,
           });
 
           // Create message (sent by us)
-          const { message, created } = await services.messages.findOrCreate(chat.id, payload.externalId, {
+          const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
             source: 'realtime',
             messageType: mapContentType(payload.content.type),
             textContent: payload.content.text,
