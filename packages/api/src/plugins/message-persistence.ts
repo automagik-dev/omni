@@ -166,12 +166,24 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         const rawPayload = payload.rawPayload;
         const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
 
+        // Extract platform timestamp from raw payload if available (for history sync messages)
+        // WhatsApp messageTimestamp is in Unix seconds, fallback to event timestamp
+        let platformTimestamp = new Date(event.timestamp);
+        if (rawPayload?.messageTimestamp) {
+          const ts = rawPayload.messageTimestamp;
+          const tsNum = typeof ts === 'number' ? ts : typeof ts === 'string' ? Number(ts) : null;
+          if (tsNum && !Number.isNaN(tsNum)) {
+            // WhatsApp timestamps are in seconds, convert to milliseconds
+            platformTimestamp = new Date(tsNum < 1e12 ? tsNum * 1000 : tsNum);
+          }
+        }
+
         // Create message
         const { message, created } = await services.messages.findOrCreate(chat.id, payload.externalId, {
           source: 'realtime',
           messageType: mapContentType(payload.content.type),
           textContent: payload.content.text,
-          platformTimestamp: new Date(event.timestamp),
+          platformTimestamp,
           // Sender info (use resolved identity)
           senderPlatformUserId: payload.from,
           senderDisplayName: rawPayload?.pushName as string | undefined,
