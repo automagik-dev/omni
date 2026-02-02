@@ -46,5 +46,8 @@ export {
   type ContactData,
 } from './contact';
 
+// Forward
+export { forwardMessage } from './forward';
+
 // Unified content builder
 export { buildMessageContent } from './builders';

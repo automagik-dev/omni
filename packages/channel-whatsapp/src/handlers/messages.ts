@@ -12,7 +12,7 @@
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
-import { fromJid, isGroupJid } from '../jid';
+import { fromJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 
 const log = createLogger('whatsapp:messages');
@@ -422,7 +422,7 @@ function isFromMe(msg: WAMessage): boolean {
  */
 function shouldProcessMessage(msg: WAMessage): boolean {
   if (!msg.message) return false;
-  if (isGroupJid(msg.key.remoteJid || '')) return false;
+  // Group messages are now supported
   return true;
 }
 

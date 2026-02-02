@@ -28,7 +28,7 @@ import {
   setupRawEventHandler,
   setupReactionHandlers,
 } from './handlers';
-import { sendMediaMessage } from './senders/media';
+import { sendMediaBuffer, sendMediaMessage } from './senders/media';
 import { addReaction, removeReaction } from './senders/reaction';
 import { deleteMessage as deleteTextMessage, editTextMessage, sendTextMessage } from './senders/text';
 import type {
@@ -352,8 +352,32 @@ export class DiscordPlugin extends BaseChannelPlugin {
             };
             messageId = await sendEmbedMessage(client, channelId, embedOptions, content.text, message.replyTo);
           } else {
-            // Regular text message
-            const text = content.text ?? '';
+            // Regular text message - handle mentions if present
+            let text = content.text ?? '';
+
+            // Process mentions from metadata
+            const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
+            if (mentions && mentions.length > 0) {
+              const mentionStrings = mentions.map((m) => {
+                const type = m.type || 'user';
+                switch (type) {
+                  case 'user':
+                    return `<@${m.id}>`;
+                  case 'role':
+                    return `<@&${m.id}>`;
+                  case 'channel':
+                    return `<#${m.id}>`;
+                  case 'everyone':
+                    return '@everyone';
+                  case 'here':
+                    return '@here';
+                  default:
+                    return `<@${m.id}>`;
+                }
+              });
+              text = mentionStrings.join(' ') + ' ' + text;
+            }
+
             const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
             messageId = messageIds[0] ?? ''; // Return first chunk's ID
           }
@@ -364,14 +388,32 @@ export class DiscordPlugin extends BaseChannelPlugin {
         case 'audio':
         case 'video':
         case 'document': {
-          if (!content.mediaUrl) {
-            throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL required');
+          // Check if base64 is provided in metadata (for external URLs that can't be embedded)
+          const base64 = message.metadata?.base64 as string | undefined;
+
+          if (base64) {
+            // Send from buffer (base64 decoded)
+            const buffer = Buffer.from(base64, 'base64');
+            const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
+            messageId = await sendMediaBuffer(client, channelId, buffer, {
+              filename,
+              caption: content.text || content.caption,
+              replyToId: message.replyTo,
+            });
+          } else {
+            // Send from URL
+            if (!content.mediaUrl) {
+              throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL or base64 required');
+            }
+
+            // Let media sender infer filename from URL/headers if not provided
+            // This allows proper filename extraction for inline display
+            messageId = await sendMediaMessage(client, channelId, content.mediaUrl, {
+              caption: content.text || content.caption,
+              filename: content.filename, // undefined if not provided - sender will infer
+              replyToId: message.replyTo,
+            });
           }
-          messageId = await sendMediaMessage(client, channelId, content.mediaUrl, {
-            caption: content.text || content.caption,
-            filename: content.filename,
-            replyToId: message.replyTo,
-          });
           break;
         }
 

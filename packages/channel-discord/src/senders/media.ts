@@ -9,11 +9,103 @@ import type { Client, DMChannel, MessageCreateOptions, TextChannel, ThreadChanne
 type SendableChannel = TextChannel | DMChannel | ThreadChannel;
 
 /**
+ * Common MIME type to extension mapping
+ */
+const MIME_TO_EXTENSION: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/ogg': '.ogg',
+  'audio/wav': '.wav',
+  'audio/webm': '.webm',
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'application/pdf': '.pdf',
+  'application/zip': '.zip',
+  'text/plain': '.txt',
+};
+
+/**
+ * Extract filename from URL path
+ */
+function getFilenameFromUrl(url: string): string | null {
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    const lastSegment = pathname.split('/').pop();
+
+    // Check if it has a file extension
+    if (lastSegment && /\.[a-zA-Z0-9]+$/.test(lastSegment)) {
+      return lastSegment;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get file extension from content-type header
+ */
+function getExtensionFromContentType(contentType: string | null): string {
+  if (!contentType) return '.bin';
+
+  // Extract main MIME type (ignore charset, etc.)
+  const mimeType = contentType.split(';')[0]?.trim().toLowerCase();
+  if (!mimeType) return '.bin';
+
+  return MIME_TO_EXTENSION[mimeType] || '.bin';
+}
+
+/**
+ * Infer filename for a media URL
+ *
+ * First tries to extract from URL, then does a HEAD request to get content-type.
+ */
+async function inferFilename(mediaUrl: string): Promise<string> {
+  // Try to get filename from URL
+  const urlFilename = getFilenameFromUrl(mediaUrl);
+  if (urlFilename) {
+    return urlFilename;
+  }
+
+  // Do a HEAD request to get content-type
+  try {
+    const response = await fetch(mediaUrl, { method: 'HEAD' });
+    const contentType = response.headers.get('content-type');
+    const extension = getExtensionFromContentType(contentType);
+
+    // Generate a filename based on timestamp
+    return `media-${Date.now()}${extension}`;
+  } catch {
+    // If HEAD fails, try a small GET request
+    try {
+      const response = await fetch(mediaUrl, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-0' }, // Request only 1 byte
+      });
+      const contentType = response.headers.get('content-type');
+      const extension = getExtensionFromContentType(contentType);
+      return `media-${Date.now()}${extension}`;
+    } catch {
+      // Last resort: generic filename
+      return `media-${Date.now()}.bin`;
+    }
+  }
+}
+
+/**
  * Build media message content
  *
  * @param mediaUrl - URL or file path to the media
  * @param caption - Optional caption/description
- * @param filename - Optional filename
+ * @param filename - Optional filename (will be inferred if not provided)
  */
 export function buildMediaContent(mediaUrl: string, caption?: string, filename?: string): MessageCreateOptions {
   return {
@@ -52,8 +144,11 @@ export async function sendMediaMessage(
     throw new Error(`Channel ${channelId} is not a text channel or cannot be accessed`);
   }
 
+  // Infer filename if not provided (ensures proper extension for Discord to display inline)
+  const filename = options.filename || (await inferFilename(mediaUrl));
+
   const sendChannel = channel as SendableChannel;
-  const messageOptions: MessageCreateOptions = buildMediaContent(mediaUrl, options.caption, options.filename);
+  const messageOptions: MessageCreateOptions = buildMediaContent(mediaUrl, options.caption, filename);
 
   if (options.replyToId) {
     messageOptions.reply = { messageReference: options.replyToId };

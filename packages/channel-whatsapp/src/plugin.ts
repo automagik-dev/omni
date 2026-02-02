@@ -399,11 +399,34 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const content = this.buildContent(processedMessage);
 
       // Send with optional reply
-      const result = await sock.sendMessage(
-        jid,
-        content,
-        message.replyTo ? { quoted: { key: { id: message.replyTo, remoteJid: jid } } as WAMessage } : undefined,
-      );
+      // Baileys requires key.fromMe and a message object for quoted messages
+      let quotedOptions: { quoted: unknown } | undefined;
+      if (message.replyTo) {
+        // Get fromMe and rawPayload from metadata (looked up by API)
+        const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
+        const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
+        this.logger.debug('Sending with reply', { replyTo: message.replyTo, jid, replyToFromMe, hasRawPayload: !!replyToRawPayload });
+
+        // If we have the full rawPayload, use it directly (this is a WAMessage)
+        if (replyToRawPayload) {
+          quotedOptions = { quoted: replyToRawPayload };
+        } else {
+          // Fallback: construct minimal quoted object
+          quotedOptions = {
+            quoted: {
+              key: {
+                id: message.replyTo,
+                remoteJid: jid,
+                fromMe: replyToFromMe,
+              },
+              message: {},
+            },
+          };
+        }
+      }
+
+      this.logger.debug('Sending message', { jid, content, hasQuoted: !!quotedOptions });
+      const result = await sock.sendMessage(jid, content, quotedOptions as never);
 
       const externalId = result?.key?.id || '';
 
@@ -448,17 +471,30 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Process audio for voice note, converting to OGG/OPUS if needed
+   * Supports both URL and base64 input
    */
   private async processAudioForVoiceNote(message: OutgoingMessage): Promise<OutgoingMessage> {
-    const { convertAudioForVoiceNote } = await import('./utils/audio-converter');
+    const { convertAudioForVoiceNote, convertBufferForVoiceNote } = await import('./utils/audio-converter');
 
     const mediaUrl = message.content.mediaUrl;
-    if (!mediaUrl) {
+    const base64 = message.metadata?.base64 as string | undefined;
+
+    // No audio source available
+    if (!mediaUrl && !base64) {
       return message;
     }
 
     try {
-      const result = await convertAudioForVoiceNote(mediaUrl, message.content.mimeType);
+      let result: { buffer: Buffer; mimeType: string } | null = null;
+
+      if (base64) {
+        // Convert from base64
+        const inputBuffer = Buffer.from(base64, 'base64');
+        result = await convertBufferForVoiceNote(inputBuffer, message.content.mimeType);
+      } else if (mediaUrl) {
+        // Convert from URL
+        result = await convertAudioForVoiceNote(mediaUrl, message.content.mimeType);
+      }
 
       if (result) {
         // Audio was converted, update message to use buffer

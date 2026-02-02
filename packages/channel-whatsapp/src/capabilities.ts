@@ -35,6 +35,7 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canSendContact: true,
   canSendLocation: true,
   canSendSticker: true,
+  canSendPoll: true,
 
   // Group/broadcast (deferred)
   canHandleGroups: false, // Defer to future wish

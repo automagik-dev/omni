@@ -230,12 +230,19 @@ const updateDeliveryStatusSchema = z.object({
   latestEventId: z.string().uuid().optional(),
 });
 
+// Mention schema - supports both WhatsApp and Discord formats
+const MentionSchema = z.object({
+  id: z.string().min(1).describe('User/role ID to mention'),
+  type: z.enum(['user', 'role', 'channel', 'everyone', 'here']).default('user').describe('Mention type'),
+});
+
 // Send text message schema
 const sendTextSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID to send from'),
   to: z.string().min(1).describe('Recipient (phone number or platform ID)'),
   text: z.string().min(1).describe('Message text'),
   replyTo: z.string().optional().describe('Message ID to reply to'),
+  mentions: z.array(MentionSchema).optional().describe('Users/roles to mention'),
 });
 
 // Send media schema
@@ -505,7 +512,7 @@ messagesRoutes.patch(
  * POST /messages/send - Send text message
  */
 messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
-  const { instanceId, to, text, replyTo } = c.req.valid('json');
+  const { instanceId, to, text, replyTo, mentions } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -544,7 +551,21 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Build outgoing message
+  // Look up original message data when replying
+  let replyToFromMe: boolean | undefined;
+  let replyToRawPayload: Record<string, unknown> | undefined;
+  if (replyTo) {
+    const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
+    if (chat) {
+      const originalMessage = await services.messages.getByExternalId(chat.id, replyTo);
+      if (originalMessage) {
+        replyToFromMe = originalMessage.isFromMe;
+        replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
+      }
+    }
+  }
+
+  // Build outgoing message with mentions support
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: {
@@ -552,6 +573,11 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
       text,
     } as OutgoingContent,
     replyTo,
+    metadata: {
+      ...(mentions ? { mentions } : {}),
+      ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
+      ...(replyToRawPayload ? { replyToRawPayload } : {}),
+    },
   };
 
   // Send via channel plugin
@@ -645,7 +671,8 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
     } as OutgoingContent,
     metadata: {
       base64: data.base64,
-      voiceNote: data.voiceNote,
+      // WhatsApp uses 'ptt' (push-to-talk) flag for voice notes
+      ptt: data.voiceNote,
     },
   };
 
@@ -1020,6 +1047,552 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
     },
     201,
   );
+});
+
+// ============================================================================
+// Forward Route (WhatsApp)
+// ============================================================================
+
+// Forward message schema
+const forwardMessageSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  to: z.string().min(1).describe('Recipient to forward to'),
+  messageId: z.string().min(1).describe('External message ID to forward'),
+  fromChatId: z.string().min(1).describe('Chat ID where the message is from'),
+});
+
+/**
+ * POST /messages/send/forward - Forward a message (WhatsApp)
+ *
+ * Fetches the original message from our DB and uses its rawPayload for forwarding.
+ * This ensures the "Forwarded" label appears correctly.
+ */
+messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), async (c) => {
+  const { instanceId, to, messageId, fromChatId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(instanceId);
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin supports forwarding
+  if (!plugin.capabilities.canForwardMessage) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support forwarding messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Fetch the original message from our DB to get rawPayload
+  // Chat externalId is the platform chat ID (e.g., WhatsApp JID)
+  const chat = await services.chats.getByExternalId(instanceId, fromChatId);
+  if (!chat) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: `Chat not found for ${fromChatId}`,
+      context: { fromChatId },
+      recoverable: false,
+    });
+  }
+
+  const originalMessage = await services.messages.getByExternalId(chat.id, messageId);
+  if (!originalMessage) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: `Message not found: ${messageId}`,
+      context: { messageId, chatId: chat.id },
+      recoverable: false,
+    });
+  }
+
+  if (!originalMessage.rawPayload) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: 'Message does not have rawPayload - cannot forward',
+      context: { messageId },
+      recoverable: false,
+    });
+  }
+
+  // Resolve recipient
+  const resolvedTo = await resolveRecipient(to, instance.channel, services);
+
+  // Build outgoing message for forward with the full rawPayload
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: {
+      type: 'text',
+      text: '', // Empty text - plugin will use forward instead
+    } as OutgoingContent,
+    metadata: {
+      forward: {
+        messageId,
+        fromChatId,
+        rawPayload: originalMessage.rawPayload, // Pass full message for proper forwarding
+      },
+    },
+  };
+
+  // Send via channel plugin
+  const result = await plugin.sendMessage(instanceId, outgoingMessage);
+
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? 'Failed to forward message',
+      context: {
+        channelType: instance.channel,
+        instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+// ============================================================================
+// Discord-specific Send Routes
+// ============================================================================
+
+// Send poll schema (Discord only)
+const sendPollSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  to: z.string().min(1).describe('Channel ID'),
+  question: z.string().min(1).max(300).describe('Poll question'),
+  answers: z.array(z.string().min(1).max(55)).min(2).max(10).describe('Poll answer options'),
+  durationHours: z.number().int().min(1).max(168).optional().describe('Poll duration in hours (default 24, max 168)'),
+  multiSelect: z.boolean().optional().describe('Allow multiple selections'),
+  replyTo: z.string().optional().describe('Message ID to reply to'),
+});
+
+// Send embed schema (Discord only)
+const sendEmbedSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  to: z.string().min(1).describe('Channel ID'),
+  title: z.string().max(256).optional().describe('Embed title'),
+  description: z.string().max(4096).optional().describe('Embed description'),
+  color: z.number().int().optional().describe('Embed color (integer)'),
+  url: z.string().url().optional().describe('URL for the title'),
+  timestamp: z.string().datetime().optional().describe('Timestamp for footer'),
+  footer: z
+    .object({
+      text: z.string().max(2048),
+      iconUrl: z.string().url().optional(),
+    })
+    .optional()
+    .describe('Footer text and icon'),
+  author: z
+    .object({
+      name: z.string().max(256),
+      url: z.string().url().optional(),
+      iconUrl: z.string().url().optional(),
+    })
+    .optional()
+    .describe('Author info'),
+  thumbnail: z.string().url().optional().describe('Thumbnail URL'),
+  image: z.string().url().optional().describe('Main image URL'),
+  fields: z
+    .array(
+      z.object({
+        name: z.string().max(256),
+        value: z.string().max(1024),
+        inline: z.boolean().optional(),
+      }),
+    )
+    .max(25)
+    .optional()
+    .describe('Embed fields'),
+  replyTo: z.string().optional().describe('Message ID to reply to'),
+});
+
+// Edit message via channel schema
+const editMessageChannelSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  channelId: z.string().min(1).describe('Channel/Chat ID'),
+  messageId: z.string().min(1).describe('Message ID to edit'),
+  text: z.string().min(1).describe('New message text'),
+});
+
+// Delete message via channel schema
+const deleteMessageChannelSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  channelId: z.string().min(1).describe('Channel/Chat ID'),
+  messageId: z.string().min(1).describe('Message ID to delete'),
+});
+
+/**
+ * POST /messages/send/poll - Send poll message (Discord only)
+ */
+messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(data.instanceId);
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin supports polls
+  if (!plugin.capabilities.canSendPoll) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support sending polls`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Resolve recipient
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  // Look up original message's isFromMe when replying
+  let replyToFromMe: boolean | undefined;
+  let replyToRawPayload: Record<string, unknown> | undefined;
+  if (data.replyTo) {
+    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
+    if (chat) {
+      const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
+      if (originalMessage) {
+        replyToFromMe = originalMessage.isFromMe;
+        replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
+      }
+    }
+  }
+
+  // Build outgoing message for poll
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: {
+      type: 'poll',
+      text: data.question,
+    } as OutgoingContent,
+    metadata: {
+      poll: {
+        question: data.question,
+        answers: data.answers,
+        durationHours: data.durationHours ?? 24,
+        multiSelect: data.multiSelect ?? false,
+      },
+      ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
+      ...(replyToRawPayload ? { replyToRawPayload } : {}),
+    },
+    replyTo: data.replyTo,
+  };
+
+  // Send via channel plugin
+  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? 'Failed to send poll',
+      context: {
+        channelType: instance.channel,
+        instanceId: data.instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * POST /messages/send/embed - Send embed message (Discord only)
+ */
+messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(data.instanceId);
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin supports embeds
+  if (!plugin.capabilities.canSendEmbed) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support sending embeds`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Resolve recipient
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  // Look up original message data when replying
+  let replyToFromMe: boolean | undefined;
+  let replyToRawPayload: Record<string, unknown> | undefined;
+  if (data.replyTo) {
+    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
+    if (chat) {
+      const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
+      if (originalMessage) {
+        replyToFromMe = originalMessage.isFromMe;
+        replyToRawPayload = originalMessage.rawPayload as Record<string, unknown> | undefined;
+      }
+    }
+  }
+
+  // Build outgoing message for embed
+  // Note: We use 'text' type but pass embed data in metadata
+  // The Discord plugin checks for metadata.embed and handles accordingly
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: {
+      type: 'text',
+      text: data.description,
+    } as OutgoingContent,
+    metadata: {
+      embed: {
+        title: data.title,
+        description: data.description,
+        color: data.color,
+        url: data.url,
+        timestamp: data.timestamp,
+        footer: data.footer,
+        author: data.author,
+        thumbnail: data.thumbnail,
+        image: data.image,
+        fields: data.fields,
+      },
+      ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
+      ...(replyToRawPayload ? { replyToRawPayload } : {}),
+    },
+    replyTo: data.replyTo,
+  };
+
+  // Send via channel plugin
+  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? 'Failed to send embed',
+      context: {
+        channelType: instance.channel,
+        instanceId: data.instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * POST /messages/edit-channel - Edit message via channel plugin
+ */
+messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema), async (c) => {
+  const { instanceId, channelId, messageId, text } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(instanceId);
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin supports editing
+  if (!plugin.capabilities.canEditMessage) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support editing messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin has editMessage method
+  if (!('editMessage' in plugin) || typeof plugin.editMessage !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement editMessage`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Edit via channel plugin
+  await (
+    plugin as { editMessage: (instanceId: string, channelId: string, messageId: string, text: string) => Promise<void> }
+  ).editMessage(instanceId, channelId, messageId, text);
+
+  return c.json({
+    success: true,
+    data: { messageId, edited: true },
+  });
+});
+
+/**
+ * POST /messages/delete-channel - Delete message via channel plugin
+ */
+messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSchema), async (c) => {
+  const { instanceId, channelId, messageId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Verify instance exists
+  const instance = await services.instances.getById(instanceId);
+
+  // Get channel plugin
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin supports deleting
+  if (!plugin.capabilities.canDeleteMessage) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support deleting messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Check if plugin has deleteMessage method
+  if (!('deleteMessage' in plugin) || typeof plugin.deleteMessage !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} plugin does not implement deleteMessage`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Delete via channel plugin
+  await (
+    plugin as { deleteMessage: (instanceId: string, channelId: string, messageId: string) => Promise<void> }
+  ).deleteMessage(instanceId, channelId, messageId);
+
+  return c.json({
+    success: true,
+    data: { messageId, deleted: true },
+  });
 });
 
 export { messagesRoutes };

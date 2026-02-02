@@ -14,11 +14,80 @@ type ContentBuilder = (message: OutgoingMessage, buildVCard: VCardBuilder) => An
 type VCardBuilder = (contact: { name: string; phone?: string; email?: string }) => string;
 
 /**
- * Build text message content
+ * Convert a phone number or partial JID to full WhatsApp JID
  */
-const buildText: ContentBuilder = (message) => ({
-  text: message.content.text || '',
-});
+function toMentionJid(phoneOrJid: string): string {
+  if (phoneOrJid.includes('@')) {
+    return phoneOrJid;
+  }
+  const cleaned = phoneOrJid.replace(/\D/g, '');
+  return `${cleaned}@s.whatsapp.net`;
+}
+
+/**
+ * Build text message content with optional mentions
+ *
+ * Also handles forward messages when metadata.forward is present.
+ *
+ * WhatsApp mentions require:
+ * 1. The `mentions` array with JIDs
+ * 2. The text containing `@number` placeholders where mentions should appear
+ *
+ * If text doesn't contain @mentions, we prepend them.
+ */
+const buildText: ContentBuilder = (message) => {
+  // Check for forward in metadata - forward takes precedence
+  const forwardData = message.metadata?.forward as {
+    messageId: string;
+    fromChatId: string;
+    rawPayload?: Record<string, unknown>;
+  } | undefined;
+
+  if (forwardData) {
+    // If we have the full rawPayload from DB, use it directly for proper forwarding
+    if (forwardData.rawPayload) {
+      return {
+        forward: forwardData.rawPayload,
+      } as unknown as AnyMessageContent;
+    }
+
+    // Fallback: construct key reference (may not work if message not in Baileys memory)
+    return {
+      forward: {
+        key: {
+          remoteJid: toJid(forwardData.fromChatId),
+          id: forwardData.messageId,
+        },
+      },
+    } as unknown as AnyMessageContent;
+  }
+
+  let text = message.content.text || '';
+
+  // Check for mentions in metadata
+  const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
+
+  if (mentions && mentions.length > 0) {
+    // Convert mention IDs to WhatsApp JIDs (only user mentions for WhatsApp)
+    const userMentions = mentions.filter((m) => !m.type || m.type === 'user');
+    const mentionJids = userMentions.map((m) => toMentionJid(m.id));
+
+    if (mentionJids.length > 0) {
+      // Check if text already contains @mentions, if not prepend them
+      // WhatsApp needs @number in text to know where to render the mention
+      for (const mention of userMentions) {
+        const phoneNumber = mention.id.replace(/\D/g, '');
+        if (!text.includes(`@${phoneNumber}`)) {
+          text = `@${phoneNumber} ${text}`;
+        }
+      }
+
+      return { text, mentions: mentionJids };
+    }
+  }
+
+  return { text };
+};
 
 /**
  * Build image message content
@@ -31,11 +100,27 @@ const buildImage: ContentBuilder = (message) => ({
 
 /**
  * Build audio message content
+ *
+ * Supports URL, buffer (for converted audio), and base64.
+ * Priority: audioBuffer > base64 > URL
  */
 const buildAudio: ContentBuilder = (message) => {
   const isPtt = message.content.mimeType?.includes('ogg') || (message.metadata?.ptt as boolean) === true;
+  const audioBuffer = message.metadata?.audioBuffer as Buffer | undefined;
+  const base64 = message.metadata?.base64 as string | undefined;
+
+  // Priority: buffer > base64 > URL
+  let audioSource: Buffer | { url: string };
+  if (audioBuffer) {
+    audioSource = audioBuffer;
+  } else if (base64) {
+    audioSource = Buffer.from(base64, 'base64');
+  } else {
+    audioSource = { url: message.content.mediaUrl || '' };
+  }
+
   return {
-    audio: { url: message.content.mediaUrl || '' },
+    audio: audioSource,
     mimetype: message.content.mimeType || 'audio/ogg; codecs=opus',
     ptt: isPtt,
   };
@@ -122,6 +207,33 @@ const buildReaction: ContentBuilder = (message) => {
 };
 
 /**
+ * Build poll message content
+ *
+ * Uses Baileys poll format:
+ * { poll: { name: string, values: string[], selectableCount: number } }
+ */
+const buildPoll: ContentBuilder = (message) => {
+  const pollData = message.metadata?.poll as {
+    question: string;
+    answers: string[];
+    multiSelect?: boolean;
+  } | undefined;
+
+  if (!pollData) {
+    throw new WhatsAppError(ErrorCode.SEND_FAILED, 'Poll content missing poll data in metadata');
+  }
+
+  return {
+    poll: {
+      name: pollData.question,
+      values: pollData.answers,
+      // selectableCount: 0 = unlimited selections, 1 = single select
+      selectableCount: pollData.multiSelect ? 0 : 1,
+    },
+  } as unknown as AnyMessageContent;
+};
+
+/**
  * Map of content type to builder function
  */
 const contentBuilders: Record<string, ContentBuilder> = {
@@ -134,6 +246,7 @@ const contentBuilders: Record<string, ContentBuilder> = {
   location: buildLocation,
   contact: buildContact,
   reaction: buildReaction,
+  poll: buildPoll,
 };
 
 /**
