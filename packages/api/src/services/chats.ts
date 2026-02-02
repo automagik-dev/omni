@@ -221,7 +221,7 @@ export class ChatService {
       .update(chats)
       .set({
         lastMessageAt: timestamp,
-        lastMessagePreview: preview.slice(0, 255),
+        lastMessagePreview: preview.substring(0, 200),
         messageCount: sql`${chats.messageCount} + 1`,
         updatedAt: new Date(),
       })

@@ -101,18 +101,30 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
 
           // Find or create chat
-          const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
-            chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
-            channel,
-            name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
-          });
+          let chat: Awaited<ReturnType<typeof services.chats.findOrCreate>>['chat'];
+          try {
+            const result = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
+              chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
+              channel,
+              name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
+            });
+            chat = result.chat;
+          } catch (chatError) {
+            log.error('Failed at findOrCreate chat', { externalId: payload.externalId, chatExternalId, error: String(chatError) });
+            throw chatError;
+          }
 
           // Find or create participant - truncate platformUserId for varchar(255)
           if (payload.from) {
             const participantUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
-              displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
-            });
+            try {
+              await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
+                displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
+              });
+            } catch (participantError) {
+              log.error('Failed at findOrCreateParticipant', { externalId: payload.externalId, participantUserId, error: String(participantError) });
+              throw participantError;
+            }
           }
 
           // Auto-create Person + PlatformIdentity for sender if doesn't exist
@@ -123,18 +135,29 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
             // Note: platformUserId (JID) should never exceed 255 chars in practice
             const platformUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
-              {
-                channel,
-                instanceId: metadata.instanceId,
-                platformUserId,
-                platformUsername: displayName,
-              },
-              {
-                createPerson: true,
-                displayName,
-              },
-            );
+            let identity: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['identity'];
+            let person: Awaited<ReturnType<typeof services.persons.findOrCreateIdentity>>['person'];
+            let isNew: boolean;
+            try {
+              const result = await services.persons.findOrCreateIdentity(
+                {
+                  channel,
+                  instanceId: metadata.instanceId,
+                  platformUserId,
+                  platformUsername: displayName,
+                },
+                {
+                  createPerson: true,
+                  displayName,
+                },
+              );
+              identity = result.identity;
+              person = result.person;
+              isNew = result.isNew;
+            } catch (identityError) {
+              log.error('Failed at findOrCreateIdentity', { externalId: payload.externalId, platformUserId, error: String(identityError) });
+              throw identityError;
+            }
 
             senderPlatformIdentityId = identity.id;
             senderPersonId = person?.id;
@@ -198,9 +221,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             }
           }
 
-          // Create message
-          const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
-            source: 'realtime',
+          // Create message - build options first to log on error
+          const messageOptions = {
+            source: 'realtime' as const,
             messageType: mapContentType(payload.content.type),
             textContent: payload.content.text,
             platformTimestamp,
@@ -222,25 +245,80 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
             // Raw data
             rawPayload: rawPayload,
-          });
+          };
 
-          if (created) {
-            log.debug('Created message', {
-              messageId: message.id,
+          try {
+            const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, messageOptions);
+
+            if (created) {
+              log.debug('Created message', {
+                messageId: message.id,
+                externalId: payload.externalId,
+                chatId: chat.id,
+              });
+            }
+          } catch (messageError) {
+            log.error('Failed at messages.findOrCreate', {
               externalId: payload.externalId,
               chatId: chat.id,
+              error: String(messageError),
+              optionLengths: {
+                messageExternalId: messageExternalId?.length,
+                senderPlatformUserId: messageOptions.senderPlatformUserId?.length,
+                senderDisplayName: messageOptions.senderDisplayName?.length,
+                mediaMimeType: messageOptions.mediaMimeType?.length,
+                replyToExternalId: messageOptions.replyToExternalId?.length,
+                quotedSenderName: messageOptions.quotedSenderName?.length,
+                textContent: messageOptions.textContent?.length,
+                quotedText: messageOptions.quotedText?.length,
+              },
             });
+            throw messageError;
           }
 
           // Record participant activity
           if (payload.from) {
             const activityUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
-            await services.chats.recordParticipantActivity(chat.id, activityUserId);
+            try {
+              await services.chats.recordParticipantActivity(chat.id, activityUserId);
+            } catch (activityError) {
+              log.error('Failed at recordParticipantActivity', { externalId: payload.externalId, error: String(activityError) });
+              throw activityError;
+            }
           }
         } catch (error) {
+          // Log ALL field lengths to debug varchar(255) issues
+          const rawPayload = payload.rawPayload;
+          const quotedMsg = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
+
+          // Find any string field > 200 chars in rawPayload
+          const longFields: Record<string, number> = {};
+          const checkLongStrings = (obj: unknown, prefix = ''): void => {
+            if (!obj || typeof obj !== 'object') return;
+            for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+              if (typeof val === 'string' && val.length > 200) {
+                longFields[`${prefix}${key}`] = val.length;
+              } else if (typeof val === 'object' && val !== null) {
+                checkLongStrings(val, `${prefix}${key}.`);
+              }
+            }
+          };
+          checkLongStrings(rawPayload, 'raw.');
+
           log.error('Failed to persist message.received to unified model', {
             externalId: payload.externalId,
             error: String(error),
+            fieldLengths: {
+              chatId: payload.chatId?.length,
+              from: payload.from?.length,
+              pushName: (rawPayload?.pushName as string)?.length,
+              chatName: (rawPayload?.chatName as string)?.length,
+              mimeType: payload.content?.mimeType?.length,
+              replyToId: payload.replyToId?.length,
+              quotedPushName: (quotedMsg?.pushName as string)?.length,
+              quotedParticipant: (quotedMsg?.participant as string)?.length,
+            },
+            longFields: Object.keys(longFields).length > 0 ? longFields : undefined,
           });
           // Re-throw to trigger NATS retry mechanism
           throw error;

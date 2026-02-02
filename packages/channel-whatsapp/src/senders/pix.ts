@@ -6,7 +6,7 @@
  */
 
 import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
-import { generateMessageID, getUrlInfo } from '@whiskeysockets/baileys';
+import { generateMessageID } from '@whiskeysockets/baileys';
 
 /**
  * PIX key types supported by WhatsApp
@@ -50,9 +50,6 @@ export function isValidPixData(data: PixData): boolean {
  *
  * Creates an interactive message with native payment_info button
  * that displays the PIX "copia e cola" interface.
- *
- * The message must be wrapped in viewOnceMessage for Baileys to
- * properly handle the interactive message structure.
  */
 export function buildPixContent(data: PixData): AnyMessageContent {
   const buttonParamsJson = JSON.stringify({
@@ -68,21 +65,17 @@ export function buildPixContent(data: PixData): AnyMessageContent {
     ],
   });
 
-  // Wrap in viewOnceMessage for proper Baileys handling
-  // Cast through unknown because AnyMessageContent doesn't include these types
+  // Simple structure matching received PIX messages
+  // Cast through unknown because AnyMessageContent doesn't include interactiveMessage
   return {
-    viewOnceMessage: {
-      message: {
-        interactiveMessage: {
-          nativeFlowMessage: {
-            buttons: [
-              {
-                name: 'payment_info',
-                buttonParamsJson,
-              },
-            ],
+    interactiveMessage: {
+      nativeFlowMessage: {
+        buttons: [
+          {
+            name: 'payment_info',
+            buttonParamsJson,
           },
-        },
+        ],
       },
     },
   } as unknown as AnyMessageContent;
@@ -93,6 +86,8 @@ export function buildPixContent(data: PixData): AnyMessageContent {
  *
  * This bypasses Baileys' content validation which doesn't support
  * interactive messages natively.
+ *
+ * Structure based on real received PIX messages from fixtures.
  */
 export function buildPixProtoMessage(data: PixData) {
   const buttonParamsJson = JSON.stringify({
@@ -108,19 +103,16 @@ export function buildPixProtoMessage(data: PixData) {
     ],
   });
 
+  // Simple structure matching received PIX messages
   return {
-    viewOnceMessage: {
-      message: {
-        interactiveMessage: {
-          nativeFlowMessage: {
-            buttons: [
-              {
-                name: 'payment_info',
-                buttonParamsJson,
-              },
-            ],
+    interactiveMessage: {
+      nativeFlowMessage: {
+        buttons: [
+          {
+            name: 'payment_info',
+            buttonParamsJson,
           },
-        },
+        ],
       },
     },
   };

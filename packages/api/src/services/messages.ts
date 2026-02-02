@@ -278,11 +278,12 @@ export class MessageService {
     }
 
     // Update chat's last message
+    // Use substring(0, 200) to safely truncate for varchar(255) with Unicode characters
     await this.db
       .update(chats)
       .set({
         lastMessageAt: options.platformTimestamp,
-        lastMessagePreview: (options.textContent ?? '[Media]').slice(0, 255),
+        lastMessagePreview: (options.textContent ?? '[Media]').substring(0, 200),
         messageCount: sql`${chats.messageCount} + 1`,
         updatedAt: new Date(),
       })

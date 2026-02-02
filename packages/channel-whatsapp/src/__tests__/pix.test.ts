@@ -5,15 +5,11 @@
 import { describe, expect, it } from 'bun:test';
 import { type PixData, type PixKeyType, buildPixContent, isValidPixData } from '../senders/pix';
 
-/** Helper type for accessing the wrapped interactive message structure */
-interface PixViewOnceMessage {
-  viewOnceMessage: {
-    message: {
-      interactiveMessage: {
-        nativeFlowMessage: {
-          buttons: Array<{ name: string; buttonParamsJson: string }>;
-        };
-      };
+/** Helper type for accessing the interactive message structure */
+interface PixInteractiveMessage {
+  interactiveMessage: {
+    nativeFlowMessage: {
+      buttons: Array<{ name: string; buttonParamsJson: string }>;
     };
   };
 }
@@ -80,7 +76,7 @@ describe('PIX Sender', () => {
   });
 
   describe('buildPixContent', () => {
-    it('builds correct viewOnceMessage wrapper structure', () => {
+    it('builds correct interactive message structure', () => {
       const data: PixData = {
         merchantName: 'Test Store',
         key: 'test@example.com',
@@ -88,14 +84,12 @@ describe('PIX Sender', () => {
       };
 
       const content = buildPixContent(data);
-      const msg = content as unknown as PixViewOnceMessage;
+      const msg = content as unknown as PixInteractiveMessage;
 
-      expect(msg).toHaveProperty('viewOnceMessage');
-      expect(msg.viewOnceMessage).toHaveProperty('message');
-      expect(msg.viewOnceMessage.message).toHaveProperty('interactiveMessage');
-      expect(msg.viewOnceMessage.message.interactiveMessage).toHaveProperty('nativeFlowMessage');
-      expect(msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage).toHaveProperty('buttons');
-      expect(msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons).toHaveLength(1);
+      expect(msg).toHaveProperty('interactiveMessage');
+      expect(msg.interactiveMessage).toHaveProperty('nativeFlowMessage');
+      expect(msg.interactiveMessage.nativeFlowMessage).toHaveProperty('buttons');
+      expect(msg.interactiveMessage.nativeFlowMessage.buttons).toHaveLength(1);
     });
 
     it('builds payment_info button with correct name', () => {
@@ -106,8 +100,8 @@ describe('PIX Sender', () => {
       };
 
       const content = buildPixContent(data);
-      const msg = content as unknown as PixViewOnceMessage;
-      const button = msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0]!;
+      const msg = content as unknown as PixInteractiveMessage;
+      const button = msg.interactiveMessage.nativeFlowMessage.buttons[0]!;
 
       expect(button.name).toBe('payment_info');
     });
@@ -120,8 +114,8 @@ describe('PIX Sender', () => {
       };
 
       const content = buildPixContent(data);
-      const msg = content as unknown as PixViewOnceMessage;
-      const button = msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0]!;
+      const msg = content as unknown as PixInteractiveMessage;
+      const button = msg.interactiveMessage.nativeFlowMessage.buttons[0]!;
       const params = JSON.parse(button.buttonParamsJson);
 
       expect(params).toHaveProperty('payment_settings');
@@ -142,8 +136,8 @@ describe('PIX Sender', () => {
       };
 
       const content = buildPixContent(data);
-      const msg = content as unknown as PixViewOnceMessage;
-      const button = msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0]!;
+      const msg = content as unknown as PixInteractiveMessage;
+      const button = msg.interactiveMessage.nativeFlowMessage.buttons[0]!;
       const params = JSON.parse(button.buttonParamsJson);
 
       expect(params.payment_settings[0].pix_static_code.key_type).toBe('EVP');
@@ -158,8 +152,8 @@ describe('PIX Sender', () => {
       };
 
       const content = buildPixContent(data);
-      const msg = content as unknown as PixViewOnceMessage;
-      const button = msg.viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0]!;
+      const msg = content as unknown as PixInteractiveMessage;
+      const button = msg.interactiveMessage.nativeFlowMessage.buttons[0]!;
       const params = JSON.parse(button.buttonParamsJson);
 
       expect(params.payment_settings[0].pix_static_code.merchant_name).toBe('Loja do João & Maria');
