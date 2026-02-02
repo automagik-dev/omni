@@ -21,6 +21,14 @@ import { getPlugin } from './loader';
 const log = createLogger('message-persistence');
 
 /**
+ * Truncate string to max length (safe for varchar columns)
+ */
+function truncate(str: string | undefined | null, maxLength: number): string | undefined {
+  if (!str) return undefined;
+  return str.length > maxLength ? str.slice(0, maxLength) : str;
+}
+
+/**
  * Map content type to message type
  */
 function mapContentType(contentType: string | undefined): MessageType {
@@ -87,13 +95,13 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         const { chat } = await services.chats.findOrCreate(metadata.instanceId, payload.chatId, {
           chatType: inferChatType(payload.chatId, payload.rawPayload?.isGroup as boolean | undefined),
           channel,
-          name: payload.rawPayload?.chatName as string | undefined,
+          name: truncate(payload.rawPayload?.chatName as string | undefined, 255),
         });
 
         // Find or create participant
         if (payload.from) {
           await services.chats.findOrCreateParticipant(chat.id, payload.from, {
-            displayName: payload.rawPayload?.pushName as string | undefined,
+            displayName: truncate(payload.rawPayload?.pushName as string | undefined, 255),
           });
         }
 
@@ -102,12 +110,14 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         let senderPlatformIdentityId = metadata.platformIdentityId;
 
         if (payload.from && !senderPlatformIdentityId) {
-          const displayName = payload.rawPayload?.pushName as string | undefined;
+          const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
+          // Note: platformUserId (JID) should never exceed 255 chars in practice
+          const platformUserId = payload.from.length > 255 ? payload.from.slice(0, 255) : payload.from;
           const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
             {
               channel,
               instanceId: metadata.instanceId,
-              platformUserId: payload.from,
+              platformUserId,
               platformUsername: displayName,
             },
             {
@@ -184,9 +194,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           messageType: mapContentType(payload.content.type),
           textContent: payload.content.text,
           platformTimestamp,
-          // Sender info (use resolved identity)
-          senderPlatformUserId: payload.from,
-          senderDisplayName: rawPayload?.pushName as string | undefined,
+          // Sender info (use resolved identity) - truncate varchar(255) fields
+          senderPlatformUserId: truncate(payload.from, 255),
+          senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
           senderPersonId: senderPersonId,
           senderPlatformIdentityId: senderPlatformIdentityId,
           isFromMe: false,
@@ -194,10 +204,10 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
           mediaMimeType: payload.content.mimeType,
           mediaUrl: payload.content.mediaUrl,
-          // Reply info
-          replyToExternalId: payload.replyToId,
+          // Reply info - truncate varchar(255) fields
+          replyToExternalId: truncate(payload.replyToId, 255),
           quotedText: quotedMessage?.conversation as string | undefined,
-          quotedSenderName: quotedMessage?.pushName as string | undefined,
+          quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
           // Forward info
           isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
           // Raw data
@@ -255,8 +265,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Media
           hasMedia: !!payload.content.mediaUrl,
           mediaUrl: payload.content.mediaUrl,
-          // Reply info
-          replyToExternalId: payload.replyToId,
+          // Reply info - truncate varchar(255) fields
+          replyToExternalId: truncate(payload.replyToId, 255),
         });
 
         if (created) {
