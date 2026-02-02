@@ -84,11 +84,11 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
   },
   [STREAM_NAMES.SYSTEM]: {
     name: STREAM_NAMES.SYSTEM,
-    subjects: ['system.>'],
+    subjects: ['system.>', 'sync.>'],
     max_age: daysToNs(7),
     storage: StorageType.File,
     retention: RetentionPolicy.Limits,
-    description: 'Internal system events (dead_letter, replay, health)',
+    description: 'Internal system events (dead_letter, replay, health, sync)',
   },
 };
 
@@ -106,6 +106,7 @@ export function getStreamForEventType(eventType: string): StreamName {
     access: STREAM_NAMES.ACCESS,
     custom: STREAM_NAMES.CUSTOM,
     system: STREAM_NAMES.SYSTEM,
+    sync: STREAM_NAMES.SYSTEM,
   };
 
   return prefixToStream[prefix] ?? STREAM_NAMES.CUSTOM;
