@@ -17,7 +17,7 @@ import {
   isProviderSchemaSupported,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
-import type { AgentReplyFilter, Instance } from '@omni/db';
+import type { AgentReplyFilter, AgentSessionStrategy, Instance } from '@omni/db';
 import type { Database } from '@omni/db';
 import { agentProviders, instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -175,6 +175,37 @@ export function getSplitDelayConfig(instance: Instance): SplitDelayConfig {
 }
 
 // ============================================================================
+// Session ID Computation
+// ============================================================================
+
+/**
+ * Compute session ID based on the configured strategy
+ *
+ * @param strategy - Session strategy (per_user, per_chat, per_user_per_chat)
+ * @param userId - The user's identifier
+ * @param chatId - The chat/conversation identifier
+ * @returns Computed session ID for the agent
+ */
+export function computeSessionId(
+  strategy: AgentSessionStrategy,
+  userId: string,
+  chatId: string,
+): string {
+  switch (strategy) {
+    case 'per_user':
+      // Same session across all chats for this user
+      return userId;
+    case 'per_chat':
+      // All users in a chat share the session (group memory)
+      return chatId;
+    case 'per_user_per_chat':
+    default:
+      // Each user has own session per chat (most isolated)
+      return `${userId}:${chatId}`;
+  }
+}
+
+// ============================================================================
 // Agent Runner Service
 // ============================================================================
 
@@ -249,11 +280,17 @@ export class AgentRunnerService {
     // Aggregate messages with separator if multiple
     const combinedMessage = messages.join('\n---\n');
 
+    // Compute session ID based on configured strategy
+    const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+    const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
+
     log.info('Running agent', {
       instanceId: instance.id,
       agentId: instance.agentId,
       agentType: instance.agentType,
       messageCount: messages.length,
+      sessionStrategy,
+      sessionId,
     });
 
     // Call appropriate endpoint based on agent type
@@ -261,8 +298,8 @@ export class AgentRunnerService {
     const request = {
       message: combinedMessage,
       stream: false,
-      sessionId: chatId, // Use chat ID for session continuity
-      userId: senderId, // User identifier
+      sessionId, // Computed based on session strategy
+      userId: senderId, // User identifier (always sent for context)
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
     };
 
@@ -319,11 +356,15 @@ export class AgentRunnerService {
     const combinedMessage = messages.join('\n---\n');
     const enableSplit = instance.enableAutoSplit ?? true;
 
+    // Compute session ID based on configured strategy
+    const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+    const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
+
     const request = {
       message: combinedMessage,
       stream: true,
-      sessionId: chatId,
-      userId: senderId,
+      sessionId, // Computed based on session strategy
+      userId: senderId, // User identifier (always sent for context)
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
     };
 

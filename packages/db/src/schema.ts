@@ -59,6 +59,15 @@ export interface AgentReplyFilter {
   };
 }
 
+/**
+ * Session strategy for agent memory
+ * - per_user: Same session across all chats for this user
+ * - per_chat: All users in a chat share the session (group memory)
+ * - per_user_per_chat: Each user has own session per chat (most isolated)
+ */
+export const agentSessionStrategies = ['per_user', 'per_chat', 'per_user_per_chat'] as const;
+export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
+
 export const ruleTypes = ['allow', 'deny'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
@@ -387,6 +396,11 @@ export const instances = pgTable(
     agentStreamMode: boolean('agent_stream_mode').notNull().default(false),
     /** When agent should reply to messages */
     agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),
+    /** Session strategy for agent memory */
+    agentSessionStrategy: varchar('agent_session_strategy', { length: 20 })
+      .notNull()
+      .default('per_user_per_chat')
+      .$type<AgentSessionStrategy>(),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
