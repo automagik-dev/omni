@@ -1,9 +1,10 @@
-# WISH: Agent Provider Implementation
+# WISH: Agno Provider Integration
 
-> Implement the provider client layer to actually call LLMs when messages arrive.
+> Wire Agno agents/teams to incoming messages with split, delay, debounce, and reply filtering.
 
 **Status:** DRAFT
 **Created:** 2026-02-02
+**Updated:** 2026-02-03
 **Author:** WISH Agent
 **Beads:** omni-r76
 
@@ -11,17 +12,26 @@
 
 ## Context
 
-The agent provider **structure** exists (DB schema, API routes, service layer) but the **execution** is missing. We can create/configure providers but nothing actually calls them when a message arrives.
+**Problem:** The agent provider infrastructure exists (DB schema, API, types) but nothing actually calls the agent when messages arrive. We can configure providers but they don't execute.
+
+**Goal:** When a message arrives for an instance with Agno configured:
+1. Check reply filter conditions (DM, mention, reply, name match)
+2. Apply debounce (with typing-aware restart option)
+3. Call Agno API (agent, team, or workflow)
+4. Split response on `\n\n`, apply delays, send back
 
 **Current State:**
-- ✅ `agent_providers` table with schema, baseUrl, apiKey, capabilities
-- ✅ CRUD API at `/api/v2/providers`
-- ✅ Instances can reference a provider via `agentProviderId`
-- ❌ No provider clients (OpenAI, Anthropic, Agno, Custom)
-- ❌ No message→provider wiring
-- ❌ No streaming support implementation
+- ✅ `agent_providers` table with schema, baseUrl, apiKey
+- ✅ Instance references (`agentProviderId`, `agentId`, `agentType`)
+- ✅ Split/delay/debounce config fields already in schema
+- ❌ No Agno client
+- ❌ No message→agent wiring
+- ❌ No reply filter logic
 
-**Goal:** When a message arrives for an instance with a configured provider, call the LLM and send the response back.
+**Test Environment:**
+- Agno API: `http://localhost:8181`
+- API Key: `namastex888`
+- Target: Discord bot instance
 
 ---
 
@@ -29,12 +39,14 @@ The agent provider **structure** exists (DB schema, API routes, service layer) b
 
 | ID | Type | Description |
 |----|------|-------------|
-| **ASM-1** | Assumption | We need test APIs for each provider type to validate behavior |
-| **ASM-2** | Assumption | Streaming is important for UX |
-| **DEC-1** | Decision | Follow patterns from `docs/architecture/provider-system.md` |
-| **DEC-2** | Decision | Start with OpenAI client (most common), then others |
-| **DEC-3** | Decision | Explore AG-UI / A2A protocols for future standardization |
-| **REQ-1** | Requirement | **EXTERNAL DEV TASK:** Set up test APIs for validation |
+| **DEC-1** | Decision | Start with Agno only (defer OpenAI/Anthropic/Custom) |
+| **DEC-2** | Decision | Support agents, teams, and workflows |
+| **DEC-3** | Decision | Split on `\n\n` applies to both streaming and sync |
+| **DEC-4** | Decision | Typing presence starts immediately on agent call |
+| **DEC-5** | Decision | Reply filter is per-instance config |
+| **ASM-1** | Assumption | Agno API available at configured baseUrl |
+| **ASM-2** | Assumption | Session context managed by Agno (user_id = chatId) |
+| **RISK-1** | Risk | Agno API may be slow/unavailable → timeout + error handling |
 
 ---
 
@@ -42,286 +54,443 @@ The agent provider **structure** exists (DB schema, API routes, service layer) b
 
 ### IN SCOPE
 
-- Provider client implementations (OpenAI, Anthropic, Agno, Custom)
-- Provider client factory
-- Message→Provider wiring in event handlers
-- Streaming support
-- Basic conversation context (recent messages)
-- Protocol exploration (AG-UI, A2A)
+- **Agno Client** - Support agents, teams, workflows (sync + streaming)
+- **Reply Filter** - Conditions for when agent should reply
+- **Debounce** - With typing-aware restart (WhatsApp)
+- **Response Split** - On `\n\n` with configurable delays
+- **Typing Presence** - Start as soon as agent call begins
+- **Message Wiring** - Hook into message-persistence flow
 
 ### OUT OF SCOPE
 
-- Full conversation memory / RAG
-- Tool/function calling
-- Multi-modal beyond images (audio, video transcription already exists)
+- OpenAI/Anthropic/Custom providers (future wish)
+- Tool calling UI/confirmation
+- Multi-modal beyond text (images later)
+- Conversation memory beyond Agno's session
 - Provider cost tracking
+- Agent health dashboard
 
 ---
 
-## External Dev Task: Test APIs
+## Agno API Reference
 
-**IMPORTANT:** Before we can validate our clients work correctly, we need simple test endpoints.
-
-### Required Test Endpoints
-
-| Schema | Endpoint Needed | Purpose |
-|--------|-----------------|---------|
-| OpenAI | Echo server at `/v1/chat/completions` | Returns "Echo: {user message}" |
-| Anthropic | Echo server at `/v1/messages` | Returns "Echo: {user message}" |
-| Agno | Echo agent at `/agents/{id}/runs` | Returns "Echo: {user message}" |
-
-**Suggested Approach:**
-1. Simple Bun/Hono server with 3 routes
-2. Each route accepts the schema's format, returns echo response
-3. Support both streaming and non-streaming
-4. Deploy somewhere accessible (or run locally)
-
-**Example Echo Server Spec:**
-
-```typescript
-// POST /v1/chat/completions (OpenAI format)
-// Request: { model, messages: [{ role: "user", content: "Hello" }] }
-// Response: { choices: [{ message: { role: "assistant", content: "Echo: Hello" }}]}
-
-// POST /v1/messages (Anthropic format)
-// Request: { model, messages: [{ role: "user", content: "Hello" }] }
-// Response: { content: [{ type: "text", text: "Echo: Hello" }]}
-
-// POST /agents/:id/runs (Agno format)
-// Request: { message: "Hello", stream: false }
-// Response: { content: "Echo: Hello", run_id: "..." }
+### List Endpoints
+```bash
+GET /agents                        # List agents
+GET /teams                         # List teams
+GET /workflows                     # List workflows
 ```
 
-**Streaming versions** should chunk the response character by character with 50ms delays.
+### Run Endpoints (multipart/form-data)
+```bash
+POST /agents/{agent_id}/runs       # Run agent
+POST /teams/{team_id}/runs         # Run team
+POST /workflows/{workflow_id}/runs # Run workflow
+```
+
+**Request Body:**
+```typescript
+{
+  message: string;        // Required
+  stream?: boolean;       // Default: true
+  session_id?: string;    // Session continuity
+  user_id?: string;       // User identifier
+  files?: File[];         // Optional attachments
+}
+```
+
+**Response (sync, stream=false):**
+```typescript
+{
+  run_id: string;
+  agent_id: string;
+  session_id: string;
+  content: string;        // The response text
+  status: 'COMPLETED' | 'FAILED';
+  metrics: { input_tokens, output_tokens, duration };
+}
+```
+
+**Response (streaming, stream=true):**
+```
+event: RunStarted
+data: {"run_id": "...", "session_id": "..."}
+
+event: RunResponse
+data: {"event": "RunResponse", "content": "Hello", "content_type": "str"}
+
+event: RunCompleted
+data: {"run_id": "...", "content": "Full response here"}
+```
 
 ---
 
-## Execution Group A: Base Infrastructure
+## Instance Configuration
 
-**Goal:** Create the provider client foundation.
+### Reply Filter (NEW - needs schema update)
+
+```typescript
+// When should agent reply to messages?
+agentReplyFilter: {
+  mode: 'all' | 'filtered';  // all = reply to everything, filtered = check conditions
+  conditions: {
+    onDm: boolean;           // Reply if message is a DM (not in group/channel)
+    onMention: boolean;      // Reply if bot is @mentioned
+    onReply: boolean;        // Reply if message is a reply to bot's message
+    onNameMatch: boolean;    // Reply if bot name appears in text
+    namePatterns?: string[]; // Custom patterns for name matching
+  };
+}
+```
+
+**Logic:** If mode='filtered', check conditions with OR (any match triggers reply).
+
+### Existing Config (already in schema)
+
+```typescript
+// Split & Delay
+enableAutoSplit: boolean;                    // Split on \n\n
+messageSplitDelayMode: 'disabled' | 'fixed' | 'randomized';
+messageSplitDelayFixedMs: number;
+messageSplitDelayMinMs: number;              // Default: 300
+messageSplitDelayMaxMs: number;              // Default: 1000
+
+// Debounce
+messageDebounceMode: 'disabled' | 'fixed' | 'randomized';
+messageDebounceMinMs: number;
+messageDebounceMaxMs: number;
+// NEW: messageDebounceRestartOnTyping: boolean  // Restart timer if user is typing
+```
+
+---
+
+## Execution Group A: Agno Client & Factory
+
+**Goal:** Implement the Agno client with streaming and sync support.
 
 **Deliverables:**
-- [ ] `packages/core/src/providers/types.ts` - Shared types
-- [ ] `packages/core/src/providers/base-client.ts` - Abstract base class
+- [ ] `packages/core/src/providers/types.ts` - Provider types
+- [ ] `packages/core/src/providers/agno-client.ts` - Agno implementation
 - [ ] `packages/core/src/providers/factory.ts` - Client factory
 - [ ] `packages/core/src/providers/index.ts` - Exports
 
 **Types:**
-
 ```typescript
-interface ProviderMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-  images?: Array<{ url?: string; base64?: string; mimeType: string }>;
-}
-
 interface ProviderRequest {
-  messages: ProviderMessage[];
+  message: string;
   stream?: boolean;
-  sessionId?: string;
-  userId?: string;
+  sessionId?: string;   // Typically chatId for continuity
+  userId?: string;      // Typically personId or senderId
+  files?: { path: string; mimeType: string }[];
 }
 
 interface ProviderResponse {
   content: string;
-  usage?: { inputTokens: number; outputTokens: number };
-  metadata?: Record<string, unknown>;
+  runId: string;
+  sessionId: string;
+  status: 'completed' | 'failed';
+  metrics?: { inputTokens: number; outputTokens: number; durationMs: number };
 }
 
 interface StreamChunk {
-  content: string;
+  event: string;
+  content?: string;
   isComplete: boolean;
+  runId?: string;
 }
 
-abstract class BaseProviderClient {
-  abstract send(request: ProviderRequest): Promise<ProviderResponse>;
-  abstract sendStream(request: ProviderRequest): AsyncGenerator<StreamChunk>;
-  abstract healthCheck(): Promise<boolean>;
+interface AgnoClient {
+  listAgents(): Promise<AgnoAgent[]>;
+  listTeams(): Promise<AgnoTeam[]>;
+  listWorkflows(): Promise<AgnoWorkflow[]>;
+
+  runAgent(agentId: string, request: ProviderRequest): Promise<ProviderResponse>;
+  runTeam(teamId: string, request: ProviderRequest): Promise<ProviderResponse>;
+  runWorkflow(workflowId: string, request: ProviderRequest): Promise<ProviderResponse>;
+
+  streamAgent(agentId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
+  streamTeam(teamId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
+  streamWorkflow(workflowId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
 }
 ```
-
----
-
-## Execution Group B: Provider Clients
-
-**Goal:** Implement clients for each schema type.
-
-**Deliverables:**
-- [ ] `packages/core/src/providers/openai-client.ts`
-- [ ] `packages/core/src/providers/anthropic-client.ts`
-- [ ] `packages/core/src/providers/agno-client.ts`
-- [ ] `packages/core/src/providers/custom-client.ts`
 
 **Acceptance Criteria:**
-- [ ] OpenAI client sends/receives in OpenAI format
-- [ ] Anthropic client sends/receives in Anthropic format
-- [ ] Agno client sends/receives in Agno format (form-data or JSON)
-- [ ] Custom client uses template-based request/response mapping
-- [ ] All clients support streaming
-- [ ] All clients handle errors gracefully
+- [ ] Can list agents, teams, workflows from Agno API
+- [ ] Can run agent with sync response
+- [ ] Can stream agent with SSE parsing
+- [ ] Handles errors (401, 404, 500) gracefully
+- [ ] Respects timeout config
 
-**Validation (with echo servers):**
+**Validation:**
 ```bash
-# Unit tests against echo servers
-bun test packages/core/src/providers/__tests__/
+bun test packages/core/src/providers/__tests__/agno-client.test.ts
 ```
 
 ---
 
-## Execution Group C: Message Wiring
+## Execution Group B: Message Wiring & Reply Filter
 
-**Goal:** Wire incoming messages to provider calls.
+**Goal:** Wire messages to agent calls with filtering, debounce, and response handling.
 
 **Deliverables:**
-- [ ] `packages/core/src/providers/service.ts` - Provider service
-- [ ] Update message event handlers to call providers
-- [ ] Implement response sending back to channel
+- [ ] `packages/api/src/services/agent-runner.ts` - Orchestration service
+- [ ] `packages/api/src/plugins/agent-responder.ts` - Event handler plugin
+- [ ] Schema update for `agentReplyFilter` and `messageDebounceRestartOnTyping`
+- [ ] Reply filter logic implementation
+- [ ] Debounce buffer with typing-aware restart
 
 **Flow:**
-
 ```
 message.received event
     ↓
-Check instance.agentProviderId
+message-persistence (existing - persists message)
     ↓
-If provider configured:
-    - Build messages array (system prompt + recent context + new message)
-    - Call provider.send() or provider.sendStream()
-    - Send response back via channel plugin
-    ↓
-Emit agent.response event
+agent-responder plugin (NEW)
+    ├─ Get instance config
+    ├─ Check agentProviderId is set
+    ├─ Apply reply filter → skip if no match
+    ├─ Start typing presence immediately
+    ├─ Apply debounce (buffer messages, restart on typing if enabled)
+    ├─ When debounce fires:
+    │   ├─ Aggregate buffered messages
+    │   ├─ Call Agno via agentRunner.run()
+    │   ├─ Split response on \n\n
+    │   ├─ Send each part with configured delay
+    │   └─ Emit message.sent events
+    └─ Stop typing presence
+```
+
+**Reply Filter Implementation:**
+```typescript
+function shouldAgentReply(instance: Instance, message: Message): boolean {
+  const filter = instance.agentReplyFilter;
+
+  // No filter = no agent response
+  if (!filter || !instance.agentProviderId) return false;
+
+  // All mode = always reply
+  if (filter.mode === 'all') return true;
+
+  // Filtered mode = check conditions (OR logic)
+  const { conditions } = filter;
+
+  if (conditions.onDm && message.isDirectMessage) return true;
+  if (conditions.onMention && message.mentionsBot) return true;
+  if (conditions.onReply && message.isReplyToBot) return true;
+  if (conditions.onNameMatch && matchesNamePattern(message.text, conditions.namePatterns)) return true;
+
+  return false;
+}
 ```
 
 **Acceptance Criteria:**
-- [ ] Message to instance with provider triggers LLM call
-- [ ] Response is sent back to the sender
-- [ ] Streaming responses send incremental updates (or buffer then send)
-- [ ] No provider = no action (passthrough)
+- [ ] Messages only trigger agent when reply filter passes
+- [ ] Typing presence shows while agent is processing
+- [ ] Debounce aggregates rapid messages with `\n---\n`
+- [ ] Typing-aware debounce restarts timer on user typing (WhatsApp)
+- [ ] Response split on `\n\n` works correctly
+- [ ] Split delays follow mode config (disabled/fixed/randomized)
+- [ ] First message sent immediately, subsequent with delay
+
+**Validation:**
+```bash
+bun test packages/api/src/plugins/__tests__/agent-responder.test.ts
+make typecheck
+```
 
 ---
 
-## Execution Group D: Protocol Exploration
+## Execution Group C: Integration & Discord Setup
 
-**Goal:** Research AG-UI and A2A protocols for potential future adoption.
+**Goal:** End-to-end test with Discord bot, configure and validate.
 
 **Deliverables:**
-- [ ] `docs/research/agent-protocols.md` - Research document
+- [ ] Create Agno provider record via API
+- [ ] Configure Discord instance with provider
+- [ ] CLI commands for provider/agent management
+- [ ] Integration test with live Agno API
 
-### AG-UI Protocol
+**CLI Commands:**
+```bash
+omni providers list
+omni providers create --name agno-local --schema agno --base-url http://localhost:8181 --api-key xxx
+omni providers agents <provider-id>    # List agents from provider
+omni providers teams <provider-id>     # List teams
+omni providers test <provider-id>      # Health check
 
-[AG-UI](https://docs.ag-ui.com) (Agent User Interaction Protocol) - Standard for AI agents to interact with UIs.
+omni instances update <id> --agent-provider <provider-id> --agent-id calculator-agent
+```
 
-**Research Questions:**
-- What does AG-UI define?
-- How does it handle streaming?
-- Is it relevant to Omni's use case (messaging, not UI)?
-- Could we adapt it for message-based interactions?
+**Test Scenario:**
+1. Create Agno provider pointing to localhost:8181
+2. Set Discord instance to use provider with calculator-agent
+3. Configure reply filter: `onMention: true`
+4. Send message mentioning bot: "@Omni what is 25 * 4?"
+5. Expect: Typing indicator → "The result of 25 * 4 is **100**."
 
-### A2A Protocol
+**Acceptance Criteria:**
+- [ ] Provider created and persisted
+- [ ] Instance linked to provider
+- [ ] Bot responds to mentions only
+- [ ] Response arrives with typing indicator
+- [ ] Split messages have delay between them
 
-[A2A](https://github.com/google/A2A) (Agent-to-Agent) - Google's protocol for agent interoperability.
-
-**Research Questions:**
-- What does A2A define?
-- How do agents discover and communicate?
-- Is it overkill for our use case?
-- Could providers implement A2A for standardization?
-
-### Clarification: MCP vs Agent Protocols
-
-**MCP is NOT for agent communication.** In Omni:
-- MCP = wrapper around the CLI (for AI assistants like Claude Code to manage Omni)
-- Future: "omni skill" following SKILLS.md guidelines, using the omni CLI
-
-AG-UI and A2A are candidates for **message→agent** communication standardization.
-
-**Output:** Document comparing AG-UI vs A2A with recommendation for Omni's agent protocol.
+**Validation:**
+```bash
+# Manual test with Discord
+omni providers test <provider-id>
+# Send message in Discord, observe response
+```
 
 ---
 
 ## Technical Notes
 
-### Provider Resolution
+### Streaming Split Strategy
+
+When streaming, accumulate text and split on `\n\n`:
 
 ```typescript
-// In message handler
-async function handleMessage(event: MessageReceivedEvent) {
-  const instance = await getInstance(event.instanceId);
+async function* streamWithSplit(
+  stream: AsyncGenerator<StreamChunk>,
+  splitOnDoubleNewline: boolean,
+): AsyncGenerator<string> {
+  let buffer = '';
 
-  // Get provider (from reference or inline config)
-  const provider = instance.agentProviderId
-    ? await getProvider(instance.agentProviderId)
-    : instance.agentApiUrl
-      ? buildInlineProvider(instance)
-      : null;
+  for await (const chunk of stream) {
+    if (chunk.content) {
+      buffer += chunk.content;
 
-  if (!provider) return; // No agent configured
+      if (splitOnDoubleNewline) {
+        // Check for complete segments
+        while (buffer.includes('\n\n')) {
+          const [segment, rest] = buffer.split('\n\n', 2);
+          yield segment.trim();
+          buffer = rest || '';
+        }
+      }
+    }
 
-  const client = factory.create(provider);
-  const response = await client.send({
-    messages: buildMessages(instance, event),
-  });
-
-  await sendMessage(instance.id, event.from, response.content);
+    if (chunk.isComplete && buffer.trim()) {
+      yield buffer.trim();
+    }
+  }
 }
 ```
 
-### Conversation Context
-
-Start simple - last N messages from the chat:
+### Debounce with Typing Awareness
 
 ```typescript
-function buildMessages(instance: Instance, event: MessageEvent): ProviderMessage[] {
-  const messages: ProviderMessage[] = [];
+class MessageDebouncer {
+  private buffers: Map<string, Message[]> = new Map();
+  private timers: Map<string, Timer> = new Map();
 
-  // System prompt from provider config
-  const systemPrompt = instance.agentProvider?.schemaConfig?.systemPrompt;
-  if (systemPrompt) {
-    messages.push({ role: 'system', content: systemPrompt });
+  buffer(chatId: string, message: Message, config: DebounceConfig): void {
+    // Add to buffer
+    const buffer = this.buffers.get(chatId) || [];
+    buffer.push(message);
+    this.buffers.set(chatId, buffer);
+
+    // Restart timer
+    this.restartTimer(chatId, config);
   }
 
-  // Recent messages (last 10) for context
-  const recent = await getRecentMessages(event.chatId, 10);
-  for (const msg of recent) {
-    messages.push({
-      role: msg.isFromMe ? 'assistant' : 'user',
-      content: msg.textContent || '[media]',
-    });
+  onUserTyping(chatId: string, config: DebounceConfig): void {
+    if (config.restartOnTyping && this.buffers.has(chatId)) {
+      this.restartTimer(chatId, config);
+    }
   }
 
-  // Current message
-  messages.push({
-    role: 'user',
-    content: event.content.text || '[media]',
-    images: event.mediaUrl ? [{ url: event.mediaUrl, mimeType: event.mediaMimeType }] : undefined,
-  });
+  private restartTimer(chatId: string, config: DebounceConfig): void {
+    // Cancel existing
+    const existing = this.timers.get(chatId);
+    if (existing) clearTimeout(existing);
 
-  return messages;
+    // Calculate delay
+    const delay = this.calculateDelay(config);
+
+    // Set new timer
+    const timer = setTimeout(() => this.flush(chatId), delay);
+    this.timers.set(chatId, timer);
+  }
 }
 ```
 
-### Streaming Strategy
+### Presence Updates
 
-For messaging platforms, we have two options:
+```typescript
+async function handleAgentResponse(instance: Instance, chat: Chat, message: Message): Promise<void> {
+  const channel = getChannel(instance.channelType);
 
-1. **Buffer then send** - Wait for complete response, send as one message
-2. **Typing indicator + send** - Show typing, then send complete response
-3. **Edit message** (Discord only) - Send placeholder, edit with chunks
+  // Start typing immediately
+  await channel.sendPresence(instance.id, chat.externalId, 'composing');
 
-Start with option 2 (simplest).
+  try {
+    const response = await agentRunner.run(instance, message);
+
+    // Split and send
+    const parts = splitOnDoubleNewline(response.content);
+
+    for (let i = 0; i < parts.length; i++) {
+      // Send message
+      await channel.sendText(instance.id, chat.externalId, parts[i]);
+
+      // Delay between parts (except last)
+      if (i < parts.length - 1) {
+        const delay = calculateSplitDelay(instance);
+        await sleep(delay);
+
+        // Re-send typing for next message
+        await channel.sendPresence(instance.id, chat.externalId, 'composing');
+      }
+    }
+  } finally {
+    // Clear typing
+    await channel.sendPresence(instance.id, chat.externalId, 'paused');
+  }
+}
+```
+
+---
+
+## Schema Changes Required
+
+### Add to instances table:
+```typescript
+// Reply filter (JSONB)
+agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),
+
+// Typing-aware debounce
+messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing')
+  .notNull()
+  .default(false),
+```
+
+### AgentReplyFilter type:
+```typescript
+interface AgentReplyFilter {
+  mode: 'all' | 'filtered';
+  conditions: {
+    onDm: boolean;
+    onMention: boolean;
+    onReply: boolean;
+    onNameMatch: boolean;
+    namePatterns?: string[];
+  };
+}
+```
 
 ---
 
 ## Dependencies
 
-- Test APIs from external dev (Group A-C blocked until available)
-- Existing provider CRUD API
-
-## Depends On
-
-- None (can start immediately for structure, blocked for validation)
+- Agno API running on localhost:8181
+- Discord instance configured
+- Existing provider infrastructure (DB, API, services)
 
 ## Enables
 
-- Actual AI agent functionality
-- Future: Tool calling, RAG, multi-agent
+- AI agent responses in Discord
+- Future: Same pattern for WhatsApp
+- Future: OpenAI/Anthropic providers
+- Future: Tool calling, RAG
