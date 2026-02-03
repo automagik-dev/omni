@@ -12,8 +12,8 @@
  *   bun run packages/db/scripts/backfill-participant-identities.ts --dry-run
  */
 
-import { createDb, chatParticipants, platformIdentities, chats } from '../src';
-import { eq, isNull, or, and } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
+import { chatParticipants, chats, createDb, platformIdentities } from '../src';
 
 const db = createDb();
 const isDryRun = process.argv.includes('--dry-run');
@@ -42,7 +42,7 @@ async function backfillParticipantIdentities() {
   }
 
   // Get unique chat IDs
-  const chatIds = [...new Set(missingIdentities.map((p) => p.chatId))];
+  const _chatIds = [...new Set(missingIdentities.map((p) => p.chatId))];
 
   // Get chat → instance mapping
   const chatInstances = await db
@@ -54,7 +54,9 @@ async function backfillParticipantIdentities() {
     .from(chats);
 
   // Create lookup map
-  const chatToInstance = new Map(chatInstances.map((c) => [c.chatId, { instanceId: c.instanceId, channel: c.channel }]));
+  const chatToInstance = new Map(
+    chatInstances.map((c) => [c.chatId, { instanceId: c.instanceId, channel: c.channel }]),
+  );
 
   let updated = 0;
   let skipped = 0;
@@ -115,15 +117,15 @@ async function backfillParticipantIdentities() {
     updated++;
   }
 
-  console.log(`\n📊 Results:`);
+  console.log('\n📊 Results:');
   console.log(`   Updated:   ${updated}`);
   console.log(`   Skipped:   ${skipped}`);
   console.log(`   No match:  ${notFound} (will be linked on next message)`);
 
   if (isDryRun) {
-    console.log(`\n💡 Run without --dry-run to apply changes`);
+    console.log('\n💡 Run without --dry-run to apply changes');
   } else {
-    console.log(`\n✅ Backfill complete`);
+    console.log('\n✅ Backfill complete');
   }
 }
 

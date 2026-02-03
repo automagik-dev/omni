@@ -23,6 +23,7 @@ import type { ChannelType, Instance } from '@omni/db';
 import type { AgentRunnerService, Services } from '../services';
 import {
   type MessageContext,
+  type SplitDelayConfig,
   calculateSplitDelay,
   getSplitDelayConfig,
   shouldAgentReply,
@@ -266,6 +267,60 @@ function sleep(ms: number): Promise<void> {
 // ============================================================================
 
 /**
+ * Send response parts with configured delays between them
+ */
+async function sendResponseParts(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  parts: string[],
+  splitConfig: SplitDelayConfig,
+): Promise<void> {
+  for (const [index, part] of parts.entries()) {
+    await sendTextMessage(channel, instanceId, chatId, part);
+
+    // Delay between parts (except last)
+    const isLastPart = index === parts.length - 1;
+    if (!isLastPart) {
+      const delay = calculateSplitDelay(splitConfig);
+      if (delay > 0) {
+        await sendTypingPresence(channel, instanceId, chatId, 'composing');
+        await sleep(delay);
+      }
+    }
+  }
+}
+
+/**
+ * Handle agent response error - send user-friendly message if appropriate
+ */
+async function handleAgentError(
+  error: unknown,
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+): Promise<void> {
+  log.error('Failed to process agent response', { instanceId, chatId, error: String(error) });
+
+  // Only send error message for non-internal errors
+  if (error instanceof ProviderError) {
+    const isInternalError = error.code === 'AUTHENTICATION_FAILED' || error.code === 'SERVER_ERROR';
+    if (!isInternalError) {
+      try {
+        await sendTextMessage(
+          channel,
+          instanceId,
+          chatId,
+          'Sorry, I encountered an error processing your message. Please try again.',
+        );
+      } catch {
+        // Ignore send error
+      }
+    }
+  }
+}
+
+/**
  * Process buffered messages and generate agent response
  */
 async function processAgentResponse(
@@ -273,9 +328,9 @@ async function processAgentResponse(
   instance: Instance,
   messages: BufferedMessage[],
 ): Promise<void> {
-  if (!messages.length) return;
+  const firstMessage = messages[0];
+  if (!firstMessage) return;
 
-  const firstMessage = messages[0]!;
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
@@ -314,24 +369,7 @@ async function processAgentResponse(
     });
 
     // Send response parts with delays
-    const splitConfig = getSplitDelayConfig(instance);
-
-    for (let i = 0; i < result.parts.length; i++) {
-      const part = result.parts[i]!;
-
-      // Send message
-      await sendTextMessage(channel, instance.id, chatId, part);
-
-      // Delay between parts (except last)
-      if (i < result.parts.length - 1) {
-        const delay = calculateSplitDelay(splitConfig);
-        if (delay > 0) {
-          // Re-send typing for next message
-          await sendTypingPresence(channel, instance.id, chatId, 'composing');
-          await sleep(delay);
-        }
-      }
-    }
+    await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
 
     log.info('Agent response sent', {
       instanceId: instance.id,
@@ -340,28 +378,7 @@ async function processAgentResponse(
       runId: result.metadata.runId,
     });
   } catch (error) {
-    log.error('Failed to process agent response', {
-      instanceId: instance.id,
-      chatId,
-      error: String(error),
-    });
-
-    // Optionally send error message to user
-    if (error instanceof ProviderError) {
-      // Don't send internal errors to users
-      if (error.code !== 'AUTHENTICATION_FAILED' && error.code !== 'SERVER_ERROR') {
-        try {
-          await sendTextMessage(
-            channel,
-            instance.id,
-            chatId,
-            'Sorry, I encountered an error processing your message. Please try again.',
-          );
-        } catch {
-          // Ignore send error
-        }
-      }
-    }
+    await handleAgentError(error, channel, instance.id, chatId);
   } finally {
     // Clear typing
     await sendTypingPresence(channel, instance.id, chatId, 'paused');

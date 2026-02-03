@@ -432,9 +432,7 @@ export const instances = pgTable(
     messageDebounceMinMs: integer('message_debounce_min_ms').notNull().default(0),
     messageDebounceMaxMs: integer('message_debounce_max_ms').notNull().default(0),
     /** Restart debounce timer when user is typing (requires channel support) */
-    messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing')
-      .notNull()
-      .default(false),
+    messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing').notNull().default(false),
 
     // ---- Message Split Delay ----
     messageSplitDelayMode: varchar('message_split_delay_mode', { length: 20 })

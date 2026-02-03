@@ -30,7 +30,10 @@ export const ProviderSchema = z.object({
 // Create provider request
 export const CreateProviderSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Provider name' }),
-  schema: z.enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom']).default('agnoos').openapi({ description: 'Schema type' }),
+  schema: z
+    .enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom'])
+    .default('agnoos')
+    .openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().optional().openapi({ description: 'API key (encrypted)' }),
   schemaConfig: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Schema config' }),

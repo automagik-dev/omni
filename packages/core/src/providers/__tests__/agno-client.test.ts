@@ -10,15 +10,12 @@ import { ProviderError, type StreamChunk } from '../types';
  * Creates a mock fetch function with Bun-compatible interface
  */
 function createMockFetch() {
-  const mockImpl = mock((_input: string | URL | Request, _init?: RequestInit) =>
-    Promise.resolve(new Response()),
-  );
+  const mockImpl = mock((_input: string | URL | Request, _init?: RequestInit) => Promise.resolve(new Response()));
 
   // Create fetch-compatible function with preconnect
-  const mockFetch = Object.assign(
-    (input: string | URL | Request, init?: RequestInit) => mockImpl(input, init),
-    { preconnect: () => {} },
-  ) as typeof fetch;
+  const mockFetch = Object.assign((input: string | URL | Request, init?: RequestInit) => mockImpl(input, init), {
+    preconnect: () => {},
+  }) as typeof fetch;
 
   return { mockFetch, mockImpl };
 }

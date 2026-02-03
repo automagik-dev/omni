@@ -8,6 +8,7 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { AccessService } from './access';
+import { AgentRunnerService } from './agent-runner';
 import { ApiKeyService } from './api-keys';
 import { AutomationService } from './automations';
 import { ChatService } from './chats';
@@ -22,7 +23,6 @@ import { ProviderService } from './providers';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
 import { WebhookService } from './webhooks';
-import { AgentRunnerService } from './agent-runner';
 
 /**
  * Service container

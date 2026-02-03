@@ -246,6 +246,44 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
 }
 
 /**
+ * Setup event bus related services (plugins, persistence, workers)
+ * Extracted to reduce main() complexity
+ */
+async function setupEventBusServices(
+  eventBus: EventBus | null,
+  services: ReturnType<typeof createApp>['services'],
+  db: Database,
+): Promise<void> {
+  if (!eventBus) {
+    log.warn('Skipping event bus services (no event bus)');
+    return;
+  }
+
+  // Message persistence
+  try {
+    await setupMessagePersistence(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up message persistence', { error: String(error) });
+  }
+
+  // Agent responder (AI agent responses)
+  try {
+    await setupAgentResponder(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up agent responder', { error: String(error) });
+  }
+
+  // Sync worker
+  if (globalChannelRegistry) {
+    try {
+      await setupSyncWorker(eventBus, services, globalChannelRegistry, db);
+    } catch (error) {
+      log.error('Failed to set up sync worker', { error: String(error) });
+    }
+  }
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -296,32 +334,8 @@ async function main() {
     log.error('Failed to initialize primary API key', { error: String(error) });
   }
 
-  // Set up message persistence (writes to unified chats/messages tables)
-  if (eventBus) {
-    try {
-      await setupMessagePersistence(eventBus, services);
-    } catch (error) {
-      log.error('Failed to set up message persistence', { error: String(error) });
-    }
-  }
-
-  // Set up agent responder (triggers AI agent responses)
-  if (eventBus) {
-    try {
-      await setupAgentResponder(eventBus, services);
-    } catch (error) {
-      log.error('Failed to set up agent responder', { error: String(error) });
-    }
-  }
-
-  // Set up sync worker (processes sync jobs)
-  if (eventBus && globalChannelRegistry) {
-    try {
-      await setupSyncWorker(eventBus, services, globalChannelRegistry, db);
-    } catch (error) {
-      log.error('Failed to set up sync worker', { error: String(error) });
-    }
-  }
+  // Set up event bus related services (persistence, agent responder, sync worker)
+  await setupEventBusServices(eventBus, services, db);
 
   // Setup scheduler with services
   log.info('Starting scheduler');

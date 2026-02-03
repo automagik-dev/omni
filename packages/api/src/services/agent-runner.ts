@@ -188,11 +188,7 @@ export function getSplitDelayConfig(instance: Instance): SplitDelayConfig {
  * @param chatId - The chat/conversation identifier
  * @returns Computed session ID for the agent
  */
-export function computeSessionId(
-  strategy: AgentSessionStrategy,
-  userId: string,
-  chatId: string,
-): string {
+export function computeSessionId(strategy: AgentSessionStrategy, userId: string, chatId: string): string {
   switch (strategy) {
     case 'per_user':
       // Same session across all chats for this user
@@ -200,9 +196,8 @@ export function computeSessionId(
     case 'per_chat':
       // All users in a chat share the session (group memory)
       return chatId;
-    case 'per_user_per_chat':
     default:
-      // Each user has own session per chat (most isolated)
+      // per_user_per_chat: Each user has own session per chat (most isolated)
       return `${userId}:${chatId}`;
   }
 }
@@ -242,6 +237,56 @@ export function formatMessagesWithSender(
     return messages;
   }
   return messages.map((msg) => `[${senderName}]: ${msg}`);
+}
+
+// ============================================================================
+// Stream Processing
+// ============================================================================
+
+/**
+ * Extract complete segments from buffer (split on \n\n)
+ * Returns [segments to yield, remaining buffer]
+ */
+function extractSegments(buffer: string): [string[], string] {
+  const segments: string[] = [];
+  let remaining = buffer;
+
+  while (remaining.includes('\n\n')) {
+    const splitIndex = remaining.indexOf('\n\n');
+    const segment = remaining.slice(0, splitIndex).trim();
+    remaining = remaining.slice(splitIndex + 2);
+    if (segment) segments.push(segment);
+  }
+
+  return [segments, remaining];
+}
+
+/**
+ * Process stream chunks and yield split segments
+ */
+async function* processStreamChunks(
+  streamGenerator: AsyncGenerator<StreamChunk>,
+  enableSplit: boolean,
+): AsyncGenerator<string> {
+  let buffer = '';
+
+  for await (const chunk of streamGenerator) {
+    if (chunk.content) {
+      buffer += chunk.content;
+    }
+
+    if (enableSplit && buffer.includes('\n\n')) {
+      const [segments, remaining] = extractSegments(buffer);
+      buffer = remaining;
+      for (const segment of segments) {
+        yield segment;
+      }
+    }
+
+    if (chunk.isComplete && buffer.trim()) {
+      yield buffer.trim();
+    }
+  }
 }
 
 // ============================================================================
@@ -444,45 +489,13 @@ export class AgentRunnerService {
 
     const agentType = instance.agentType ?? 'agent';
 
-    let streamGenerator: AsyncGenerator<StreamChunk>;
+    const streamGenerator =
+      agentType === 'team'
+        ? client.streamTeam(instance.agentId, request)
+        : client.streamAgent(instance.agentId, request);
 
-    switch (agentType) {
-      case 'agent':
-        streamGenerator = client.streamAgent(instance.agentId, request);
-        break;
-      case 'team':
-        streamGenerator = client.streamTeam(instance.agentId, request);
-        break;
-      default:
-        throw new ProviderError(`Unknown agent type: ${agentType}`, 'NOT_FOUND', 400);
-    }
-
-    // Accumulate content and yield split parts as they complete
-    let buffer = '';
-
-    for await (const chunk of streamGenerator) {
-      if (chunk.content) {
-        buffer += chunk.content;
-
-        if (enableSplit) {
-          // Check for complete segments
-          while (buffer.includes('\n\n')) {
-            const splitIndex = buffer.indexOf('\n\n');
-            const segment = buffer.slice(0, splitIndex).trim();
-            buffer = buffer.slice(splitIndex + 2);
-
-            if (segment) {
-              yield segment;
-            }
-          }
-        }
-      }
-
-      // On completion, yield any remaining buffer
-      if (chunk.isComplete && buffer.trim()) {
-        yield buffer.trim();
-      }
-    }
+    // Delegate to helper for stream processing with split
+    yield* processStreamChunks(streamGenerator, enableSplit);
   }
 
   /**
