@@ -236,16 +236,18 @@ async function handleMessageReceived(
     name: truncate(rawPayload?.chatName as string | undefined, 255),
   });
 
-  // Step 2: Find or create participant
+  // Step 2: Process sender identity (before participant, so we have IDs)
+  const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
+
+  // Step 3: Find or create participant (with identity links)
   if (payload.from) {
     const participantUserId = truncate(payload.from, 255) ?? payload.from;
     await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
       displayName: truncate(rawPayload?.pushName as string | undefined, 255),
+      personId,
+      platformIdentityId,
     });
   }
-
-  // Step 3: Process sender identity
-  const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
 
   // Step 4: Build and create message
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;

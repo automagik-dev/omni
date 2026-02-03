@@ -391,6 +391,26 @@ export class ChatService {
   }
 
   /**
+   * Update participant with identity links if missing
+   */
+  private async updateParticipantIdentity(
+    existing: ChatParticipant,
+    defaults: Partial<NewChatParticipant>,
+  ): Promise<ChatParticipant> {
+    const [updated] = await this.db
+      .update(chatParticipants)
+      .set({
+        personId: defaults.personId ?? existing.personId,
+        platformIdentityId: defaults.platformIdentityId ?? existing.platformIdentityId,
+        displayName: defaults.displayName ?? existing.displayName,
+        updatedAt: new Date(),
+      })
+      .where(eq(chatParticipants.id, existing.id))
+      .returning();
+    return updated ?? existing;
+  }
+
+  /**
    * Find or create a participant
    */
   async findOrCreateParticipant(
@@ -405,6 +425,13 @@ export class ChatService {
       .limit(1);
 
     if (existing) {
+      // Update identity links if provided and missing on existing record
+      const hasNewIdentity = defaults.personId || defaults.platformIdentityId;
+      const missingIdentity = !existing.personId || !existing.platformIdentityId;
+      if (hasNewIdentity && missingIdentity) {
+        const updated = await this.updateParticipantIdentity(existing, defaults);
+        return { participant: updated, created: false };
+      }
       return { participant: existing, created: false };
     }
 
