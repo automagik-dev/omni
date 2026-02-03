@@ -106,7 +106,7 @@ describe('CLI Basic Tests', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('omni');
-      expect(result.stdout).toContain('LLM-optimized CLI');
+      expect(result.stdout).toContain('CLI for Omni v2');
       expect(result.stdout).toContain('auth');
       expect(result.stdout).toContain('config');
       expect(result.stdout).toContain('instances');
