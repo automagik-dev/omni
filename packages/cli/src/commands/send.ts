@@ -67,28 +67,33 @@ interface SendOptions {
   presence?: string;
 }
 
-/** Message sender handlers */
+/** Message sender handlers - each validates required fields before use */
 const messageSenders = {
   async text(client: OmniClient, instanceId: string, options: SendOptions) {
+    const { to, text } = options;
+    if (!to || !text) return; // Already validated by caller
     const result = await client.messages.send({
       instanceId,
-      to: options.to!,
-      text: options.text!,
+      to,
+      text,
       replyTo: options.replyTo,
     });
     output.success('Message sent', result);
   },
 
   async media(client: OmniClient, instanceId: string, options: SendOptions) {
-    if (!existsSync(options.media!)) {
-      output.error(`File not found: ${options.media}`);
+    const { to, media } = options;
+    if (!to || !media) return;
+    if (!existsSync(media)) {
+      output.error(`File not found: ${media}`);
+      return;
     }
-    const mediaType = getMediaType(options.media!);
-    const base64 = readFileAsBase64(options.media!);
-    const filename = basename(options.media!);
+    const mediaType = getMediaType(media);
+    const base64 = readFileAsBase64(media);
+    const filename = basename(media);
     const result = await client.messages.sendMedia({
       instanceId,
-      to: options.to!,
+      to,
       type: mediaType,
       base64,
       filename,
@@ -99,37 +104,45 @@ const messageSenders = {
   },
 
   async reaction(client: OmniClient, instanceId: string, options: SendOptions) {
-    if (!options.message) {
+    const { to, reaction, message } = options;
+    if (!to || !reaction) return;
+    if (!message) {
       output.error('--message <id> is required for reactions');
+      return;
     }
     const result = await client.messages.sendReaction({
       instanceId,
-      to: options.to!,
-      emoji: options.reaction!,
-      messageId: options.message!,
+      to,
+      emoji: reaction,
+      messageId: message,
     });
     output.success('Reaction sent', result);
   },
 
   async sticker(client: OmniClient, instanceId: string, options: SendOptions) {
-    const isBase64 = !options.sticker?.startsWith('http');
+    const { to, sticker } = options;
+    if (!to || !sticker) return;
+    const isBase64 = !sticker.startsWith('http');
     const result = await client.messages.sendSticker({
       instanceId,
-      to: options.to!,
-      ...(isBase64 ? { base64: options.sticker } : { url: options.sticker }),
+      to,
+      ...(isBase64 ? { base64: sticker } : { url: sticker }),
     });
     output.success('Sticker sent', result);
   },
 
   async contact(client: OmniClient, instanceId: string, options: SendOptions) {
-    if (!options.name) {
+    const { to, name } = options;
+    if (!to) return;
+    if (!name) {
       output.error('--name <name> is required for contact');
+      return;
     }
     const result = await client.messages.sendContact({
       instanceId,
-      to: options.to!,
+      to,
       contact: {
-        name: options.name!,
+        name,
         phone: options.phone,
         email: options.email,
       },
@@ -138,28 +151,34 @@ const messageSenders = {
   },
 
   async location(client: OmniClient, instanceId: string, options: SendOptions) {
-    if (options.lat === undefined || options.lng === undefined) {
+    const { to, lat, lng } = options;
+    if (!to) return;
+    if (lat === undefined || lng === undefined) {
       output.error('--lat and --lng are required for location');
+      return;
     }
     const result = await client.messages.sendLocation({
       instanceId,
-      to: options.to!,
-      latitude: options.lat!,
-      longitude: options.lng!,
+      to,
+      latitude: lat,
+      longitude: lng,
       address: options.address,
     });
     output.success('Location sent', result);
   },
 
   async poll(client: OmniClient, instanceId: string, options: SendOptions) {
-    if (!options.options) {
+    const { to, poll, options: pollOptions } = options;
+    if (!to || !poll) return;
+    if (!pollOptions) {
       output.error('--options <answers> is required for poll');
+      return;
     }
-    const answers = options.options?.split(',').map((s: string) => s.trim());
+    const answers = pollOptions.split(',').map((s: string) => s.trim());
     const result = await client.messages.sendPoll({
       instanceId,
-      to: options.to!,
-      question: options.poll!,
+      to,
+      question: poll,
       answers,
       multiSelect: options.multiSelect,
       durationHours: options.duration,
@@ -168,9 +187,11 @@ const messageSenders = {
   },
 
   async embed(client: OmniClient, instanceId: string, options: SendOptions) {
+    const { to } = options;
+    if (!to) return;
     const result = await client.messages.sendEmbed({
       instanceId,
-      to: options.to!,
+      to,
       title: options.title,
       description: options.description,
       color: options.color,
@@ -180,14 +201,17 @@ const messageSenders = {
   },
 
   async presence(client: OmniClient, instanceId: string, options: SendOptions) {
-    const validTypes = ['typing', 'recording', 'paused'];
-    if (!validTypes.includes(options.presence!)) {
-      output.error(`Invalid presence type: ${options.presence}`, { validTypes });
+    const { to, presence } = options;
+    if (!to || !presence) return;
+    const validTypes = ['typing', 'recording', 'paused'] as const;
+    if (!validTypes.includes(presence as (typeof validTypes)[number])) {
+      output.error(`Invalid presence type: ${presence}`, { validTypes });
+      return;
     }
     const result = await client.messages.sendPresence({
       instanceId,
-      to: options.to!,
-      type: options.presence as 'typing' | 'recording' | 'paused',
+      to,
+      type: presence as 'typing' | 'recording' | 'paused',
     });
     output.success('Presence sent', result);
   },

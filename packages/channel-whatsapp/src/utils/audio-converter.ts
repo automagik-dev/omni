@@ -5,7 +5,7 @@
  * Uses ffmpeg for conversion.
  */
 
-import { spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { promises as fs, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,13 +13,23 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 /**
+ * Extended ChildProcess type with EventEmitter methods
+ * Workaround for bun-types missing EventEmitter interface on ChildProcess
+ */
+interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
+  on(event: 'close', listener: (code: number | null) => void): this;
+  on(event: 'error', listener: (err: Error) => void): this;
+  on(event: string, listener: (...args: unknown[]) => void): this;
+}
+
+/**
  * Check if ffmpeg is available on the system
  */
 export async function isFFmpegAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
-    const proc = spawn('ffmpeg', ['-version']);
+    const proc = spawn('ffmpeg', ['-version']) as ChildProcessWithEvents;
     proc.on('error', () => resolve(false));
-    proc.on('close', (code) => resolve(code === 0));
+    proc.on('close', (code: number | null) => resolve(code === 0));
   });
 }
 
@@ -154,15 +164,15 @@ async function convertToOggOpus(inputPath: string): Promise<string> {
       '1',
       '-y', // Overwrite output
       outputPath,
-    ]);
+    ]) as ChildProcessWithEvents;
 
     let stderr = '';
 
-    ffmpeg.stderr.on('data', (data) => {
+    ffmpeg.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
-    ffmpeg.on('close', (code) => {
+    ffmpeg.on('close', (code: number | null) => {
       if (code === 0) {
         resolve(outputPath);
       } else {
@@ -170,7 +180,7 @@ async function convertToOggOpus(inputPath: string): Promise<string> {
       }
     });
 
-    ffmpeg.on('error', (err) => {
+    ffmpeg.on('error', (err: Error) => {
       reject(new Error(`ffmpeg failed to start: ${err.message}`));
     });
   });
@@ -291,15 +301,15 @@ export async function getAudioDuration(filePath: string): Promise<number | null>
       'quiet',
       '-of',
       'csv=p=0',
-    ]);
+    ]) as ChildProcessWithEvents;
 
     let stdout = '';
 
-    ffprobe.stdout.on('data', (data) => {
+    ffprobe.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
     });
 
-    ffprobe.on('close', (code) => {
+    ffprobe.on('close', (code: number | null) => {
       if (code === 0 && stdout.trim()) {
         const duration = Number.parseFloat(stdout.trim());
         resolve(Number.isNaN(duration) ? null : duration);

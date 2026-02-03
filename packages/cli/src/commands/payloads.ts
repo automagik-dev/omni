@@ -9,11 +9,70 @@
  * omni payloads stats
  */
 
+import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
 const VALID_STAGES = ['webhook_raw', 'agent_request', 'agent_response', 'channel_send', 'error'] as const;
+
+/** Boolean display helper */
+const boolDisplay = (v: boolean | undefined): string => (v ? 'yes' : 'no');
+
+/** Parse string to boolean */
+const parseBool = (v: string | undefined): boolean | undefined =>
+  v === 'true' ? true : v === 'false' ? false : undefined;
+
+/** Config options type */
+interface ConfigOptions {
+  retention?: number;
+  storeWebhook?: string;
+  storeAgentRequest?: string;
+  storeAgentResponse?: string;
+  storeChannelSend?: string;
+  storeError?: string;
+}
+
+/** Format config for display */
+function formatConfig(c: {
+  eventType: string;
+  retentionDays: number;
+  storeWebhookRaw?: boolean;
+  storeAgentRequest?: boolean;
+  storeAgentResponse?: boolean;
+  storeChannelSend?: boolean;
+  storeError?: boolean;
+}) {
+  return {
+    eventType: c.eventType,
+    retention: c.retentionDays,
+    webhook: boolDisplay(c.storeWebhookRaw),
+    agentReq: boolDisplay(c.storeAgentRequest),
+    agentRes: boolDisplay(c.storeAgentResponse),
+    channelSend: boolDisplay(c.storeChannelSend),
+    error: boolDisplay(c.storeError),
+  };
+}
+
+/** Update a config */
+async function updateConfig(client: OmniClient, eventType: string, options: ConfigOptions): Promise<void> {
+  const config = await client.payloads.updateConfig(eventType, {
+    retentionDays: options.retention,
+    storeWebhookRaw: parseBool(options.storeWebhook),
+    storeAgentRequest: parseBool(options.storeAgentRequest),
+    storeAgentResponse: parseBool(options.storeAgentResponse),
+    storeChannelSend: parseBool(options.storeChannelSend),
+    storeError: parseBool(options.storeError),
+  });
+  output.success(`Config updated for ${eventType}`, config);
+}
+
+/** List all configs */
+async function listConfigs(client: OmniClient): Promise<void> {
+  const configs = await client.payloads.listConfigs();
+  const items = configs.map(formatConfig);
+  output.list(items, { emptyMessage: 'No payload configs found.' });
+}
 
 export function createPayloadsCommand(): Command {
   const payloads = new Command('payloads').description('Manage event payloads');
@@ -88,57 +147,21 @@ export function createPayloadsCommand(): Command {
     .option('--store-agent-response <bool>', 'Store agent response payloads')
     .option('--store-channel-send <bool>', 'Store channel send payloads')
     .option('--store-error <bool>', 'Store error payloads')
-    .action(
-      async (
-        eventType?: string,
-        options?: {
-          retention?: number;
-          storeWebhook?: string;
-          storeAgentRequest?: string;
-          storeAgentResponse?: string;
-          storeChannelSend?: string;
-          storeError?: string;
-        },
-      ) => {
-        const client = getClient();
+    .action(async (eventType: string | undefined, options: ConfigOptions) => {
+      const client = getClient();
+      const hasOptions = Object.values(options).some((v) => v !== undefined);
 
-        try {
-          if (eventType && options && Object.keys(options).some((k) => options[k as keyof typeof options])) {
-            // Update config
-            const parseBool = (v: string | undefined) => (v === 'true' ? true : v === 'false' ? false : undefined);
-
-            const config = await client.payloads.updateConfig(eventType, {
-              retentionDays: options.retention,
-              storeWebhookRaw: parseBool(options.storeWebhook),
-              storeAgentRequest: parseBool(options.storeAgentRequest),
-              storeAgentResponse: parseBool(options.storeAgentResponse),
-              storeChannelSend: parseBool(options.storeChannelSend),
-              storeError: parseBool(options.storeError),
-            });
-
-            output.success(`Config updated for ${eventType}`, config);
-          } else {
-            // List configs
-            const configs = await client.payloads.listConfigs();
-
-            const items = configs.map((c) => ({
-              eventType: c.eventType,
-              retention: c.retentionDays,
-              webhook: c.storeWebhookRaw ? 'yes' : 'no',
-              agentReq: c.storeAgentRequest ? 'yes' : 'no',
-              agentRes: c.storeAgentResponse ? 'yes' : 'no',
-              channelSend: c.storeChannelSend ? 'yes' : 'no',
-              error: c.storeError ? 'yes' : 'no',
-            }));
-
-            output.list(items, { emptyMessage: 'No payload configs found.' });
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to manage config: ${message}`);
+      try {
+        if (eventType && hasOptions) {
+          await updateConfig(client, eventType, options);
+        } else {
+          await listConfigs(client);
         }
-      },
-    );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to manage config: ${message}`);
+      }
+    });
 
   // omni payloads stats
   payloads
