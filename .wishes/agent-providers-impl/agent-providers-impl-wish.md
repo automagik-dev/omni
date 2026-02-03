@@ -1,6 +1,6 @@
-# WISH: Agno Provider Integration
+# WISH: Agno Provider Integration (Omnichannel)
 
-> Wire Agno agents/teams to incoming messages with split, delay, debounce, and reply filtering.
+> Wire Agno agents/teams to incoming messages across ALL channels with split, delay, debounce, and reply filtering.
 
 **Status:** DRAFT
 **Created:** 2026-02-02
@@ -31,7 +31,8 @@
 **Test Environment:**
 - Agno API: `http://localhost:8181`
 - API Key: `namastex888`
-- Target: Discord bot instance
+- Initial test: Discord bot instance
+- **OMNICHANNEL**: Implementation is channel-agnostic, works with ANY channel plugin
 
 ---
 
@@ -56,10 +57,11 @@
 
 - **Agno Client** - Support agents, teams, workflows (sync + streaming)
 - **Reply Filter** - Conditions for when agent should reply
-- **Debounce** - With typing-aware restart (WhatsApp)
+- **Debounce** - With typing-aware restart (where channel supports it)
 - **Response Split** - On `\n\n` with configurable delays
 - **Typing Presence** - Start as soon as agent call begins
 - **Message Wiring** - Hook into message-persistence flow
+- **OMNICHANNEL** - Channel-agnostic via ChannelPlugin interface (Discord, WhatsApp, any future channel)
 
 ### OUT OF SCOPE
 
@@ -300,15 +302,16 @@ make typecheck
 
 ---
 
-## Execution Group C: Integration & Discord Setup
+## Execution Group C: Omnichannel Integration & Testing
 
-**Goal:** End-to-end test with Discord bot, configure and validate.
+**Goal:** End-to-end validation across channels - test with Discord, ready for WhatsApp and any future channel.
 
 **Deliverables:**
 - [ ] Create Agno provider record via API
-- [ ] Configure Discord instance with provider
+- [ ] Configure instance with provider (any channel)
 - [ ] CLI commands for provider/agent management
 - [ ] Integration test with live Agno API
+- [ ] Verify channel-agnostic implementation
 
 **CLI Commands:**
 ```bash
@@ -321,25 +324,50 @@ omni providers test <provider-id>      # Health check
 omni instances update <id> --agent-provider <provider-id> --agent-id calculator-agent
 ```
 
-**Test Scenario:**
+**Test Scenarios:**
+
+*Discord (initial test):*
 1. Create Agno provider pointing to localhost:8181
 2. Set Discord instance to use provider with calculator-agent
 3. Configure reply filter: `onMention: true`
 4. Send message mentioning bot: "@Omni what is 25 * 4?"
 5. Expect: Typing indicator → "The result of 25 * 4 is **100**."
 
+*WhatsApp (same code, different channel):*
+1. Same provider, different instance
+2. Configure reply filter: `onDm: true` (private chats)
+3. Send message in DM
+4. Expect: Typing indicator → response with split delays
+5. Test typing-aware debounce restart
+
+**Channel Capabilities Matrix:**
+| Feature | Discord | WhatsApp | Notes |
+|---------|---------|----------|-------|
+| Typing presence | ✅ | ✅ | Both support composing/paused |
+| Detect bot mention | ✅ | ⚠️ | WhatsApp needs name pattern match |
+| Detect reply to bot | ✅ | ✅ | Both have reply context |
+| Detect user typing | ❌ | ✅ | Only WhatsApp has presence events |
+| Edit message | ✅ | ❌ | Discord can update, WhatsApp can't |
+
 **Acceptance Criteria:**
 - [ ] Provider created and persisted
-- [ ] Instance linked to provider
-- [ ] Bot responds to mentions only
-- [ ] Response arrives with typing indicator
-- [ ] Split messages have delay between them
+- [ ] Instance linked to provider (any channel type)
+- [ ] Bot responds based on reply filter
+- [ ] Typing indicator shows immediately
+- [ ] Split messages have configurable delay
+- [ ] Same code works for Discord AND WhatsApp
+- [ ] Channel-specific features gracefully degrade
 
 **Validation:**
 ```bash
-# Manual test with Discord
+# Test provider health
 omni providers test <provider-id>
-# Send message in Discord, observe response
+
+# Discord test
+# Send @mention in Discord, observe response
+
+# WhatsApp test (when ready)
+# Send DM, observe typing + response
 ```
 
 ---
@@ -416,13 +444,14 @@ class MessageDebouncer {
 }
 ```
 
-### Presence Updates
+### Presence Updates (Omnichannel)
 
 ```typescript
 async function handleAgentResponse(instance: Instance, chat: Chat, message: Message): Promise<void> {
-  const channel = getChannel(instance.channelType);
+  // Get channel plugin - works for ANY channel (Discord, WhatsApp, future channels)
+  const channel = getChannelPlugin(instance.channelType);
 
-  // Start typing immediately
+  // Start typing immediately (channel handles capability check internally)
   await channel.sendPresence(instance.id, chat.externalId, 'composing');
 
   try {
@@ -432,7 +461,7 @@ async function handleAgentResponse(instance: Instance, chat: Chat, message: Mess
     const parts = splitOnDoubleNewline(response.content);
 
     for (let i = 0; i < parts.length; i++) {
-      // Send message
+      // Send message via channel plugin abstraction
       await channel.sendText(instance.id, chat.externalId, parts[i]);
 
       // Delay between parts (except last)
@@ -448,6 +477,27 @@ async function handleAgentResponse(instance: Instance, chat: Chat, message: Mess
     // Clear typing
     await channel.sendPresence(instance.id, chat.externalId, 'paused');
   }
+}
+```
+
+### Channel Plugin Interface (abstraction layer)
+
+```typescript
+// All agent response handling goes through this interface
+// Implementation is channel-specific, but API is universal
+interface ChannelPlugin {
+  // Presence (typing indicator) - noop if channel doesn't support
+  sendPresence(instanceId: string, chatId: string, state: 'composing' | 'paused'): Promise<void>;
+
+  // Send text message
+  sendText(instanceId: string, chatId: string, text: string): Promise<SendResult>;
+
+  // Channel capabilities (for graceful degradation)
+  capabilities: {
+    supportsTypingPresence: boolean;
+    supportsUserTypingEvents: boolean;  // For typing-aware debounce
+    supportsMessageEdit: boolean;        // For streaming updates
+  };
 }
 ```
 
@@ -490,7 +540,9 @@ interface AgentReplyFilter {
 
 ## Enables
 
-- AI agent responses in Discord
-- Future: Same pattern for WhatsApp
-- Future: OpenAI/Anthropic providers
-- Future: Tool calling, RAG
+- **OMNICHANNEL AI agents** - Same code, any channel
+- AI agent responses in Discord (test target)
+- AI agent responses in WhatsApp (ready immediately)
+- AI agent responses in ANY future channel (Telegram, Slack, etc.)
+- Future: OpenAI/Anthropic/Custom providers (same wiring)
+- Future: Tool calling, RAG, multi-agent
