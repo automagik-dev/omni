@@ -16,10 +16,10 @@
  * omni instances syncs <id> [job-id]
  */
 
+import type { Channel } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
-import type { Channel } from '@omni/sdk';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
@@ -84,36 +84,34 @@ export function createInstancesCommand(): Command {
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
-    .action(
-      async (options: { name: string; channel: string; agentProvider?: string; agent?: string }) => {
-        if (!VALID_CHANNELS.includes(options.channel as Channel)) {
-          output.error(`Invalid channel: ${options.channel}`, {
-            validChannels: VALID_CHANNELS,
-          });
-        }
+    .action(async (options: { name: string; channel: string; agentProvider?: string; agent?: string }) => {
+      if (!VALID_CHANNELS.includes(options.channel as Channel)) {
+        output.error(`Invalid channel: ${options.channel}`, {
+          validChannels: VALID_CHANNELS,
+        });
+      }
 
-        const client = getClient();
+      const client = getClient();
 
-        try {
-          const instance = await client.instances.create({
-            name: options.name,
-            channel: options.channel as Channel,
-            agentProviderId: options.agentProvider,
-            agentId: options.agent,
-          });
+      try {
+        const instance = await client.instances.create({
+          name: options.name,
+          channel: options.channel as Channel,
+          agentProviderId: options.agentProvider,
+          agentId: options.agent,
+        });
 
-          output.success(`Instance created: ${instance.id}`, {
-            id: instance.id,
-            name: instance.name,
-            channel: instance.channel,
-            active: instance.isActive,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to create instance: ${message}`);
-        }
-      },
-    );
+        output.success(`Instance created: ${instance.id}`, {
+          id: instance.id,
+          name: instance.name,
+          channel: instance.channel,
+          active: instance.isActive,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to create instance: ${message}`);
+      }
+    });
 
   // omni instances delete <id>
   instances
@@ -290,45 +288,40 @@ export function createInstancesCommand(): Command {
     .requiredOption('--type <type>', `Sync type (${VALID_SYNC_TYPES.join(', ')})`)
     .option('--depth <depth>', 'Sync depth (7d, 30d, 90d, 1y, all)')
     .option('--download-media', 'Download media files')
-    .action(
-      async (
-        id: string,
-        options: { type: string; depth?: string; downloadMedia?: boolean },
-      ) => {
-        if (!VALID_SYNC_TYPES.includes(options.type as (typeof VALID_SYNC_TYPES)[number])) {
-          output.error(`Invalid sync type: ${options.type}`, {
-            validTypes: VALID_SYNC_TYPES,
-          });
+    .action(async (id: string, options: { type: string; depth?: string; downloadMedia?: boolean }) => {
+      if (!VALID_SYNC_TYPES.includes(options.type as (typeof VALID_SYNC_TYPES)[number])) {
+        output.error(`Invalid sync type: ${options.type}`, {
+          validTypes: VALID_SYNC_TYPES,
+        });
+      }
+
+      const client = getClient();
+
+      try {
+        // Profile sync is immediate
+        if (options.type === 'profile') {
+          const result = await client.instances.syncProfile(id);
+          output.success('Profile synced', result);
+          return;
         }
 
-        const client = getClient();
+        // Other syncs create a job
+        const result = await client.instances.startSync(id, {
+          type: options.type as (typeof VALID_SYNC_TYPES)[number],
+          depth: options.depth as '7d' | '30d' | '90d' | '1y' | 'all' | undefined,
+          downloadMedia: options.downloadMedia,
+        });
 
-        try {
-          // Profile sync is immediate
-          if (options.type === 'profile') {
-            const result = await client.instances.syncProfile(id);
-            output.success('Profile synced', result);
-            return;
-          }
-
-          // Other syncs create a job
-          const result = await client.instances.startSync(id, {
-            type: options.type as (typeof VALID_SYNC_TYPES)[number],
-            depth: options.depth as '7d' | '30d' | '90d' | '1y' | 'all' | undefined,
-            downloadMedia: options.downloadMedia,
-          });
-
-          output.success(result.message, {
-            jobId: result.jobId,
-            type: result.type,
-            status: result.status,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to start sync: ${message}`);
-        }
-      },
-    );
+        output.success(result.message, {
+          jobId: result.jobId,
+          type: result.type,
+          status: result.status,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to start sync: ${message}`);
+      }
+    });
 
   // omni instances syncs <id> [job-id]
   instances

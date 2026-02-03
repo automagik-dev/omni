@@ -16,17 +16,17 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawn } from 'bun';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { spawn } from 'bun';
 
 const CLI_PATH = join(import.meta.dir, '../../bin/omni');
 const API_URL = process.env.API_URL || 'http://localhost:8881';
 const API_KEY = process.env.API_KEY || 'test-key';
 
 // Temp config dir for tests
-const TEST_CONFIG_DIR = join(tmpdir(), '.omni-test-' + Date.now());
+const TEST_CONFIG_DIR = join(tmpdir(), `.omni-test-${Date.now()}`);
 
 interface CliResult {
   stdout: string;
@@ -354,10 +354,9 @@ describe.skipIf(!shouldRunIntegration)('CLI Integration Tests', () => {
 
     test('instances create creates new instance', async () => {
       const name = `test-cli-${Date.now()}`;
-      const result = await runCli(
-        ['instances', 'create', '--name', name, '--channel', 'whatsapp-baileys'],
-        { OMNI_FORMAT: 'json' },
-      );
+      const result = await runCli(['instances', 'create', '--name', name, '--channel', 'whatsapp-baileys'], {
+        OMNI_FORMAT: 'json',
+      });
 
       assertSuccess(result, 'instances create');
       const parsed = JSON.parse(result.stdout);
@@ -367,7 +366,6 @@ describe.skipIf(!shouldRunIntegration)('CLI Integration Tests', () => {
 
     test('instances get returns instance details', async () => {
       if (!testInstanceId) {
-        console.log('Skipping - no test instance created');
         return;
       }
 
@@ -380,7 +378,6 @@ describe.skipIf(!shouldRunIntegration)('CLI Integration Tests', () => {
 
     test('instances status returns connection status', async () => {
       if (!testInstanceId) {
-        console.log('Skipping - no test instance created');
         return;
       }
 
@@ -393,7 +390,6 @@ describe.skipIf(!shouldRunIntegration)('CLI Integration Tests', () => {
 
     test('instances delete removes instance', async () => {
       if (!testInstanceId) {
-        console.log('Skipping - no test instance created');
         return;
       }
 

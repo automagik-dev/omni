@@ -7,12 +7,12 @@
  * etc.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, extname } from 'node:path';
 import { Command } from 'commander';
-import { readFileSync, existsSync } from 'node:fs';
-import { extname, basename } from 'node:path';
 import { getClient } from '../client.js';
-import * as output from '../output.js';
 import { loadConfig } from '../config.js';
+import * as output from '../output.js';
 
 /** Get media type from file extension */
 function getMediaType(path: string): 'image' | 'audio' | 'video' | 'document' {
@@ -80,9 +80,7 @@ export function createSendCommand(): Command {
       // Resolve instance ID
       const instanceId = options.instance ?? loadConfig().defaultInstance;
       if (!instanceId) {
-        output.error(
-          'No instance specified. Use --instance <id> or set default: omni config set defaultInstance <id>',
-        );
+        output.error('No instance specified. Use --instance <id> or set default: omni config set defaultInstance <id>');
       }
 
       // Validate recipient

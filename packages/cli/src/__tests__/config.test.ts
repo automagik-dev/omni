@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from 'bun:test';
 
-import { isValidConfigKey, CONFIG_KEYS, type ConfigKey } from '../config';
+import { CONFIG_KEYS, type ConfigKey, isValidConfigKey } from '../config';
 
 describe('Config Validation', () => {
   describe('isValidConfigKey', () => {
@@ -42,7 +42,7 @@ describe('Config Validation', () => {
     });
 
     test('has descriptions for all keys', () => {
-      for (const [key, meta] of Object.entries(CONFIG_KEYS)) {
+      for (const [_key, meta] of Object.entries(CONFIG_KEYS)) {
         expect(meta.description).toBeDefined();
         expect(typeof meta.description).toBe('string');
         expect(meta.description.length).toBeGreaterThan(0);

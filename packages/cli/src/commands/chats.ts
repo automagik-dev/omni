@@ -12,10 +12,10 @@
  * omni chats participants <id>
  */
 
+import type { Channel } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
-import type { Channel } from '@omni/sdk';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 
@@ -249,43 +249,38 @@ export function createChatsCommand(): Command {
     .option('--remove <user-id>', 'Remove participant by platform user ID')
     .option('--name <name>', 'Display name for new participant')
     .option('--role <role>', 'Role for new participant')
-    .action(
-      async (
-        id: string,
-        options: { add?: string; remove?: string; name?: string; role?: string },
-      ) => {
-        const client = getClient();
+    .action(async (id: string, options: { add?: string; remove?: string; name?: string; role?: string }) => {
+      const client = getClient();
 
-        try {
-          if (options.add) {
-            const participant = await client.chats.addParticipant(id, {
-              platformUserId: options.add,
-              displayName: options.name,
-              role: options.role,
-            });
-            output.success(`Participant added: ${participant.platformUserId}`, participant);
-          } else if (options.remove) {
-            await client.chats.removeParticipant(id, options.remove);
-            output.success(`Participant removed: ${options.remove}`);
-          } else {
-            // List participants
-            const participants = await client.chats.listParticipants(id);
+      try {
+        if (options.add) {
+          const participant = await client.chats.addParticipant(id, {
+            platformUserId: options.add,
+            displayName: options.name,
+            role: options.role,
+          });
+          output.success(`Participant added: ${participant.platformUserId}`, participant);
+        } else if (options.remove) {
+          await client.chats.removeParticipant(id, options.remove);
+          output.success(`Participant removed: ${options.remove}`);
+        } else {
+          // List participants
+          const participants = await client.chats.listParticipants(id);
 
-            const items = participants.map((p) => ({
-              id: p.id,
-              userId: p.platformUserId,
-              name: p.displayName ?? '-',
-              role: p.role ?? '-',
-            }));
+          const items = participants.map((p) => ({
+            id: p.id,
+            userId: p.platformUserId,
+            name: p.displayName ?? '-',
+            role: p.role ?? '-',
+          }));
 
-            output.list(items, { emptyMessage: 'No participants found.' });
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to manage participants: ${message}`);
+          output.list(items, { emptyMessage: 'No participants found.' });
         }
-      },
-    );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to manage participants: ${message}`);
+      }
+    });
 
   return chats;
 }

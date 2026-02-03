@@ -6,9 +6,9 @@
  * omni auth logout
  */
 
-import { Command } from 'commander';
 import { createOmniClient } from '@omni/sdk';
-import { loadConfig, saveConfig, deleteConfigValue, getConfigDir, getConfigPath } from '../config.js';
+import { Command } from 'commander';
+import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, saveConfig } from '../config.js';
 import * as output from '../output.js';
 
 export function createAuthCommand(): Command {
@@ -68,9 +68,12 @@ export function createAuthCommand(): Command {
         output.error('Not logged in. Run: omni auth login --api-key <key>', undefined, 2);
       }
 
+      // Type guard: output.error is never, so apiKey is guaranteed here
+      const apiKey = config.apiKey;
+
       const client = createOmniClient({
         baseUrl: config.apiUrl ?? 'http://localhost:8881',
-        apiKey: config.apiKey!,
+        apiKey,
       });
 
       try {

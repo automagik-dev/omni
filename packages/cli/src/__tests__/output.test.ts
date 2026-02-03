@@ -8,20 +8,20 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  disableColors,
-  areColorsEnabled,
-  getCurrentFormat,
-  success,
-  error,
-  warn,
-  info,
-  data,
-  list,
-  keyValue,
-  header,
-  dim,
-  raw,
   type OutputFormat,
+  areColorsEnabled,
+  data,
+  dim,
+  disableColors,
+  error,
+  getCurrentFormat,
+  header,
+  info,
+  keyValue,
+  list,
+  raw,
+  success,
+  warn,
 } from '../output';
 
 describe('Output Module Exports', () => {

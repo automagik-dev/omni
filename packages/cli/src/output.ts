@@ -38,31 +38,35 @@ export function getCurrentFormat(): OutputFormat {
 }
 
 /** Output success message */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function success(message: string, data?: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(JSON.stringify({ success: true, message, data }, null, 2));
   } else {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().green('✓'), message);
     if (data !== undefined) {
+      // biome-ignore lint/suspicious/noConsole: CLI output
       console.log(c().dim(JSON.stringify(data, null, 2)));
     }
   }
 }
 
 /** Output error message and exit */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function error(message: string, details?: unknown, exitCode = 1): never {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(JSON.stringify({ success: false, error: message, details }, null, 2));
   } else {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(c().red('✗'), message);
     if (details !== undefined) {
-      console.error(c().dim(typeof details === 'string' ? details : JSON.stringify(details, null, 2)));
+      // biome-ignore lint/suspicious/noConsole: CLI output
+      console.error(c().dim(JSON.stringify(details, null, 2)));
     }
   }
 
@@ -70,35 +74,37 @@ export function error(message: string, details?: unknown, exitCode = 1): never {
 }
 
 /** Output warning message */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function warn(message: string): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    console.error(JSON.stringify({ warning: message }));
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(JSON.stringify({ warning: message }, null, 2));
   } else {
-    console.warn(c().yellow('⚠'), message);
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(c().yellow('⚠'), message);
   }
 }
 
 /** Output info message */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function info(message: string): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    console.error(JSON.stringify({ info: message }));
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(JSON.stringify({ info: message }, null, 2));
   } else {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().blue('ℹ'), message);
   }
 }
 
 /** Output data (main output) */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function data(value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(JSON.stringify(value, null, 2));
   } else {
     if (Array.isArray(value)) {
@@ -106,22 +112,24 @@ export function data(value: unknown): void {
     } else if (typeof value === 'object' && value !== null) {
       printObject(value as Record<string, unknown>);
     } else {
+      // biome-ignore lint/suspicious/noConsole: CLI output
       console.log(value);
     }
   }
 }
 
 /** Output list of items */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function list<T>(items: T[], options?: { emptyMessage?: string }): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(JSON.stringify(items, null, 2));
     return;
   }
 
   if (items.length === 0) {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().dim(options?.emptyMessage ?? 'No items found.'));
     return;
   }
@@ -130,14 +138,14 @@ export function list<T>(items: T[], options?: { emptyMessage?: string }): void {
 }
 
 /** Print a simple table from array of objects */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 function printTable<T>(items: T[]): void {
   if (items.length === 0) return;
 
   const first = items[0];
   if (typeof first !== 'object' || first === null) {
     for (const item of items) {
-      console.log(String(item));
+      // biome-ignore lint/suspicious/noConsole: CLI output
+      console.log(item);
     }
     return;
   }
@@ -159,14 +167,17 @@ function printTable<T>(items: T[]): void {
   }
 
   const header = keys.map((k) => k.toUpperCase().padEnd(widths[k])).join('  ');
+  // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(c().bold(header));
 
   const separator = keys.map((k) => '-'.repeat(widths[k])).join('  ');
+  // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(c().dim(separator));
 
   for (const item of items) {
     const obj = item as Record<string, unknown>;
     const row = keys.map((k) => formatCellValue(obj[k]).padEnd(widths[k])).join('  ');
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(row);
   }
 }
@@ -187,13 +198,13 @@ function formatCellValue(value: unknown): string {
 }
 
 /** Print a single object's properties */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 function printObject(obj: Record<string, unknown>): void {
   const maxKeyLen = Math.max(...Object.keys(obj).map((k) => k.length));
 
   for (const [key, value] of Object.entries(obj)) {
     const label = key.padEnd(maxKeyLen);
     const formattedValue = formatValue(value);
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(`${c().cyan(label)}  ${formattedValue}`);
   }
 }
@@ -213,37 +224,36 @@ function formatValue(value: unknown): string {
 }
 
 /** Print a key-value pair */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function keyValue(key: string, value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(JSON.stringify({ [key]: value }, null, 2));
   } else {
-    console.log(`${c().cyan(key)}:`, formatValue(value));
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(`${c().cyan(key)}: ${formatValue(value)}`);
   }
 }
 
 /** Print a section header */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function header(title: string): void {
   if (getCurrentFormat() === 'human') {
-    console.log();
-    console.log(c().bold(title));
-    console.log(c().dim('-'.repeat(title.length)));
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(`\n${c().bold.underline(title)}`);
   }
 }
 
 /** Print dimmed/secondary text */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function dim(text: string): void {
   if (getCurrentFormat() === 'human') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().dim(text));
   }
 }
 
 /** Raw console.log (for custom formatting) */
-// biome-ignore lint/suspicious/noConsole: CLI needs console output
 export function raw(text: string): void {
+  // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(text);
 }

@@ -8,13 +8,13 @@
 
 import { Command } from 'commander';
 import {
-  loadConfig,
-  getConfigValue,
-  setConfigValue,
-  deleteConfigValue,
   CONFIG_KEYS,
-  isValidConfigKey,
   type ConfigKey,
+  deleteConfigValue,
+  getConfigValue,
+  isValidConfigKey,
+  loadConfig,
+  setConfigValue,
 } from '../config.js';
 import * as output from '../output.js';
 

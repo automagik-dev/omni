@@ -4,8 +4,8 @@
  * Creates SDK client from config and handles auth errors.
  */
 
-import { createOmniClient, type OmniClient } from '@omni/sdk';
-import { loadConfig, hasAuth } from './config.js';
+import { type OmniClient, createOmniClient } from '@omni/sdk';
+import { hasAuth, loadConfig } from './config.js';
 import * as output from './output.js';
 
 /** Cached client instance */
@@ -26,9 +26,14 @@ export function getClient(): OmniClient {
 
   const config = loadConfig();
 
+  // hasAuth() already verified apiKey exists, but we check again for type safety
+  if (!config.apiKey) {
+    output.error('API key not configured', undefined, 2);
+  }
+
   cachedClient = createOmniClient({
     baseUrl: config.apiUrl ?? 'http://localhost:8881',
-    apiKey: config.apiKey!,
+    apiKey: config.apiKey,
   });
 
   return cachedClient;
@@ -49,9 +54,14 @@ export function getOptionalClient(): OmniClient | null {
 
   const config = loadConfig();
 
+  // hasAuth() already verified apiKey exists
+  if (!config.apiKey) {
+    return null;
+  }
+
   cachedClient = createOmniClient({
     baseUrl: config.apiUrl ?? 'http://localhost:8881',
-    apiKey: config.apiKey!,
+    apiKey: config.apiKey,
   });
 
   return cachedClient;

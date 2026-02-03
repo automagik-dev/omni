@@ -10,15 +10,15 @@
 
 import { Command } from 'commander';
 import { createAuthCommand } from './commands/auth.js';
-import { createConfigCommand } from './commands/config.js';
-import { createInstancesCommand } from './commands/instances.js';
-import { createSendCommand } from './commands/send.js';
 import { createChatsCommand } from './commands/chats.js';
+import { createCompletionsCommand } from './commands/completions.js';
+import { createConfigCommand } from './commands/config.js';
 import { createEventsCommand } from './commands/events.js';
+import { createInstancesCommand } from './commands/instances.js';
 import { createPersonsCommand } from './commands/persons.js';
+import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
-import { createCompletionsCommand } from './commands/completions.js';
 import { disableColors } from './output.js';
 
 const VERSION = '0.0.1';
