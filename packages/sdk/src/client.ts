@@ -1291,7 +1291,14 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SendPresenceResult };
-        return json?.data ?? { instanceId: body.instanceId, chatId: body.to, type: body.type, duration: body.duration ?? 5000 };
+        return (
+          json?.data ?? {
+            instanceId: body.instanceId,
+            chatId: body.to,
+            type: body.type,
+            duration: body.duration ?? 5000,
+          }
+        );
       },
 
       /**

@@ -18,6 +18,41 @@ import {
 } from '../config.js';
 import * as output from '../output.js';
 
+/** Handle config set with value */
+function handleSetWithValue(key: ConfigKey, value: string): void {
+  const keyMeta = CONFIG_KEYS[key];
+
+  // Validate value if there are specific options
+  if (keyMeta.values && !keyMeta.values.includes(value)) {
+    output.error(`Invalid value '${value}' for key '${key}'`, {
+      validValues: keyMeta.values,
+    });
+    return;
+  }
+
+  try {
+    setConfigValue(key, value);
+    output.success(`Set ${key} = ${value}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(message);
+  }
+}
+
+/** Show available values or usage for a key */
+function showKeyUsage(key: ConfigKey): void {
+  const keyMeta = CONFIG_KEYS[key];
+  if (keyMeta.values) {
+    output.info(`Available values for '${key}':`);
+    for (const v of keyMeta.values) {
+      output.raw(`  - ${v}`);
+    }
+  } else {
+    output.info(`Usage: omni config set ${key} <value>`);
+    output.dim(keyMeta.description);
+  }
+}
+
 export function createConfigCommand(): Command {
   const config = new Command('config').description('Manage CLI configuration');
 
@@ -66,37 +101,13 @@ export function createConfigCommand(): Command {
         output.error(`Unknown config key: ${key}`, {
           availableKeys: Object.keys(CONFIG_KEYS),
         });
-      }
-
-      const keyMeta = CONFIG_KEYS[key as ConfigKey];
-
-      // If no value provided, show available values or usage
-      if (value === undefined) {
-        if (keyMeta.values) {
-          output.info(`Available values for '${key}':`);
-          for (const v of keyMeta.values) {
-            output.raw(`  - ${v}`);
-          }
-        } else {
-          output.info(`Usage: omni config set ${key} <value>`);
-          output.dim(keyMeta.description);
-        }
         return;
       }
 
-      // Validate value if there are specific options
-      if (keyMeta.values && !keyMeta.values.includes(value)) {
-        output.error(`Invalid value '${value}' for key '${key}'`, {
-          validValues: keyMeta.values,
-        });
-      }
-
-      try {
-        setConfigValue(key as ConfigKey, value);
-        output.success(`Set ${key} = ${value}`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(message);
+      if (value === undefined) {
+        showKeyUsage(key as ConfigKey);
+      } else {
+        handleSetWithValue(key as ConfigKey, value);
       }
     });
 

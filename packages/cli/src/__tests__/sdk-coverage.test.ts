@@ -193,12 +193,7 @@ describe('SDK Coverage', () => {
 
     if (uncoveredMethods.length > 0) {
       throw new Error(
-        `SDK has methods not covered by CLI!\n\n` +
-          `Uncovered methods:\n${uncoveredMethods.map((m) => `  - ${m}`).join('\n')}\n\n` +
-          `To fix:\n` +
-          `1. Add CLI commands for these SDK methods, OR\n` +
-          `2. Add them to CLI_COVERAGE with null and a comment explaining why they're skipped\n\n` +
-          `Location: packages/cli/src/__tests__/sdk-coverage.test.ts`,
+        `SDK has methods not covered by CLI!\n\nUncovered methods:\n${uncoveredMethods.map((m) => `  - ${m}`).join('\n')}\n\nTo fix:\n1. Add CLI commands for these SDK methods, OR\n2. Add them to CLI_COVERAGE with null and a comment explaining why they're skipped\n\nLocation: packages/cli/src/__tests__/sdk-coverage.test.ts`,
       );
     }
 
@@ -212,9 +207,7 @@ describe('SDK Coverage', () => {
 
     if (staleCoverage.length > 0) {
       throw new Error(
-        `CLI_COVERAGE has entries for methods that no longer exist in SDK!\n\n` +
-          `Stale entries:\n${staleCoverage.map((m) => `  - ${m}`).join('\n')}\n\n` +
-          `Remove these from CLI_COVERAGE.`,
+        `CLI_COVERAGE has entries for methods that no longer exist in SDK!\n\nStale entries:\n${staleCoverage.map((m) => `  - ${m}`).join('\n')}\n\nRemove these from CLI_COVERAGE.`,
       );
     }
   });
