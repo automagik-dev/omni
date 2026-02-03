@@ -8,8 +8,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** Command visibility categories */
+export type CommandCategory = 'core' | 'standard' | 'advanced' | 'debug';
+
 /** Valid config keys */
-export type ConfigKey = 'apiUrl' | 'apiKey' | 'defaultInstance' | 'format';
+export type ConfigKey = 'apiUrl' | 'apiKey' | 'defaultInstance' | 'format' | 'showCommands';
 
 /** Config file structure */
 export interface Config {
@@ -17,6 +20,7 @@ export interface Config {
   apiKey?: string;
   defaultInstance?: string;
   format?: 'human' | 'json';
+  showCommands?: string; // 'all' or comma-separated categories
 }
 
 /** Default config values */
@@ -31,7 +35,40 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   apiKey: { description: 'API key for authentication' },
   defaultInstance: { description: 'Default instance ID for commands' },
   format: { description: 'Output format', values: ['human', 'json'] },
+  showCommands: {
+    description: 'Which command categories to show in help',
+    values: ['all', 'core', 'standard', 'advanced', 'debug'],
+  },
 };
+
+/** Default visible categories (core + standard) */
+const DEFAULT_VISIBLE_CATEGORIES: CommandCategory[] = ['core', 'standard'];
+
+/** Get which command categories should be visible */
+export function getVisibleCategories(): CommandCategory[] | 'all' {
+  // Environment variable override
+  const envShow = process.env.OMNI_SHOW_COMMANDS;
+  if (envShow) {
+    if (envShow === 'all') return 'all';
+    return envShow.split(',').map((c) => c.trim()) as CommandCategory[];
+  }
+
+  // Config file
+  const config = loadConfig();
+  if (config.showCommands) {
+    if (config.showCommands === 'all') return 'all';
+    return config.showCommands.split(',').map((c) => c.trim()) as CommandCategory[];
+  }
+
+  return DEFAULT_VISIBLE_CATEGORIES;
+}
+
+/** Check if a category should be visible */
+export function isCategoryVisible(category: CommandCategory): boolean {
+  const visible = getVisibleCategories();
+  if (visible === 'all') return true;
+  return visible.includes(category);
+}
 
 /** Get config directory path */
 export function getConfigDir(): string {
@@ -89,6 +126,15 @@ export function setConfigValue(key: ConfigKey, value: string): void {
       throw new Error(`Invalid format value: ${value}. Must be 'human' or 'json'.`);
     }
     config.format = value;
+  } else if (key === 'showCommands') {
+    const validCategories = ['all', 'core', 'standard', 'advanced', 'debug'];
+    const categories = value.split(',').map((c) => c.trim());
+    for (const cat of categories) {
+      if (!validCategories.includes(cat)) {
+        throw new Error(`Invalid category: ${cat}. Valid: ${validCategories.join(', ')}`);
+      }
+    }
+    config.showCommands = value;
   } else {
     config[key] = value;
   }
