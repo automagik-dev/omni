@@ -282,5 +282,24 @@ export function createChatsCommand(): Command {
       }
     });
 
+  // omni chats read <id> --instance <id>
+  chats
+    .command('read <id>')
+    .description('Mark entire chat as read')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (id: string, options: { instance: string }) => {
+      const client = getClient();
+
+      try {
+        const result = await client.chats.markRead(id, {
+          instanceId: options.instance,
+        });
+        output.success('Chat marked as read', result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to mark chat as read: ${message}`);
+      }
+    });
+
   return chats;
 }

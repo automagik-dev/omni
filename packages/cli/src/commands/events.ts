@@ -157,5 +157,103 @@ export function createEventsCommand(): Command {
       }
     });
 
+  // omni events metrics
+  events
+    .command('metrics')
+    .description('Get event processing metrics')
+    .action(async () => {
+      const client = getClient();
+
+      try {
+        const metrics = await client.eventOps.metrics();
+        output.data(metrics);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get metrics: ${message}`);
+      }
+    });
+
+  // omni events replay
+  events
+    .command('replay')
+    .description('Start, list, or manage replay sessions')
+    .option('--start', 'Start a new replay session')
+    .option('--since <time>', 'Replay events since (required with --start)')
+    .option('--until <time>', 'Replay events until')
+    .option('--types <types>', 'Comma-separated event types to replay')
+    .option('--instance <id>', 'Filter by instance ID')
+    .option('--speed <n>', 'Speed multiplier', (v) => Number.parseFloat(v))
+    .option('--dry-run', "Dry run (don't actually process)")
+    .option('--status <id>', 'Get status of a replay session')
+    .option('--cancel <id>', 'Cancel a replay session')
+    .action(
+      async (options: {
+        start?: boolean;
+        since?: string;
+        until?: string;
+        types?: string;
+        instance?: string;
+        speed?: number;
+        dryRun?: boolean;
+        status?: string;
+        cancel?: string;
+      }) => {
+        const client = getClient();
+
+        try {
+          if (options.cancel) {
+            await client.eventOps.cancelReplay(options.cancel);
+            output.success(`Replay session cancelled: ${options.cancel}`);
+            return;
+          }
+
+          if (options.status) {
+            const session = await client.eventOps.getReplay(options.status);
+            output.data(session);
+            return;
+          }
+
+          if (options.start) {
+            if (!options.since) {
+              output.error('--since is required when starting a replay');
+            }
+
+            const session = await client.eventOps.startReplay({
+              since: parseSinceTime(options.since as string),
+              until: options.until ? parseSinceTime(options.until) : undefined,
+              eventTypes: options.types?.split(','),
+              instanceId: options.instance,
+              speedMultiplier: options.speed,
+              dryRun: options.dryRun,
+            });
+
+            output.success(`Replay session started: ${session.id}`, {
+              id: session.id,
+              status: session.status,
+              since: session.options.since,
+              until: session.options.until,
+            });
+            return;
+          }
+
+          // Default: list replay sessions
+          const sessions = await client.eventOps.listReplays();
+
+          const items = sessions.map((s) => ({
+            id: s.id,
+            status: s.status,
+            since: s.options.since,
+            until: s.options.until ?? '-',
+            progress: s.progress ?? '-',
+          }));
+
+          output.list(items, { emptyMessage: 'No replay sessions found.' });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to manage replay: ${message}`);
+        }
+      },
+    );
+
   return events;
 }
