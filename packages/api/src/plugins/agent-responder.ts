@@ -280,10 +280,16 @@ async function processAgentResponse(
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
 
+  // Get sender name from DB or fallback to pushName from payload
+  const rawPayload = firstMessage.payload.rawPayload ?? {};
+  const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
+  const senderName = await agentRunner.getSenderName(firstMessage.metadata.personId, pushName);
+
   log.info('Processing agent response', {
     instanceId: instance.id,
     chatId,
     messageCount: messages.length,
+    senderName,
   });
 
   // Start typing immediately
@@ -303,6 +309,7 @@ async function processAgentResponse(
       instance,
       chatId,
       senderId,
+      senderName,
       messages: messageTexts,
     });
 

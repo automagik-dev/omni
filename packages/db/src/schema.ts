@@ -401,6 +401,8 @@ export const instances = pgTable(
       .notNull()
       .default('per_user_per_chat')
       .$type<AgentSessionStrategy>(),
+    /** Prefix messages with sender name: [Name]: message */
+    agentPrefixSenderName: boolean('agent_prefix_sender_name').notNull().default(true),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),

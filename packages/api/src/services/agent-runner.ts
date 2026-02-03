@@ -19,7 +19,7 @@ import {
 import { createLogger } from '@omni/core';
 import type { AgentReplyFilter, AgentSessionStrategy, Instance } from '@omni/db';
 import type { Database } from '@omni/db';
-import { agentProviders, instances } from '@omni/db';
+import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
 const log = createLogger('agent-runner');
@@ -35,6 +35,8 @@ export interface AgentRunContext {
   chatId: string;
   /** Sender ID for user identification */
   senderId: string;
+  /** Sender's display name (from DB or payload) */
+  senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
 }
@@ -206,6 +208,43 @@ export function computeSessionId(
 }
 
 // ============================================================================
+// Message Formatting
+// ============================================================================
+
+/**
+ * Format a message with optional sender name prefix
+ *
+ * @param message - The message content
+ * @param senderName - The sender's display name (optional)
+ * @param prefixEnabled - Whether to prefix with sender name
+ * @returns Formatted message: "[Name]: message" or just "message"
+ */
+export function formatMessageWithSender(
+  message: string,
+  senderName: string | undefined,
+  prefixEnabled: boolean,
+): string {
+  if (!prefixEnabled || !senderName) {
+    return message;
+  }
+  return `[${senderName}]: ${message}`;
+}
+
+/**
+ * Format multiple messages with optional sender name prefix
+ */
+export function formatMessagesWithSender(
+  messages: string[],
+  senderName: string | undefined,
+  prefixEnabled: boolean,
+): string[] {
+  if (!prefixEnabled || !senderName) {
+    return messages;
+  }
+  return messages.map((msg) => `[${senderName}]: ${msg}`);
+}
+
+// ============================================================================
 // Agent Runner Service
 // ============================================================================
 
@@ -262,10 +301,35 @@ export class AgentRunnerService {
   }
 
   /**
+   * Get sender name from database (by personId) or fallback to pushName from payload
+   *
+   * @param personId - Optional person ID from metadata
+   * @param fallbackName - Fallback name from payload (e.g., pushName)
+   * @returns Sender display name or undefined
+   */
+  async getSenderName(personId?: string, fallbackName?: string): Promise<string | undefined> {
+    // Try to get name from database first
+    if (personId) {
+      const [person] = await this.db
+        .select({ displayName: persons.displayName })
+        .from(persons)
+        .where(eq(persons.id, personId))
+        .limit(1);
+
+      if (person?.displayName) {
+        return person.displayName;
+      }
+    }
+
+    // Fallback to payload name (pushName, displayName, etc.)
+    return fallbackName || undefined;
+  }
+
+  /**
    * Run an agent call (sync mode)
    */
   async run(context: AgentRunContext): Promise<AgentRunResult> {
-    const { instance, chatId, senderId, messages } = context;
+    const { instance, chatId, senderId, senderName, messages } = context;
 
     if (!instance.agentProviderId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
@@ -277,8 +341,12 @@ export class AgentRunnerService {
 
     const client = await this.getClient(instance.agentProviderId);
 
+    // Format messages with sender name prefix if enabled
+    const prefixEnabled = instance.agentPrefixSenderName ?? true;
+    const formattedMessages = formatMessagesWithSender(messages, senderName, prefixEnabled);
+
     // Aggregate messages with separator if multiple
-    const combinedMessage = messages.join('\n---\n');
+    const combinedMessage = formattedMessages.join('\n---\n');
 
     // Compute session ID based on configured strategy
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
@@ -291,6 +359,7 @@ export class AgentRunnerService {
       messageCount: messages.length,
       sessionStrategy,
       sessionId,
+      senderName: prefixEnabled ? senderName : undefined,
     });
 
     // Call appropriate endpoint based on agent type
@@ -342,7 +411,7 @@ export class AgentRunnerService {
    * Yields split parts as they become available
    */
   async *stream(context: AgentRunContext): AsyncGenerator<string> {
-    const { instance, chatId, senderId, messages } = context;
+    const { instance, chatId, senderId, senderName, messages } = context;
 
     if (!instance.agentProviderId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
@@ -353,7 +422,12 @@ export class AgentRunnerService {
     }
 
     const client = await this.getClient(instance.agentProviderId);
-    const combinedMessage = messages.join('\n---\n');
+
+    // Format messages with sender name prefix if enabled
+    const prefixEnabled = instance.agentPrefixSenderName ?? true;
+    const formattedMessages = formatMessagesWithSender(messages, senderName, prefixEnabled);
+
+    const combinedMessage = formattedMessages.join('\n---\n');
     const enableSplit = instance.enableAutoSplit ?? true;
 
     // Compute session ID based on configured strategy
