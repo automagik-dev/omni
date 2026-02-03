@@ -18,6 +18,79 @@ import { chatParticipants, chats, createDb, platformIdentities } from '../src';
 const db = createDb();
 const isDryRun = process.argv.includes('--dry-run');
 
+interface ParticipantData {
+  participantId: string;
+  chatId: string;
+  platformUserId: string;
+  displayName: string | null;
+  existingPersonId: string | null;
+  existingIdentityId: string | null;
+}
+
+interface ChatInfo {
+  instanceId: string;
+  channel: string;
+}
+
+type UpdateResult = 'updated' | 'skipped' | 'not_found' | 'no_chat';
+
+/**
+ * Process a single participant - look up identity and update if needed
+ */
+async function processParticipant(
+  participant: ParticipantData,
+  chatToInstance: Map<string, ChatInfo>,
+): Promise<UpdateResult> {
+  const chatInfo = chatToInstance.get(participant.chatId);
+  if (!chatInfo) {
+    console.log(`  ⚠️  Chat not found for participant ${participant.participantId}`);
+    return 'no_chat';
+  }
+
+  // Look up platform identity
+  const [identity] = await db
+    .select({ id: platformIdentities.id, personId: platformIdentities.personId })
+    .from(platformIdentities)
+    .where(
+      and(
+        eq(platformIdentities.channel, chatInfo.channel),
+        eq(platformIdentities.instanceId, chatInfo.instanceId),
+        eq(platformIdentities.platformUserId, participant.platformUserId),
+      ),
+    )
+    .limit(1);
+
+  if (!identity) return 'not_found';
+
+  const updates: { personId?: string; platformIdentityId?: string } = {};
+  if (!participant.existingPersonId && identity.personId) updates.personId = identity.personId;
+  if (!participant.existingIdentityId) updates.platformIdentityId = identity.id;
+
+  if (Object.keys(updates).length === 0) return 'skipped';
+
+  if (isDryRun) {
+    console.log(`  Would update participant ${participant.participantId}:`, updates);
+  } else {
+    await db
+      .update(chatParticipants)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(chatParticipants.id, participant.participantId));
+  }
+
+  return 'updated';
+}
+
+/**
+ * Print results summary
+ */
+function printResults(updated: number, skipped: number, notFound: number): void {
+  console.log('\n📊 Results:');
+  console.log(`   Updated:   ${updated}`);
+  console.log(`   Skipped:   ${skipped}`);
+  console.log(`   No match:  ${notFound} (will be linked on next message)`);
+  console.log(isDryRun ? '\n💡 Run without --dry-run to apply changes' : '\n✅ Backfill complete');
+}
+
 async function backfillParticipantIdentities() {
   console.log(`\n🔗 Backfill Participant Identities ${isDryRun ? '(DRY RUN)' : ''}\n`);
 
@@ -41,92 +114,27 @@ async function backfillParticipantIdentities() {
     return;
   }
 
-  // Get unique chat IDs
-  const _chatIds = [...new Set(missingIdentities.map((p) => p.chatId))];
-
-  // Get chat → instance mapping
+  // Build chat → instance lookup map
   const chatInstances = await db
-    .select({
-      chatId: chats.id,
-      instanceId: chats.instanceId,
-      channel: chats.channel,
-    })
+    .select({ chatId: chats.id, instanceId: chats.instanceId, channel: chats.channel })
     .from(chats);
-
-  // Create lookup map
   const chatToInstance = new Map(
     chatInstances.map((c) => [c.chatId, { instanceId: c.instanceId, channel: c.channel }]),
   );
 
+  // Process all participants
   let updated = 0;
   let skipped = 0;
   let notFound = 0;
 
   for (const participant of missingIdentities) {
-    const chatInfo = chatToInstance.get(participant.chatId);
-    if (!chatInfo) {
-      console.log(`  ⚠️  Chat not found for participant ${participant.participantId}`);
-      skipped++;
-      continue;
-    }
-
-    // Look up platform identity
-    const [identity] = await db
-      .select({
-        id: platformIdentities.id,
-        personId: platformIdentities.personId,
-      })
-      .from(platformIdentities)
-      .where(
-        and(
-          eq(platformIdentities.channel, chatInfo.channel),
-          eq(platformIdentities.instanceId, chatInfo.instanceId),
-          eq(platformIdentities.platformUserId, participant.platformUserId),
-        ),
-      )
-      .limit(1);
-
-    if (!identity) {
-      // No identity found - will be created on next message
-      notFound++;
-      continue;
-    }
-
-    const updates: { personId?: string; platformIdentityId?: string } = {};
-    if (!participant.existingPersonId && identity.personId) {
-      updates.personId = identity.personId;
-    }
-    if (!participant.existingIdentityId) {
-      updates.platformIdentityId = identity.id;
-    }
-
-    if (Object.keys(updates).length === 0) {
-      skipped++;
-      continue;
-    }
-
-    if (isDryRun) {
-      console.log(`  Would update participant ${participant.participantId}:`, updates);
-    } else {
-      await db
-        .update(chatParticipants)
-        .set({ ...updates, updatedAt: new Date() })
-        .where(eq(chatParticipants.id, participant.participantId));
-    }
-
-    updated++;
+    const result = await processParticipant(participant, chatToInstance);
+    if (result === 'updated') updated++;
+    else if (result === 'skipped' || result === 'no_chat') skipped++;
+    else if (result === 'not_found') notFound++;
   }
 
-  console.log('\n📊 Results:');
-  console.log(`   Updated:   ${updated}`);
-  console.log(`   Skipped:   ${skipped}`);
-  console.log(`   No match:  ${notFound} (will be linked on next message)`);
-
-  if (isDryRun) {
-    console.log('\n💡 Run without --dry-run to apply changes');
-  } else {
-    console.log('\n✅ Backfill complete');
-  }
+  printResults(updated, skipped, notFound);
 }
 
 backfillParticipantIdentities()
