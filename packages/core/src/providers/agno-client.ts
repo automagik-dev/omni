@@ -33,7 +33,7 @@ export class AgnoClient implements IAgnoClient {
 
   private getHeaders(): Record<string, string> {
     return {
-      'X-API-Key': this.apiKey,
+      Authorization: `Bearer ${this.apiKey}`,
     };
   }
 

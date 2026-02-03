@@ -30,14 +30,36 @@ const listQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+// Reply filter schema
+const agentReplyFilterSchema = z.object({
+  mode: z.enum(['all', 'filtered']).describe('Reply mode: all = reply to everything, filtered = check conditions'),
+  conditions: z
+    .object({
+      onDm: z.boolean().default(true).describe('Reply if message is a DM'),
+      onMention: z.boolean().default(true).describe('Reply if bot is @mentioned'),
+      onReply: z.boolean().default(true).describe('Reply if message is a reply to bot'),
+      onNameMatch: z.boolean().default(false).describe('Reply if bot name appears in text'),
+      namePatterns: z.array(z.string()).optional().describe('Custom patterns for name matching'),
+    })
+    .default({ onDm: true, onMention: true, onReply: true, onNameMatch: false }),
+});
+
 // Create instance schema
 const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
-  agentProviderId: z.string().uuid().optional().describe('Reference to agent provider'),
+  agentProviderId: z.string().uuid().optional().nullable().describe('Reference to agent provider'),
   agentId: z.string().max(255).default('default').describe('Agent ID within the provider'),
+  agentType: z.enum(['agent', 'team', 'workflow']).default('agent').describe('Agent type (agent, team, or workflow)'),
   agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
+  agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
+  agentSessionStrategy: z
+    .enum(['per_user', 'per_chat', 'per_user_per_chat'])
+    .default('per_user_per_chat')
+    .describe('Session strategy for agent memory'),
+  agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
+  enableAutoSplit: z.boolean().default(true).describe('Split responses on double newlines'),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
 });

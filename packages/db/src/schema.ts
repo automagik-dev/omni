@@ -30,7 +30,7 @@ import {
 export const channelTypes = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
-export const agentTypes = ['agent', 'team'] as const;
+export const agentTypes = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof agentTypes)[number];
 
 export const debounceMode = ['disabled', 'fixed', 'randomized'] as const;

@@ -37,6 +37,7 @@ export type ProviderClient = IAgnoClient;
 export function createProviderClient(config: ProviderClientConfig): ProviderClient {
   switch (config.schema) {
     case 'agnoos':
+    case 'agno':
       return createAgnoClient({
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
@@ -64,7 +65,7 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
  * Check if a provider schema is currently supported
  */
 export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
-  return schema === 'agnoos';
+  return schema === 'agnoos' || schema === 'agno';
 }
 
 /**

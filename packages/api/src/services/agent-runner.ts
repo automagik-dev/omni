@@ -426,6 +426,9 @@ export class AgentRunnerService {
       case 'team':
         response = await client.runTeam(instance.agentId, request);
         break;
+      case 'workflow':
+        response = await client.runWorkflow(instance.agentId, request);
+        break;
       default:
         throw new ProviderError(`Unknown agent type: ${agentType}`, 'NOT_FOUND', 400);
     }

@@ -182,6 +182,8 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     guildId: message.guild?.id,
     authorId: from,
     authorTag: message.author.tag,
+    // displayName is used by agent-responder for sender name prefixing
+    displayName: message.author.displayName || message.author.globalName || message.author.username,
     createdAt: message.createdTimestamp,
     isDM: isDM(message),
     hasEmbeds: message.embeds.length > 0,

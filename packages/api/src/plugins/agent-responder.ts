@@ -262,12 +262,93 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Channel-specific message length limits
+ * Discord: 2000 characters
+ * WhatsApp: 65536 characters (practical limit)
+ * Others: default to a safe 4000 characters
+ */
+const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
+  discord: 2000,
+  'whatsapp-baileys': 65536,
+  'whatsapp-cloud': 65536,
+  slack: 40000,
+  telegram: 4096,
+};
+
+const DEFAULT_MESSAGE_LIMIT = 4000;
+
+/**
+ * Get the message character limit for a channel
+ */
+function getMessageLimit(channel: ChannelType): number {
+  return CHANNEL_MESSAGE_LIMITS[channel] ?? DEFAULT_MESSAGE_LIMIT;
+}
+
+/**
+ * Chunk text into parts that fit within the character limit
+ * Tries to split at natural boundaries (newlines, sentences, words)
+ */
+function chunkText(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLength) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Find a good split point within the limit
+    let splitIndex = maxLength;
+
+    // Try to split at a double newline (paragraph boundary)
+    const paragraphBreak = remaining.lastIndexOf('\n\n', maxLength);
+    if (paragraphBreak > maxLength * 0.5) {
+      splitIndex = paragraphBreak + 2; // Include the newlines
+    } else {
+      // Try to split at a single newline
+      const lineBreak = remaining.lastIndexOf('\n', maxLength);
+      if (lineBreak > maxLength * 0.5) {
+        splitIndex = lineBreak + 1;
+      } else {
+        // Try to split at a sentence boundary (. ! ?)
+        const sentenceEnd = Math.max(
+          remaining.lastIndexOf('. ', maxLength),
+          remaining.lastIndexOf('! ', maxLength),
+          remaining.lastIndexOf('? ', maxLength),
+        );
+        if (sentenceEnd > maxLength * 0.5) {
+          splitIndex = sentenceEnd + 2;
+        } else {
+          // Try to split at a word boundary (space)
+          const wordBreak = remaining.lastIndexOf(' ', maxLength);
+          if (wordBreak > maxLength * 0.5) {
+            splitIndex = wordBreak + 1;
+          }
+          // Otherwise just split at maxLength (hard cut)
+        }
+      }
+    }
+
+    chunks.push(remaining.slice(0, splitIndex).trim());
+    remaining = remaining.slice(splitIndex).trim();
+  }
+
+  return chunks.filter(Boolean);
+}
+
 // ============================================================================
 // Main Handler
 // ============================================================================
 
 /**
  * Send response parts with configured delays between them
+ * Automatically chunks messages that exceed channel limits
  */
 async function sendResponseParts(
   channel: ChannelType,
@@ -276,12 +357,20 @@ async function sendResponseParts(
   parts: string[],
   splitConfig: SplitDelayConfig,
 ): Promise<void> {
-  for (const [index, part] of parts.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, part);
+  const messageLimit = getMessageLimit(channel);
 
-    // Delay between parts (except last)
-    const isLastPart = index === parts.length - 1;
-    if (!isLastPart) {
+  // Flatten parts that exceed the message limit into smaller chunks
+  const allChunks: string[] = [];
+  for (const part of parts) {
+    allChunks.push(...chunkText(part, messageLimit));
+  }
+
+  for (const [index, chunk] of allChunks.entries()) {
+    await sendTextMessage(channel, instanceId, chatId, chunk);
+
+    // Delay between chunks (except last)
+    const isLastChunk = index === allChunks.length - 1;
+    if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
       if (delay > 0) {
         await sendTypingPresence(channel, instanceId, chatId, 'composing');
@@ -289,6 +378,9 @@ async function sendResponseParts(
       }
     }
   }
+
+  // Stop typing after all parts sent
+  await sendTypingPresence(channel, instanceId, chatId, 'paused');
 }
 
 /**
@@ -356,6 +448,7 @@ async function processAgentResponse(
 
     if (!messageTexts.length) {
       log.debug('No text content in messages, skipping agent call');
+      await sendTypingPresence(channel, instance.id, chatId, 'paused');
       return;
     }
 
