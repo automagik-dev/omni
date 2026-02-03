@@ -5,7 +5,7 @@
 export const AGENT_TYPES = ['agent', 'team'] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-export const PROVIDER_SCHEMAS = ['openai', 'anthropic', 'agno', 'custom'] as const;
+export const PROVIDER_SCHEMAS = ['agnoos', 'a2a', 'openai', 'anthropic', 'custom'] as const;
 export type ProviderSchema = (typeof PROVIDER_SCHEMAS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -20,7 +20,7 @@ export interface AgentProviderConfig {
   schema: ProviderSchema;
   baseUrl: string;
   apiKey?: string;
-  schemaConfig?: OpenAIConfig | AnthropicConfig | AgnoConfig | CustomConfig;
+  schemaConfig?: OpenAIConfig | AnthropicConfig | AgnoOSConfig | A2AConfig | CustomConfig;
   defaultStream: boolean;
   defaultTimeout: number;
   capabilities: AgentCapabilities;
@@ -46,9 +46,15 @@ export interface AnthropicConfig {
   maxTokens?: number;
 }
 
-export interface AgnoConfig {
+export interface AgnoOSConfig {
   agentId: string;
   teamId?: string;
+  timeout?: number;
+}
+
+export interface A2AConfig {
+  agentUrl: string;
+  capabilities?: string[];
   timeout?: number;
 }
 

@@ -34,6 +34,10 @@ export const CORE_EVENT_TYPES = [
   // Access control
   'access.allowed',
   'access.denied',
+  // Presence
+  'presence.typing',
+  'presence.online',
+  'presence.offline',
   // Sync operations
   'sync.started',
   'sync.progress',
@@ -315,6 +319,26 @@ export interface ProfileSyncedPayload {
 }
 
 /**
+ * Presence event payloads
+ */
+export interface PresenceTypingPayload {
+  chatId: string;
+  from: string;
+  /** Timestamp when typing started */
+  timestamp?: number;
+}
+
+export interface PresenceOnlinePayload {
+  userId: string;
+  lastSeen?: number;
+}
+
+export interface PresenceOfflinePayload {
+  userId: string;
+  lastSeen: number;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -339,6 +363,9 @@ export interface EventPayloadMap {
   'sync.completed': SyncCompletedPayload;
   'sync.failed': SyncFailedPayload;
   'profile.synced': ProfileSyncedPayload;
+  'presence.typing': PresenceTypingPayload;
+  'presence.online': PresenceOnlinePayload;
+  'presence.offline': PresenceOfflinePayload;
 }
 
 /**

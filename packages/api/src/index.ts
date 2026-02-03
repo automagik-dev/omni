@@ -28,6 +28,7 @@ import {
   InstanceMonitor,
   loadChannelPlugins,
   reconnectWithPool,
+  setupAgentResponder,
   setupConnectionListener,
   setupEventPersistence,
   setupMessageListener,
@@ -301,6 +302,15 @@ async function main() {
       await setupMessagePersistence(eventBus, services);
     } catch (error) {
       log.error('Failed to set up message persistence', { error: String(error) });
+    }
+  }
+
+  // Set up agent responder (triggers AI agent responses)
+  if (eventBus) {
+    try {
+      await setupAgentResponder(eventBus, services);
+    } catch (error) {
+      log.error('Failed to set up agent responder', { error: String(error) });
     }
   }
 

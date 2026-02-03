@@ -35,6 +35,9 @@ export { setupEventPersistence } from './event-persistence';
 // Message persistence (writes to unified chats/messages tables)
 export { setupMessagePersistence } from './message-persistence';
 
+// Agent responder (triggers AI agent responses)
+export { setupAgentResponder } from './agent-responder';
+
 // Sync worker (processes sync jobs)
 export { setupSyncWorker } from './sync-worker';
 

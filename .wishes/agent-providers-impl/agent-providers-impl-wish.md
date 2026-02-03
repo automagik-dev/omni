@@ -2,7 +2,7 @@
 
 > Wire Agno agents/teams to incoming messages across ALL channels with split, delay, debounce, and reply filtering.
 
-**Status:** DRAFT
+**Status:** FORGING
 **Created:** 2026-02-02
 **Updated:** 2026-02-03
 **Author:** WISH Agent

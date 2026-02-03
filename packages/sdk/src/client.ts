@@ -168,6 +168,75 @@ export interface ListProvidersParams {
   active?: boolean;
 }
 
+/**
+ * Provider schema type
+ * - agnoos: AgnoOS AI orchestration platform
+ * - a2a: Agent-to-Agent protocol (Google A2A)
+ * - openai: OpenAI-compatible API
+ * - anthropic: Anthropic Claude API
+ * - custom: Custom provider implementation
+ */
+export type ProviderSchema = 'agnoos' | 'a2a' | 'openai' | 'anthropic' | 'custom';
+
+/**
+ * Body for creating a provider
+ */
+export interface NewAgentProvider {
+  name: string;
+  schema: ProviderSchema;
+  baseUrl: string;
+  apiKey?: string;
+  schemaConfig?: Record<string, unknown>;
+  defaultStream?: boolean;
+  defaultTimeout?: number;
+  supportsStreaming?: boolean;
+  supportsImages?: boolean;
+  supportsAudio?: boolean;
+  supportsDocuments?: boolean;
+  description?: string;
+  tags?: string[];
+}
+
+/**
+ * Provider health check result
+ */
+export interface ProviderHealthResult {
+  healthy: boolean;
+  latency: number;
+  error?: string;
+}
+
+/**
+ * Agno agent entity
+ */
+export interface AgnoAgent {
+  agent_id: string;
+  name: string;
+  model?: { provider?: string; name?: string };
+  description?: string;
+  instructions?: string[];
+}
+
+/**
+ * Agno team entity
+ */
+export interface AgnoTeam {
+  team_id: string;
+  name: string;
+  description?: string;
+  mode?: string;
+  members?: Array<{ agent_id: string; role?: string }>;
+}
+
+/**
+ * Agno workflow entity
+ */
+export interface AgnoWorkflow {
+  workflow_id: string;
+  name: string;
+  description?: string;
+}
+
 // ============================================================================
 // New parameter/body types for expanded SDK
 // ============================================================================
@@ -1475,6 +1544,110 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data?.items ?? [];
+      },
+
+      /**
+       * Get provider by ID
+       */
+      async get(id: string): Promise<Provider> {
+        const { data, error, response } = await client.GET('/providers/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Provider not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      /**
+       * Create a provider
+       */
+      async create(body: NewAgentProvider): Promise<Provider> {
+        const resp = await fetch(`${baseUrl}/api/v2/providers`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+          const errorData = await resp.json().catch(() => ({}));
+          throw new OmniApiError(
+            (errorData as { error?: string }).error ?? resp.statusText,
+            'CREATE_FAILED',
+            undefined,
+            resp.status,
+          );
+        }
+        const data = (await resp.json()) as { data: Provider };
+        return data.data;
+      },
+
+      /**
+       * Delete a provider
+       */
+      async delete(id: string): Promise<void> {
+        const { error, response } = await client.DELETE('/providers/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+      },
+
+      /**
+       * Check provider health
+       */
+      async checkHealth(id: string): Promise<ProviderHealthResult> {
+        const { data, error, response } = await client.POST('/providers/{id}/health', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        return {
+          healthy: data?.healthy ?? false,
+          latency: data?.latency ?? 0,
+          error: data?.error ?? undefined,
+        };
+      },
+
+      /**
+       * List agents from Agno provider
+       */
+      async listAgents(id: string): Promise<AgnoAgent[]> {
+        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/agents`, {
+          method: 'GET',
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) {
+          throw new OmniApiError(`Failed to list agents: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
+        }
+        const data = (await resp.json()) as { items: AgnoAgent[] };
+        return data.items ?? [];
+      },
+
+      /**
+       * List teams from Agno provider
+       */
+      async listTeams(id: string): Promise<AgnoTeam[]> {
+        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/teams`, {
+          method: 'GET',
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) {
+          throw new OmniApiError(`Failed to list teams: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
+        }
+        const data = (await resp.json()) as { items: AgnoTeam[] };
+        return data.items ?? [];
+      },
+
+      /**
+       * List workflows from Agno provider
+       */
+      async listWorkflows(id: string): Promise<AgnoWorkflow[]> {
+        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/workflows`, {
+          method: 'GET',
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) {
+          throw new OmniApiError(`Failed to list workflows: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
+        }
+        const data = (await resp.json()) as { items: AgnoWorkflow[] };
+        return data.items ?? [];
       },
     },
 

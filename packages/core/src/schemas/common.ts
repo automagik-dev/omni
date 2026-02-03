@@ -113,8 +113,13 @@ export const JobStatusSchema = z.enum(['pending', 'running', 'completed', 'faile
 
 /**
  * Provider schema enum
+ * - agnoos: AgnoOS AI orchestration platform
+ * - a2a: Agent-to-Agent protocol (Google A2A)
+ * - openai: OpenAI-compatible API
+ * - anthropic: Anthropic Claude API
+ * - custom: Custom provider implementation
  */
-export const ProviderSchemaEnum = z.enum(['openai', 'anthropic', 'agno', 'custom']);
+export const ProviderSchemaEnum = z.enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom']);
 
 /**
  * Rule type enum

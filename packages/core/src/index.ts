@@ -57,3 +57,6 @@ export * from './metrics';
 
 // Automations
 export * from './automations';
+
+// Providers
+export * from './providers';

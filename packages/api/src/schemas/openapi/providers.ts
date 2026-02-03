@@ -10,7 +10,7 @@ import { ErrorSchema, SuccessSchema } from './common';
 export const ProviderSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Provider UUID' }),
   name: z.string().openapi({ description: 'Provider name' }),
-  schema: z.enum(['agno', 'openai', 'anthropic', 'custom']).openapi({ description: 'Provider schema type' }),
+  schema: z.enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom']).openapi({ description: 'Provider schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
   schemaConfig: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Schema config' }),
@@ -30,7 +30,7 @@ export const ProviderSchema = z.object({
 // Create provider request
 export const CreateProviderSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Provider name' }),
-  schema: z.enum(['agno', 'openai', 'anthropic', 'custom']).default('agno').openapi({ description: 'Schema type' }),
+  schema: z.enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom']).default('agnoos').openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().optional().openapi({ description: 'API key (encrypted)' }),
   schemaConfig: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Schema config' }),

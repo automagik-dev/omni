@@ -22,6 +22,7 @@ import { ProviderService } from './providers';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
 import { WebhookService } from './webhooks';
+import { AgentRunnerService } from './agent-runner';
 
 /**
  * Service container
@@ -42,6 +43,7 @@ export interface Services {
   chats: ChatService;
   messages: MessageService;
   syncJobs: SyncJobService;
+  agentRunner: AgentRunnerService;
 }
 
 /**
@@ -68,6 +70,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
+    agentRunner: new AgentRunnerService(db),
   };
 }
 
@@ -87,3 +90,4 @@ export { AutomationService } from './automations';
 export { ChatService } from './chats';
 export { MessageService } from './messages';
 export { SyncJobService } from './sync-jobs';
+export { AgentRunnerService } from './agent-runner';

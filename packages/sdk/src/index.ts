@@ -54,6 +54,12 @@ export type {
   CreateAccessRuleBody,
   ListSettingsParams,
   ListProvidersParams,
+  NewAgentProvider,
+  ProviderSchema,
+  ProviderHealthResult,
+  AgnoAgent,
+  AgnoTeam,
+  AgnoWorkflow,
   // Sync types
   StartSyncBody,
   ListSyncsParams,

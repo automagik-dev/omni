@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { ProviderSchemaEnum } from '@omni/core';
+import { ProviderSchemaEnum, createAgnoClient } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppVariables } from '../../types';
@@ -18,7 +18,7 @@ const listQuerySchema = z.object({
 // Create provider schema
 const createProviderSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique provider name'),
-  schema: ProviderSchemaEnum.default('agno').describe('Provider schema type'),
+  schema: ProviderSchemaEnum.default('agnoos').describe('Provider schema type'),
   baseUrl: z.string().url().describe('Base URL for provider API'),
   apiKey: z.string().optional().describe('API key (stored encrypted)'),
   schemaConfig: z.record(z.string(), z.unknown()).optional().describe('Schema-specific configuration'),
@@ -137,21 +137,87 @@ providersRoutes.post('/:id/health', async (c) => {
 });
 
 /**
- * GET /providers/:id/agents - List agents from provider
+ * GET /providers/:id/agents - List agents from provider (AgnoOS only)
  */
 providersRoutes.get('/:id/agents', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
-  // Verify provider exists
-  await services.providers.getById(id);
+  const provider = await services.providers.getById(id);
 
-  // TODO: Fetch agents from provider API
-  // For now, return empty list
-  return c.json({
-    items: [],
-    message: 'Agent listing not implemented yet - depends on provider schema',
+  if (provider.schema !== 'agnoos') {
+    return c.json({ items: [], message: 'Agent listing only supported for AgnoOS providers' });
+  }
+
+  if (!provider.apiKey) {
+    return c.json({ error: 'Provider has no API key configured' }, 400);
+  }
+
+  const client = createAgnoClient({
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
+
+  const agents = await client.listAgents();
+
+  return c.json({ items: agents });
+});
+
+/**
+ * GET /providers/:id/teams - List teams from provider (AgnoOS only)
+ */
+providersRoutes.get('/:id/teams', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const provider = await services.providers.getById(id);
+
+  if (provider.schema !== 'agnoos') {
+    return c.json({ items: [], message: 'Team listing only supported for AgnoOS providers' });
+  }
+
+  if (!provider.apiKey) {
+    return c.json({ error: 'Provider has no API key configured' }, 400);
+  }
+
+  const client = createAgnoClient({
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  const teams = await client.listTeams();
+
+  return c.json({ items: teams });
+});
+
+/**
+ * GET /providers/:id/workflows - List workflows from provider (AgnoOS only)
+ */
+providersRoutes.get('/:id/workflows', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const provider = await services.providers.getById(id);
+
+  if (provider.schema !== 'agnoos') {
+    return c.json({ items: [], message: 'Workflow listing only supported for AgnoOS providers' });
+  }
+
+  if (!provider.apiKey) {
+    return c.json({ error: 'Provider has no API key configured' }, 400);
+  }
+
+  const client = createAgnoClient({
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  const workflows = await client.listWorkflows();
+
+  return c.json({ items: workflows });
 });
 
 export { providersRoutes };

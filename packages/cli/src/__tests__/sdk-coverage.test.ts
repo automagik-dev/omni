@@ -111,6 +111,13 @@ const CLI_COMMANDS: Record<string, string> = {
   // PROVIDERS (AI/Agent providers)
   // ============================================================================
   'providers.list': 'providers list',
+  'providers.get': 'providers get <id>',
+  'providers.create': 'providers create --name <name> --schema <schema> --base-url <url> --api-key <key>',
+  'providers.delete': 'providers delete <id> --force',
+  'providers.checkHealth': 'providers test <id>',
+  'providers.listAgents': 'providers agents <id>',
+  'providers.listTeams': 'providers teams <id>',
+  'providers.listWorkflows': 'providers workflows <id>',
 
   // ============================================================================
   // LOGS

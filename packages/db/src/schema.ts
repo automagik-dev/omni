@@ -39,6 +39,26 @@ export type DebounceMode = (typeof debounceMode)[number];
 export const splitDelayMode = ['disabled', 'fixed', 'randomized'] as const;
 export type SplitDelayMode = (typeof splitDelayMode)[number];
 
+export const replyFilterMode = ['all', 'filtered'] as const;
+export type ReplyFilterMode = (typeof replyFilterMode)[number];
+
+/** When agent should reply to messages */
+export interface AgentReplyFilter {
+  mode: ReplyFilterMode;
+  conditions: {
+    /** Reply if message is a DM (not in group/channel) */
+    onDm: boolean;
+    /** Reply if bot is @mentioned */
+    onMention: boolean;
+    /** Reply if message is a reply to bot's message */
+    onReply: boolean;
+    /** Reply if bot name appears in text */
+    onNameMatch: boolean;
+    /** Custom patterns for name matching */
+    namePatterns?: string[];
+  };
+}
+
 export const ruleTypes = ['allow', 'deny'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
@@ -189,12 +209,12 @@ export type JobStatus = (typeof jobStatuses)[number];
 // AGENT PROVIDERS
 // ============================================================================
 
-export const providerSchemas = ['openai', 'anthropic', 'agno', 'custom'] as const;
+export const providerSchemas = ['agnoos', 'a2a', 'openai', 'anthropic', 'custom'] as const;
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**
  * Reusable agent provider configurations.
- * Supports multiple API schemas: OpenAI, Anthropic, Agno, and custom.
+ * Supports multiple API schemas: AgnoOS, A2A, OpenAI, Anthropic, and custom.
  *
  * @see v1: omni_agent_providers table
  * @see docs/architecture/provider-system.md
@@ -206,7 +226,7 @@ export const agentProviders = pgTable(
     name: varchar('name', { length: 255 }).notNull().unique(),
 
     // Schema type determines how to communicate with the provider
-    schema: varchar('schema', { length: 20 }).notNull().default('agno').$type<ProviderSchema>(),
+    schema: varchar('schema', { length: 20 }).notNull().default('agnoos').$type<ProviderSchema>(),
 
     // Connection settings
     baseUrl: text('base_url').notNull(),
@@ -365,6 +385,8 @@ export const instances = pgTable(
     agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
     agentTimeout: integer('agent_timeout').notNull().default(60),
     agentStreamMode: boolean('agent_stream_mode').notNull().default(false),
+    /** When agent should reply to messages */
+    agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
@@ -393,6 +415,10 @@ export const instances = pgTable(
       .$type<DebounceMode>(),
     messageDebounceMinMs: integer('message_debounce_min_ms').notNull().default(0),
     messageDebounceMaxMs: integer('message_debounce_max_ms').notNull().default(0),
+    /** Restart debounce timer when user is typing (requires channel support) */
+    messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing')
+      .notNull()
+      .default(false),
 
     // ---- Message Split Delay ----
     messageSplitDelayMode: varchar('message_split_delay_mode', { length: 20 })

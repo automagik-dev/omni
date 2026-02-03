@@ -53,7 +53,7 @@ export type AgentProvider = z.infer<typeof AgentProviderSchema>;
  */
 export const CreateAgentProviderSchema = z.object({
   name: z.string().max(255),
-  schema: ProviderSchemaEnum.default('agno'),
+  schema: ProviderSchemaEnum.default('agnoos'),
   baseUrl: z.string().url(),
   apiKey: z.string().optional(),
   schemaConfig: MetadataSchema.optional(),
