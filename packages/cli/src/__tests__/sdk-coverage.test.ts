@@ -4,32 +4,42 @@
  * Ensures the CLI exposes all SDK functionality.
  * This test fails if the SDK has methods that the CLI doesn't cover.
  *
- * When this test fails:
- * 1. Check what new SDK methods were added
- * 2. Add corresponding CLI commands
- * 3. Update the CLI_COVERAGE mapping below
+ * PRINCIPLE: The CLI should expose EVERYTHING the SDK has.
+ * Access control is handled by the API via scopes, not by hiding CLI commands.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { createOmniClient } from '@omni/sdk';
 
 /**
- * Maps SDK namespaces/methods to CLI commands.
- *
- * Format: 'namespace.method': 'command subcommand' or null if intentionally skipped
- *
- * When adding new SDK methods, add them here with the corresponding CLI command.
- * Use null for methods that are intentionally not exposed via CLI (with a comment explaining why).
+ * SDK methods that are INTERNAL and should NOT be exposed in CLI.
+ * These are implementation details, not user-facing functionality.
  */
-const CLI_COVERAGE: Record<string, string | null> = {
-  // Auth
+const INTERNAL_METHODS = new Set([
+  'raw', // The underlying openapi-fetch client - internal implementation detail
+]);
+
+/**
+ * Maps SDK methods to their CLI commands.
+ *
+ * - String value = implemented CLI command
+ * - 'TODO: command name' = planned but not yet implemented
+ *
+ * When SDK adds new methods, add them here with either the CLI command or TODO.
+ */
+const CLI_COMMANDS: Record<string, string> = {
+  // ============================================================================
+  // AUTH
+  // ============================================================================
   'auth.validate': 'auth status',
 
-  // Instances
+  // ============================================================================
+  // INSTANCES
+  // ============================================================================
   'instances.list': 'instances list',
   'instances.get': 'instances get',
   'instances.create': 'instances create',
-  'instances.update': 'instances update', // Not implemented yet - TODO
+  'instances.update': 'TODO: instances update',
   'instances.delete': 'instances delete',
   'instances.status': 'instances status',
   'instances.qr': 'instances qr',
@@ -42,11 +52,13 @@ const CLI_COVERAGE: Record<string, string | null> = {
   'instances.startSync': 'instances sync',
   'instances.listSyncs': 'instances syncs',
   'instances.getSyncStatus': 'instances syncs',
-  'instances.listContacts': 'instances contacts', // Not implemented yet - TODO
-  'instances.listGroups': 'instances groups', // Not implemented yet - TODO
-  'instances.getUserProfile': null, // Internal API, not needed in CLI
+  'instances.listContacts': 'TODO: instances contacts',
+  'instances.listGroups': 'TODO: instances groups',
+  'instances.getUserProfile': 'TODO: instances profile',
 
-  // Messages (send commands)
+  // ============================================================================
+  // MESSAGES
+  // ============================================================================
   'messages.send': 'send text',
   'messages.sendMedia': 'send media',
   'messages.sendReaction': 'send reaction',
@@ -56,10 +68,12 @@ const CLI_COVERAGE: Record<string, string | null> = {
   'messages.sendPoll': 'send poll',
   'messages.sendEmbed': 'send embed',
   'messages.sendPresence': 'send presence',
-  'messages.markRead': null, // Handled via chats commands
-  'messages.batchMarkRead': null, // Handled via chats commands
+  'messages.markRead': 'TODO: messages read',
+  'messages.batchMarkRead': 'TODO: messages read --batch',
 
-  // Chats
+  // ============================================================================
+  // CHATS
+  // ============================================================================
   'chats.list': 'chats list',
   'chats.get': 'chats get',
   'chats.create': 'chats create',
@@ -71,76 +85,97 @@ const CLI_COVERAGE: Record<string, string | null> = {
   'chats.listParticipants': 'chats participants',
   'chats.addParticipant': 'chats participants --add',
   'chats.removeParticipant': 'chats participants --remove',
-  'chats.markRead': null, // Low priority for CLI
+  'chats.markRead': 'TODO: chats read',
 
-  // Events
+  // ============================================================================
+  // EVENTS
+  // ============================================================================
   'events.list': 'events list',
 
-  // Persons
+  // ============================================================================
+  // PERSONS
+  // ============================================================================
   'persons.search': 'persons search',
   'persons.get': 'persons get',
   'persons.presence': 'persons presence',
 
-  // Access
-  'access.listRules': null, // Admin feature, low priority
-  'access.createRule': null, // Admin feature, low priority
+  // ============================================================================
+  // ACCESS CONTROL
+  // ============================================================================
+  'access.listRules': 'TODO: access list',
+  'access.createRule': 'TODO: access create',
 
-  // Settings
+  // ============================================================================
+  // SETTINGS
+  // ============================================================================
   'settings.list': 'settings list',
 
-  // Providers
-  'providers.list': null, // Admin feature, low priority
+  // ============================================================================
+  // PROVIDERS (AI/Agent providers)
+  // ============================================================================
+  'providers.list': 'TODO: providers list',
 
-  // Logs
-  'logs.recent': null, // Admin feature, low priority
+  // ============================================================================
+  // LOGS
+  // ============================================================================
+  'logs.recent': 'TODO: logs',
 
-  // Automations
-  'automations.list': null, // Future: automations list
-  'automations.get': null, // Future: automations get
-  'automations.create': null, // Future: automations create
-  'automations.update': null, // Future: automations update
-  'automations.delete': null, // Future: automations delete
-  'automations.enable': null, // Future: automations enable
-  'automations.disable': null, // Future: automations disable
-  'automations.test': null, // Future: automations test
-  'automations.getLogs': null, // Future: automations logs
+  // ============================================================================
+  // AUTOMATIONS
+  // ============================================================================
+  'automations.list': 'TODO: automations list',
+  'automations.get': 'TODO: automations get',
+  'automations.create': 'TODO: automations create',
+  'automations.update': 'TODO: automations update',
+  'automations.delete': 'TODO: automations delete',
+  'automations.enable': 'TODO: automations enable',
+  'automations.disable': 'TODO: automations disable',
+  'automations.test': 'TODO: automations test',
+  'automations.getLogs': 'TODO: automations logs',
 
-  // Dead Letters
-  'deadLetters.list': null, // Admin feature, low priority
-  'deadLetters.get': null, // Admin feature, low priority
-  'deadLetters.stats': null, // Admin feature, low priority
-  'deadLetters.retry': null, // Admin feature, low priority
-  'deadLetters.resolve': null, // Admin feature, low priority
-  'deadLetters.abandon': null, // Admin feature, low priority
+  // ============================================================================
+  // DEAD LETTERS (failed events)
+  // ============================================================================
+  'deadLetters.list': 'TODO: dead-letters list',
+  'deadLetters.get': 'TODO: dead-letters get',
+  'deadLetters.stats': 'TODO: dead-letters stats',
+  'deadLetters.retry': 'TODO: dead-letters retry',
+  'deadLetters.resolve': 'TODO: dead-letters resolve',
+  'deadLetters.abandon': 'TODO: dead-letters abandon',
 
-  // Event Ops
-  'eventOps.metrics': null, // Admin feature, low priority
-  'eventOps.startReplay': null, // Admin feature, low priority
-  'eventOps.listReplays': null, // Admin feature, low priority
-  'eventOps.getReplay': null, // Admin feature, low priority
-  'eventOps.cancelReplay': null, // Admin feature, low priority
+  // ============================================================================
+  // EVENT OPS (replay, metrics)
+  // ============================================================================
+  'eventOps.metrics': 'TODO: events metrics',
+  'eventOps.startReplay': 'TODO: events replay',
+  'eventOps.listReplays': 'TODO: events replays',
+  'eventOps.getReplay': 'TODO: events replay --status',
+  'eventOps.cancelReplay': 'TODO: events replay --cancel',
 
-  // Webhooks
-  'webhooks.listSources': null, // Admin feature, low priority
-  'webhooks.getSource': null, // Admin feature, low priority
-  'webhooks.createSource': null, // Admin feature, low priority
-  'webhooks.updateSource': null, // Admin feature, low priority
-  'webhooks.deleteSource': null, // Admin feature, low priority
-  'webhooks.trigger': null, // Admin feature, low priority
+  // ============================================================================
+  // WEBHOOKS
+  // ============================================================================
+  'webhooks.listSources': 'TODO: webhooks list',
+  'webhooks.getSource': 'TODO: webhooks get',
+  'webhooks.createSource': 'TODO: webhooks create',
+  'webhooks.updateSource': 'TODO: webhooks update',
+  'webhooks.deleteSource': 'TODO: webhooks delete',
+  'webhooks.trigger': 'TODO: webhooks trigger',
 
-  // Payloads
-  'payloads.listForEvent': null, // Debug feature, low priority
-  'payloads.getStage': null, // Debug feature, low priority
-  'payloads.delete': null, // Debug feature, low priority
-  'payloads.listConfigs': null, // Admin feature, low priority
-  'payloads.updateConfig': null, // Admin feature, low priority
-  'payloads.stats': null, // Admin feature, low priority
+  // ============================================================================
+  // PAYLOADS (event payload storage)
+  // ============================================================================
+  'payloads.listForEvent': 'TODO: payloads list',
+  'payloads.getStage': 'TODO: payloads get',
+  'payloads.delete': 'TODO: payloads delete',
+  'payloads.listConfigs': 'TODO: payloads config',
+  'payloads.updateConfig': 'TODO: payloads config --set',
+  'payloads.stats': 'TODO: payloads stats',
 
-  // System
+  // ============================================================================
+  // SYSTEM
+  // ============================================================================
   'system.health': 'status',
-
-  // Raw client - internal, not exposed
-  raw: null,
 };
 
 /**
@@ -159,11 +194,9 @@ function getMethodPaths(obj: unknown, prefix = ''): string[] {
     if (typeof value === 'function') {
       paths.push(path);
     } else if (typeof value === 'object' && value !== null) {
-      // Recurse into nested objects (but skip the raw client)
       if (key !== 'raw') {
         paths.push(...getMethodPaths(value, path));
       } else {
-        // Just mark 'raw' as a single entry
         paths.push(path);
       }
     }
@@ -173,62 +206,96 @@ function getMethodPaths(obj: unknown, prefix = ''): string[] {
 }
 
 describe('SDK Coverage', () => {
-  test('CLI covers all SDK methods', () => {
-    // Create a mock client to introspect its structure
+  test('All SDK methods are mapped', () => {
     const client = createOmniClient({
       baseUrl: 'http://localhost:8881',
       apiKey: 'test-key',
     });
 
-    // Get all SDK method paths
     const sdkMethods = getMethodPaths(client);
 
-    // Find methods not in CLI_COVERAGE
-    const uncoveredMethods: string[] = [];
+    // Find methods not in CLI_COMMANDS and not internal
+    const unmappedMethods: string[] = [];
     for (const method of sdkMethods) {
-      if (!(method in CLI_COVERAGE)) {
-        uncoveredMethods.push(method);
+      if (!INTERNAL_METHODS.has(method) && !(method in CLI_COMMANDS)) {
+        unmappedMethods.push(method);
       }
     }
 
-    if (uncoveredMethods.length > 0) {
+    if (unmappedMethods.length > 0) {
       throw new Error(
-        `SDK has methods not covered by CLI!\n\nUncovered methods:\n${uncoveredMethods.map((m) => `  - ${m}`).join('\n')}\n\nTo fix:\n1. Add CLI commands for these SDK methods, OR\n2. Add them to CLI_COVERAGE with null and a comment explaining why they're skipped\n\nLocation: packages/cli/src/__tests__/sdk-coverage.test.ts`,
+        `SDK has methods not mapped in CLI!\n\n` +
+          `Unmapped methods:\n${unmappedMethods.map((m) => `  - ${m}`).join('\n')}\n\n` +
+          `Add these to CLI_COMMANDS in sdk-coverage.test.ts`,
       );
     }
 
-    // Also check for stale entries in CLI_COVERAGE
-    const staleCoverage: string[] = [];
-    for (const method of Object.keys(CLI_COVERAGE)) {
+    // Check for stale entries
+    const staleMappings: string[] = [];
+    for (const method of Object.keys(CLI_COMMANDS)) {
       if (!sdkMethods.includes(method)) {
-        staleCoverage.push(method);
+        staleMappings.push(method);
       }
     }
 
-    if (staleCoverage.length > 0) {
+    if (staleMappings.length > 0) {
       throw new Error(
-        `CLI_COVERAGE has entries for methods that no longer exist in SDK!\n\nStale entries:\n${staleCoverage.map((m) => `  - ${m}`).join('\n')}\n\nRemove these from CLI_COVERAGE.`,
+        `CLI_COMMANDS has stale entries!\n\n` +
+          `Stale:\n${staleMappings.map((m) => `  - ${m}`).join('\n')}\n\n` +
+          `Remove these from CLI_COMMANDS.`,
       );
     }
   });
 
-  test('All non-null CLI_COVERAGE entries reference valid commands', () => {
-    // This test ensures that when we say a method maps to a command,
-    // that command actually exists. We do this by checking the help output.
+  test('Coverage statistics', () => {
+    const implemented = Object.entries(CLI_COMMANDS).filter(([_, cmd]) => !cmd.startsWith('TODO:'));
+    const todo = Object.entries(CLI_COMMANDS).filter(([_, cmd]) => cmd.startsWith('TODO:'));
 
-    const coveredMethods = Object.entries(CLI_COVERAGE)
-      .filter(([_, cmd]) => cmd !== null)
-      .map(([method, cmd]) => ({ method, command: cmd as string }));
+    const total = Object.keys(CLI_COMMANDS).length;
+    const implementedCount = implemented.length;
+    const todoCount = todo.length;
+    const coverage = Math.round((implementedCount / total) * 100);
 
-    // Just verify we have coverage entries
-    expect(coveredMethods.length).toBeGreaterThan(0);
-
-    // Count how many are marked as covered vs skipped
-    const covered = Object.values(CLI_COVERAGE).filter((v) => v !== null).length;
-    const skipped = Object.values(CLI_COVERAGE).filter((v) => v === null).length;
-
-    // Log coverage stats (visible in test output)
     // biome-ignore lint/suspicious/noConsole: test output
-    console.log(`\nSDK Coverage: ${covered} methods covered, ${skipped} intentionally skipped`);
+    console.log(`\n${'='.repeat(60)}`);
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log('SDK COVERAGE REPORT');
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log('='.repeat(60));
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log(`Total SDK methods:  ${total}`);
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log(`Implemented:        ${implementedCount} (${coverage}%)`);
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log(`TODO:               ${todoCount}`);
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log(`Internal (skipped): ${INTERNAL_METHODS.size}`);
+    // biome-ignore lint/suspicious/noConsole: test output
+    console.log('='.repeat(60));
+
+    if (todoCount > 0) {
+      // biome-ignore lint/suspicious/noConsole: test output
+      console.log('\nMISSING CLI COMMANDS:');
+      // Group TODOs by namespace
+      const byNamespace: Record<string, string[]> = {};
+      for (const [method, cmd] of todo) {
+        const ns = method.split('.')[0];
+        if (!byNamespace[ns]) byNamespace[ns] = [];
+        byNamespace[ns].push(`  ${method} → ${cmd.replace('TODO: ', '')}`);
+      }
+      for (const [ns, methods] of Object.entries(byNamespace).sort()) {
+        // biome-ignore lint/suspicious/noConsole: test output
+        console.log(`\n${ns}:`);
+        for (const m of methods) {
+          // biome-ignore lint/suspicious/noConsole: test output
+          console.log(m);
+        }
+      }
+      // biome-ignore lint/suspicious/noConsole: test output
+      console.log('');
+    }
+
+    // Always pass - this is informational
+    expect(total).toBeGreaterThan(0);
   });
 });
