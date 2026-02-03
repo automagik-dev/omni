@@ -349,7 +349,7 @@ omni instances update <id> --agent-provider <provider-id> --agent-id calculator-
 | Detect bot mention | ✅ | ⚠️ | WhatsApp needs name pattern match |
 | Detect reply to bot | ✅ | ✅ | Both have reply context |
 | Receive user typing | ❌ | ✅ | Baileys captures `presence.update`, handler stubbed (easy fix) |
-| Edit message | ✅ | ✅ | Baileys supports via `edit` param (15min window) |
+| Receive edited msgs | ✅ | ✅ | Baileys handles `protoType === 14` already |
 
 **Note:** WhatsApp uses Baileys directly. User typing events are already captured (`all-events.ts:51`), just need to emit event from stubbed `handlePresenceUpdate`.
 
