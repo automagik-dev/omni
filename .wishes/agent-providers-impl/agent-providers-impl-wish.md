@@ -240,6 +240,7 @@ bun test packages/core/src/providers/__tests__/agno-client.test.ts
 - [ ] Schema update for `agentReplyFilter` and `messageDebounceRestartOnTyping`
 - [ ] Reply filter logic implementation
 - [ ] Debounce buffer with typing-aware restart
+- [ ] Emit `presence.typing` event from WhatsApp's stubbed `handlePresenceUpdate` (already capturing, just need to emit)
 
 **Flow:**
 ```
@@ -290,6 +291,7 @@ function shouldAgentReply(instance: Instance, message: Message): boolean {
 - [ ] Typing presence shows while agent is processing
 - [ ] Debounce aggregates rapid messages with `\n---\n`
 - [ ] Typing-aware debounce restarts timer on user typing (WhatsApp)
+- [ ] `presence.typing` event emitted when user is composing
 - [ ] Response split on `\n\n` works correctly
 - [ ] Split delays follow mode config (disabled/fixed/randomized)
 - [ ] First message sent immediately, subsequent with delay
@@ -341,13 +343,15 @@ omni instances update <id> --agent-provider <provider-id> --agent-id calculator-
 5. Test typing-aware debounce restart
 
 **Channel Capabilities Matrix:**
-| Feature | Discord | WhatsApp | Notes |
-|---------|---------|----------|-------|
-| Typing presence | ✅ | ✅ | Both support composing/paused |
+| Feature | Discord | WhatsApp | Status |
+|---------|---------|----------|--------|
+| Send typing presence | ✅ | ✅ | Both support composing/paused |
 | Detect bot mention | ✅ | ⚠️ | WhatsApp needs name pattern match |
 | Detect reply to bot | ✅ | ✅ | Both have reply context |
-| Detect user typing | ❌ | ✅ | Only WhatsApp has presence events |
-| Edit message | ✅ | ❌ | Discord can update, WhatsApp can't |
+| Receive user typing | ❌ | ✅ | Baileys captures `presence.update`, handler stubbed (easy fix) |
+| Edit message | ✅ | ✅ | Baileys supports via `edit` param (15min window) |
+
+**Note:** WhatsApp uses Baileys directly. User typing events are already captured (`all-events.ts:51`), just need to emit event from stubbed `handlePresenceUpdate`.
 
 **Acceptance Criteria:**
 - [ ] Provider created and persisted
