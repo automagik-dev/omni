@@ -152,6 +152,28 @@ export interface CreateAccessRuleBody {
   phonePattern?: string;
   platformUserId?: string;
   priority?: number;
+  action?: 'block' | 'silent_block' | 'allow';
+  reason?: string;
+  blockMessage?: string;
+  enabled?: boolean;
+}
+
+/**
+ * Parameters for checking access
+ */
+export interface CheckAccessParams {
+  instanceId: string;
+  platformUserId: string;
+  channel: string;
+}
+
+/**
+ * Result of access check
+ */
+export interface CheckAccessResult {
+  allowed: boolean;
+  reason: string | null;
+  rule?: AccessRule | null;
 }
 
 /**
@@ -1504,6 +1526,27 @@ export function createOmniClient(config: OmniClientConfig) {
       async createRule(body: CreateAccessRuleBody): Promise<void> {
         const { error, response } = await client.POST('/access/rules', { body });
         throwIfError(response, error);
+      },
+
+      /**
+       * Delete an access rule
+       */
+      async deleteRule(id: string): Promise<void> {
+        const { error, response } = await client.DELETE('/access/rules/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+      },
+
+      /**
+       * Check if a user has access
+       */
+      async checkAccess(params: CheckAccessParams): Promise<CheckAccessResult> {
+        const { data, error, response } = await client.POST('/access/check', {
+          body: params,
+        });
+        throwIfError(response, error);
+        return data?.data ?? { allowed: true, reason: 'Default allow' };
       },
     },
 
