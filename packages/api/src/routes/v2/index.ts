@@ -42,8 +42,8 @@ v2Routes.route('/event-ops', eventOpsRoutes);
 v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
+v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
 v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/payloads and /api/v2/payload-config
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
-v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes at /api/v2/batch-jobs
