@@ -11,6 +11,7 @@
 ```
 /wish    → Plan features (WISH phase)
 /forge   → Execute plans (FORGE phase)
+/qa      → Integration testing (QA phase)
 /review  → Validate work (REVIEW phase)
 /council → Architectural review
 ```

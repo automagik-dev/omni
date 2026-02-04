@@ -9,6 +9,7 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 ```
 /wish    → Plan and document requirements
 /forge   → Execute the approved wish
+/qa      → Integration testing (actually test the system)
 /review  → Validate completed work
 /council → Get multi-perspective review on decisions
 ```
@@ -26,6 +27,13 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 /forge --spawn                # Spawn worker for wish
 /forge --spawn --parallel     # Parallel workers per group
 term work <beads-id>          # Direct worker spawn
+
+# Integration Testing
+/qa                           # Full QA (API + CLI + Integration + Regression)
+/qa --api                     # API testing only
+/qa --cli                     # CLI testing only
+/qa --ui                      # UI testing with Playwright
+/qa --regression              # Regression suite only
 
 # Validation
 /review                       # Final validation
@@ -116,6 +124,7 @@ bd graph --all                        # Visualize dependency tree
 ### Orchestrators
 - **WISH** - Planning phase, creates structured requirements
 - **FORGE** - Execution phase, coordinates specialists
+- **QA** - Testing phase, validates system actually works
 - **REVIEW** - Validation phase, final verdict
 
 ### Council (Advisory)

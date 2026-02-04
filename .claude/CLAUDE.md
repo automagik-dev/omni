@@ -219,11 +219,12 @@ packages/channel-*/CLAUDE.md # Channel-specific notes
 
 ## Workflow
 
-This project uses the **WISH → FORGE → REVIEW** paradigm:
+This project uses the **WISH → FORGE → QA → REVIEW** paradigm:
 
 1. **WISH** - Plan and document requirements
 2. **FORGE** - Execute via specialist agents
-3. **REVIEW** - Validate against wish criteria
+3. **QA** - Integration testing (actually test the running system)
+4. **REVIEW** - Validate against wish criteria
 
 See `.claude/agents/` for available agents and their roles.
 
