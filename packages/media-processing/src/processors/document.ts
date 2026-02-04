@@ -21,6 +21,12 @@ import { BaseProcessor } from './base';
 /** Minimum text length to consider extraction successful (below this, assume scanned PDF) */
 const MIN_TEXT_LENGTH = 50;
 
+/** JSON file size threshold for summarization (~500 tokens, file path is saved for full access) */
+const JSON_SUMMARIZE_THRESHOLD = 2 * 1024;
+
+/** Max array examples to show in JSON summary */
+const JSON_MAX_ARRAY_EXAMPLES = 3;
+
 /** Gemini prompt for document OCR */
 const GEMINI_OCR_PROMPT = `Extract and transcribe all text content from this document image.
 
@@ -60,7 +66,7 @@ export class DocumentProcessor extends BaseProcessor {
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
       this.log.info('Gemini model initialized for document OCR');
     }
     return this.geminiModel;
@@ -270,29 +276,148 @@ export class DocumentProcessor extends BaseProcessor {
   }
 
   /**
-   * Process JSON files
+   * Process JSON files - small files returned as-is, large files get schema summary
    */
   private async processJson(filePath: string): Promise<ProcessingResult> {
     try {
       const content = readFileSync(filePath, 'utf-8');
+      const data = JSON.parse(content);
 
-      // Validate it's valid JSON
-      JSON.parse(content);
+      // For small JSON files, return as-is
+      if (content.length < JSON_SUMMARIZE_THRESHOLD) {
+        return {
+          success: true,
+          content,
+          contentFormat: 'json',
+          processingType: 'extraction',
+          provider: 'local',
+          model: 'json',
+          processingTimeMs: 0,
+          costCents: 0,
+        };
+      }
+
+      // For larger JSON, generate a schema summary with examples
+      const summary = this.generateJsonSummary(data);
 
       return {
         success: true,
-        content,
-        contentFormat: 'json',
+        content: summary,
+        contentFormat: 'markdown',
         processingType: 'extraction',
         provider: 'local',
-        model: 'text',
+        model: 'json-schema',
         processingTimeMs: 0,
         costCents: 0,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      return this.createFailedResult(errorMsg, 'local', 'text');
+      return this.createFailedResult(errorMsg, 'local', 'json');
     }
+  }
+
+  /**
+   * Generate a schema summary of JSON data with examples
+   */
+  private generateJsonSummary(data: unknown, depth = 0, maxDepth = 5): string {
+    const indent = '  '.repeat(depth);
+
+    // Handle primitives first (no depth limit for primitives)
+    if (data === null) {
+      return 'null';
+    }
+
+    if (typeof data !== 'object') {
+      return this.getValuePreview(data);
+    }
+
+    // Check depth limit for complex types
+    if (depth > maxDepth) {
+      if (Array.isArray(data)) {
+        return `Array[${data.length} items] (...)`;
+      }
+      return `Object {...}`;
+    }
+
+    if (Array.isArray(data)) {
+      if (data.length === 0) {
+        return '[] (empty array)';
+      }
+
+      // For primitive arrays, show inline
+      const firstItem = data[0];
+      if (typeof firstItem !== 'object' || firstItem === null) {
+        const preview = data.slice(0, JSON_MAX_ARRAY_EXAMPLES).map((v) => this.getValuePreview(v)).join(', ');
+        const suffix = data.length > JSON_MAX_ARRAY_EXAMPLES ? `, ... +${data.length - JSON_MAX_ARRAY_EXAMPLES} more` : '';
+        return `[${preview}${suffix}]`;
+      }
+
+      // For object arrays, show structure
+      const lines: string[] = [];
+      lines.push(`Array[${data.length} items]:`);
+
+      const examples = data.slice(0, JSON_MAX_ARRAY_EXAMPLES);
+      for (let i = 0; i < examples.length; i++) {
+        lines.push(`${indent}  [${i}]: ${this.generateJsonSummary(examples[i], depth + 2, maxDepth)}`);
+      }
+
+      if (data.length > JSON_MAX_ARRAY_EXAMPLES) {
+        lines.push(`${indent}  ... and ${data.length - JSON_MAX_ARRAY_EXAMPLES} more items`);
+      }
+
+      return lines.join('\n');
+    }
+
+    // Object handling
+    const obj = data as Record<string, unknown>;
+    const keys = Object.keys(obj);
+
+    if (keys.length === 0) {
+      return '{} (empty object)';
+    }
+
+    const lines: string[] = [];
+    lines.push(`Object {${keys.length} keys}:`);
+
+    for (const key of keys) {
+      const value = obj[key];
+      const valueType = this.getJsonValueType(value);
+
+      if (valueType === 'object' || valueType === 'array') {
+        lines.push(`${indent}  "${key}": ${this.generateJsonSummary(value, depth + 2, maxDepth)}`);
+      } else {
+        const preview = this.getValuePreview(value);
+        lines.push(`${indent}  "${key}": ${valueType} = ${preview}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Get the type description for a JSON value
+   */
+  private getJsonValueType(value: unknown): string {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    return typeof value;
+  }
+
+  /**
+   * Get a preview string for a primitive value
+   */
+  private getValuePreview(value: unknown): string {
+    if (value === null) return 'null';
+    if (typeof value === 'string') {
+      if (value.length > 50) {
+        return `"${value.substring(0, 50)}..."`;
+      }
+      return `"${value}"`;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    return String(value);
   }
 
   /**
@@ -324,7 +449,7 @@ export class DocumentProcessor extends BaseProcessor {
       const inputTokens = usageMetadata?.promptTokenCount ?? 0;
       const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-      const costCents = calculateCost('gemini_vision', 'gemini-2.0-flash', {
+      const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
         inputTokens,
         outputTokens,
       });
@@ -335,7 +460,7 @@ export class DocumentProcessor extends BaseProcessor {
         contentFormat: 'markdown',
         processingType: 'extraction',
         provider: 'google',
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash',
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -344,7 +469,7 @@ export class DocumentProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('Gemini OCR failed', { error: errorMsg });
-      return this.createFailedResult(errorMsg, 'google', 'gemini-2.0-flash');
+      return this.createFailedResult(errorMsg, 'google', 'gemini-2.5-flash');
     }
   }
 
