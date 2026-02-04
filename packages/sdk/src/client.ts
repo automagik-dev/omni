@@ -73,6 +73,89 @@ export interface PaginatedResponse<T> {
   meta: PaginationMeta;
 }
 
+// ============================================================================
+// BATCH JOB TYPES
+// ============================================================================
+
+/** Batch job type */
+export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch';
+
+/** Job status */
+export type BatchJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** Content types processable by batch jobs */
+export type ProcessableContentType = 'audio' | 'image' | 'video' | 'document';
+
+/** Batch job record */
+export interface BatchJob {
+  id: string;
+  jobType: string;
+  instanceId: string;
+  status: string;
+  requestParams: Record<string, unknown>;
+  totalItems: number;
+  processedItems: number;
+  failedItems: number;
+  currentItem?: string | null;
+  progressPercent: number;
+  totalCostUsd?: number | null;
+  totalTokens?: number | null;
+  errorMessage?: string | null;
+  errors?: Array<{ itemId: string; error: string }>;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+/** Batch job status (lightweight for polling) */
+export interface BatchJobStatusResponse {
+  id: string;
+  status: string;
+  totalItems: number;
+  processedItems: number;
+  failedItems: number;
+  skippedItems: number;
+  progressPercent: number;
+  currentItem?: string | null;
+  totalCostUsd?: number | null;
+  totalTokens?: number | null;
+  estimatedCompletion?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+/** Body for creating a batch job */
+export interface CreateBatchJobBody {
+  jobType: BatchJobType;
+  instanceId: string;
+  chatId?: string;
+  daysBack?: number;
+  limit?: number;
+  contentTypes?: ProcessableContentType[];
+  force?: boolean;
+}
+
+/** Query parameters for listing batch jobs */
+export interface ListBatchJobsParams {
+  instanceId?: string;
+  status?: BatchJobStatus[];
+  jobType?: BatchJobType[];
+  limit?: number;
+  cursor?: string;
+}
+
+/** Cost estimation result */
+export interface CostEstimate {
+  totalItems: number;
+  audioCount: number;
+  imageCount: number;
+  videoCount: number;
+  documentCount: number;
+  estimatedCostCents: number;
+  estimatedCostUsd: number;
+  estimatedDurationMinutes: number;
+}
+
 /**
  * Client configuration
  */
@@ -2165,6 +2248,103 @@ export function createOmniClient(config: OmniClientConfig) {
         const { data, error, response } = await client.GET('/payload-stats');
         throwIfError(response, error);
         return data?.data ?? { totalPayloads: 0, totalSizeBytes: 0, byStage: {} };
+      },
+    },
+
+    // ========================================================================
+    // BATCH JOBS
+    // ========================================================================
+
+    /**
+     * Batch job management for media processing
+     */
+    batchJobs: {
+      /**
+       * Create a batch processing job
+       */
+      async create(body: CreateBatchJobBody): Promise<BatchJob> {
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: BatchJob };
+        if (!json?.data) throw new OmniApiError('Failed to create batch job', 'CREATE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Get a batch job by ID
+       */
+      async get(id: string): Promise<BatchJob> {
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: BatchJob };
+        if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * Get batch job status (lightweight, for polling)
+       */
+      async getStatus(id: string): Promise<BatchJobStatusResponse> {
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}/status`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: BatchJobStatusResponse };
+        if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * List batch jobs
+       */
+      async list(params?: ListBatchJobsParams): Promise<PaginatedResponse<BatchJob>> {
+        const query = new URLSearchParams();
+        if (params?.instanceId) query.set('instanceId', params.instanceId);
+        if (params?.status) query.set('status', params.status.join(','));
+        if (params?.jobType) query.set('jobType', params.jobType.join(','));
+        if (params?.limit) query.set('limit', String(params.limit));
+        if (params?.cursor) query.set('cursor', params.cursor);
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs?${query}`, {
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { items?: BatchJob[]; meta?: PaginationMeta };
+        return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
+      },
+
+      /**
+       * Cancel a running batch job
+       */
+      async cancel(id: string): Promise<BatchJob> {
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}/cancel`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey },
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: BatchJob };
+        if (!json?.data) throw new OmniApiError('Failed to cancel batch job', 'CANCEL_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Estimate cost before creating a job
+       */
+      async estimate(body: Omit<CreateBatchJobBody, 'force'>): Promise<CostEstimate> {
+        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/estimate`, {
+          method: 'POST',
+          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: CostEstimate };
+        if (!json?.data) throw new OmniApiError('Failed to estimate', 'ESTIMATE_FAILED', undefined, resp.status);
+        return json.data;
       },
     },
 

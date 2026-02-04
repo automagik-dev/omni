@@ -180,6 +180,16 @@ const CLI_COMMANDS: Record<string, string> = {
   'payloads.stats': 'payloads stats',
 
   // ============================================================================
+  // BATCH JOBS
+  // ============================================================================
+  'batchJobs.create': 'batch create',
+  'batchJobs.get': 'batch status',
+  'batchJobs.getStatus': 'batch status',
+  'batchJobs.list': 'batch list',
+  'batchJobs.cancel': 'batch cancel',
+  'batchJobs.estimate': 'batch estimate',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',

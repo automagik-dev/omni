@@ -126,6 +126,15 @@ export type {
   BatchMarkReadBody,
   MarkChatReadBody,
   MarkReadResult,
+  // Batch job types
+  BatchJobType,
+  BatchJob,
+  BatchJobStatus,
+  BatchJobStatusResponse,
+  ProcessableContentType,
+  CreateBatchJobBody,
+  ListBatchJobsParams,
+  CostEstimate,
 } from './client';
 
 // Errors

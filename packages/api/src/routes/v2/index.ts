@@ -9,6 +9,7 @@ import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
+import { batchJobsRoutes } from './batch-jobs';
 import { chatsRoutes } from './chats';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
@@ -45,3 +46,4 @@ v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/pa
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
+v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes at /api/v2/batch-jobs

@@ -2,7 +2,7 @@
 
 > Reprocess historical media with progress tracking, cancellation, and resumability
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-02-04
 **Author:** WISH Agent
 **Beads:** omni-ap0

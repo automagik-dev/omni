@@ -11,6 +11,7 @@ import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { ApiKeyService } from './api-keys';
 import { AutomationService } from './automations';
+import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
@@ -43,6 +44,7 @@ export interface Services {
   chats: ChatService;
   messages: MessageService;
   syncJobs: SyncJobService;
+  batchJobs: BatchJobService;
   agentRunner: AgentRunnerService;
 }
 
@@ -70,6 +72,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
+    batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
   };
 }
@@ -90,4 +93,5 @@ export { AutomationService } from './automations';
 export { ChatService } from './chats';
 export { MessageService } from './messages';
 export { SyncJobService } from './sync-jobs';
+export { BatchJobService } from './batch-jobs';
 export { AgentRunnerService } from './agent-runner';

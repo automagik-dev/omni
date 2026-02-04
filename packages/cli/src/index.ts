@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { createAccessCommand } from './commands/access.js';
 import { createAuthCommand } from './commands/auth.js';
 import { createAutomationsCommand } from './commands/automations.js';
+import { createBatchCommand } from './commands/batch.js';
 import { createChatsCommand } from './commands/chats.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
@@ -61,6 +62,7 @@ const COMMANDS: CommandDef[] = [
   { create: createEventsCommand, category: 'standard' },
   { create: createSettingsCommand, category: 'standard' },
   { create: createConfigCommand, category: 'standard' },
+  { create: createBatchCommand, category: 'standard' },
 
   // Advanced - Power user/admin
   { create: createAutomationsCommand, category: 'advanced' },

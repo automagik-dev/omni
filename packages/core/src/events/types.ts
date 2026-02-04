@@ -44,6 +44,13 @@ export const CORE_EVENT_TYPES = [
   'sync.completed',
   'sync.failed',
   'profile.synced',
+  // Batch job operations
+  'batch-job.created',
+  'batch-job.started',
+  'batch-job.progress',
+  'batch-job.completed',
+  'batch-job.cancelled',
+  'batch-job.failed',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -319,6 +326,63 @@ export interface ProfileSyncedPayload {
 }
 
 /**
+ * Batch job event payloads
+ */
+export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch';
+
+export interface BatchJobProgress {
+  totalItems: number;
+  processedItems: number;
+  failedItems: number;
+  skippedItems: number;
+  currentItem?: string;
+  progressPercent: number;
+  totalCostCents: number;
+  totalTokens: number;
+}
+
+export interface BatchJobCreatedPayload {
+  jobId: string;
+  instanceId: string;
+  jobType: BatchJobType;
+  requestParams: Record<string, unknown>;
+}
+
+export interface BatchJobStartedPayload {
+  jobId: string;
+  instanceId: string;
+  jobType: BatchJobType;
+  totalItems: number;
+}
+
+export interface BatchJobProgressPayload {
+  jobId: string;
+  instanceId: string;
+  progress: BatchJobProgress;
+}
+
+export interface BatchJobCompletedPayload {
+  jobId: string;
+  instanceId: string;
+  jobType: BatchJobType;
+  progress: BatchJobProgress;
+  durationMs: number;
+}
+
+export interface BatchJobCancelledPayload {
+  jobId: string;
+  instanceId: string;
+  progress: BatchJobProgress;
+}
+
+export interface BatchJobFailedPayload {
+  jobId: string;
+  instanceId: string;
+  error: string;
+  progress?: BatchJobProgress;
+}
+
+/**
  * Presence event payloads
  */
 export interface PresenceTypingPayload {
@@ -366,6 +430,12 @@ export interface EventPayloadMap {
   'presence.typing': PresenceTypingPayload;
   'presence.online': PresenceOnlinePayload;
   'presence.offline': PresenceOfflinePayload;
+  'batch-job.created': BatchJobCreatedPayload;
+  'batch-job.started': BatchJobStartedPayload;
+  'batch-job.progress': BatchJobProgressPayload;
+  'batch-job.completed': BatchJobCompletedPayload;
+  'batch-job.cancelled': BatchJobCancelledPayload;
+  'batch-job.failed': BatchJobFailedPayload;
 }
 
 /**

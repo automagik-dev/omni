@@ -1,0 +1,829 @@
+/**
+ * Batch Job Service - manages batch media processing jobs
+ *
+ * Provides job lifecycle management for reprocessing historical media:
+ * - targeted_chat_sync: All media from a specific chat
+ * - time_based_batch: Media from past N days with optional limit
+ *
+ * Features:
+ * - Progress tracking with real-time updates
+ * - Cancellation support (graceful stop)
+ * - Resumability on restart
+ * - Cost aggregation
+ *
+ * @see media-processing-batch wish
+ */
+
+import { join } from 'node:path';
+import type { BatchJobProgress, BatchJobType, EventBus } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
+import type { Database } from '@omni/db';
+import {
+  type BatchJob,
+  type JobStatus,
+  type Message,
+  type NewBatchJob,
+  batchJobs,
+  chats,
+  mediaContent,
+  messages,
+} from '@omni/db';
+import {
+  type MediaProcessingService,
+  type ProcessingResult,
+  createMediaProcessingService,
+} from '@omni/media-processing';
+import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm';
+import { MediaStorageService } from './media-storage';
+
+const log = createLogger('services:batch-jobs');
+
+/**
+ * Content types that can be batch processed
+ */
+export type ProcessableContentType = 'audio' | 'image' | 'video' | 'document';
+const PROCESSABLE_CONTENT_TYPES = new Set<ProcessableContentType>(['audio', 'image', 'video', 'document']);
+
+/**
+ * Request parameters for creating a batch job
+ */
+export interface CreateBatchJobOptions {
+  jobType: BatchJobType;
+  instanceId: string;
+  /** For targeted_chat_sync: the chat ID */
+  chatId?: string;
+  /** For time_based_batch: days to look back */
+  daysBack?: number;
+  /** For time_based_batch: max items to process */
+  limit?: number;
+  /** Content types to process (default: all) */
+  contentTypes?: ProcessableContentType[];
+  /** Re-process items that already have content (default: false) */
+  force?: boolean;
+}
+
+/**
+ * Job with calculated progress
+ */
+export interface BatchJobWithProgress extends BatchJob {
+  skippedItems: number;
+  estimatedCompletion?: Date;
+}
+
+/**
+ * Cost estimation result
+ */
+export interface CostEstimate {
+  totalItems: number;
+  audioCount: number;
+  imageCount: number;
+  videoCount: number;
+  documentCount: number;
+  estimatedCostCents: number;
+  estimatedCostUsd: number;
+  estimatedDurationMinutes: number;
+}
+
+/**
+ * List options for batch jobs
+ */
+export interface ListBatchJobsOptions {
+  instanceId?: string;
+  status?: JobStatus[];
+  jobType?: BatchJobType[];
+  limit?: number;
+  cursor?: string;
+}
+
+/**
+ * Batch Job Service
+ */
+export class BatchJobService {
+  private mediaService: MediaProcessingService;
+  private mediaStorage: MediaStorageService;
+  /** Track active job executions for cancellation */
+  private activeJobs = new Map<string, { cancelled: boolean }>();
+  /** Average processing time per item in ms (for estimation) */
+  private static readonly AVG_PROCESSING_TIME_MS = 3000;
+  /** Delay between items to avoid blocking event loop */
+  private static readonly INTER_ITEM_DELAY_MS = 100;
+  /** Progress update interval (items) */
+  private static readonly PROGRESS_UPDATE_INTERVAL = 5;
+
+  constructor(
+    private db: Database,
+    private eventBus: EventBus | null,
+  ) {
+    this.mediaService = createMediaProcessingService();
+    this.mediaStorage = new MediaStorageService(db);
+  }
+
+  /**
+   * Create and start a batch job
+   */
+  async create(options: CreateBatchJobOptions): Promise<BatchJob> {
+    const { jobType, instanceId, chatId, daysBack, limit, contentTypes, force = false } = options;
+
+    // Validate based on job type
+    if (jobType === 'targeted_chat_sync' && !chatId) {
+      throw new Error('chatId is required for targeted_chat_sync jobs');
+    }
+    if (jobType === 'time_based_batch' && daysBack === undefined) {
+      throw new Error('daysBack is required for time_based_batch jobs');
+    }
+
+    const requestParams = {
+      chatId,
+      daysBack,
+      limit,
+      contentTypes: contentTypes ?? ['audio', 'image', 'video', 'document'],
+      force,
+    };
+
+    const jobData: NewBatchJob = {
+      jobType,
+      instanceId,
+      status: 'pending',
+      requestParams,
+      totalItems: 0,
+      processedItems: 0,
+      failedItems: 0,
+      progressPercent: 0,
+      totalCostUsd: 0,
+      totalTokens: 0,
+      errors: [],
+    };
+
+    const [created] = await this.db.insert(batchJobs).values(jobData).returning();
+
+    if (!created) {
+      throw new Error('Failed to create batch job');
+    }
+
+    log.info('Batch job created', { jobId: created.id, jobType, instanceId });
+
+    // Emit created event
+    if (this.eventBus) {
+      await this.eventBus.publish(
+        'batch-job.created',
+        {
+          jobId: created.id,
+          instanceId,
+          jobType,
+          requestParams,
+        },
+        { instanceId },
+      );
+    }
+
+    // Start execution in background (non-blocking)
+    this.executeJob(created.id).catch((error) => {
+      log.error('Job execution failed', { jobId: created.id, error: String(error) });
+    });
+
+    return created;
+  }
+
+  /**
+   * Get job by ID
+   */
+  async getById(id: string): Promise<BatchJob> {
+    const [result] = await this.db.select().from(batchJobs).where(eq(batchJobs.id, id)).limit(1);
+
+    if (!result) {
+      throw new NotFoundError('BatchJob', id);
+    }
+
+    return result;
+  }
+
+  /**
+   * Get job status (lightweight - for polling)
+   */
+  async getStatus(id: string): Promise<BatchJobWithProgress> {
+    const job = await this.getById(id);
+    return this.enrichWithProgress(job);
+  }
+
+  /**
+   * List jobs with filtering
+   */
+  async list(options: ListBatchJobsOptions = {}): Promise<{
+    items: BatchJobWithProgress[];
+    hasMore: boolean;
+    cursor?: string;
+  }> {
+    const { instanceId, status, jobType, limit = 50, cursor } = options;
+
+    let query = this.db.select().from(batchJobs).$dynamic();
+
+    const conditions = [];
+
+    if (instanceId) {
+      conditions.push(eq(batchJobs.instanceId, instanceId));
+    }
+
+    if (status?.length) {
+      conditions.push(inArray(batchJobs.status, status));
+    }
+
+    if (jobType?.length) {
+      conditions.push(inArray(batchJobs.jobType, jobType));
+    }
+
+    if (cursor) {
+      // Cursor-based pagination using createdAt
+      const cursorJob = await this.getById(cursor);
+      conditions.push(lte(batchJobs.createdAt, cursorJob.createdAt));
+    }
+
+    if (conditions.length) {
+      query = query.where(and(...conditions));
+    }
+
+    const items = await query.orderBy(desc(batchJobs.createdAt)).limit(limit + 1);
+
+    const hasMore = items.length > limit;
+    if (hasMore) {
+      items.pop();
+    }
+
+    const enrichedItems = items.map((item) => this.enrichWithProgress(item));
+    const lastItem = items[items.length - 1];
+
+    return {
+      items: enrichedItems,
+      hasMore,
+      cursor: lastItem?.id,
+    };
+  }
+
+  /**
+   * Cancel a running job
+   */
+  async cancel(id: string): Promise<BatchJob> {
+    const job = await this.getById(id);
+
+    if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed') {
+      throw new Error(`Cannot cancel job with status: ${job.status}`);
+    }
+
+    // Mark for cancellation in active jobs map
+    const activeJob = this.activeJobs.get(id);
+    if (activeJob) {
+      activeJob.cancelled = true;
+    }
+
+    // Update status in database
+    const [updated] = await this.db
+      .update(batchJobs)
+      .set({
+        status: 'cancelled',
+        completedAt: new Date(),
+      })
+      .where(eq(batchJobs.id, id))
+      .returning();
+
+    if (!updated) {
+      throw new NotFoundError('BatchJob', id);
+    }
+
+    log.info('Batch job cancelled', { jobId: id });
+
+    // Emit cancelled event
+    if (this.eventBus) {
+      await this.eventBus.publish(
+        'batch-job.cancelled',
+        {
+          jobId: id,
+          instanceId: job.instanceId!,
+          progress: this.buildProgressPayload(updated),
+        },
+        { instanceId: job.instanceId! },
+      );
+    }
+
+    return updated;
+  }
+
+  /**
+   * Estimate cost before starting a job
+   */
+  async estimate(options: Omit<CreateBatchJobOptions, 'force'>): Promise<CostEstimate> {
+    const items = await this.queryEligibleItems(options);
+
+    const counts = {
+      audioCount: 0,
+      imageCount: 0,
+      videoCount: 0,
+      documentCount: 0,
+    };
+
+    for (const item of items) {
+      const type = this.getContentTypeFromMime(item.mediaMimeType);
+      if (type === 'audio') counts.audioCount++;
+      else if (type === 'image') counts.imageCount++;
+      else if (type === 'video') counts.videoCount++;
+      else if (type === 'document') counts.documentCount++;
+    }
+
+    // Rough cost estimates (in cents)
+    // Audio: ~$0.04/hour = ~0.1 cents per 10-second clip
+    // Image: ~$0.01 per image (Gemini vision tokens)
+    // Video: ~$0.02 per video (Gemini)
+    // Document: ~$0.00 (local processing)
+    const estimatedCostCents =
+      counts.audioCount * 10 + counts.imageCount * 1 + counts.videoCount * 2 + counts.documentCount * 0;
+
+    const estimatedDurationMinutes = Math.ceil((items.length * BatchJobService.AVG_PROCESSING_TIME_MS) / 60000);
+
+    return {
+      totalItems: items.length,
+      ...counts,
+      estimatedCostCents,
+      estimatedCostUsd: estimatedCostCents / 100,
+      estimatedDurationMinutes,
+    };
+  }
+
+  /**
+   * Resume jobs that were running when the API restarted
+   */
+  async resumeJobs(): Promise<void> {
+    const runningJobs = await this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running'));
+
+    if (runningJobs.length === 0) {
+      log.debug('No jobs to resume');
+      return;
+    }
+
+    log.info('Resuming batch jobs', { count: runningJobs.length });
+
+    for (const job of runningJobs) {
+      this.executeJob(job.id).catch((error) => {
+        log.error('Failed to resume job', { jobId: job.id, error: String(error) });
+      });
+    }
+  }
+
+  /**
+   * Execute a batch job (main processing loop)
+   */
+  private async executeJob(jobId: string): Promise<void> {
+    const job = await this.getById(jobId);
+    const params = (job.requestParams ?? {}) as Partial<CreateBatchJobOptions>;
+
+    // Register job as active
+    this.activeJobs.set(jobId, { cancelled: false });
+
+    try {
+      // Query eligible items
+      const items = await this.queryEligibleItems({
+        jobType: job.jobType as BatchJobType,
+        instanceId: job.instanceId!,
+        chatId: params.chatId,
+        daysBack: params.daysBack,
+        limit: params.limit,
+        contentTypes: params.contentTypes as ProcessableContentType[],
+      });
+
+      // Filter out already processed (unless force)
+      const eligibleItems = params.force === true ? items : items.filter((item) => !this.hasExistingContent(item));
+
+      const totalItems = eligibleItems.length;
+      const skippedItems = items.length - eligibleItems.length;
+
+      // Update job to running with total count
+      await this.db
+        .update(batchJobs)
+        .set({
+          status: 'running',
+          startedAt: new Date(),
+          totalItems,
+        })
+        .where(eq(batchJobs.id, jobId));
+
+      log.info('Job started', { jobId, totalItems, skippedItems });
+
+      // Emit started event
+      if (this.eventBus) {
+        await this.eventBus.publish(
+          'batch-job.started',
+          {
+            jobId,
+            instanceId: job.instanceId!,
+            jobType: job.jobType as BatchJobType,
+            totalItems,
+          },
+          { instanceId: job.instanceId! },
+        );
+      }
+
+      let processedItems = job.processedItems;
+      let failedItems = job.failedItems;
+      let totalCostCents = job.totalCostUsd ?? 0;
+      let totalTokens = job.totalTokens ?? 0;
+      const errors: Array<{ itemId: string; error: string }> =
+        (job.errors as Array<{ itemId: string; error: string }>) ?? [];
+      const startTime = Date.now();
+
+      // Process each item
+      for (let i = 0; i < eligibleItems.length; i++) {
+        // Check for cancellation
+        const activeJob = this.activeJobs.get(jobId);
+        if (activeJob?.cancelled) {
+          log.info('Job cancelled by user', { jobId, processedItems });
+          break;
+        }
+
+        // Re-check status in DB (in case cancel was called)
+        const currentStatus = await this.db
+          .select({ status: batchJobs.status })
+          .from(batchJobs)
+          .where(eq(batchJobs.id, jobId))
+          .limit(1);
+
+        if (currentStatus[0]?.status === 'cancelled') {
+          log.info('Job cancelled (DB check)', { jobId, processedItems });
+          break;
+        }
+
+        const item = eligibleItems[i]!;
+
+        // Update current item
+        await this.db.update(batchJobs).set({ currentItem: item.id }).where(eq(batchJobs.id, jobId));
+
+        try {
+          const result = await this.processItem(job.instanceId!, item, jobId);
+
+          if (result.success) {
+            processedItems++;
+            totalCostCents += result.costCents;
+            totalTokens += (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
+          } else {
+            failedItems++;
+            errors.push({ itemId: item.id, error: result.errorMessage ?? 'Unknown error' });
+          }
+        } catch (error) {
+          failedItems++;
+          errors.push({ itemId: item.id, error: String(error) });
+          log.warn('Item processing error', { jobId, itemId: item.id, error: String(error) });
+        }
+
+        // Update progress periodically
+        if ((i + 1) % BatchJobService.PROGRESS_UPDATE_INTERVAL === 0 || i === eligibleItems.length - 1) {
+          const progressPercent = totalItems > 0 ? Math.round(((processedItems + failedItems) / totalItems) * 100) : 0;
+
+          await this.db
+            .update(batchJobs)
+            .set({
+              processedItems,
+              failedItems,
+              progressPercent,
+              totalCostUsd: totalCostCents,
+              totalTokens,
+              errors,
+            })
+            .where(eq(batchJobs.id, jobId));
+
+          // Emit progress event
+          if (this.eventBus) {
+            await this.eventBus.publish(
+              'batch-job.progress',
+              {
+                jobId,
+                instanceId: job.instanceId!,
+                progress: {
+                  totalItems,
+                  processedItems,
+                  failedItems,
+                  skippedItems,
+                  currentItem: item.id,
+                  progressPercent,
+                  totalCostCents,
+                  totalTokens,
+                },
+              },
+              { instanceId: job.instanceId! },
+            );
+          }
+        }
+
+        // Small delay to avoid blocking event loop
+        await new Promise((resolve) => setTimeout(resolve, BatchJobService.INTER_ITEM_DELAY_MS));
+      }
+
+      // Final status check
+      const finalStatus = await this.db
+        .select({ status: batchJobs.status })
+        .from(batchJobs)
+        .where(eq(batchJobs.id, jobId))
+        .limit(1);
+
+      if (finalStatus[0]?.status === 'cancelled') {
+        // Job was cancelled, don't update to completed
+        return;
+      }
+
+      const durationMs = Date.now() - startTime;
+
+      // Mark completed
+      await this.db
+        .update(batchJobs)
+        .set({
+          status: 'completed',
+          completedAt: new Date(),
+          processedItems,
+          failedItems,
+          progressPercent: 100,
+          totalCostUsd: totalCostCents,
+          totalTokens,
+          errors,
+          currentItem: null,
+        })
+        .where(eq(batchJobs.id, jobId));
+
+      log.info('Job completed', { jobId, processedItems, failedItems, durationMs, totalCostCents });
+
+      // Emit completed event
+      if (this.eventBus) {
+        await this.eventBus.publish(
+          'batch-job.completed',
+          {
+            jobId,
+            instanceId: job.instanceId!,
+            jobType: job.jobType as BatchJobType,
+            progress: {
+              totalItems,
+              processedItems,
+              failedItems,
+              skippedItems,
+              progressPercent: 100,
+              totalCostCents,
+              totalTokens,
+            },
+            durationMs,
+          },
+          { instanceId: job.instanceId! },
+        );
+      }
+    } catch (error) {
+      log.error('Job execution failed', { jobId, error: String(error) });
+
+      await this.db
+        .update(batchJobs)
+        .set({
+          status: 'failed',
+          completedAt: new Date(),
+          errorMessage: String(error),
+        })
+        .where(eq(batchJobs.id, jobId));
+
+      if (this.eventBus && job.instanceId) {
+        await this.eventBus.publish(
+          'batch-job.failed',
+          {
+            jobId,
+            instanceId: job.instanceId,
+            error: String(error),
+          },
+          { instanceId: job.instanceId },
+        );
+      }
+    } finally {
+      this.activeJobs.delete(jobId);
+    }
+  }
+
+  /**
+   * Process a single media item
+   */
+  private async processItem(instanceId: string, message: Message, batchJobId: string): Promise<ProcessingResult> {
+    const mimeType = message.mediaMimeType;
+    if (!mimeType || !this.mediaService.canProcess(mimeType)) {
+      return {
+        success: false,
+        contentFormat: 'text',
+        processingType: 'extraction',
+        provider: 'none',
+        model: 'none',
+        processingTimeMs: 0,
+        costCents: 0,
+        errorMessage: `MIME type not processable: ${mimeType}`,
+      };
+    }
+
+    // Get file path
+    let filePath = message.mediaLocalPath;
+    if (!filePath && message.mediaUrl) {
+      // Download from URL if no local path
+      try {
+        const result = await this.mediaStorage.storeFromUrl(
+          instanceId,
+          message.id,
+          message.mediaUrl,
+          mimeType,
+          message.platformTimestamp ?? undefined,
+        );
+        filePath = result.localPath;
+        await this.mediaStorage.updateMessageLocalPath(message.id, filePath);
+      } catch {
+        return {
+          success: false,
+          contentFormat: 'text',
+          processingType: 'extraction',
+          provider: 'none',
+          model: 'none',
+          processingTimeMs: 0,
+          costCents: 0,
+          errorMessage: 'Failed to download media',
+        };
+      }
+    }
+
+    if (!filePath) {
+      return {
+        success: false,
+        contentFormat: 'text',
+        processingType: 'extraction',
+        provider: 'none',
+        model: 'none',
+        processingTimeMs: 0,
+        costCents: 0,
+        errorMessage: 'No media file path available',
+      };
+    }
+
+    const fullPath = join(this.mediaStorage.getBasePath(), filePath);
+
+    // Process media
+    const result = await this.mediaService.process(fullPath, mimeType, {
+      language: 'pt',
+      caption: message.textContent ?? undefined,
+    });
+
+    if (result.success && result.content) {
+      // Store result in media_content table
+      await this.db.insert(mediaContent).values({
+        mediaId: message.id,
+        processingType: result.processingType,
+        content: result.content,
+        model: result.model,
+        provider: result.provider,
+        language: result.language,
+        duration: result.duration,
+        tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+        costUsd: result.costCents,
+        processingTimeMs: result.processingTimeMs,
+        batchJobId,
+      });
+
+      // Update message with processed content
+      const updateData = this.getMessageUpdateForType(result.processingType, result.content);
+      if (updateData) {
+        await this.db.update(messages).set(updateData).where(eq(messages.id, message.id));
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Query messages eligible for batch processing
+   */
+  private async queryEligibleItems(options: {
+    jobType: BatchJobType;
+    instanceId: string;
+    chatId?: string;
+    daysBack?: number;
+    limit?: number;
+    contentTypes?: ProcessableContentType[];
+  }): Promise<Message[]> {
+    const { jobType, instanceId, chatId, daysBack, limit, contentTypes } = options;
+
+    // Build base conditions
+    const conditions = [eq(messages.hasMedia, true), isNotNull(messages.mediaMimeType)];
+
+    // Add instance filter via chat join
+    const chatConditions = [eq(chats.instanceId, instanceId)];
+
+    if (jobType === 'targeted_chat_sync' && chatId) {
+      chatConditions.push(eq(chats.externalId, chatId));
+    }
+
+    if (jobType === 'time_based_batch' && daysBack !== undefined) {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+      conditions.push(gte(messages.createdAt, cutoffDate));
+    }
+
+    // Query with join
+    let query = this.db
+      .select({ message: messages })
+      .from(messages)
+      .innerJoin(chats, eq(messages.chatId, chats.id))
+      .where(and(...conditions, ...chatConditions))
+      .orderBy(desc(messages.createdAt))
+      .$dynamic();
+
+    if (limit) {
+      query = query.limit(limit);
+    }
+
+    const results = await query;
+
+    // Filter by content types
+    const allowedTypes = new Set(contentTypes ?? PROCESSABLE_CONTENT_TYPES);
+    return results
+      .map((r) => r.message)
+      .filter((m) => {
+        const type = this.getContentTypeFromMime(m.mediaMimeType);
+        return type && allowedTypes.has(type);
+      });
+  }
+
+  /**
+   * Check if message already has processed content
+   */
+  private hasExistingContent(message: Message): boolean {
+    return !!(
+      message.transcription ||
+      message.imageDescription ||
+      message.videoDescription ||
+      message.documentExtraction
+    );
+  }
+
+  /**
+   * Get content type from MIME type
+   */
+  private getContentTypeFromMime(mimeType: string | null): ProcessableContentType | null {
+    if (!mimeType) return null;
+    if (mimeType.startsWith('audio/')) return 'audio';
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType === 'application/pdf' || mimeType.includes('document') || mimeType.includes('text/')) {
+      return 'document';
+    }
+    return null;
+  }
+
+  /**
+   * Get message update object for processing type
+   */
+  private getMessageUpdateForType(
+    processingType: 'transcription' | 'description' | 'extraction',
+    content: string,
+  ): Partial<Message> | null {
+    switch (processingType) {
+      case 'transcription':
+        return { transcription: content };
+      case 'description':
+        return { imageDescription: content };
+      case 'extraction':
+        return { documentExtraction: content };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Build progress payload for events
+   */
+  private buildProgressPayload(job: BatchJob): BatchJobProgress {
+    return {
+      totalItems: job.totalItems,
+      processedItems: job.processedItems,
+      failedItems: job.failedItems,
+      skippedItems: 0, // Not stored in DB
+      currentItem: job.currentItem ?? undefined,
+      progressPercent: job.progressPercent,
+      totalCostCents: job.totalCostUsd ?? 0,
+      totalTokens: job.totalTokens ?? 0,
+    };
+  }
+
+  /**
+   * Enrich job with calculated progress fields
+   */
+  private enrichWithProgress(job: BatchJob): BatchJobWithProgress {
+    let estimatedCompletion: Date | undefined;
+
+    if (job.status === 'running' && job.startedAt && job.totalItems > 0) {
+      const elapsed = Date.now() - job.startedAt.getTime();
+      const processed = job.processedItems + job.failedItems;
+      if (processed > 0) {
+        const avgTimePerItem = elapsed / processed;
+        const remaining = job.totalItems - processed;
+        const remainingTime = remaining * avgTimePerItem;
+        estimatedCompletion = new Date(Date.now() + remainingTime);
+      }
+    }
+
+    return {
+      ...job,
+      skippedItems: 0, // Not stored in DB
+      estimatedCompletion,
+    };
+  }
+}
