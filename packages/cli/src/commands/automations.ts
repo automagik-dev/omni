@@ -11,15 +11,13 @@
  * omni automations test <id> --event <json>
  * omni automations logs <id> [--limit <n>] [--status <status>]
  *
- * Example: Create call_agent automation
+ * Example: Create call_agent automation (response stored for chaining)
  * omni automations create \
  *   --name "Support Bot" \
  *   --trigger message.received \
  *   --action call_agent \
  *   --agent-id support-agent \
- *   --provider-id my-provider \
- *   --response-as agentResponse \
- *   --show-typing
+ *   --response-as agentResponse
  */
 
 import { Command } from 'commander';
@@ -92,7 +90,6 @@ export function createAutomationsCommand(): Command {
     .option('--agent-id <id>', 'Agent ID (for call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for call_agent action)')
     .option('--response-as <var>', 'Store agent response as variable (for call_agent action)')
-    .option('--show-typing', 'Show typing presence during agent call (for call_agent action)')
     .action(
       async (options: {
         name: string;
@@ -107,7 +104,6 @@ export function createAutomationsCommand(): Command {
         agentId?: string;
         providerId?: string;
         responseAs?: string;
-        showTyping?: boolean;
       }) => {
         const client = getClient();
 
@@ -127,7 +123,6 @@ export function createAutomationsCommand(): Command {
             if (options.agentId) actionConfig.agentId = options.agentId;
             if (options.providerId) actionConfig.providerId = options.providerId;
             if (options.responseAs) actionConfig.responseAs = options.responseAs;
-            if (options.showTyping) actionConfig.showTypingPresence = true;
 
             // Validate required field
             if (!actionConfig.agentId) {

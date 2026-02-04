@@ -65,16 +65,11 @@ const CallAgentActionSchema = z.object({
       .optional()
       .openapi({ description: 'Session strategy for agent memory' }),
     prefixSenderName: z.boolean().optional().openapi({ description: 'Prefix messages with sender name' }),
-    enableSplit: z.boolean().optional().openapi({ description: 'Enable response splitting on \\n\\n' }),
-    splitDelayMode: z
-      .enum(['disabled', 'fixed', 'randomized'])
-      .optional()
-      .openapi({ description: 'Delay mode between split messages' }),
-    splitDelayMinMs: z.number().int().optional().openapi({ description: 'Min delay in ms (for randomized mode)' }),
-    splitDelayMaxMs: z.number().int().optional().openapi({ description: 'Max delay in ms (for randomized mode)' }),
-    showTypingPresence: z.boolean().optional().openapi({ description: 'Show typing presence during agent processing' }),
     timeoutMs: z.number().int().optional().openapi({ description: 'Timeout in milliseconds' }),
-    responseAs: z.string().optional().openapi({ description: 'Store agent response as variable for chaining' }),
+    responseAs: z
+      .string()
+      .optional()
+      .openapi({ description: 'Store agent response as variable for chaining (e.g., "agentResponse")' }),
   }),
 });
 

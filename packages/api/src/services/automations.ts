@@ -44,8 +44,6 @@ export class AutomationService {
   async startEngine(deps?: {
     sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
     callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
-    startTyping?: (instanceId: string, chatId: string) => Promise<void>;
-    stopTyping?: (instanceId: string, chatId: string) => Promise<void>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

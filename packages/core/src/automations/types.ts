@@ -93,7 +93,6 @@ export interface LogActionConfig {
  * These are defined in other modules to avoid duplication.
  */
 import type { AgentType } from '../types/agent';
-import type { SplitDelayMode } from '../types/channel';
 
 /**
  * Session strategy for agent memory (matches @omni/db).
@@ -102,7 +101,8 @@ export type AgentSessionStrategy = 'per_user' | 'per_chat' | 'per_user_per_chat'
 
 /**
  * Call agent action configuration.
- * Invokes an AI agent as part of an automation workflow.
+ * Invokes an AI agent and returns the response for use in subsequent actions.
+ * This is a composable building block - use send_message to actually send the response.
  */
 export interface CallAgentActionConfig {
   /** Provider ID (template: {{instance.agentProviderId}}) */
@@ -115,19 +115,9 @@ export interface CallAgentActionConfig {
   sessionStrategy?: AgentSessionStrategy;
   /** Prefix messages with sender name: [Name]: message */
   prefixSenderName?: boolean;
-  /** Enable response splitting on \n\n */
-  enableSplit?: boolean;
-  /** Delay mode between split messages */
-  splitDelayMode?: SplitDelayMode;
-  /** Fixed delay in ms (for 'fixed' mode) */
-  splitDelayMinMs?: number;
-  /** Max delay in ms (for 'randomized' mode) */
-  splitDelayMaxMs?: number;
-  /** Show typing presence during agent processing */
-  showTypingPresence?: boolean;
   /** Timeout in milliseconds */
   timeoutMs?: number;
-  /** Store agent response as variable for chaining */
+  /** Store agent response as variable for chaining (e.g., "agentResponse") */
   responseAs?: string;
 }
 

@@ -61,21 +61,10 @@ export interface ActionDependencies {
   eventBus: EventBus | null;
   sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
   /**
-   * Call an AI agent. Handles:
-   * - Agent invocation (sync mode)
-   * - Response splitting
-   * - Typing presence (optional)
-   * - Split delays (optional)
+   * Call an AI agent and return the response.
+   * The response is stored in variables for use in subsequent actions.
    */
   callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
-  /**
-   * Start typing indicator (optional, for call_agent action)
-   */
-  startTyping?: (instanceId: string, chatId: string) => Promise<void>;
-  /**
-   * Stop typing indicator (optional, for call_agent action)
-   */
-  stopTyping?: (instanceId: string, chatId: string) => Promise<void>;
 }
 
 /**
@@ -326,39 +315,9 @@ function extractAgentCallContext(
 }
 
 /**
- * Manage typing presence during agent call
- */
-async function withTypingPresence<T>(
-  config: CallAgentActionConfig,
-  deps: ActionDependencies,
-  instanceId: string,
-  chatId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  if (config.showTypingPresence && deps.startTyping) {
-    try {
-      await deps.startTyping(instanceId, chatId);
-    } catch (err) {
-      logger.warn('Failed to start typing presence', { error: err });
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    if (config.showTypingPresence && deps.stopTyping) {
-      try {
-        await deps.stopTyping(instanceId, chatId);
-      } catch (err) {
-        logger.warn('Failed to stop typing presence', { error: err });
-      }
-    }
-  }
-}
-
-/**
  * Execute a call_agent action
- * Invokes an AI agent and returns the response
+ * Invokes an AI agent and returns the response for use in subsequent actions.
+ * This is a composable building block - use send_message to send the response.
  */
 async function executeCallAgentAction(
   config: CallAgentActionConfig,
@@ -381,25 +340,22 @@ async function executeCallAgentAction(
     instanceId: agentContext.instanceId,
     chatId: agentContext.chatId,
     senderId: agentContext.senderId,
-    showTypingPresence: config.showTypingPresence,
+    agentId: config.agentId,
   });
 
   try {
-    const result = await withTypingPresence(config, deps, agentContext.instanceId, agentContext.chatId, () =>
-      deps.callAgent!(agentContext, config),
-    );
+    const result = await deps.callAgent(agentContext, config);
 
     logger.info('Agent call completed', {
       runId: result.metadata.runId,
       status: result.metadata.status,
-      partsCount: result.parts.length,
+      responseLength: result.fullResponse.length,
     });
 
     return {
       success: result.metadata.status === 'completed',
       result: {
         response: result.fullResponse,
-        parts: result.parts,
         runId: result.metadata.runId,
         sessionId: result.metadata.sessionId,
       },

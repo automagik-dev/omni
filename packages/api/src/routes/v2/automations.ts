@@ -64,7 +64,7 @@ const logActionSchema = z.object({
   }),
 });
 
-// Call agent action schema
+// Call agent action schema - just calls agent and returns response for chaining
 const callAgentActionSchema = z.object({
   type: z.literal('call_agent'),
   config: z.object({
@@ -76,14 +76,6 @@ const callAgentActionSchema = z.object({
       .optional()
       .describe('Session strategy for agent memory'),
     prefixSenderName: z.boolean().optional().describe('Prefix messages with sender name'),
-    enableSplit: z.boolean().optional().describe('Enable response splitting on \\n\\n'),
-    splitDelayMode: z
-      .enum(['disabled', 'fixed', 'randomized'])
-      .optional()
-      .describe('Delay mode between split messages'),
-    splitDelayMinMs: z.number().int().optional().describe('Min delay in ms (for randomized mode)'),
-    splitDelayMaxMs: z.number().int().optional().describe('Max delay in ms (for randomized mode)'),
-    showTypingPresence: z.boolean().optional().describe('Show typing presence during agent processing'),
     timeoutMs: z.number().int().optional().describe('Timeout in milliseconds'),
     responseAs: z.string().optional().describe('Store agent response as variable for chaining'),
   }),
