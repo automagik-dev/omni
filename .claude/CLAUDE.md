@@ -194,6 +194,52 @@ throw new OmniError({
 });
 ```
 
+## Refactoring Guidelines
+
+When Biome reports `noExcessiveCognitiveComplexity` or suggests extracting helper functions:
+
+### Before Creating New Helpers
+
+**ALWAYS search for existing utilities first** to avoid duplicating logic:
+
+```bash
+# Search for similar function names
+rg "function (format|parse|transform|validate|convert)" packages/
+
+# Search for similar patterns in utils/helpers
+rg "export (function|const)" packages/*/src/utils/
+rg "export (function|const)" packages/*/src/helpers/
+
+# Check core package for shared utilities
+rg "export" packages/core/src/utils/
+```
+
+### Common Utility Locations
+
+| Type | Check Here First |
+|------|------------------|
+| String/formatting | `packages/core/src/utils/` |
+| Validation helpers | `packages/core/src/schemas/` |
+| Date/time utilities | `packages/core/src/utils/` |
+| ID generation | `packages/core/src/identity/` |
+| Error helpers | `packages/core/src/errors/` |
+| Channel-specific | `packages/channel-*/src/utils/` |
+
+### When Extracting Functions
+
+1. **Search first** - Use grep/glob to find similar existing functions
+2. **Reuse if exists** - Import and use the existing helper
+3. **Extend if close** - If a helper does 80% of what you need, consider extending it
+4. **Create if truly new** - Only create new helpers when no suitable option exists
+5. **Place correctly** - Put shared utilities in `@omni/core`, package-specific in local `utils/`
+
+### Refactoring Strategies
+
+- **Early returns** - Reduce nesting by returning early for edge cases
+- **Guard clauses** - Handle invalid states at the top of functions
+- **Compose small functions** - Prefer many small functions over one large one
+- **Single responsibility** - Each function should do one thing well
+
 ## Distributed Documentation
 
 Each package/directory should have its own CLAUDE.md with:
