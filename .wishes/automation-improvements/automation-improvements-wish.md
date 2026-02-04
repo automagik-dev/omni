@@ -2,7 +2,7 @@
 
 > Add OR logic support for automation trigger conditions.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-02
 **Updated:** 2026-02-04
 **Author:** WISH Agent
