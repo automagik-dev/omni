@@ -6024,7 +6024,7 @@ export interface paths {
                                  * @description Provider schema type
                                  * @enum {string}
                                  */
-                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                                 /**
                                  * Format: uri
                                  * @description Base URL
@@ -6089,10 +6089,10 @@ export interface paths {
                         name: string;
                         /**
                          * @description Schema type
-                         * @default agno
+                         * @default agnoos
                          * @enum {string}
                          */
-                        schema?: "agno" | "openai" | "anthropic" | "custom";
+                        schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                         /**
                          * Format: uri
                          * @description Base URL
@@ -6161,7 +6161,7 @@ export interface paths {
                                  * @description Provider schema type
                                  * @enum {string}
                                  */
-                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                                 /**
                                  * Format: uri
                                  * @description Base URL
@@ -6275,7 +6275,7 @@ export interface paths {
                                  * @description Provider schema type
                                  * @enum {string}
                                  */
-                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                                 /**
                                  * Format: uri
                                  * @description Base URL
@@ -6418,10 +6418,10 @@ export interface paths {
                         name?: string;
                         /**
                          * @description Schema type
-                         * @default agno
+                         * @default agnoos
                          * @enum {string}
                          */
-                        schema?: "agno" | "openai" | "anthropic" | "custom";
+                        schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                         /**
                          * Format: uri
                          * @description Base URL
@@ -6490,7 +6490,7 @@ export interface paths {
                                  * @description Provider schema type
                                  * @enum {string}
                                  */
-                                schema: "agno" | "openai" | "anthropic" | "custom";
+                                schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
                                 /**
                                  * Format: uri
                                  * @description Base URL
@@ -7966,6 +7966,44 @@ export interface paths {
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
                                     };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
+                                    };
                                 })[];
                                 /** @description Debounce config */
                                 debounce: {
@@ -8078,6 +8116,44 @@ export interface paths {
                                 level: "debug" | "info" | "warn" | "error";
                                 message: string;
                             };
+                        } | {
+                            /** @enum {string} */
+                            type: "call_agent";
+                            config: {
+                                /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                providerId?: string;
+                                /** @description Agent ID (required or template) */
+                                agentId: string;
+                                /**
+                                 * @description Agent type
+                                 * @enum {string}
+                                 */
+                                agentType?: "agent" | "team" | "workflow";
+                                /**
+                                 * @description Session strategy for agent memory
+                                 * @enum {string}
+                                 */
+                                sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                /** @description Prefix messages with sender name */
+                                prefixSenderName?: boolean;
+                                /** @description Enable response splitting on \n\n */
+                                enableSplit?: boolean;
+                                /**
+                                 * @description Delay mode between split messages
+                                 * @enum {string}
+                                 */
+                                splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                /** @description Min delay in ms (for randomized mode) */
+                                splitDelayMinMs?: number;
+                                /** @description Max delay in ms (for randomized mode) */
+                                splitDelayMaxMs?: number;
+                                /** @description Show typing presence during agent processing */
+                                showTypingPresence?: boolean;
+                                /** @description Timeout in milliseconds */
+                                timeoutMs?: number;
+                                /** @description Store agent response as variable for chaining */
+                                responseAs?: string;
+                            };
                         })[];
                         /** @description Debounce config */
                         debounce?: {
@@ -8181,6 +8257,44 @@ export interface paths {
                                         /** @enum {string} */
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
                                     };
                                 })[];
                                 /** @description Debounce config */
@@ -8340,6 +8454,44 @@ export interface paths {
                                         /** @enum {string} */
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
                                     };
                                 })[];
                                 /** @description Debounce config */
@@ -8531,6 +8683,44 @@ export interface paths {
                                 level: "debug" | "info" | "warn" | "error";
                                 message: string;
                             };
+                        } | {
+                            /** @enum {string} */
+                            type: "call_agent";
+                            config: {
+                                /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                providerId?: string;
+                                /** @description Agent ID (required or template) */
+                                agentId: string;
+                                /**
+                                 * @description Agent type
+                                 * @enum {string}
+                                 */
+                                agentType?: "agent" | "team" | "workflow";
+                                /**
+                                 * @description Session strategy for agent memory
+                                 * @enum {string}
+                                 */
+                                sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                /** @description Prefix messages with sender name */
+                                prefixSenderName?: boolean;
+                                /** @description Enable response splitting on \n\n */
+                                enableSplit?: boolean;
+                                /**
+                                 * @description Delay mode between split messages
+                                 * @enum {string}
+                                 */
+                                splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                /** @description Min delay in ms (for randomized mode) */
+                                splitDelayMinMs?: number;
+                                /** @description Max delay in ms (for randomized mode) */
+                                splitDelayMaxMs?: number;
+                                /** @description Show typing presence during agent processing */
+                                showTypingPresence?: boolean;
+                                /** @description Timeout in milliseconds */
+                                timeoutMs?: number;
+                                /** @description Store agent response as variable for chaining */
+                                responseAs?: string;
+                            };
                         })[];
                         /** @description Debounce config */
                         debounce?: {
@@ -8634,6 +8824,44 @@ export interface paths {
                                         /** @enum {string} */
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
                                     };
                                 })[];
                                 /** @description Debounce config */
@@ -8791,6 +9019,44 @@ export interface paths {
                                         /** @enum {string} */
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
                                     };
                                 })[];
                                 /** @description Debounce config */
@@ -8952,6 +9218,44 @@ export interface paths {
                                         /** @enum {string} */
                                         level: "debug" | "info" | "warn" | "error";
                                         message: string;
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    type: "call_agent";
+                                    config: {
+                                        /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                        providerId?: string;
+                                        /** @description Agent ID (required or template) */
+                                        agentId: string;
+                                        /**
+                                         * @description Agent type
+                                         * @enum {string}
+                                         */
+                                        agentType?: "agent" | "team" | "workflow";
+                                        /**
+                                         * @description Session strategy for agent memory
+                                         * @enum {string}
+                                         */
+                                        sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                        /** @description Prefix messages with sender name */
+                                        prefixSenderName?: boolean;
+                                        /** @description Enable response splitting on \n\n */
+                                        enableSplit?: boolean;
+                                        /**
+                                         * @description Delay mode between split messages
+                                         * @enum {string}
+                                         */
+                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                        /** @description Min delay in ms (for randomized mode) */
+                                        splitDelayMinMs?: number;
+                                        /** @description Max delay in ms (for randomized mode) */
+                                        splitDelayMaxMs?: number;
+                                        /** @description Show typing presence during agent processing */
+                                        showTypingPresence?: boolean;
+                                        /** @description Timeout in milliseconds */
+                                        timeoutMs?: number;
+                                        /** @description Store agent response as variable for chaining */
+                                        responseAs?: string;
                                     };
                                 })[];
                                 /** @description Debounce config */
@@ -9116,6 +9420,44 @@ export interface paths {
                                     /** @enum {string} */
                                     level: "debug" | "info" | "warn" | "error";
                                     message: string;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "call_agent";
+                                config: {
+                                    /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                                    providerId?: string;
+                                    /** @description Agent ID (required or template) */
+                                    agentId: string;
+                                    /**
+                                     * @description Agent type
+                                     * @enum {string}
+                                     */
+                                    agentType?: "agent" | "team" | "workflow";
+                                    /**
+                                     * @description Session strategy for agent memory
+                                     * @enum {string}
+                                     */
+                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    /** @description Prefix messages with sender name */
+                                    prefixSenderName?: boolean;
+                                    /** @description Enable response splitting on \n\n */
+                                    enableSplit?: boolean;
+                                    /**
+                                     * @description Delay mode between split messages
+                                     * @enum {string}
+                                     */
+                                    splitDelayMode?: "disabled" | "fixed" | "randomized";
+                                    /** @description Min delay in ms (for randomized mode) */
+                                    splitDelayMinMs?: number;
+                                    /** @description Max delay in ms (for randomized mode) */
+                                    splitDelayMaxMs?: number;
+                                    /** @description Show typing presence during agent processing */
+                                    showTypingPresence?: boolean;
+                                    /** @description Timeout in milliseconds */
+                                    timeoutMs?: number;
+                                    /** @description Store agent response as variable for chaining */
+                                    responseAs?: string;
                                 };
                             })[];
                         };
@@ -10966,7 +11308,7 @@ export interface components {
              * @description Provider schema type
              * @enum {string}
              */
-            schema: "agno" | "openai" | "anthropic" | "custom";
+            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
             /**
              * Format: uri
              * @description Base URL
@@ -11012,10 +11354,10 @@ export interface components {
             name: string;
             /**
              * @description Schema type
-             * @default agno
+             * @default agnoos
              * @enum {string}
              */
-            schema: "agno" | "openai" | "anthropic" | "custom";
+            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
             /**
              * Format: uri
              * @description Base URL
@@ -11317,6 +11659,44 @@ export interface components {
                     level: "debug" | "info" | "warn" | "error";
                     message: string;
                 };
+            } | {
+                /** @enum {string} */
+                type: "call_agent";
+                config: {
+                    /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                    providerId?: string;
+                    /** @description Agent ID (required or template) */
+                    agentId: string;
+                    /**
+                     * @description Agent type
+                     * @enum {string}
+                     */
+                    agentType?: "agent" | "team" | "workflow";
+                    /**
+                     * @description Session strategy for agent memory
+                     * @enum {string}
+                     */
+                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    /** @description Prefix messages with sender name */
+                    prefixSenderName?: boolean;
+                    /** @description Enable response splitting on \n\n */
+                    enableSplit?: boolean;
+                    /**
+                     * @description Delay mode between split messages
+                     * @enum {string}
+                     */
+                    splitDelayMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Min delay in ms (for randomized mode) */
+                    splitDelayMinMs?: number;
+                    /** @description Max delay in ms (for randomized mode) */
+                    splitDelayMaxMs?: number;
+                    /** @description Show typing presence during agent processing */
+                    showTypingPresence?: boolean;
+                    /** @description Timeout in milliseconds */
+                    timeoutMs?: number;
+                    /** @description Store agent response as variable for chaining */
+                    responseAs?: string;
+                };
             })[];
             /** @description Debounce config */
             debounce: {
@@ -11409,6 +11789,44 @@ export interface components {
                     /** @enum {string} */
                     level: "debug" | "info" | "warn" | "error";
                     message: string;
+                };
+            } | {
+                /** @enum {string} */
+                type: "call_agent";
+                config: {
+                    /** @description Provider ID (template: {{instance.agentProviderId}}) */
+                    providerId?: string;
+                    /** @description Agent ID (required or template) */
+                    agentId: string;
+                    /**
+                     * @description Agent type
+                     * @enum {string}
+                     */
+                    agentType?: "agent" | "team" | "workflow";
+                    /**
+                     * @description Session strategy for agent memory
+                     * @enum {string}
+                     */
+                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    /** @description Prefix messages with sender name */
+                    prefixSenderName?: boolean;
+                    /** @description Enable response splitting on \n\n */
+                    enableSplit?: boolean;
+                    /**
+                     * @description Delay mode between split messages
+                     * @enum {string}
+                     */
+                    splitDelayMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Min delay in ms (for randomized mode) */
+                    splitDelayMinMs?: number;
+                    /** @description Max delay in ms (for randomized mode) */
+                    splitDelayMaxMs?: number;
+                    /** @description Show typing presence during agent processing */
+                    showTypingPresence?: boolean;
+                    /** @description Timeout in milliseconds */
+                    timeoutMs?: number;
+                    /** @description Store agent response as variable for chaining */
+                    responseAs?: string;
                 };
             })[];
             /** @description Debounce config */

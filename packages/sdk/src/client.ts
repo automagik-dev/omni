@@ -367,7 +367,7 @@ export interface CreateAutomationBody {
     value?: unknown;
   }>;
   actions: Array<{
-    type: 'webhook' | 'send_message' | 'emit_event' | 'log';
+    type: 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent';
     config: Record<string, unknown>;
   }>;
   debounce?: Record<string, unknown>;

@@ -11,6 +11,7 @@ import { type TemplateContext, substituteTemplate, substituteTemplateObject } fr
 import type {
   ActionExecutionResult,
   AutomationAction,
+  CallAgentActionConfig,
   EmitEventActionConfig,
   LogActionConfig,
   SendMessageActionConfig,
@@ -20,11 +21,61 @@ import type {
 const logger = createLogger('automations:actions');
 
 /**
+ * Result of running an agent
+ */
+export interface AgentRunResult {
+  /** Response content (may be split into parts) */
+  parts: string[];
+  /** Full response content (joined parts) */
+  fullResponse: string;
+  /** Run metadata */
+  metadata: {
+    runId: string;
+    sessionId: string;
+    status: 'completed' | 'failed';
+  };
+}
+
+/**
+ * Context needed for agent call
+ */
+export interface AgentCallContext {
+  /** Instance ID (resolved from template) */
+  instanceId: string;
+  /** Provider ID (optional, resolved from template or instance default) */
+  providerId?: string;
+  /** Chat ID for session continuity */
+  chatId: string;
+  /** Sender ID for user identification */
+  senderId: string;
+  /** Sender's display name */
+  senderName?: string;
+  /** The message(s) to send to the agent */
+  messages: string[];
+}
+
+/**
  * Dependencies needed by action executors
  */
 export interface ActionDependencies {
   eventBus: EventBus | null;
   sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
+  /**
+   * Call an AI agent. Handles:
+   * - Agent invocation (sync mode)
+   * - Response splitting
+   * - Typing presence (optional)
+   * - Split delays (optional)
+   */
+  callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  /**
+   * Start typing indicator (optional, for call_agent action)
+   */
+  startTyping?: (instanceId: string, chatId: string) => Promise<void>;
+  /**
+   * Stop typing indicator (optional, for call_agent action)
+   */
+  stopTyping?: (instanceId: string, chatId: string) => Promise<void>;
 }
 
 /**
@@ -229,6 +280,139 @@ async function executeLogAction(
 }
 
 /**
+ * Extract agent call context from automation payload
+ * Returns extracted context or error string
+ */
+function extractAgentCallContext(
+  config: CallAgentActionConfig,
+  context: TemplateContext,
+): { context: AgentCallContext } | { error: string } {
+  // Extract instanceId from config or payload
+  const instanceId = config.providerId
+    ? substituteTemplate(config.providerId, context)
+    : (context.payload.instanceId as string);
+
+  if (!instanceId) {
+    return { error: 'instanceId is required (from payload or config.providerId template)' };
+  }
+
+  // Extract chat and sender info from payload
+  const fromObj = context.payload.from as { id?: string; name?: string } | undefined;
+  const chatId = (context.payload.chatId as string) ?? fromObj?.id;
+  const senderId = fromObj?.id ?? (context.payload.senderId as string);
+  const senderName = fromObj?.name ?? (context.payload.senderName as string);
+
+  if (!chatId) return { error: 'chatId not found in payload' };
+  if (!senderId) return { error: 'senderId not found in payload' };
+
+  // Get message content from payload
+  const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
+  if (!messageContent) return { error: 'message content not found in payload' };
+
+  // Resolve agentId (may be a template)
+  const agentId = substituteTemplate(config.agentId, context);
+  if (!agentId) return { error: 'agentId is required' };
+
+  return {
+    context: {
+      instanceId,
+      providerId: config.providerId ? substituteTemplate(config.providerId, context) : undefined,
+      chatId,
+      senderId,
+      senderName,
+      messages: [messageContent],
+    },
+  };
+}
+
+/**
+ * Manage typing presence during agent call
+ */
+async function withTypingPresence<T>(
+  config: CallAgentActionConfig,
+  deps: ActionDependencies,
+  instanceId: string,
+  chatId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (config.showTypingPresence && deps.startTyping) {
+    try {
+      await deps.startTyping(instanceId, chatId);
+    } catch (err) {
+      logger.warn('Failed to start typing presence', { error: err });
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    if (config.showTypingPresence && deps.stopTyping) {
+      try {
+        await deps.stopTyping(instanceId, chatId);
+      } catch (err) {
+        logger.warn('Failed to stop typing presence', { error: err });
+      }
+    }
+  }
+}
+
+/**
+ * Execute a call_agent action
+ * Invokes an AI agent and returns the response
+ */
+async function executeCallAgentAction(
+  config: CallAgentActionConfig,
+  context: TemplateContext,
+  deps: ActionDependencies,
+): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  if (!deps.callAgent) {
+    return { success: false, error: 'callAgent dependency not provided' };
+  }
+
+  // Extract and validate context
+  const extracted = extractAgentCallContext(config, context);
+  if ('error' in extracted) {
+    return { success: false, error: extracted.error };
+  }
+
+  const agentContext = extracted.context;
+
+  logger.debug('Executing call_agent action', {
+    instanceId: agentContext.instanceId,
+    chatId: agentContext.chatId,
+    senderId: agentContext.senderId,
+    showTypingPresence: config.showTypingPresence,
+  });
+
+  try {
+    const result = await withTypingPresence(config, deps, agentContext.instanceId, agentContext.chatId, () =>
+      deps.callAgent!(agentContext, config),
+    );
+
+    logger.info('Agent call completed', {
+      runId: result.metadata.runId,
+      status: result.metadata.status,
+      partsCount: result.parts.length,
+    });
+
+    return {
+      success: result.metadata.status === 'completed',
+      result: {
+        response: result.fullResponse,
+        parts: result.parts,
+        runId: result.metadata.runId,
+        sessionId: result.metadata.sessionId,
+      },
+      error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Call agent action failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
  * Execute a single action
  */
 export async function executeAction(
@@ -252,6 +436,9 @@ export async function executeAction(
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
+      break;
+    case 'call_agent':
+      result = await executeCallAgentAction(action.config, context, deps);
       break;
     default:
       // TypeScript should catch this, but just in case
@@ -293,9 +480,14 @@ export async function executeActions(
     const result = await executeAction(action, actionContext, deps);
     results.push(result);
 
-    // Store webhook response as variable if configured
+    // Store response as variable if configured (for webhook and call_agent)
     if (action.type === 'webhook' && action.config.responseAs && result.status === 'success' && result.result) {
       variables[action.config.responseAs] = result.result;
+    }
+    if (action.type === 'call_agent' && action.config.responseAs && result.status === 'success' && result.result) {
+      // Store the full response for chaining
+      const agentResult = result.result as { response: string };
+      variables[action.config.responseAs] = agentResult.response;
     }
 
     // Note: We don't stop on failure - just log and continue

@@ -10,6 +10,16 @@
  * omni automations disable <id>
  * omni automations test <id> --event <json>
  * omni automations logs <id> [--limit <n>] [--status <status>]
+ *
+ * Example: Create call_agent automation
+ * omni automations create \
+ *   --name "Support Bot" \
+ *   --trigger message.received \
+ *   --action call_agent \
+ *   --agent-id support-agent \
+ *   --provider-id my-provider \
+ *   --response-as agentResponse \
+ *   --show-typing
  */
 
 import { Command } from 'commander';
@@ -72,12 +82,17 @@ export function createAutomationsCommand(): Command {
     .description('Create an automation')
     .requiredOption('--name <name>', 'Automation name')
     .requiredOption('--trigger <event>', 'Trigger event type (e.g., message.received)')
-    .requiredOption('--action <type>', 'Action type (webhook, send_message, emit_event, log)')
+    .requiredOption('--action <type>', 'Action type (webhook, send_message, emit_event, log, call_agent)')
     .option('--action-config <json>', 'Action config as JSON')
     .option('--condition <json>', 'Trigger conditions as JSON array')
     .option('--description <desc>', 'Automation description')
     .option('--priority <n>', 'Priority (higher = runs first)', (v) => Number.parseInt(v, 10))
     .option('--disabled', 'Create in disabled state')
+    // call_agent specific options
+    .option('--agent-id <id>', 'Agent ID (for call_agent action)')
+    .option('--provider-id <id>', 'Provider ID (for call_agent action)')
+    .option('--response-as <var>', 'Store agent response as variable (for call_agent action)')
+    .option('--show-typing', 'Show typing presence during agent call (for call_agent action)')
     .action(
       async (options: {
         name: string;
@@ -88,6 +103,11 @@ export function createAutomationsCommand(): Command {
         description?: string;
         priority?: number;
         disabled?: boolean;
+        // call_agent specific
+        agentId?: string;
+        providerId?: string;
+        responseAs?: string;
+        showTyping?: boolean;
       }) => {
         const client = getClient();
 
@@ -98,6 +118,21 @@ export function createAutomationsCommand(): Command {
               actionConfig = JSON.parse(options.actionConfig);
             } catch {
               output.error('Invalid JSON for --action-config');
+              return;
+            }
+          }
+
+          // Build call_agent config from specific options if provided
+          if (options.action === 'call_agent') {
+            if (options.agentId) actionConfig.agentId = options.agentId;
+            if (options.providerId) actionConfig.providerId = options.providerId;
+            if (options.responseAs) actionConfig.responseAs = options.responseAs;
+            if (options.showTyping) actionConfig.showTypingPresence = true;
+
+            // Validate required field
+            if (!actionConfig.agentId) {
+              output.error('call_agent action requires --agent-id or agentId in --action-config');
+              return;
             }
           }
 
@@ -107,6 +142,7 @@ export function createAutomationsCommand(): Command {
               conditions = JSON.parse(options.condition);
             } catch {
               output.error('Invalid JSON for --condition');
+              return;
             }
           }
 
@@ -117,7 +153,7 @@ export function createAutomationsCommand(): Command {
             triggerConditions: conditions as Parameters<typeof client.automations.create>[0]['triggerConditions'],
             actions: [
               {
-                type: options.action as 'webhook' | 'send_message' | 'emit_event' | 'log',
+                type: options.action as 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent',
                 config: actionConfig,
               },
             ],

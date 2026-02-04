@@ -101,6 +101,8 @@ const CLI_COMMANDS: Record<string, string> = {
   // ============================================================================
   'access.listRules': 'access list',
   'access.createRule': 'access create',
+  'access.deleteRule': 'access delete',
+  'access.checkAccess': 'access check',
 
   // ============================================================================
   // SETTINGS

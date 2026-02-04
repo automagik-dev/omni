@@ -26,7 +26,7 @@ export type ConditionOperator = (typeof CONDITION_OPERATORS)[number];
 /**
  * Action types for automations.
  */
-export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log'] as const;
+export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /**
@@ -89,13 +89,57 @@ export interface LogActionConfig {
 }
 
 /**
+ * Re-export types used by CallAgentActionConfig.
+ * These are defined in other modules to avoid duplication.
+ */
+import type { AgentType } from '../types/agent';
+import type { SplitDelayMode } from '../types/channel';
+
+/**
+ * Session strategy for agent memory (matches @omni/db).
+ */
+export type AgentSessionStrategy = 'per_user' | 'per_chat' | 'per_user_per_chat';
+
+/**
+ * Call agent action configuration.
+ * Invokes an AI agent as part of an automation workflow.
+ */
+export interface CallAgentActionConfig {
+  /** Provider ID (template: {{instance.agentProviderId}}) */
+  providerId?: string;
+  /** Agent ID (required or template) */
+  agentId: string;
+  /** Agent type: agent, team, or workflow */
+  agentType?: AgentType;
+  /** Session strategy for agent memory */
+  sessionStrategy?: AgentSessionStrategy;
+  /** Prefix messages with sender name: [Name]: message */
+  prefixSenderName?: boolean;
+  /** Enable response splitting on \n\n */
+  enableSplit?: boolean;
+  /** Delay mode between split messages */
+  splitDelayMode?: SplitDelayMode;
+  /** Fixed delay in ms (for 'fixed' mode) */
+  splitDelayMinMs?: number;
+  /** Max delay in ms (for 'randomized' mode) */
+  splitDelayMaxMs?: number;
+  /** Show typing presence during agent processing */
+  showTypingPresence?: boolean;
+  /** Timeout in milliseconds */
+  timeoutMs?: number;
+  /** Store agent response as variable for chaining */
+  responseAs?: string;
+}
+
+/**
  * Union type for action configurations.
  */
 export type AutomationAction =
   | { type: 'webhook'; config: WebhookActionConfig }
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
-  | { type: 'log'; config: LogActionConfig };
+  | { type: 'log'; config: LogActionConfig }
+  | { type: 'call_agent'; config: CallAgentActionConfig };
 
 /**
  * Debounce configuration for message grouping.

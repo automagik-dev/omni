@@ -54,7 +54,37 @@ const LogActionSchema = z.object({
   }),
 });
 
-const ActionSchema = z.union([WebhookActionSchema, SendMessageActionSchema, EmitEventActionSchema, LogActionSchema]);
+const CallAgentActionSchema = z.object({
+  type: z.literal('call_agent'),
+  config: z.object({
+    providerId: z.string().optional().openapi({ description: 'Provider ID (template: {{instance.agentProviderId}})' }),
+    agentId: z.string().min(1).openapi({ description: 'Agent ID (required or template)' }),
+    agentType: z.enum(['agent', 'team', 'workflow']).optional().openapi({ description: 'Agent type' }),
+    sessionStrategy: z
+      .enum(['per_user', 'per_chat', 'per_user_per_chat'])
+      .optional()
+      .openapi({ description: 'Session strategy for agent memory' }),
+    prefixSenderName: z.boolean().optional().openapi({ description: 'Prefix messages with sender name' }),
+    enableSplit: z.boolean().optional().openapi({ description: 'Enable response splitting on \\n\\n' }),
+    splitDelayMode: z
+      .enum(['disabled', 'fixed', 'randomized'])
+      .optional()
+      .openapi({ description: 'Delay mode between split messages' }),
+    splitDelayMinMs: z.number().int().optional().openapi({ description: 'Min delay in ms (for randomized mode)' }),
+    splitDelayMaxMs: z.number().int().optional().openapi({ description: 'Max delay in ms (for randomized mode)' }),
+    showTypingPresence: z.boolean().optional().openapi({ description: 'Show typing presence during agent processing' }),
+    timeoutMs: z.number().int().optional().openapi({ description: 'Timeout in milliseconds' }),
+    responseAs: z.string().optional().openapi({ description: 'Store agent response as variable for chaining' }),
+  }),
+});
+
+const ActionSchema = z.union([
+  WebhookActionSchema,
+  SendMessageActionSchema,
+  EmitEventActionSchema,
+  LogActionSchema,
+  CallAgentActionSchema,
+]);
 
 // Debounce schema
 const DebounceSchema = z.object({
