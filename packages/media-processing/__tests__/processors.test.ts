@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { AudioProcessor, DocumentProcessor, ImageProcessor } from '../src/processors';
+import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from '../src/processors';
 import type { ProcessorConfig } from '../src/types';
 
 const mockConfig: ProcessorConfig = {
@@ -114,6 +114,38 @@ describe('processors', () => {
         expect(processor.canProcess('audio/ogg')).toBe(false);
         expect(processor.canProcess('image/jpeg')).toBe(false);
         expect(processor.canProcess('video/mp4')).toBe(false);
+      });
+    });
+  });
+
+  describe('VideoProcessor', () => {
+    const processor = new VideoProcessor(mockConfig);
+
+    describe('canProcess', () => {
+      it('handles common video types', () => {
+        expect(processor.canProcess('video/mp4')).toBe(true);
+        expect(processor.canProcess('video/webm')).toBe(true);
+        expect(processor.canProcess('video/quicktime')).toBe(true);
+      });
+
+      it('handles additional video types', () => {
+        expect(processor.canProcess('video/x-msvideo')).toBe(true);
+        expect(processor.canProcess('video/mpeg')).toBe(true);
+        expect(processor.canProcess('video/3gpp')).toBe(true);
+      });
+
+      it('rejects non-video types', () => {
+        expect(processor.canProcess('audio/ogg')).toBe(false);
+        expect(processor.canProcess('image/jpeg')).toBe(false);
+        expect(processor.canProcess('application/pdf')).toBe(false);
+      });
+    });
+
+    describe('process (without API keys)', () => {
+      it('returns error when no API keys configured', async () => {
+        const result = await processor.process('/nonexistent/video.mp4', 'video/mp4');
+        expect(result.success).toBe(false);
+        expect(result.errorMessage).toContain('API');
       });
     });
   });

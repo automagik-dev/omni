@@ -85,6 +85,17 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
   },
 
   // ============================================================================
+  // GEMINI VIDEO (Video Description)
+  // ============================================================================
+  'gemini_video:gemini-2.0-flash': {
+    model: 'gemini-2.0-flash',
+    provider: 'google',
+    unit: 'per_million_tokens',
+    inputRate: 0.1, // $0.10 per 1M input tokens (video frames + audio)
+    outputRate: 0.4, // $0.40 per 1M output tokens
+  },
+
+  // ============================================================================
   // LOCAL PROCESSORS (No Cost)
   // ============================================================================
   'local:pdf-parse': {

@@ -6,7 +6,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import { AudioProcessor, DocumentProcessor, ImageProcessor } from './processors';
+import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from './processors';
 import type { ProcessOptions, ProcessingResult, Processor, ProcessorConfig } from './types';
 
 const log = createLogger('media-processing:service');
@@ -25,7 +25,12 @@ export class MediaProcessingService {
     this.config = config;
 
     // Initialize processors
-    this.processors = [new AudioProcessor(config), new ImageProcessor(config), new DocumentProcessor(config)];
+    this.processors = [
+      new AudioProcessor(config),
+      new ImageProcessor(config),
+      new VideoProcessor(config),
+      new DocumentProcessor(config),
+    ];
 
     log.info('MediaProcessingService initialized', {
       processorCount: this.processors.length,

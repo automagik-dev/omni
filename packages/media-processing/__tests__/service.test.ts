@@ -42,8 +42,12 @@ describe('MediaProcessingService', () => {
       expect(service.canProcess('application/json')).toBe(true);
     });
 
+    it('returns true for video types', () => {
+      expect(service.canProcess('video/mp4')).toBe(true);
+      expect(service.canProcess('video/webm')).toBe(true);
+    });
+
     it('returns false for unsupported types', () => {
-      expect(service.canProcess('video/mp4')).toBe(false);
       expect(service.canProcess('application/zip')).toBe(false);
       expect(service.canProcess('application/x-executable')).toBe(false);
     });
@@ -67,8 +71,13 @@ describe('MediaProcessingService', () => {
       expect(service.getProcessorName('text/plain')).toBe('document');
     });
 
+    it('returns video for video types', () => {
+      expect(service.getProcessorName('video/mp4')).toBe('video');
+      expect(service.getProcessorName('video/webm')).toBe('video');
+    });
+
     it('returns undefined for unsupported types', () => {
-      expect(service.getProcessorName('video/mp4')).toBeUndefined();
+      expect(service.getProcessorName('application/zip')).toBeUndefined();
     });
   });
 
