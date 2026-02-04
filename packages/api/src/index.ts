@@ -40,7 +40,7 @@ import { setupScheduler, stopScheduler } from './scheduler';
 import { printStartupBanner } from './utils/startup-banner';
 
 // Configuration
-const PORT = Number.parseInt(process.env.API_PORT ?? '8881', 10);
+const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const DATABASE_URL = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';

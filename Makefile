@@ -5,7 +5,9 @@
         test test-watch test-api test-db typecheck lint lint-fix format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg start stop restart logs status \
+        restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
+        cli cli-build cli-link \
         migrate-messages migrate-messages-dry
 
 # Default target
@@ -55,6 +57,20 @@ help:
 	@echo "  make restart       Restart all services"
 	@echo "  make logs          View logs"
 	@echo "  make status        Check service status"
+	@echo ""
+	@echo "Individual Services:"
+	@echo "  make restart-api     Restart API only"
+	@echo "  make restart-nats    Restart NATS only"
+	@echo "  make restart-pgserve Restart PostgreSQL only"
+	@echo "  make logs-api        View API logs"
+	@echo ""
+	@echo "CLI:"
+	@echo "  make cli ARGS=\"...\"  Run CLI from source"
+	@echo "  make cli-build       Build CLI package"
+	@echo "  make cli-link        Build + link globally (omni command)"
+	@echo ""
+	@echo "SDK:"
+	@echo "  make sdk-generate    Generate SDK from OpenAPI spec"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make ensure-nats   Download NATS binary if missing"
@@ -240,10 +256,23 @@ status:
 	@pm2 list 2>/dev/null || echo "PM2 not running"
 	@echo ""
 	@echo "Service URLs:"
-	@echo "  API:        http://localhost:$${API_PORT:-8881}"
-	@echo "  Swagger:    http://localhost:$${API_PORT:-8881}/api/v2/docs"
+	@echo "  API:        http://localhost:$${API_PORT:-8882}"
+	@echo "  Swagger:    http://localhost:$${API_PORT:-8882}/api/v2/docs"
 	@echo "  PostgreSQL: localhost:$${PGSERVE_PORT:-8432}"
 	@echo "  NATS:       localhost:$${NATS_PORT:-4222}"
+
+# Individual service control
+restart-api:
+	pm2 restart omni-v2-api
+
+restart-nats:
+	pm2 restart omni-v2-nats
+
+restart-pgserve:
+	pm2 restart omni-v2-pgserve
+
+logs-api:
+	pm2 logs omni-v2-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
@@ -262,7 +291,18 @@ kill-ghosts:
 
 # Generate SDK from OpenAPI spec
 sdk-generate:
-	bun run sdk:generate
+	bun run generate:sdk
+
+# CLI commands
+cli:
+	@bun packages/cli/src/index.ts $(ARGS)
+
+cli-build:
+	bun run --cwd packages/cli build
+
+cli-link: cli-build
+	cd packages/cli && bun link
+	@echo "✓ 'omni' command now available globally"
 
 # Full clean and reinstall
 reset: clean stop

@@ -2,7 +2,7 @@
 
 > Make Omni v2 easy to install and run on any platform with one command, with proper git hooks and standardized make commands.
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-02-02
 **Updated:** 2026-02-04
 **Author:** WISH Agent

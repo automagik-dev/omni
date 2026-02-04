@@ -13,11 +13,13 @@
     "format": "biome format --write .",
     "test": "turbo test",
     "clean": "turbo clean && rm -rf node_modules",
-    "generate:sdk": "bun scripts/generate-sdk.ts"
+    "generate:sdk": "bun scripts/generate-sdk.ts",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "bun-types": "^1.1.42",
+    "husky": "^9.1.7",
     "turbo": "^2.3.3",
     "typescript": "^5.7.3"
   },
