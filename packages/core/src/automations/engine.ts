@@ -371,6 +371,7 @@ export class AutomationEngine {
       const conditionResult = evaluateConditionsWithDetails(
         automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
         event.payload as Record<string, unknown>,
+        automation.conditionLogic ?? 'and',
       );
 
       if (!conditionResult.matched) {
@@ -497,6 +498,7 @@ export class AutomationEngine {
     const conditionResult = evaluateConditionsWithDetails(
       automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
       event.payload,
+      automation.conditionLogic ?? 'and',
     );
 
     // Map actions
