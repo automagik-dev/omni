@@ -1,0 +1,311 @@
+/**
+ * Media Processing Handler
+ *
+ * Subscribes to message.received events and processes media content.
+ * Extracts text from audio (transcription), images (description), and documents.
+ * Results are stored in media_content table and made available for automations.
+ *
+ * Flow:
+ * 1. message.received event with hasMedia=true
+ * 2. Download media to local path (if not already done)
+ * 3. Process with MediaProcessingService
+ * 4. Store result in media_content table
+ * 5. Update message.mediaTranscript
+ * 6. Emit media.processed event
+ *
+ * @see media-processing-realtime wish
+ */
+
+import { join } from 'node:path';
+import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
+import { createLogger } from '@omni/core';
+import type { Database } from '@omni/db';
+import { mediaContent, messages } from '@omni/db';
+import { type MediaProcessingService, createMediaProcessingService } from '@omni/media-processing';
+import { eq } from 'drizzle-orm';
+import type { Services } from '../services';
+import { MediaStorageService } from '../services/media-storage';
+
+const log = createLogger('media-processor');
+
+/**
+ * Media types that should be processed
+ */
+const PROCESSABLE_MEDIA_TYPES = new Set(['audio', 'image', 'document', 'video']);
+
+/**
+ * Map processing type to message column name
+ */
+function getContentFieldForType(processingType: 'transcription' | 'description' | 'extraction'): string | undefined {
+  switch (processingType) {
+    case 'transcription':
+      return 'transcription';
+    case 'description':
+      return 'imageDescription';
+    case 'extraction':
+      return 'documentExtraction';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Check if a content type should be processed
+ */
+function shouldProcess(contentType: string | undefined): boolean {
+  if (!contentType) return false;
+  return PROCESSABLE_MEDIA_TYPES.has(contentType);
+}
+
+/**
+ * Get MIME type from content or infer from type
+ */
+function getMimeType(content: MessageReceivedPayload['content']): string | undefined {
+  if (content.mimeType) return content.mimeType;
+
+  // Infer from content type
+  switch (content.type) {
+    case 'audio':
+      return 'audio/ogg';
+    case 'image':
+      return 'image/jpeg';
+    case 'video':
+      return 'video/mp4';
+    case 'document':
+      return 'application/octet-stream';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Media processor context
+ */
+interface MediaProcessorContext {
+  db: Database;
+  eventBus: EventBus;
+  services: Services;
+  mediaService: MediaProcessingService;
+  mediaStorage: MediaStorageService;
+}
+
+/**
+ * Result of resolving media file path
+ */
+interface MediaResolution {
+  messageId: string;
+  filePath: string;
+  fullPath: string;
+}
+
+/**
+ * Resolve media file path for a message
+ * Handles both local paths and URL downloads
+ */
+async function resolveMediaPath(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  chatId: string,
+  externalId: string,
+  content: MessageReceivedPayload['content'],
+  mimeType: string,
+): Promise<MediaResolution | null> {
+  const chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+  if (!chat) {
+    log.debug('Chat not found, cannot process media', { chatId, externalId });
+    return null;
+  }
+
+  const message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+  if (!message) {
+    log.debug('Message not found, cannot process media', { externalId });
+    return null;
+  }
+
+  let filePath = message.mediaLocalPath;
+
+  // If no local path, try to download from URL
+  if (!filePath && content.mediaUrl) {
+    try {
+      const result = await ctx.mediaStorage.storeFromUrl(
+        instanceId,
+        message.id,
+        content.mediaUrl,
+        mimeType,
+        message.platformTimestamp ?? undefined,
+      );
+      filePath = result.localPath;
+      await ctx.mediaStorage.updateMessageLocalPath(message.id, filePath);
+      log.debug('Downloaded media from URL', { messageId: message.id, filePath });
+    } catch (error) {
+      log.error('Failed to download media', { error: String(error), mediaUrl: content.mediaUrl });
+      return null;
+    }
+  }
+
+  if (!filePath) {
+    log.debug('No media file path available', { externalId });
+    return null;
+  }
+
+  return {
+    messageId: message.id,
+    filePath,
+    fullPath: join(ctx.mediaStorage.getBasePath(), filePath),
+  };
+}
+
+/**
+ * Store processing result in database and update message
+ */
+async function persistProcessingResult(
+  ctx: MediaProcessorContext,
+  messageId: string,
+  eventId: string | undefined,
+  result: Awaited<ReturnType<MediaProcessingService['process']>>,
+): Promise<void> {
+  // Store result in media_content table
+  await ctx.db.insert(mediaContent).values({
+    eventId: eventId ?? undefined,
+    mediaId: messageId,
+    processingType: result.processingType,
+    content: result.content ?? '',
+    model: result.model,
+    provider: result.provider,
+    language: result.language,
+    duration: result.duration,
+    tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+    costUsd: result.costCents,
+    processingTimeMs: result.processingTimeMs,
+  });
+
+  // Update message with processed content (for quick access in automations)
+  if (result.content) {
+    const updateField = getContentFieldForType(result.processingType);
+    if (updateField) {
+      await ctx.db
+        .update(messages)
+        .set({ [updateField]: result.content })
+        .where(eq(messages.id, messageId));
+    }
+  }
+}
+
+/**
+ * Process media for a received message
+ */
+async function processMessageMedia(
+  ctx: MediaProcessorContext,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; eventId?: string; channelType?: ChannelType },
+): Promise<void> {
+  const { instanceId, eventId } = metadata;
+  const { content, externalId } = payload;
+  const mimeType = getMimeType(content);
+
+  if (!mimeType || !ctx.mediaService.canProcess(mimeType)) {
+    log.debug('MIME type not processable or missing', { mimeType, externalId });
+    return;
+  }
+
+  const media = await resolveMediaPath(ctx, instanceId, payload.chatId, externalId, content, mimeType);
+  if (!media) return;
+
+  log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
+
+  const result = await ctx.mediaService.process(media.fullPath, mimeType, {
+    language: 'pt',
+    caption: content.text,
+  });
+
+  if (!result.success) {
+    log.warn('Media processing failed', { messageId: media.messageId, error: result.errorMessage });
+    return;
+  }
+
+  await persistProcessingResult(ctx, media.messageId, eventId, result);
+
+  log.info('Media processing complete', {
+    messageId: media.messageId,
+    processingType: result.processingType,
+    provider: result.provider,
+    model: result.model,
+    costCents: result.costCents,
+    processingTimeMs: result.processingTimeMs,
+  });
+
+  await ctx.eventBus.publish(
+    'media.processed',
+    {
+      eventId: eventId ?? media.messageId,
+      mediaId: media.messageId,
+      processingType: result.processingType,
+      content: result.content ?? '',
+      model: result.model,
+      provider: result.provider,
+      tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+    },
+    { instanceId, channelType: metadata.channelType },
+  );
+}
+
+/**
+ * Set up media processing - subscribes to message.received events
+ */
+export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
+  // Initialize media processing service with API keys from environment
+  const mediaService = createMediaProcessingService();
+  const mediaStorage = new MediaStorageService(db);
+
+  const ctx: MediaProcessorContext = {
+    db,
+    eventBus,
+    services,
+    mediaService,
+    mediaStorage,
+  };
+
+  // Subscribe to message.received with durable consumer
+  await eventBus.subscribe(
+    'message.received',
+    async (event) => {
+      const payload = event.payload as MessageReceivedPayload;
+      const metadata = event.metadata;
+
+      // Skip if no instance ID
+      if (!metadata.instanceId) {
+        return;
+      }
+
+      // Check if message has media
+      const content = payload.content;
+      if (!shouldProcess(content.type)) {
+        return;
+      }
+
+      try {
+        await processMessageMedia(ctx, payload, {
+          instanceId: metadata.instanceId,
+          eventId: event.id,
+          channelType: metadata.channelType,
+        });
+      } catch (error) {
+        log.error('Failed to process media', {
+          externalId: payload.externalId,
+          error: String(error),
+        });
+        // Don't re-throw - media processing failures shouldn't block message flow
+      }
+    },
+    {
+      durable: 'media-processor',
+      queue: 'media-processor',
+      maxRetries: 2,
+      retryDelayMs: 1000,
+      startFrom: 'last',
+      concurrency: 5, // Process up to 5 media files in parallel
+    },
+  );
+
+  log.info('Media processor initialized');
+}

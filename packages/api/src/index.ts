@@ -31,6 +31,7 @@ import {
   setupAgentResponder,
   setupConnectionListener,
   setupEventPersistence,
+  setupMediaProcessor,
   setupMessageListener,
   setupMessagePersistence,
   setupQrCodeListener,
@@ -264,6 +265,13 @@ async function setupEventBusServices(
     await setupMessagePersistence(eventBus, services);
   } catch (error) {
     log.error('Failed to set up message persistence', { error: String(error) });
+  }
+
+  // Media processor (transcription, description, extraction)
+  try {
+    await setupMediaProcessor(eventBus, db, services);
+  } catch (error) {
+    log.error('Failed to set up media processor', { error: String(error) });
   }
 
   // Agent responder (AI agent responses)

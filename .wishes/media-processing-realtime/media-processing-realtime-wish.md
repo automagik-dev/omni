@@ -2,7 +2,7 @@
 
 > Automatically process incoming audio, images, and documents so transcripts are available when actions fire.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-02-04
 **Author:** WISH Agent
 **Beads:** omni-1mj

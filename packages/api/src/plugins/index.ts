@@ -35,6 +35,9 @@ export { setupEventPersistence } from './event-persistence';
 // Message persistence (writes to unified chats/messages tables)
 export { setupMessagePersistence } from './message-persistence';
 
+// Media processor (transcribes/describes media content)
+export { setupMediaProcessor } from './media-processor';
+
 // Agent responder (triggers AI agent responses)
 export { setupAgentResponder } from './agent-responder';
 

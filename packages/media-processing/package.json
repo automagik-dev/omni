@@ -1,0 +1,43 @@
+{
+  "name": "@omni/media-processing",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./pricing": {
+      "types": "./src/pricing.ts",
+      "default": "./src/pricing.ts"
+    },
+    "./processors": {
+      "types": "./src/processors/index.ts",
+      "default": "./src/processors/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@omni/core": "workspace:*",
+    "@omni/db": "workspace:*",
+    "groq-sdk": "^0.15.0",
+    "openai": "^4.77.0",
+    "@google/generative-ai": "^0.21.0",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.8.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/pdf-parse": "^1.1.5",
+    "bun-types": "^1.1.42",
+    "typescript": "^5.7.3"
+  }
+}
