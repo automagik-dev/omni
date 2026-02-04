@@ -42,6 +42,31 @@ Parse arguments to determine mode:
    - `/forge --spawn --parallel` - Spawn parallel workers per group
    - `/forge --spawn --group A` - Spawn only group A
 
+## Pre-Flight Isolation Check
+
+**Before any execution, verify environment:**
+
+```bash
+# Check current state
+CURRENT_BRANCH=$(git branch --show-current)
+IN_WORKTREE=$(git rev-parse --is-inside-work-tree 2>/dev/null && \
+  [ "$(git rev-parse --show-toplevel)" != "$(git rev-parse --git-common-dir | sed 's|/\.git$||')" ] && \
+  echo "yes" || echo "no")
+```
+
+**Decision matrix:**
+
+| State | Action |
+|-------|--------|
+| `--spawn` mode | ✓ Proceed - `term work` handles worktree |
+| In worktree already | ✓ Proceed - already isolated |
+| On `main` or `master` | ❌ **BLOCK**: "Cannot forge on main. Use `--spawn` or create a feature branch first" |
+| On feature branch (inline) | ⚠️ **Warn**: "Recommend `--spawn` for isolation. Proceeding inline on branch: $BRANCH" |
+
+**For multi-group wishes or wishes affecting 3+ packages:**
+- Strongly recommend `--spawn` mode
+- Inline execution risks polluting workspace
+
 ## Spawn Mode (via genie-cli term)
 
 When `--spawn` is present, use the `term` CLI for worker orchestration:
@@ -59,6 +84,18 @@ bd create "Group A: <description>" --type task
 bd dep add <sub-id> "$BEADS_ID"  # Sub depends on parent
 term work <sub-id-A>
 term work <sub-id-B>
+```
+
+**Baseline verification (automatic with `term work`):**
+```bash
+# term work automatically:
+# 1. Creates .worktrees/<beads-id>/
+# 2. Checks out feature branch
+# 3. Installs dependencies
+# 4. Runs make check for baseline
+
+# If baseline fails, worker reports:
+# "Baseline failing. Fix before forging."
 ```
 
 **Monitor workers:**
@@ -135,7 +172,11 @@ For each execution group (or specified group), create a todo:
 For each execution group:
 
 1. **Implement** - Write/modify code
+   - For API/service changes: Use `integration-tdd` skill (test first with fixtures)
+   - For bug fixes: Use `debug` skill (root cause first)
 2. **Test** - Create/run tests
+   - Integration tests for API changes (see `packages/api/src/__tests__/`)
+   - Watch tests fail BEFORE implementing (red-green cycle)
 3. **Polish** - Lint, format, cleanup
 4. **Validate** - Run validation commands
 
@@ -143,11 +184,33 @@ For each execution group:
 
 After all groups complete:
 
+#### Verification Gate (MANDATORY)
+
+**Before ANY completion claim, run and show output:**
+
+```bash
+make check  # typecheck + lint + test
+```
+
+**Show the output in your response.** Only then claim pass/fail.
+
+**Forbidden phrases without evidence:**
+- "Should pass now"
+- "Looks correct"
+- "I'm confident"
+- "Tests should work"
+
+#### Two-Stage Review
+
 1. **Spec Review** - Verify deliverables match wish
-   - PASS: Continue
-   - FAIL: Address gaps
+   - Check each deliverable from wish document
+   - PASS: All deliverables present and working
+   - FAIL: Address gaps before continuing
 
 2. **Quality Review** - Check code quality
+   - No `any` types introduced
+   - Events emitted for state changes
+   - Tests exist for new functionality
    - READY: Ready for /review
    - FIX-FIRST: Address minor issues
    - BLOCKED: Major issues, investigate
@@ -200,9 +263,12 @@ git worktree remove ~/.worktrees/<session>   # Remove worktree manually
 
 ## Remember
 
+- **NEVER forge on main/master** - Use `--spawn` or feature branch
 - **NEVER set status to SHIPPED** - Only /review can ship
+- **NEVER claim completion without `make check` output** - Evidence before claims
 - Wish document is a contract - don't modify it
-- Run all validation commands
+- For API/service changes: Use integration-tdd skill (test first)
+- For bug fixes: Use debug skill (root cause first)
 - Don't skip the two-stage review
 - Don't implement beyond wish scope
 - Always sync beads: `bd sync`

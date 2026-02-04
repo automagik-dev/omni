@@ -20,13 +20,13 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 # Planning
 /wish                         # Start planning a feature
 
-# Execution (inline)
-/forge                        # Execute in current session
-
-# Execution (spawned workers via term)
-/forge --spawn                # Spawn worker for wish
+# Execution (spawned workers - RECOMMENDED)
+/forge --spawn                # Spawn worker in isolated worktree
 /forge --spawn --parallel     # Parallel workers per group
 term work <beads-id>          # Direct worker spawn
+
+# Execution (inline - for quick fixes only)
+/forge                        # Execute in current session (requires feature branch)
 
 # Integration Testing
 /qa                           # Full QA (API + CLI + Integration + Regression)
@@ -150,18 +150,46 @@ bd graph --all                        # Visualize dependency tree
 - `polish` - Code cleanup
 - `qa` - Quality assurance
 
+### Skills (Methodology)
+
+Skills enforce discipline and methodology. Located in `.claude/skills/`.
+
+| Skill | When to Use |
+|-------|-------------|
+| `debug` | Before fixing any bug - enforces root cause investigation |
+| `integration-tdd` | For API/service changes - test first with fixtures |
+| `verification-gate` | Before claiming completion - evidence before claims |
+
+**Usage:**
+- Skills are referenced by commands (forge, review, qa)
+- Use `debug` skill before attempting fixes
+- Use `integration-tdd` for API endpoints
+- Verification gate is enforced in forge self-review and review verdict
+
 ## Wish Document Location
 
 Wishes are stored in: `.wishes/<slug>/<slug>-wish.md`
 
-## Parallel Execution (Spawn Mode)
+## Spawn Mode (Recommended for Features)
 
-Forge spawns workers via `term` CLI for parallel execution with isolated git worktrees.
+Forge spawns workers via `term` CLI with isolated git worktrees.
 
-**When to spawn:**
-- Multiple groups can run in parallel
-- Want isolated environment per task
-- Long-running tasks you want to monitor
+**Why spawn mode is recommended:**
+- **Isolation**: Clean worktree prevents workspace pollution
+- **Baseline verification**: Tests run before any work starts
+- **Parallel execution**: Multiple groups can run simultaneously
+- **No main branch risk**: Cannot accidentally commit to main
+
+**When to use spawn mode:**
+- Any feature with 2+ execution groups
+- Changes affecting 3+ packages
+- Long-running implementation tasks
+- When you want monitoring via dashboard
+
+**When inline is acceptable:**
+- Quick single-file fixes
+- Already on a feature branch
+- Simple changes with one execution group
 
 **How it works:**
 ```bash

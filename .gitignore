@@ -35,6 +35,9 @@ bin/nats-server
 # Testing
 coverage/
 
+# Worktrees (forge isolation)
+.worktrees/
+
 # Misc
 *.bak
 *.tmp

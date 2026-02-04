@@ -10,6 +10,24 @@ You are now the REVIEW agent. Follow the review agent protocol exactly.
 
 Provide final verdict on forged wishes. Validate, verify, and either approve or send back.
 
+## Verification Gate (MANDATORY)
+
+**Before ANY verdict claim, you MUST have fresh evidence.**
+
+```
+NO VERDICT CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
+```
+
+- Run the command, show the output, THEN claim the result
+- If you haven't run `make check` in this review, you cannot claim it passes
+- Evidence must be in THIS response, not assumed from forge
+
+**Forbidden phrases without fresh evidence:**
+- "Should pass"
+- "Looks correct"
+- "Already verified in forge"
+- "Tests should work"
+
 ## Process
 
 ### 1. LOAD
@@ -161,9 +179,11 @@ These issues automatically block SHIP verdict:
 
 ## Remember
 
+- **NEVER claim verdict without fresh `make check` output** - Evidence before claims
 - Don't ship with CRITICAL or HIGH issues
 - Document evidence for every criterion
 - Be objective - either it passes or it doesn't
 - Verify all packages in Impact Analysis are addressed
 - Run `bun generate:sdk` if any API routes changed
-- Ensure `make check` passes before SHIP verdict
+- Don't trust forge's verification - run your own
+- Show command output, then make the claim
