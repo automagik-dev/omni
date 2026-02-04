@@ -1,21 +1,48 @@
 # WISH: Media Processing - Real-time Per-Message
 
+> Automatically process incoming audio, images, and documents so transcripts are available when actions fire.
+
 **Status:** DRAFT
+**Created:** 2026-02-04
+**Author:** WISH Agent
 **Beads:** omni-1mj
 **Priority:** P0
 
+---
+
+## Alignment
+
+### Decisions (Locked)
+
+| ID | Decision |
+|----|----------|
+| DEC-1 | Shared `@omni/media-processing` package (not per-channel) |
+| DEC-2 | TypeScript libraries for documents (pdf-parse, mammoth, xlsx) |
+| DEC-3 | LLM APIs for audio/image/video (Groq, Gemini, OpenAI as fallbacks) |
+| DEC-4 | Processing happens before debounce - transcript available when actions fire |
+| DEC-5 | Use existing local storage, defer S3/cloud to `omni-t4u` |
+| DEC-6 | Cost tracking in cents (integer) for simplicity, migrate to decimal later if needed |
+
+### Assumptions
+
+| ID | Assumption |
+|----|------------|
+| ASM-1 | API keys (Groq, Gemini, OpenAI) configured via instance settings |
+| ASM-2 | Existing `media_content` table schema is sufficient (minor tweaks OK) |
+| ASM-3 | Processing failures should not block message handling |
+| ASM-4 | Videos under 10MB processed inline; larger deferred to batch |
+
+### Risks
+
+| ID | Risk | Mitigation |
+|----|------|------------|
+| RISK-1 | Rate limits on Groq/OpenAI | Retry with exponential backoff + fallback chain |
+| RISK-2 | Large video files slow processing | Size limits, defer to batch processing |
+| RISK-3 | Missing API keys | Graceful degradation, skip processing |
+
+---
+
 ## Context
-
-Omni v1 has a production-grade media processing system that automatically processes audio, images, videos, and documents as messages arrive. This happens **before debounce** to ensure transcripts are immediately available.
-
-**V1 Reference Files:**
-- `/home/cezar/dev/omni/src/services/media_processing/service.py` - MediaProcessingService
-- `/home/cezar/dev/omni/src/services/media_processing/processors/` - All processors
-- `/home/cezar/dev/omni/src/channels/whatsapp/handlers.py` (lines 509-956) - Integration
-- `/home/cezar/dev/omni/src/services/media_processing/pricing.py` - Cost tracking
-- `/home/cezar/dev/omni/src/db/trace_models.py` - MediaContent table
-
-## Problem Statement
 
 V2 currently has **no media processing capability**. When a user sends an audio message, image, or document, v2 cannot:
 - Transcribe audio to text
@@ -23,227 +50,297 @@ V2 currently has **no media processing capability**. When a user sends an audio 
 - Extract document text
 - Track processing costs
 
-This is a critical v1 feature required for parity.
+This is a critical v1 parity feature required for production.
+
+### Existing Infrastructure
+
+We already have:
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| `media_content` table | `packages/db/src/schema.ts:1138` | ✅ Ready |
+| `MediaStorageService` | `packages/api/src/services/media-storage.ts` | ✅ Ready |
+| `media.received` event | `packages/core/src/events/types.ts` | ✅ Defined |
+| `media.processed` event | `packages/core/src/events/types.ts` | ✅ Defined |
+| WhatsApp media download | `packages/channel-whatsapp/src/handlers/media.ts` | ✅ Working |
+
+---
 
 ## Scope
 
 ### IN SCOPE
 
-1. **Database Schema**
-   - `media_content` table for storing processed results
-   - Cost tracking columns (penny-accurate Decimal precision)
-   - Processor metadata (name, model, confidence, timing)
+1. **New Package: `@omni/media-processing`**
+   - `MediaProcessingService` class
+   - Processor interface and registry
+   - Pricing calculations
 
-2. **Processor Architecture**
-   - `BaseProcessor` abstract class
-   - `ProcessingResult` data class
-   - Processor registry pattern
-
-3. **Audio Processor**
-   - Primary: Groq Whisper (whisper-large-v3-turbo) - $0.04/hour, 216x realtime
+2. **Audio Processor**
+   - Primary: Groq Whisper (`whisper-large-v3-turbo`) - $0.04/hour
    - Fallback: OpenAI Whisper-1 - $0.006/minute
-   - Retry with exponential backoff on rate limits
    - Language detection (default: Portuguese)
 
-4. **Image Processor**
-   - Primary: Gemini Vision (gemini-2.5-flash)
-   - Fallback: OpenAI Vision (gpt-4o-mini or gpt-5-nano)
-   - Custom prompts with caption context
+3. **Image Processor**
+   - Primary: Gemini Vision (`gemini-2.0-flash`)
+   - Fallback: OpenAI Vision (`gpt-4o-mini`)
+   - Caption context for better descriptions
 
-5. **Video Processor**
-   - Gemini Video API with File upload
-   - Full dialogue/speech extraction
-   - Scene description
+4. **Document Processor**
+   - PDF: `pdf-parse` (free, local)
+   - Word: `mammoth` (free, local)
+   - Excel: `xlsx` (free, local)
+   - Scanned PDFs: Gemini Vision OCR fallback
 
-6. **Document Processor**
-   - PDF (text): PyMuPDF (local, free)
-   - PDF (scanned): Gemini Vision OCR fallback
-   - Word (DOCX): python-docx (local, free)
-   - Excel (XLSX): openpyxl (local, free)
-   - Text files: Direct read
+5. **Message Integration**
+   - Attach transcript to message in DB before debounce
+   - Emit `media.processed` event after completion
+   - Make transcript available in automation context
 
-7. **Channel Integration**
-   - WhatsApp: Process in `channel-whatsapp` message handler
-   - Discord: Process in `channel-discord` message handler
-   - Processing happens BEFORE debounce
-
-8. **Cost Tracking**
+6. **Cost Tracking**
    - Per-processor pricing registry
-   - Decimal(10,8) precision for USD amounts
-   - Token counting for LLM-based processors
-   - Duration-based pricing for audio
+   - Store in `media_content.costUsd` (cents)
+   - Duration-based for audio, token-based for LLMs
 
 ### OUT OF SCOPE
 
-- Batch job system (separate wish: media-processing-batch)
+- Batch processing system (see `omni-ap0`)
+- Video processing (complex, defer to batch)
+- S3/cloud storage (see `omni-t4u`)
 - UI for viewing processed content
-- Search/indexing of processed text
-- Configurable processor preferences per instance
+- Per-instance processor configuration
+
+---
+
+## Impact Analysis
+
+### Packages Affected
+
+| Package | Changes | Notes |
+|---------|---------|-------|
+| **NEW: media-processing** | [x] service, processors, pricing | New package |
+| core | [x] exports | Re-export from media-processing |
+| db | [ ] schema | May add `transcript` to messages |
+| api | [x] services | Call processing on message receive |
+| channel-whatsapp | [x] handlers | Trigger processing after download |
+| channel-discord | [x] handlers | Trigger processing after download |
+
+### System Checklist
+
+- [x] **Events**: `media.processed` already defined
+- [ ] **Database**: May add `transcript` column to messages
+- [ ] **SDK**: No API changes needed
+- [ ] **CLI**: No changes needed
+- [x] **Tests**: New package needs tests
+
+---
 
 ## Technical Design
 
-### Database Schema
+### Package Structure
 
-```typescript
-// packages/db/src/schema.ts additions
-
-export const mediaContent = pgTable('media_content', {
-  id: serial('id').primaryKey(),
-  instanceId: text('instance_id').references(() => instances.id),
-  channelType: text('channel_type').notNull(), // 'whatsapp' | 'discord'
-  originalMessageId: text('original_message_id').notNull(),
-  senderId: text('sender_id'),
-
-  // Processing metadata
-  contentType: text('content_type').notNull(), // 'audio_transcript' | 'image_description' | 'video_description' | 'document_content'
-  sourceMediaType: text('source_media_type').notNull(), // 'audio' | 'image' | 'video' | 'document'
-  processorName: text('processor_name').notNull(), // 'groq_whisper' | 'gemini_vision' | etc
-  processorModel: text('processor_model'), // 'whisper-large-v3-turbo' | etc
-
-  // Results
-  content: text('content'), // The extracted/transcribed text
-  contentFormat: text('content_format').default('text'), // 'text' | 'markdown'
-  processingTimeMs: integer('processing_time_ms'),
-  confidenceScore: integer('confidence_score'), // 0-100
-  status: text('status').notNull().default('pending'), // 'pending' | 'processing' | 'completed' | 'failed'
-  errorMessage: text('error_message'),
-
-  // Cost tracking (USD, 10-digit precision)
-  costInputUsd: numeric('cost_input_usd', { precision: 12, scale: 8 }),
-  costOutputUsd: numeric('cost_output_usd', { precision: 12, scale: 8 }),
-  costTotalUsd: numeric('cost_total_usd', { precision: 12, scale: 8 }),
-
-  // Token usage
-  inputTokens: integer('input_tokens'),
-  outputTokens: integer('output_tokens'),
-
-  // Pricing audit
-  pricingModel: text('pricing_model'),
-  pricingRateInput: numeric('pricing_rate_input', { precision: 12, scale: 8 }),
-  pricingRateOutput: numeric('pricing_rate_output', { precision: 12, scale: 8 }),
-
-  // Source media
-  mediaUrl: text('media_url'),
-  mediaMimeType: text('media_mime_type'),
-  mediaSizeBytes: integer('media_size_bytes'),
-  mediaDurationSeconds: integer('media_duration_seconds'), // For audio/video
-  mediaSha256: text('media_sha256'), // For deduplication
-
-  // Batch job reference (if from batch processing)
-  batchJobId: text('batch_job_id'),
-
-  processedAt: timestamp('processed_at'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+```
+packages/media-processing/
+├── package.json
+├── src/
+│   ├── index.ts              # Exports
+│   ├── service.ts            # MediaProcessingService
+│   ├── types.ts              # Interfaces
+│   ├── pricing.ts            # Cost calculations
+│   └── processors/
+│       ├── index.ts
+│       ├── base.ts           # BaseProcessor
+│       ├── audio.ts          # AudioProcessor (Groq/OpenAI)
+│       ├── image.ts          # ImageProcessor (Gemini/OpenAI)
+│       └── document.ts       # DocumentProcessor (local libs)
+└── __tests__/
+    └── processors.test.ts
 ```
 
 ### Processor Interface
 
 ```typescript
-// packages/core/src/media-processing/types.ts
-
 export interface ProcessingResult {
   content: string;
-  contentFormat: 'text' | 'markdown';
-  processorName: string;
-  processorModel: string;
+  processingType: 'transcription' | 'description' | 'extraction';
+  provider: string;        // 'groq' | 'openai' | 'gemini' | 'local'
+  model: string;           // 'whisper-large-v3-turbo' | etc
   processingTimeMs: number;
-  confidenceScore?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  costInputUsd: Decimal;
-  costOutputUsd: Decimal;
-  costTotalUsd: Decimal;
-  mediaDurationSeconds?: number;
+  language?: string;
+  duration?: number;       // For audio/video
+  tokensUsed?: number;     // For LLM-based
+  costUsd: number;         // In cents
+}
+
+export interface ProcessorConfig {
+  groqApiKey?: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  defaultLanguage?: string;
+  maxFileSizeMb?: number;
 }
 
 export abstract class BaseProcessor {
-  abstract readonly processorName: string;
+  abstract readonly name: string;
   abstract readonly supportedMimeTypes: string[];
 
-  abstract process(
-    filePath: string,
-    mimeType: string,
-    options?: ProcessorOptions
-  ): Promise<ProcessingResult>;
+  abstract canProcess(mimeType: string): boolean;
+  abstract process(filePath: string, mimeType: string): Promise<ProcessingResult>;
 }
+```
+
+### Processing Flow
+
+```
+1. Channel receives message with media
+2. MediaStorageService downloads to local path
+3. MediaProcessingService.process(filePath, mimeType) called
+4. Result stored in media_content table
+5. Transcript attached to message (or message.mediaContent relation)
+6. message.received event emitted (transcript now available)
+7. Automations see transcript in context
 ```
 
 ### Pricing Registry
 
 ```typescript
-// packages/core/src/media-processing/pricing.ts
-
 export const PRICING = {
-  groq_whisper: {
-    'whisper-large-v3-turbo': { unit: 'hour', rate: 0.04 },
-    'whisper-large-v3': { unit: 'hour', rate: 0.111 },
-    'distil-whisper-large-v3-en': { unit: 'hour', rate: 0.02 },
+  groq: {
+    'whisper-large-v3-turbo': { perHour: 4 },      // $0.04/hour = 4 cents
+    'whisper-large-v3': { perHour: 11 },           // $0.111/hour
   },
-  openai_whisper: {
-    'whisper-1': { unit: 'minute', rate: 0.006 },
+  openai: {
+    'whisper-1': { perMinute: 0.6 },               // $0.006/minute = 0.6 cents
+    'gpt-4o-mini': { inputPer1M: 15, outputPer1M: 60 },
   },
-  gemini_vision: {
-    'gemini-2.5-flash': { unit: 'million_tokens', inputRate: 0.15, outputRate: 0.60 },
-    'gemini-2.0-flash': { unit: 'million_tokens', inputRate: 0.10, outputRate: 0.40 },
-  },
-  openai_vision: {
-    'gpt-4o-mini': { unit: 'million_tokens', inputRate: 0.15, outputRate: 0.60 },
-    'gpt-5-nano': { unit: 'million_tokens', inputRate: 0.05, outputRate: 0.40 },
+  gemini: {
+    'gemini-2.0-flash': { inputPer1M: 10, outputPer1M: 40 },
   },
   local: {
-    'pymupdf': { unit: 'free', rate: 0 },
-    'python-docx': { unit: 'free', rate: 0 },
-    'openpyxl': { unit: 'free', rate: 0 },
+    'pdf-parse': { perDocument: 0 },
+    'mammoth': { perDocument: 0 },
+    'xlsx': { perDocument: 0 },
   },
 };
 ```
 
-## Implementation Groups
+---
 
-### Group 1: Foundation
-- [ ] Add `media_content` table to DB schema
-- [ ] Create `BaseProcessor` and `ProcessingResult` types
-- [ ] Create pricing registry
-- [ ] Create `MediaProcessingService` class
+## Execution Groups
 
-### Group 2: Processors
-- [ ] Implement `AudioProcessor` (Groq → OpenAI fallback)
-- [ ] Implement `ImageProcessor` (Gemini → OpenAI fallback)
-- [ ] Implement `VideoProcessor` (Gemini File API)
-- [ ] Implement `DocumentProcessor` (PyMuPDF → Gemini OCR)
+### Group A: Foundation & Audio
 
-### Group 3: Channel Integration
-- [ ] Integrate with `channel-whatsapp` message handler
-- [ ] Integrate with `channel-discord` message handler
-- [ ] Add settings for enable/disable per instance
+**Goal:** Create package structure and audio transcription (most common use case)
 
-### Group 4: API & Testing
-- [ ] Add API endpoints for querying MediaContent
-- [ ] Add tests for each processor
+**Packages:** `media-processing` (new), `api`
+
+**Deliverables:**
+- [ ] Create `packages/media-processing` with package.json, tsconfig
+- [ ] Implement `BaseProcessor` interface
+- [ ] Implement `AudioProcessor` with Groq primary, OpenAI fallback
+- [ ] Implement `MediaProcessingService` orchestrator
+- [ ] Implement pricing calculations
+- [ ] Add tests for audio processor
+- [ ] Wire up in API message handling
+
+**Acceptance Criteria:**
+- [ ] Audio messages are transcribed automatically
+- [ ] Fallback to OpenAI works when Groq fails
+- [ ] Transcript stored in `media_content` table
+- [ ] Cost tracked accurately
+- [ ] `make check` passes
+
+**Validation:**
+```bash
+make check
+bun test packages/media-processing
+# Manual: Send voice message, verify transcript appears
+```
+
+### Group B: Image & Document Processors
+
+**Goal:** Complete processor coverage for images and documents
+
+**Packages:** `media-processing`
+
+**Deliverables:**
+- [ ] Implement `ImageProcessor` with Gemini primary, OpenAI fallback
+- [ ] Implement `DocumentProcessor` with local libs + OCR fallback
+- [ ] Add tests for image processor
+- [ ] Add tests for document processor
+- [ ] Update service to route by mime type
+
+**Acceptance Criteria:**
+- [ ] Images get descriptions generated
+- [ ] PDFs, Word, Excel text extracted
+- [ ] Scanned PDFs use OCR fallback
+- [ ] All costs tracked
+
+**Validation:**
+```bash
+make check
+bun test packages/media-processing
+# Manual: Send image, PDF, verify content extracted
+```
+
+### Group C: Channel Integration
+
+**Goal:** Connect processing to message flow in all channels
+
+**Packages:** `channel-whatsapp`, `channel-discord`, `api`
+
+**Deliverables:**
+- [ ] WhatsApp: Call processing after media download
+- [ ] Discord: Call processing after media download
+- [ ] Make transcript available in automation context
+- [ ] Emit `media.processed` event after completion
 - [ ] Add integration tests
+
+**Acceptance Criteria:**
+- [ ] Transcript available when automations fire
+- [ ] Processing errors don't block message handling
+- [ ] Events emitted correctly
+- [ ] Works for both WhatsApp and Discord
+
+**Validation:**
+```bash
+make check
+# Manual: Create automation that uses transcript
+# Manual: Verify transcript available before action runs
+```
+
+---
 
 ## Success Criteria
 
-- [ ] Audio messages are automatically transcribed when received
+- [ ] Audio messages transcribed automatically on receive
 - [ ] Images get descriptions generated
-- [ ] Documents have text extracted
-- [ ] Cost tracking is penny-accurate
+- [ ] Documents (PDF, Word, Excel) have text extracted
+- [ ] Transcripts available when automation actions fire
+- [ ] Cost tracking is accurate
 - [ ] Fallback processors work when primary fails
-- [ ] Processing happens before debounce (immediate availability)
+- [ ] Processing failures don't break message flow
+
+---
 
 ## Dependencies
 
-- `@omni/core` - Event bus, schemas
-- `@omni/db` - Database schema
-- `@omni/channel-whatsapp` - WhatsApp integration
-- `@omni/channel-discord` - Discord integration
+### Internal
+- `@omni/core` - Logger, events, types
+- `@omni/db` - Database access
+- `@omni/api` - MediaStorageService
 
-## External Dependencies (NPM)
-
+### External (NPM)
 - `groq-sdk` - Groq Whisper API
-- `openai` - OpenAI Whisper/Vision API
-- `@google/generative-ai` - Gemini API
-- `mupdf` or `pdf-parse` - PDF text extraction
+- `openai` - OpenAI Whisper/Vision
+- `@google/generative-ai` - Gemini Vision
+- `pdf-parse` - PDF text extraction
 - `mammoth` - Word document extraction
 - `xlsx` - Excel extraction
+
+---
+
+## Notes
+
+**V1 Reference Files:**
+- `/home/cezar/dev/omni/src/services/media_processing/service.py`
+- `/home/cezar/dev/omni/src/services/media_processing/processors/`
