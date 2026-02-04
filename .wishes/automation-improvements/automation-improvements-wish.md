@@ -2,7 +2,7 @@
 
 > Add OR logic support for automation trigger conditions.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-02
 **Updated:** 2026-02-04
 **Author:** WISH Agent
@@ -164,3 +164,34 @@ omni automations create \
   "actions": [{ "type": "log", "config": { "level": "info", "message": "Support keyword detected" } }]
 }
 ```
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-04
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `make db-push` succeeds | PASS | Schema pushed successfully |
+| `evaluateConditions([...], payload, 'or')` returns true if ANY matches | PASS | 58 tests pass in conditions.test.ts |
+| Default 'and' behavior unchanged | PASS | Tests verify default behavior |
+| Can create automation with `conditionLogic: 'or'` via API | PASS | Route validation includes conditionLogic |
+| Can create automation with `--condition-logic or` via CLI | PASS | CLI help shows flag |
+| SDK types include `conditionLogic` field | PASS | Line 370 in client.ts |
+| `make check` passes | PASS | 756 pass, 0 fail |
+
+### Findings
+
+- All acceptance criteria pass
+- No security issues found
+- Backwards compatible (default 'and')
+- 7 new tests added for OR logic
+- All packages updated consistently (db, core, api, sdk, cli)
+
+### Recommendation
+
+Ready for production use. Feature is complete and well-tested.
