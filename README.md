@@ -134,70 +134,59 @@ Supports Claude Desktop, Cursor, VSCode, Windsurf, and any MCP-compatible client
 git clone https://github.com/namastexlabs/omni-v2.git
 cd omni-v2
 
-# Install dependencies
-bun install
+# See all available commands
+make help
 
-# Setup NATS (one-time)
-curl -L https://github.com/nats-io/nats-server/releases/download/v2.10.22/nats-server-v2.10.22-linux-amd64.tar.gz | tar xz
-sudo mv nats-server-v2.10.22-linux-amd64/nats-server /usr/local/bin/
-sudo mkdir -p /var/lib/nats && sudo chown $USER:$USER /var/lib/nats
+# One-command setup (RECOMMENDED)
+make setup
 
-# Setup environment
-cp .env.example .env
-# Edit .env with your configuration
-
-# Start development
-bun dev
-
-# Or start production with PM2
-pm2 start ecosystem.config.js
+# Or step-by-step:
+bun install             # Install dependencies
+make dev-services       # Start PostgreSQL + NATS + API via PM2
+make status             # Check service status
 ```
+
+**Default URLs:**
+- API: http://localhost:8882
+- Swagger Docs: http://localhost:8882/api/v2/docs
+- PostgreSQL: localhost:8432
+- NATS: localhost:4222
+
+**Git Hooks:**
+- Pre-commit: Runs `make lint` (blocks commits with lint errors)
+- Pre-push: Runs `make typecheck` (blocks pushes with type errors)
+
+Hooks are automatically installed via `bun install` (Husky prepare script).
 
 ## Deployment (PM2)
 
-We use PM2 for production deployment (no containers required):
+We use PM2 for production deployment (no containers required).
 
-```javascript
-// ecosystem.config.js
-module.exports = {
-  apps: [
-    {
-      name: 'nats',
-      script: 'nats-server',
-      args: '--jetstream --store_dir /var/lib/nats',
-      interpreter: 'none',
-    },
-    {
-      name: 'omni-api',
-      script: 'bun',
-      args: 'run start:api',
-      env: {
-        NODE_ENV: 'production',
-      },
-    },
-    {
-      name: 'omni-workers',
-      script: 'bun',
-      args: 'run start:workers',
-      instances: 2,
-      env: {
-        NODE_ENV: 'production',
-      },
-    },
-  ],
-};
-```
+**Development services managed via `ecosystem.config.cjs`:**
+- `omni-v2-pgserve` - PostgreSQL (pgserve)
+- `omni-v2-nats` - NATS JetStream
+- `omni-v2-api` - API server (uses tsx for Baileys WS compatibility)
 
 ```bash
 # Start all services
-pm2 start ecosystem.config.js
+make dev-services
 
-# View logs
-pm2 logs
+# View service status
+make status
 
-# Monitor
-pm2 monit
+# Individual service control
+make restart-api      # Restart API only
+make restart-nats     # Restart NATS only
+make restart-pgserve  # Restart PostgreSQL only
+make logs-api         # View API logs
+
+# Stop all services
+make stop
 ```
+
+**Service URLs:**
+- API: http://localhost:8882 (default, configurable via `API_PORT` in `.env`)
+- Swagger Docs: http://localhost:8882/api/v2/docs
 
 ## Project Structure
 

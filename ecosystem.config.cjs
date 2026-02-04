@@ -4,6 +4,7 @@
  * Manages local development services:
  * - pgserve (PostgreSQL)
  * - nats-server (NATS with JetStream)
+ * - api (Omni API - uses tsx for Baileys WS compatibility)
  *
  * Services are only started if their *_MANAGED=true env var is set.
  * Environment variables should be loaded by the shell before PM2 runs.
@@ -16,6 +17,7 @@ const path = require('node:path');
 
 const pgserveManaged = process.env.PGSERVE_MANAGED === 'true';
 const natsManaged = process.env.NATS_MANAGED === 'true';
+const apiManaged = process.env.API_MANAGED === 'true';
 
 const apps = [];
 
@@ -56,6 +58,24 @@ if (natsManaged) {
     autorestart: true,
     watch: false,
     max_restarts: 5,
+    restart_delay: 1000,
+  });
+}
+
+// API server (uses tsx for Baileys WebSocket compatibility)
+if (apiManaged) {
+  apps.push({
+    name: 'omni-v2-api',
+    script: 'npx',
+    args: 'tsx watch packages/api/src/index.ts',
+    cwd: __dirname,
+    env: {
+      NODE_ENV: 'development',
+      OMNI_PACKAGES_DIR: path.join(__dirname, 'packages'),
+    },
+    autorestart: true,
+    watch: false,
+    max_restarts: 10,
     restart_delay: 1000,
   });
 }

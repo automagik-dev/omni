@@ -286,11 +286,25 @@ term close <beads-id>             # Close issue + cleanup worker
 make help         # Show all available commands (START HERE)
 ```
 
+### Quick Reference
+
+| Task | Command |
+|------|---------|
+| Full setup | `make setup` |
+| Start dev | `make dev` |
+| Run checks | `make check` |
+| Lint | `make lint` |
+| Typecheck | `make typecheck` |
+| Generate SDK | `make sdk-generate` |
+| Restart API | `make restart-api` |
+| Run CLI | `make cli ARGS="--help"` |
+| Install CLI globally | `make cli-link` |
+
 ### Development
 ```bash
 make dev          # Start all services + API
-make dev-api      # Start just the API
-make dev-services # Start PostgreSQL + NATS
+make dev-api      # Start just the API (manual mode)
+make dev-services # Start PostgreSQL + NATS + API via PM2
 ```
 
 ### Quality Checks
@@ -302,6 +316,26 @@ make lint-fix     # Auto-fix lint issues
 make test         # All tests
 make test-api     # API package tests only
 make test-file F=<path>  # Specific test file
+```
+
+### Individual Services
+```bash
+make restart-api     # Restart API only
+make restart-nats    # Restart NATS only
+make restart-pgserve # Restart PostgreSQL only
+make logs-api        # View API logs
+```
+
+### CLI
+```bash
+make cli ARGS="--help"    # Run CLI from source
+make cli-build            # Build CLI package
+make cli-link             # Build + link globally (omni command)
+```
+
+### SDK
+```bash
+make sdk-generate   # Generate SDK from OpenAPI spec
 ```
 
 ### Database
