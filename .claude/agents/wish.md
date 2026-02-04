@@ -40,7 +40,36 @@ Every wish must have explicit boundaries:
 - Explicit exclusions
 - Future considerations (not now)
 
-### 4. BLUEPRINT (Execution Groups)
+### 4. IMPACT ANALYSIS (System Awareness)
+
+Before defining execution groups, analyze which parts of the system are affected:
+
+```markdown
+## Impact Analysis
+
+### Packages Affected
+- [ ] `core` - Events, schemas, types
+- [ ] `db` - Database schema (Drizzle)
+- [ ] `api` - Routes, services, plugins
+- [ ] `sdk` - Requires regeneration if API changes
+- [ ] `cli` - Commands need updating
+- [ ] `channel-sdk` - Plugin interface changes
+- [ ] `channel-*` - Specific channel implementations
+
+### System Considerations
+- [ ] **Events** - New event types needed? Existing events modified?
+- [ ] **Database** - Schema changes? Migration needed?
+- [ ] **SDK** - API surface changed? Run `bun generate:sdk`
+- [ ] **CLI** - New commands? Existing commands affected?
+- [ ] **OpenAPI** - Endpoint changes require spec update
+
+### Integration Points
+- [ ] Event handlers in api/plugins/
+- [ ] Service layer changes
+- [ ] Channel plugin updates
+```
+
+### 5. BLUEPRINT (Execution Groups)
 
 Break work into focused execution groups (max 3 per wish):
 
@@ -48,6 +77,8 @@ Break work into focused execution groups (max 3 per wish):
 ## Execution Group A: [Name]
 
 **Goal:** [Clear objective]
+
+**Packages:** [core, api, cli, etc.]
 
 **Deliverables:**
 - [ ] Deliverable 1
@@ -58,8 +89,9 @@ Break work into focused execution groups (max 3 per wish):
 - [ ] Criterion 2
 
 **Validation:**
-- `bun test packages/core`
-- `make typecheck`
+- `make check` (typecheck + lint + test)
+- `bun test packages/<affected>`
+- `bun generate:sdk` (if API changed)
 ```
 
 ## Output Format
@@ -72,6 +104,7 @@ Wishes are saved to: `.wishes/<slug>/<slug>-wish.md`
 **Status:** DRAFT | APPROVED | FORGING | REVIEW | SHIPPED | BLOCKED
 **Created:** [Date]
 **Author:** [Name]
+**Beads:** [beads-id]
 
 ## Summary
 [2-3 sentence overview]
@@ -84,6 +117,23 @@ Wishes are saved to: `.wishes/<slug>/<slug>-wish.md`
 - DEC-1: [Decision]
 - RISK-1: [Risk] → Mitigation: [How we handle it]
 
+## Impact Analysis
+
+### Packages Affected
+| Package | Changes | Notes |
+|---------|---------|-------|
+| core | schemas, events | New MessageType enum |
+| api | routes, services | New endpoint |
+| sdk | regenerate | API surface changed |
+| cli | new command | `omni <cmd>` |
+
+### System Checklist
+- [ ] Events: [New/modified event types]
+- [ ] Database: [Schema changes needed]
+- [ ] SDK: [Regeneration required]
+- [ ] CLI: [Commands to add/update]
+- [ ] Tests: [Test files to create]
+
 ## Scope
 
 ### IN SCOPE
@@ -94,10 +144,14 @@ Wishes are saved to: `.wishes/<slug>/<slug>-wish.md`
 
 ## Success Criteria
 - [ ] [Measurable criterion]
+- [ ] `make check` passes
+- [ ] SDK regenerated (if API changed)
+- [ ] CLI commands work (if applicable)
 
 ## Execution Groups
 
 ### Group A: [Name]
+**Packages:** core, api
 [As defined above]
 
 ---

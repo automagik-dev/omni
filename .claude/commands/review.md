@@ -33,13 +33,39 @@ For each acceptance criterion:
 4. Document evidence
 ```
 
-### 3. ASSESS
+### 3. SYSTEM VALIDATION
+
+Check all affected system components from the wish's Impact Analysis:
+
+**Core Validation:**
+```bash
+make check                    # typecheck + lint + test
+```
+
+**Package-Specific Checks:**
+| If Changed | Verify |
+|------------|--------|
+| `core/events/` | Event types defined, handlers registered |
+| `db/schema.ts` | Schema pushed (`make db-push`), migrations work |
+| `api/routes/` | Endpoints work, OpenAPI spec updated |
+| `sdk/` | Regenerated (`bun generate:sdk`), types correct |
+| `cli/commands/` | Commands work, help text accurate |
+| `channel-*/` | Plugin interface respected, events emitted |
+
+**Integration Checks:**
+- [ ] Events flow correctly through NATS
+- [ ] Database queries use Drizzle (no raw SQL)
+- [ ] SDK client can call new/modified endpoints
+- [ ] CLI commands function as documented
+
+### 4. ASSESS
 
 Review dimensions:
-- **Security** - No vulnerabilities
+- **Security** - No vulnerabilities, no secrets exposed
 - **Correctness** - Works as specified
 - **Quality** - Clean, maintainable code
-- **Tests** - Adequate coverage
+- **Tests** - Adequate coverage for affected packages
+- **Integration** - All system components work together
 
 ### 4. VERDICT
 
@@ -120,8 +146,24 @@ Verdict: [SHIP/FIX-FIRST/BLOCKED]
 - Security issues
 - Back to FORGE with details
 
+## System-Specific Blockers
+
+These issues automatically block SHIP verdict:
+
+| Issue | Why It Blocks |
+|-------|---------------|
+| `make check` fails | Quality gate not passed |
+| SDK not regenerated after API change | Client types out of sync |
+| Events skipped for state changes | Violates event-first architecture |
+| Raw SQL used instead of Drizzle | Consistency violation |
+| Channel logic in core package | Plugin isolation violated |
+| npm/yarn/pnpm used | Must use Bun only |
+
 ## Remember
 
 - Don't ship with CRITICAL or HIGH issues
 - Document evidence for every criterion
 - Be objective - either it passes or it doesn't
+- Verify all packages in Impact Analysis are addressed
+- Run `bun generate:sdk` if any API routes changed
+- Ensure `make check` passes before SHIP verdict

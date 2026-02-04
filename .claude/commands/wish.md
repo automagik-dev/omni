@@ -40,7 +40,33 @@ Define clear boundaries:
 **OUT OF SCOPE:**
 - Explicit exclusions (prevents scope creep)
 
-### 4. BLUEPRINT
+### 4. IMPACT ANALYSIS (System Awareness)
+
+Analyze which parts of the omni-v2 system are affected:
+
+```markdown
+## Impact Analysis
+
+### Packages Affected
+| Package | Changes | Notes |
+|---------|---------|-------|
+| core | [ ] events, [ ] schemas, [ ] types | |
+| db | [ ] schema, [ ] migrations | |
+| api | [ ] routes, [ ] services, [ ] plugins | |
+| sdk | [ ] regenerate | If API surface changed |
+| cli | [ ] commands | New or updated |
+| channel-sdk | [ ] interface | Plugin API changes |
+| channel-* | [ ] implementations | Specific channels |
+
+### System Checklist
+- [ ] **Events**: New event types? Modified payloads?
+- [ ] **Database**: Schema changes? Run `make db-push`
+- [ ] **SDK**: API changed? Run `bun generate:sdk`
+- [ ] **CLI**: Commands to add/update?
+- [ ] **Tests**: Which packages need tests?
+```
+
+### 5. BLUEPRINT
 
 Create execution groups (max 3):
 
@@ -48,6 +74,8 @@ Create execution groups (max 3):
 ## Execution Group A: [Name]
 
 **Goal:** [Clear objective]
+
+**Packages:** [core, api, cli, etc.]
 
 **Deliverables:**
 - [ ] Deliverable 1
@@ -58,11 +86,12 @@ Create execution groups (max 3):
 - [ ] Criterion 2
 
 **Validation:**
-- `bun test packages/[relevant]`
-- `make typecheck`
+- `make check`
+- `bun test packages/<affected>`
+- `bun generate:sdk` (if API changed)
 ```
 
-### 5. SAVE & TRACK
+### 6. SAVE & TRACK
 
 Create the wish document AND beads issue:
 
@@ -87,6 +116,22 @@ bd create "<slug>: <title>" --type feature --description "See .wishes/<slug>/<sl
 **Created:** <Date>
 **Author:** WISH Agent
 **Beads:** <beads-id>
+
+## Impact Analysis
+
+### Packages Affected
+| Package | Changes | Notes |
+|---------|---------|-------|
+| core | events | New event type |
+| api | routes, services | New endpoint |
+| sdk | regenerate | API changed |
+
+### System Checklist
+- [ ] Events defined
+- [ ] Database schema updated
+- [ ] SDK regenerated
+- [ ] CLI commands added
+- [ ] Tests written
 ```
 
 ## Output

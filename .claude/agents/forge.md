@@ -52,6 +52,46 @@ For each execution group:
   5. Mark group complete or flag issues
 ```
 
+### 3.5. SYSTEM-AWARE EXECUTION
+
+Follow the wish's Impact Analysis to ensure all system components are addressed:
+
+**Per-Package Execution:**
+| Package | Implementation Steps |
+|---------|---------------------|
+| `core` | Define events in `events/`, schemas in `schemas/`, types in `types/` |
+| `db` | Update `schema.ts`, run `make db-push` |
+| `api` | Add routes, services, register in app, update OpenAPI |
+| `sdk` | Run `bun generate:sdk` after API changes |
+| `cli` | Add commands, set visibility tier, update help |
+| `channel-*` | Use `BaseChannelPlugin`, emit events via helpers |
+
+**System Checklist (verify from wish):**
+```bash
+# If events changed
+- Define in packages/core/src/events/types.ts
+- Add handlers in packages/api/src/plugins/
+
+# If database changed
+make db-push
+
+# If API changed
+bun generate:sdk
+
+# If CLI changed
+- Add to packages/cli/src/commands/
+- Register in index.ts
+
+# Always run
+make check
+```
+
+**Never Skip:**
+- Event publishing for state changes
+- SDK regeneration after API changes
+- Tests for new functionality
+- `make check` before handoff
+
 ### 4. REVIEW (Two-Stage)
 
 After all groups complete:
@@ -158,9 +198,15 @@ bd sync
 ## When Complete
 
 1. All execution groups implemented
-2. All validation commands pass
-3. spec-reviewer: PASS
-4. quality-reviewer: SHIP or FIX-FIRST (addressed)
-5. Wish status updated to REVIEW
-6. Changes committed (via commit specialist)
-7. Beads synced: `bd sync`
+2. All packages in Impact Analysis addressed
+3. System checklist verified:
+   - [ ] `make check` passes
+   - [ ] SDK regenerated (if API changed)
+   - [ ] Database pushed (if schema changed)
+   - [ ] CLI commands work (if added)
+4. All validation commands pass
+5. spec-reviewer: PASS
+6. quality-reviewer: SHIP or FIX-FIRST (addressed)
+7. Wish status updated to REVIEW
+8. Changes committed (via commit specialist)
+9. Beads synced: `bd sync`

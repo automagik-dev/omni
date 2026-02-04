@@ -70,6 +70,7 @@ End-to-end testing with scenario validation.
 - [ ] Error handling is appropriate
 - [ ] No obvious performance issues
 - [ ] Code follows project patterns
+- [ ] Uses Bun (not npm/yarn/node)
 
 ### Wish Compliance
 - [ ] All acceptance criteria met
@@ -82,11 +83,46 @@ End-to-end testing with scenario validation.
 - [ ] Tests pass (`bun test`)
 - [ ] Edge cases covered
 - [ ] Error paths tested
+- [ ] `make check` passes (typecheck + lint + test)
 
 ### Documentation
 - [ ] Code is self-documenting or has necessary comments
 - [ ] API changes documented (if applicable)
 - [ ] Breaking changes noted (if applicable)
+
+### System Integration (Omni-Specific)
+
+**Event System:**
+- [ ] New events defined in `core/src/events/`
+- [ ] Event handlers registered in affected services
+- [ ] Events published correctly (not skipped for state changes)
+
+**Database:**
+- [ ] Schema changes in `db/src/schema.ts`
+- [ ] Migrations created if needed (`make db-push`)
+- [ ] No raw SQL (uses Drizzle)
+
+**SDK Generation:**
+- [ ] If API routes changed: `bun generate:sdk` ran
+- [ ] `packages/sdk/src/types.generated.ts` updated
+- [ ] SDK client methods work correctly
+
+**CLI:**
+- [ ] New commands added to `packages/cli/src/commands/`
+- [ ] Command visibility tier set correctly (core/standard/advanced/debug)
+- [ ] Help text is clear and LLM-friendly
+
+**Channel Plugins:**
+- [ ] Plugin interface respected (`channel-sdk`)
+- [ ] No channel-specific logic in core
+- [ ] Events emitted via `BaseChannelPlugin` helpers
+
+**Validation Commands:**
+```bash
+make check                    # Full quality gate
+bun generate:sdk              # SDK regeneration (if API changed)
+bun test packages/<affected>  # Package-specific tests
+```
 
 ## Output Format
 
