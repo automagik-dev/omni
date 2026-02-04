@@ -172,18 +172,29 @@ lint-core:
 format:
 	bunx biome format --write .
 
-test:
-	bun test
+test: _build-dist
+	bun test --env-file=.env
 
-test-watch:
-	bun test --watch
+test-watch: _build-dist
+	bun test --env-file=.env --watch
 
-# Run tests for specific packages
+# Build SDK and CLI dist (required for CLI tests)
+_build-dist:
+	@if [ ! -d packages/sdk/dist ]; then \
+		echo "Building SDK..."; \
+		cd packages/sdk && bun run build; \
+	fi
+	@if [ ! -d packages/cli/dist ]; then \
+		echo "Building CLI..."; \
+		cd packages/cli && bun run build; \
+	fi
+
+# Run tests for specific packages (load .env from root)
 test-api:
-	cd packages/api && bun test
+	bun test --env-file=.env packages/api/src
 
 test-db:
-	cd packages/db && bun test
+	bun test --env-file=.env packages/db/src
 
 # Run a specific test file (usage: make test-file F=packages/api/src/__tests__/foo.test.ts)
 test-file:
