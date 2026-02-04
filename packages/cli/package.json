@@ -11,7 +11,7 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-    "dev": "bun run ./src/index.ts",
+    "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
