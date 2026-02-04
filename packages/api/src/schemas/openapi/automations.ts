@@ -295,6 +295,45 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   });
 
   registry.registerPath({
+    method: 'post',
+    path: '/automations/{id}/execute',
+    tags: ['Automations'],
+    summary: 'Execute automation',
+    description: 'Execute automation with a provided event payload. Actually runs the actions (not a dry run).',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }),
+      body: { content: { 'application/json': { schema: TestAutomationSchema } } },
+    },
+    responses: {
+      200: {
+        description: 'Execution result',
+        content: {
+          'application/json': {
+            schema: z.object({
+              automationId: z.string().uuid(),
+              triggered: z
+                .boolean()
+                .openapi({ description: 'Whether the automation was triggered (event type matched)' }),
+              results: z
+                .array(
+                  z.object({
+                    action: z.string(),
+                    status: z.enum(['success', 'failed']),
+                    result: z.unknown().optional(),
+                    error: z.string().optional(),
+                    durationMs: z.number().int(),
+                  }),
+                )
+                .openapi({ description: 'Results of each action execution' }),
+            }),
+          },
+        },
+      },
+      404: { description: 'Not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
     method: 'get',
     path: '/automations/{id}/logs',
     tags: ['Automations'],

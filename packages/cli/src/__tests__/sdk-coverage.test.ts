@@ -137,6 +137,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'automations.enable': 'automations enable',
   'automations.disable': 'automations disable',
   'automations.test': 'automations test',
+  'automations.execute': 'automations execute',
   'automations.getLogs': 'automations logs',
 
   // ============================================================================

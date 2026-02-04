@@ -3,13 +3,18 @@
  */
 
 import {
+  type ActionDependencies,
+  type ActionExecutionResult,
   type AgentCallContext,
   type AgentRunResult,
+  type AutomationAction,
   type AutomationEngine,
   type CallAgentActionConfig,
   type Automation as CoreAutomation,
   NotFoundError,
   createAutomationEngine,
+  createTemplateContext,
+  executeActions,
 } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -198,6 +203,64 @@ export class AutomationService {
         wouldExecute: matched,
       })),
       dryRun: true,
+    };
+  }
+
+  /**
+   * Execute an automation with a provided event payload.
+   * Actually runs the actions (not a dry run).
+   */
+  async execute(
+    id: string,
+    event: { type: string; payload: Record<string, unknown> },
+    deps?: ActionDependencies,
+  ): Promise<{
+    automationId: string;
+    triggered: boolean;
+    results: ActionExecutionResult[];
+  }> {
+    const automation = await this.getById(id);
+
+    // Check if event type matches
+    if (automation.triggerEventType !== event.type) {
+      return {
+        automationId: id,
+        triggered: false,
+        results: [],
+      };
+    }
+
+    // Build context from event
+    const correlationId = crypto.randomUUID();
+    const context = createTemplateContext(event.payload);
+
+    // Default dependencies (eventBus from service, others empty)
+    const actionDeps: ActionDependencies = {
+      eventBus: this.eventBus,
+      ...deps,
+    };
+
+    // Execute actions
+    const results = await executeActions(automation.actions as AutomationAction[], context, actionDeps);
+
+    // Log the execution
+    const status = results.every((r) => r.status === 'success') ? 'success' : 'failed';
+    const failedAction = results.find((r) => r.status === 'failed');
+
+    await this.logExecution({
+      automationId: id,
+      eventId: correlationId,
+      status,
+      conditionsMatched: true, // Manual execution always matches
+      actionsExecuted: results,
+      error: failedAction?.error ?? null,
+      executionTimeMs: results.reduce((sum, r) => sum + r.durationMs, 0),
+    });
+
+    return {
+      automationId: id,
+      triggered: true,
+      results,
     };
   }
 

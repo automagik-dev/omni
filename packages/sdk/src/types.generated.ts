@@ -7986,22 +7986,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -8136,22 +8123,9 @@ export interface paths {
                                 sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                 /** @description Prefix messages with sender name */
                                 prefixSenderName?: boolean;
-                                /** @description Enable response splitting on \n\n */
-                                enableSplit?: boolean;
-                                /**
-                                 * @description Delay mode between split messages
-                                 * @enum {string}
-                                 */
-                                splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                /** @description Min delay in ms (for randomized mode) */
-                                splitDelayMinMs?: number;
-                                /** @description Max delay in ms (for randomized mode) */
-                                splitDelayMaxMs?: number;
-                                /** @description Show typing presence during agent processing */
-                                showTypingPresence?: boolean;
                                 /** @description Timeout in milliseconds */
                                 timeoutMs?: number;
-                                /** @description Store agent response as variable for chaining */
+                                /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                 responseAs?: string;
                             };
                         })[];
@@ -8278,22 +8252,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -8475,22 +8436,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -8703,22 +8651,9 @@ export interface paths {
                                 sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                 /** @description Prefix messages with sender name */
                                 prefixSenderName?: boolean;
-                                /** @description Enable response splitting on \n\n */
-                                enableSplit?: boolean;
-                                /**
-                                 * @description Delay mode between split messages
-                                 * @enum {string}
-                                 */
-                                splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                /** @description Min delay in ms (for randomized mode) */
-                                splitDelayMinMs?: number;
-                                /** @description Max delay in ms (for randomized mode) */
-                                splitDelayMaxMs?: number;
-                                /** @description Show typing presence during agent processing */
-                                showTypingPresence?: boolean;
                                 /** @description Timeout in milliseconds */
                                 timeoutMs?: number;
-                                /** @description Store agent response as variable for chaining */
+                                /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                 responseAs?: string;
                             };
                         })[];
@@ -8845,22 +8780,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -9040,22 +8962,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -9239,22 +9148,9 @@ export interface paths {
                                         sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                         /** @description Prefix messages with sender name */
                                         prefixSenderName?: boolean;
-                                        /** @description Enable response splitting on \n\n */
-                                        enableSplit?: boolean;
-                                        /**
-                                         * @description Delay mode between split messages
-                                         * @enum {string}
-                                         */
-                                        splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                        /** @description Min delay in ms (for randomized mode) */
-                                        splitDelayMinMs?: number;
-                                        /** @description Max delay in ms (for randomized mode) */
-                                        splitDelayMaxMs?: number;
-                                        /** @description Show typing presence during agent processing */
-                                        showTypingPresence?: boolean;
                                         /** @description Timeout in milliseconds */
                                         timeoutMs?: number;
-                                        /** @description Store agent response as variable for chaining */
+                                        /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                         responseAs?: string;
                                     };
                                 })[];
@@ -9441,25 +9337,101 @@ export interface paths {
                                     sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
-                                    /** @description Enable response splitting on \n\n */
-                                    enableSplit?: boolean;
-                                    /**
-                                     * @description Delay mode between split messages
-                                     * @enum {string}
-                                     */
-                                    splitDelayMode?: "disabled" | "fixed" | "randomized";
-                                    /** @description Min delay in ms (for randomized mode) */
-                                    splitDelayMinMs?: number;
-                                    /** @description Max delay in ms (for randomized mode) */
-                                    splitDelayMaxMs?: number;
-                                    /** @description Show typing presence during agent processing */
-                                    showTypingPresence?: boolean;
                                     /** @description Timeout in milliseconds */
                                     timeoutMs?: number;
-                                    /** @description Store agent response as variable for chaining */
+                                    /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
                                 };
                             })[];
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automations/{id}/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute automation
+         * @description Execute automation with a provided event payload. Actually runs the actions (not a dry run).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        event: {
+                            /** @description Event type */
+                            type: string;
+                            /** @description Event payload */
+                            payload: {
+                                [key: string]: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Execution result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            automationId: string;
+                            /** @description Whether the automation was triggered (event type matched) */
+                            triggered: boolean;
+                            /** @description Results of each action execution */
+                            results: {
+                                action: string;
+                                /** @enum {string} */
+                                status: "success" | "failed";
+                                result?: unknown;
+                                error?: string;
+                                durationMs: number;
+                            }[];
                         };
                     };
                 };
@@ -11679,22 +11651,9 @@ export interface components {
                     sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                     /** @description Prefix messages with sender name */
                     prefixSenderName?: boolean;
-                    /** @description Enable response splitting on \n\n */
-                    enableSplit?: boolean;
-                    /**
-                     * @description Delay mode between split messages
-                     * @enum {string}
-                     */
-                    splitDelayMode?: "disabled" | "fixed" | "randomized";
-                    /** @description Min delay in ms (for randomized mode) */
-                    splitDelayMinMs?: number;
-                    /** @description Max delay in ms (for randomized mode) */
-                    splitDelayMaxMs?: number;
-                    /** @description Show typing presence during agent processing */
-                    showTypingPresence?: boolean;
                     /** @description Timeout in milliseconds */
                     timeoutMs?: number;
-                    /** @description Store agent response as variable for chaining */
+                    /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                     responseAs?: string;
                 };
             })[];
@@ -11810,22 +11769,9 @@ export interface components {
                     sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
                     /** @description Prefix messages with sender name */
                     prefixSenderName?: boolean;
-                    /** @description Enable response splitting on \n\n */
-                    enableSplit?: boolean;
-                    /**
-                     * @description Delay mode between split messages
-                     * @enum {string}
-                     */
-                    splitDelayMode?: "disabled" | "fixed" | "randomized";
-                    /** @description Min delay in ms (for randomized mode) */
-                    splitDelayMinMs?: number;
-                    /** @description Max delay in ms (for randomized mode) */
-                    splitDelayMaxMs?: number;
-                    /** @description Show typing presence during agent processing */
-                    showTypingPresence?: boolean;
                     /** @description Timeout in milliseconds */
                     timeoutMs?: number;
-                    /** @description Store agent response as variable for chaining */
+                    /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                     responseAs?: string;
                 };
             })[];

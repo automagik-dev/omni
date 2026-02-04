@@ -9,6 +9,7 @@
  * omni automations enable <id>
  * omni automations disable <id>
  * omni automations test <id> --event <json>
+ * omni automations execute <id> --event <json>
  * omni automations logs <id> [--limit <n>] [--status <status>]
  *
  * Example: Create call_agent automation (response stored for chaining)
@@ -279,6 +280,55 @@ export function createAutomationsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to test automation: ${message}`);
+      }
+    });
+
+  // omni automations execute <id>
+  automations
+    .command('execute <id>')
+    .description('Execute an automation with a provided event (actually runs actions)')
+    .requiredOption('--event <json>', 'Event JSON (e.g., \'{"type":"message.received","payload":{...}}\')')
+    .action(async (id: string, options: { event: string }) => {
+      const client = getClient();
+
+      try {
+        let event: { type: string; payload: Record<string, unknown> };
+        try {
+          event = JSON.parse(options.event);
+        } catch {
+          output.error('Invalid JSON for --event');
+          return;
+        }
+
+        if (!event.type || !event.payload) {
+          output.error('Event must have "type" and "payload" fields');
+          return;
+        }
+
+        const result = await client.automations.execute(id, { event });
+
+        if (result.triggered) {
+          const allSuccess = result.results.every((r: { status: string }) => r.status === 'success');
+          if (allSuccess) {
+            output.success('Automation executed successfully', {
+              automationId: result.automationId,
+              actionsExecuted: result.results.length,
+              results: result.results,
+            });
+          } else {
+            output.info('Automation executed with some failures');
+            output.data({
+              automationId: result.automationId,
+              results: result.results,
+            });
+          }
+        } else {
+          output.info('Automation not triggered (event type did not match)');
+          output.data({ triggered: false });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to execute automation: ${message}`);
       }
     });
 

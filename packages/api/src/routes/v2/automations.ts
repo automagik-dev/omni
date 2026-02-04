@@ -291,6 +291,19 @@ automationsRoutes.post('/:id/test', zValidator('json', testAutomationSchema), as
 });
 
 /**
+ * POST /automations/:id/execute - Execute automation with provided event (actually runs actions)
+ */
+automationsRoutes.post('/:id/execute', zValidator('json', testAutomationSchema), async (c) => {
+  const id = c.req.param('id');
+  const { event } = c.req.valid('json');
+  const services = c.get('services');
+
+  const result = await services.automations.execute(id, event);
+
+  return c.json(result);
+});
+
+/**
  * GET /automations/:id/logs - Get execution logs for automation
  */
 automationsRoutes.get(

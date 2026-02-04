@@ -20,7 +20,7 @@
 import type { EventBus, MessageReceivedPayload } from '@omni/core';
 import { ProviderError, createLogger } from '@omni/core';
 import type { ChannelType, Instance } from '@omni/db';
-import type { AccessService, AgentRunnerService, Services } from '../services';
+import type { AgentRunnerService, Services } from '../services';
 import {
   type MessageContext,
   type SplitDelayConfig,

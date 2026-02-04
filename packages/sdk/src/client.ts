@@ -1818,7 +1818,7 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       /**
-       * Test an automation
+       * Test an automation (dry run)
        */
       async test(id: string, body: TestAutomationBody): Promise<{ matched: boolean; wouldExecute?: unknown[] }> {
         const { data, error, response } = await client.POST('/automations/{id}/test', {
@@ -1827,6 +1827,25 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data ?? { matched: false };
+      },
+
+      /**
+       * Execute an automation (actually runs actions)
+       */
+      async execute(
+        id: string,
+        body: TestAutomationBody,
+      ): Promise<{
+        automationId: string;
+        triggered: boolean;
+        results: Array<{ action: string; status: string; result?: unknown; error?: string; durationMs: number }>;
+      }> {
+        const { data, error, response } = await client.POST('/automations/{id}/execute', {
+          params: { path: { id } },
+          body,
+        });
+        throwIfError(response, error);
+        return data ?? { automationId: id, triggered: false, results: [] };
       },
 
       /**
