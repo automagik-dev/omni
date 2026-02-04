@@ -64,12 +64,38 @@ const logActionSchema = z.object({
   }),
 });
 
+// Call agent action schema
+const callAgentActionSchema = z.object({
+  type: z.literal('call_agent'),
+  config: z.object({
+    providerId: z.string().optional().describe('Provider ID (template: {{instance.agentProviderId}})'),
+    agentId: z.string().min(1).describe('Agent ID (required or template)'),
+    agentType: z.enum(['agent', 'team', 'workflow']).optional().describe('Agent type'),
+    sessionStrategy: z
+      .enum(['per_user', 'per_chat', 'per_user_per_chat'])
+      .optional()
+      .describe('Session strategy for agent memory'),
+    prefixSenderName: z.boolean().optional().describe('Prefix messages with sender name'),
+    enableSplit: z.boolean().optional().describe('Enable response splitting on \\n\\n'),
+    splitDelayMode: z
+      .enum(['disabled', 'fixed', 'randomized'])
+      .optional()
+      .describe('Delay mode between split messages'),
+    splitDelayMinMs: z.number().int().optional().describe('Min delay in ms (for randomized mode)'),
+    splitDelayMaxMs: z.number().int().optional().describe('Max delay in ms (for randomized mode)'),
+    showTypingPresence: z.boolean().optional().describe('Show typing presence during agent processing'),
+    timeoutMs: z.number().int().optional().describe('Timeout in milliseconds'),
+    responseAs: z.string().optional().describe('Store agent response as variable for chaining'),
+  }),
+});
+
 // Combined action schema
 const actionSchema = z.discriminatedUnion('type', [
   webhookActionSchema,
   sendMessageActionSchema,
   emitEventActionSchema,
   logActionSchema,
+  callAgentActionSchema,
 ]);
 
 // Debounce config schema

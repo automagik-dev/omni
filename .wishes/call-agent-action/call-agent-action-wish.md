@@ -2,7 +2,7 @@
 
 > Enable AI agent calls as an automation action type for composable workflows.
 
-**Status:** FORGE
+**Status:** REVIEW
 **Created:** 2026-02-04
 **Author:** WISH Agent
 **Beads:** omni-b48
