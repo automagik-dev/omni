@@ -15,6 +15,16 @@
 /council → Architectural review
 ```
 
+## Worker Orchestration (genie-cli)
+
+```bash
+claudio                 # Launch Claude with LLM routing
+term work <beads-id>    # Spawn worker for issue
+term workers            # Monitor all workers
+term dashboard --watch  # Live status dashboard
+term close <id>         # Cleanup worker
+```
+
 ## Essentials
 
 - **Runtime:** Bun only (never npm/yarn/node)

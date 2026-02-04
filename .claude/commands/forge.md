@@ -5,14 +5,14 @@ arguments:
     description: Path to wish document (e.g., .wishes/auth/auth-wish.md)
     required: false
   - name: spawn
-    description: Spawn tmux sessions instead of inline execution
+    description: Spawn tmux workers via term CLI instead of inline execution
     type: boolean
     required: false
   - name: group
     description: Execute only specific group (A, B, C)
     required: false
   - name: parallel
-    description: Spawn all groups in parallel sessions
+    description: Spawn all groups in parallel workers
     type: boolean
     required: false
 ---
@@ -37,51 +37,47 @@ Parse arguments to determine mode:
 1. **Inline mode** (default): Execute in current session
    - `/forge` or `/forge .wishes/auth/auth-wish.md`
 
-2. **Spawn mode**: Create tmux sessions with worktrees
-   - `/forge --spawn` - Spawn session for wish
-   - `/forge --spawn --parallel` - Spawn parallel sessions per group
+2. **Spawn mode**: Use `term` CLI to spawn workers
+   - `/forge --spawn` - Spawn worker for wish
+   - `/forge --spawn --parallel` - Spawn parallel workers per group
    - `/forge --spawn --group A` - Spawn only group A
 
-## Spawn Mode
+## Spawn Mode (via genie-cli term)
 
-When `--spawn` is present:
+When `--spawn` is present, use the `term` CLI for worker orchestration:
 
 ```bash
-# 1. Determine wish and groups
-WISH_PATH=".wishes/<slug>/<slug>-wish.md"
-WISH_SLUG="<slug>"
-# Get beads ID from wish document (created by /wish)
+# 1. Get beads ID from wish document
 BEADS_ID=$(grep "Beads:" "$WISH_PATH" | awk '{print $2}')
 
-# 2. For each group (or specified --group):
-GROUP="A"
-SESSION_NAME="${WISH_SLUG}-${GROUP}-${BEADS_ID}"
-WORKTREE_PATH="$HOME/.worktrees/omni-v2/${SESSION_NAME}"
+# 2. Spawn worker bound to beads issue
+term work "$BEADS_ID"
 
-# 3. Create worktree
-git worktree add "$WORKTREE_PATH" -b "feat/${SESSION_NAME}"
+# 3. For parallel groups, spawn multiple workers
+# (create sub-issues first, then spawn each)
+bd create "Group A: <description>" --type task
+bd dep add <sub-id> "$BEADS_ID"  # Sub depends on parent
+term work <sub-id-A>
+term work <sub-id-B>
+```
 
-# 4. Create tmux session
-tmux new-session -d -s "$SESSION_NAME" -c "$WORKTREE_PATH"
-
-# 5. Start Claude with forge command
-tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions '/forge $WISH_PATH --group $GROUP'" Enter
-
-# 6. Update beads
-bd update "$BEADS_ID" --status in_progress
+**Monitor workers:**
+```bash
+term workers              # List all workers and states
+term dashboard            # Live status dashboard
+term dashboard --watch    # Auto-refresh dashboard
 ```
 
 **Output for spawn mode:**
 ```
-Spawned forge sessions:
+Spawned forge workers:
 
-- auth-A-abc123: tmux attach -t auth-A-abc123
-- auth-B-abc123: tmux attach -t auth-B-abc123
+Workers:
+  - <beads-id>: term attach / term dashboard
 
-Beads: omni-v2-abc123 (in_progress)
-
-Monitor: tmux ls
-Attach: tmux attach -t <session>
+Monitor: term workers
+Dashboard: term dashboard --watch
+Close: term close <beads-id>
 ```
 
 ## Inline Mode (Default)
@@ -186,17 +182,20 @@ Run /review for final validation.
 
 ## Cleanup (after wish ships)
 
+Use `term` CLI for automated cleanup:
+
 ```bash
-# Remove worktree
-git worktree remove ~/.worktrees/omni-v2/<session-name>
+# Close worker + cleanup worktree + close beads issue
+term close <beads-id>
 
-# Kill tmux session (if still running)
-tmux kill-session -t <session-name>
+# Or with merge to main
+term ship <beads-id>
+```
 
-# Merge branch
-git checkout main
-git merge feat/<session-name>
-git branch -d feat/<session-name>
+**Manual cleanup (if needed):**
+```bash
+term kill <worker>                           # Force kill stuck worker
+git worktree remove ~/.worktrees/<session>   # Remove worktree manually
 ```
 
 ## Remember

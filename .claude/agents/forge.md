@@ -126,16 +126,30 @@ If a specialist fails:
 3. If still failing, pause and report to user
 4. Do not proceed to next group until resolved
 
-## Beads Integration
+## Beads & Term Integration
 
-Track progress with beads throughout execution:
+Track progress with beads and use `term` for worker orchestration:
 
 ```bash
 # At start of forge
 bd update <id> --status in_progress
 
 # Create sub-issues for complex groups
-bd add "Group A: <description>" --parent <wish-id>
+bd create "Group A: <description>" --type task
+bd dep add <sub-id> <wish-id>  # Sub depends on parent
+
+# Spawn workers for parallel execution
+term work <beads-id>           # Single worker
+term work <sub-id-A>           # Parallel workers
+term work <sub-id-B>
+
+# Monitor workers
+term workers                   # List all workers
+term dashboard --watch         # Live dashboard
+
+# Cleanup after completion
+term close <beads-id>          # Close issue + cleanup worker
+term ship <beads-id>           # Close + merge to main
 
 # Sync after each major milestone
 bd sync

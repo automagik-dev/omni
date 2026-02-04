@@ -2,7 +2,7 @@
 
 > Omni v2 - Universal Event-Driven Omnichannel Platform
 
-This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for issue tracking.
+This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for issue tracking and **genie-cli** for worker orchestration.
 
 ## Workflow Overview
 
@@ -22,16 +22,61 @@ This project uses the **WISH → FORGE → REVIEW** workflow with **beads** for 
 # Execution (inline)
 /forge                        # Execute in current session
 
-# Execution (spawned sessions)
-/forge --spawn                # Spawn tmux session with worktree
-/forge --spawn --parallel     # Parallel sessions per group
-/forge --spawn --group A      # Spawn only group A
+# Execution (spawned workers via term)
+/forge --spawn                # Spawn worker for wish
+/forge --spawn --parallel     # Parallel workers per group
+term work <beads-id>          # Direct worker spawn
 
 # Validation
 /review                       # Final validation
 
 # Decisions
 /council                      # Get council review on architecture
+```
+
+## Genie CLI (Worker Orchestration)
+
+The project uses **genie-cli** for tmux-based worker orchestration.
+
+### Launch Claude
+
+```bash
+claudio                       # Launch with default LLM profile
+claudio <profile>             # Launch with specific profile
+claudio profiles list         # List available profiles
+```
+
+### Worker Commands (term)
+
+```bash
+# Spawn workers
+term work <beads-id>          # Spawn worker bound to issue
+term work next                # Work on next ready issue
+term spawn <skill>            # Spawn with specific skill
+
+# Monitor workers
+term workers                  # List all workers and states
+term dashboard                # Live status dashboard
+term dashboard --watch        # Auto-refresh dashboard
+
+# Cleanup
+term close <beads-id>         # Close issue + cleanup worker
+term ship <beads-id>          # Close + merge to main
+term kill <worker>            # Force kill stuck worker
+
+# Session management
+term ls                       # List tmux sessions
+term new <name>               # Create new session
+term attach <name>            # Attach to session
+term read <session>           # Read session output
+term exec <session> <cmd>     # Execute command in session
+```
+
+### Daemon
+
+```bash
+term daemon start             # Auto-sync beads across workers
+term daemon status            # Check daemon status
 ```
 
 ## Beads Issue Tracking
@@ -102,7 +147,7 @@ Wishes are stored in: `.wishes/<slug>/<slug>-wish.md`
 
 ## Parallel Execution (Spawn Mode)
 
-Forge can spawn isolated tmux sessions with git worktrees for parallel work.
+Forge spawns workers via `term` CLI for parallel execution with isolated git worktrees.
 
 **When to spawn:**
 - Multiple groups can run in parallel
@@ -111,34 +156,40 @@ Forge can spawn isolated tmux sessions with git worktrees for parallel work.
 
 **How it works:**
 ```bash
+# Via forge command
 /forge --spawn --parallel
+
+# Or directly via term
+term work <beads-id>              # Spawn single worker
+term work <beads-id-A>            # Spawn parallel workers
+term work <beads-id-B>
 ```
 
-This creates for each group:
-1. Git worktree at `~/.worktrees/omni-v2/<slug>-<group>-<id>/`
-2. Tmux session named `<slug>-<group>-<id>`
-3. Claude session executing that group's tasks
+This creates for each worker:
+1. Git worktree at `.worktrees/<beads-id>/`
+2. Tmux pane bound to the beads issue
+3. Claude session executing the task
 
-**Managing spawned sessions:**
+**Managing workers:**
 ```bash
-tmux ls                           # List all sessions
-tmux attach -t <session>          # Attach to session
-tmux capture-pane -t <session> -p # See session output
-tmux kill-session -t <session>    # Kill session
+term workers                      # List all workers and states
+term dashboard --watch            # Live status dashboard
+term read <session>               # Read session output
+term attach <session>             # Attach to session
 ```
 
 **Cleanup after wish ships:**
 ```bash
-git worktree remove ~/.worktrees/omni-v2/<session>
-tmux kill-session -t <session>
-git merge feat/<session>
+term ship <beads-id>              # Close + merge to main + cleanup
+# Or manually:
+term close <beads-id>             # Close issue + cleanup worker
 ```
 
-**If you ARE a spawned session:**
+**If you ARE a spawned worker:**
 - You're in a worktree, not main repo
-- Execute your assigned group only
+- Execute your assigned task only
 - Commit to your feature branch
-- Close your beads issue when done
+- Run `bd close <id>` when done (or `term close` from orchestrator)
 - Exit when complete
 
 ## Landing the Plane (Session Completion)

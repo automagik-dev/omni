@@ -226,3 +226,41 @@ This project uses the **WISH → FORGE → REVIEW** paradigm:
 3. **REVIEW** - Validate against wish criteria
 
 See `.claude/agents/` for available agents and their roles.
+
+## Worker Orchestration (genie-cli)
+
+The project uses **genie-cli** for tmux-based worker orchestration and LLM routing.
+
+### Launch Claude
+
+```bash
+claudio                       # Launch with default LLM profile
+claudio <profile>             # Launch with specific profile
+```
+
+### Worker Management (term)
+
+```bash
+# Spawn workers
+term work <beads-id>          # Spawn worker bound to issue
+term work next                # Work on next ready issue
+
+# Monitor
+term workers                  # List all workers and states
+term dashboard --watch        # Live status dashboard
+
+# Cleanup
+term close <beads-id>         # Close issue + cleanup worker
+term ship <beads-id>          # Close + merge to main
+
+# Session management
+term ls                       # List sessions
+term read <session>           # Read session output
+term exec <session> <cmd>     # Execute command in session
+```
+
+### Daemon
+
+```bash
+term daemon start             # Auto-sync beads across workers
+```
