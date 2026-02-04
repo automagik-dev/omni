@@ -82,6 +82,7 @@ export function registerHealthSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/health',
+    operationId: 'getHealth',
     tags: ['System'],
     summary: 'Health check',
     description: 'Check the health status of the API and its dependencies.',
@@ -105,6 +106,7 @@ export function registerHealthSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/info',
+    operationId: 'getInfo',
     tags: ['System'],
     summary: 'System info',
     description: 'Get system information and basic statistics.',
@@ -122,6 +124,7 @@ export function registerHealthSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/_internal/health',
+    operationId: 'getInternalHealth',
     tags: ['System'],
     summary: 'Internal health check',
     description: 'Detailed health information for internal monitoring. Only accessible from localhost.',

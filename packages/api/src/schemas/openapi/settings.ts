@@ -47,6 +47,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/settings',
+    operationId: 'listSettings',
     tags: ['Settings'],
     summary: 'List settings',
     description: 'Get all settings. Secret values are masked.',
@@ -62,6 +63,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/settings/{key}',
+    operationId: 'getSetting',
     tags: ['Settings'],
     summary: 'Get setting',
     description: 'Get a specific setting by key.',
@@ -78,6 +80,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'put',
     path: '/settings/{key}',
+    operationId: 'setSetting',
     tags: ['Settings'],
     summary: 'Set setting',
     description: 'Set a setting value.',
@@ -96,6 +99,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/settings',
+    operationId: 'bulkUpdateSettings',
     tags: ['Settings'],
     summary: 'Bulk update settings',
     description: 'Update multiple settings at once.',
@@ -111,6 +115,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/settings/{key}',
+    operationId: 'deleteSetting',
     tags: ['Settings'],
     summary: 'Delete setting',
     description: 'Delete a setting.',
@@ -124,6 +129,7 @@ export function registerSettingsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/settings/{key}/history',
+    operationId: 'getSettingHistory',
     tags: ['Settings'],
     summary: 'Get setting history',
     description: 'Get change history for a setting.',

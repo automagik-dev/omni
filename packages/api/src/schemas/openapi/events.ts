@@ -69,6 +69,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events',
+    operationId: 'listEvents',
     tags: ['Events'],
     summary: 'List events',
     description: 'Get a paginated list of message events with optional filtering.',
@@ -105,6 +106,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/analytics',
+    operationId: 'getEventAnalytics',
     tags: ['Events'],
     summary: 'Get event analytics',
     description: 'Get analytics summary for events.',
@@ -124,6 +126,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/timeline/{personId}',
+    operationId: 'getPersonTimeline',
     tags: ['Events'],
     summary: 'Get person timeline',
     description: 'Get cross-channel timeline for a person.',
@@ -152,6 +155,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/events/search',
+    operationId: 'searchEvents',
     tags: ['Events'],
     summary: 'Advanced event search',
     description: 'Search events with advanced filters and multiple output formats.',
@@ -176,6 +180,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/{id}',
+    operationId: 'getEvent',
     tags: ['Events'],
     summary: 'Get event by ID',
     description: 'Get details of a specific event.',
@@ -192,6 +197,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/by-sender/{senderId}',
+    operationId: 'getEventsBySender',
     tags: ['Events'],
     summary: 'Get events by sender',
     description: 'Get events from a specific sender.',

@@ -20,6 +20,7 @@ export function registerLogSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/logs/stream',
+    operationId: 'streamLogs',
     tags: ['Logs'],
     summary: 'Stream logs (SSE)',
     description: 'Stream logs in real-time via Server-Sent Events. Heartbeat sent every 30 seconds.',
@@ -40,6 +41,7 @@ export function registerLogSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/logs/recent',
+    operationId: 'getRecentLogs',
     tags: ['Logs'],
     summary: 'Get recent logs',
     description: 'Get recent log entries from the in-memory buffer.',

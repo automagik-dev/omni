@@ -170,6 +170,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances',
+    operationId: 'listInstances',
     tags: ['Instances'],
     summary: 'List all instances',
     description: 'Get a paginated list of channel instances with optional filtering.',
@@ -199,6 +200,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/supported-channels',
+    operationId: 'listSupportedChannels',
     tags: ['Instances'],
     summary: 'List supported channel types',
     description: 'Get a list of all supported channel types with their capabilities.',
@@ -219,6 +221,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}',
+    operationId: 'getInstance',
     tags: ['Instances'],
     summary: 'Get instance by ID',
     description: 'Get details of a specific channel instance.',
@@ -248,6 +251,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances',
+    operationId: 'createInstance',
     tags: ['Instances'],
     summary: 'Create new instance',
     description: 'Create a new channel instance. For Discord, a bot token is required.',
@@ -279,6 +283,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/instances/{id}',
+    operationId: 'updateInstance',
     tags: ['Instances'],
     summary: 'Update instance',
     description: 'Update an existing channel instance.',
@@ -313,6 +318,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/instances/{id}',
+    operationId: 'deleteInstance',
     tags: ['Instances'],
     summary: 'Delete instance',
     description: 'Delete a channel instance. This will disconnect the instance first.',
@@ -340,6 +346,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}/status',
+    operationId: 'getInstanceStatus',
     tags: ['Instances'],
     summary: 'Get instance connection status',
     description: 'Get the current connection status of a channel instance.',
@@ -369,6 +376,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}/qr',
+    operationId: 'getInstanceQr',
     tags: ['Instances'],
     summary: 'Get QR code for WhatsApp connection',
     description: 'Get the QR code for connecting a WhatsApp instance.',
@@ -404,6 +412,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances/{id}/pair',
+    operationId: 'requestPairingCode',
     tags: ['Instances'],
     summary: 'Request pairing code',
     description: 'Request a pairing code as an alternative to QR code scanning.',
@@ -444,6 +453,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances/{id}/connect',
+    operationId: 'connectInstance',
     tags: ['Instances'],
     summary: 'Connect instance',
     description: 'Initiate connection for a channel instance.',
@@ -487,6 +497,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances/{id}/disconnect',
+    operationId: 'disconnectInstance',
     tags: ['Instances'],
     summary: 'Disconnect instance',
     description: 'Disconnect a channel instance while preserving session data.',
@@ -514,6 +525,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances/{id}/restart',
+    operationId: 'restartInstance',
     tags: ['Instances'],
     summary: 'Restart instance',
     description: 'Restart a channel instance by disconnecting and reconnecting.',
@@ -552,6 +564,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/instances/{id}/logout',
+    operationId: 'logoutInstance',
     tags: ['Instances'],
     summary: 'Logout instance',
     description: 'Logout a channel instance, clearing all session data.',
@@ -580,6 +593,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}/users/{userId}/profile',
+    operationId: 'getUserProfile',
     tags: ['Instances', 'Profiles'],
     summary: 'Fetch user profile',
     description: 'Fetch profile information for a specific user on this channel.',
@@ -605,6 +619,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}/contacts',
+    operationId: 'listInstanceContacts',
     tags: ['Instances', 'Contacts'],
     summary: 'List contacts',
     description: 'List contacts for an instance. For Discord, requires guildId query parameter.',
@@ -646,6 +661,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/instances/{id}/groups',
+    operationId: 'listInstanceGroups',
     tags: ['Instances', 'Groups'],
     summary: 'List groups',
     description: 'List groups the instance is participating in.',

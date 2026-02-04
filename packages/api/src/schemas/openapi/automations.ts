@@ -164,6 +164,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/automations',
+    operationId: 'listAutomations',
     tags: ['Automations'],
     summary: 'List automations',
     description: 'Get all automations.',
@@ -179,6 +180,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/automations/{id}',
+    operationId: 'getAutomation',
     tags: ['Automations'],
     summary: 'Get automation',
     description: 'Get details of a specific automation.',
@@ -195,6 +197,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/automations',
+    operationId: 'createAutomation',
     tags: ['Automations'],
     summary: 'Create automation',
     description: 'Create a new automation.',
@@ -211,6 +214,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/automations/{id}',
+    operationId: 'updateAutomation',
     tags: ['Automations'],
     summary: 'Update automation',
     description: 'Update an existing automation.',
@@ -230,6 +234,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/automations/{id}',
+    operationId: 'deleteAutomation',
     tags: ['Automations'],
     summary: 'Delete automation',
     description: 'Delete an automation.',
@@ -243,6 +248,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/automations/{id}/enable',
+    operationId: 'enableAutomation',
     tags: ['Automations'],
     summary: 'Enable automation',
     description: 'Enable an automation.',
@@ -259,6 +265,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/automations/{id}/disable',
+    operationId: 'disableAutomation',
     tags: ['Automations'],
     summary: 'Disable automation',
     description: 'Disable an automation.',
@@ -275,6 +282,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/automations/{id}/test',
+    operationId: 'testAutomation',
     tags: ['Automations'],
     summary: 'Test automation',
     description: 'Test automation against a sample event (dry run).',
@@ -302,6 +310,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/automations/{id}/execute',
+    operationId: 'executeAutomation',
     tags: ['Automations'],
     summary: 'Execute automation',
     description: 'Execute automation with a provided event payload. Actually runs the actions (not a dry run).',
@@ -341,6 +350,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/automations/{id}/logs',
+    operationId: 'getAutomationLogs',
     tags: ['Automations'],
     summary: 'Get automation logs',
     description: 'Get execution logs for an automation.',
@@ -364,6 +374,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/automation-logs',
+    operationId: 'searchAutomationLogs',
     tags: ['Automations'],
     summary: 'Search automation logs',
     description: 'Search execution logs across automations.',
@@ -389,6 +400,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/automation-metrics',
+    operationId: 'getAutomationMetrics',
     tags: ['Automations'],
     summary: 'Get automation metrics',
     description: 'Get automation engine metrics.',

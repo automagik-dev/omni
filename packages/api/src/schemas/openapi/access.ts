@@ -62,6 +62,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/access/rules',
+    operationId: 'listAccessRules',
     tags: ['Access'],
     summary: 'List access rules',
     description: 'Get all access rules with optional filtering.',
@@ -82,6 +83,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/access/rules/{id}',
+    operationId: 'getAccessRule',
     tags: ['Access'],
     summary: 'Get access rule',
     description: 'Get details of a specific access rule.',
@@ -98,6 +100,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/access/rules',
+    operationId: 'createAccessRule',
     tags: ['Access'],
     summary: 'Create access rule',
     description: 'Create a new access rule.',
@@ -114,6 +117,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/access/rules/{id}',
+    operationId: 'updateAccessRule',
     tags: ['Access'],
     summary: 'Update access rule',
     description: 'Update an existing access rule.',
@@ -133,6 +137,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/access/rules/{id}',
+    operationId: 'deleteAccessRule',
     tags: ['Access'],
     summary: 'Delete access rule',
     description: 'Delete an access rule.',
@@ -146,6 +151,7 @@ export function registerAccessSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/access/check',
+    operationId: 'checkAccess',
     tags: ['Access'],
     summary: 'Check access',
     description: 'Check if access is allowed for a user.',

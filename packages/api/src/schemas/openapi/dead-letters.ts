@@ -44,6 +44,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/dead-letters',
+    operationId: 'listDeadLetters',
     tags: ['Dead Letters'],
     summary: 'List dead letters',
     description: 'Get dead letters with filtering.',
@@ -70,6 +71,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/dead-letters/stats',
+    operationId: 'getDeadLetterStats',
     tags: ['Dead Letters'],
     summary: 'Get dead letter stats',
     description: 'Get statistics about dead letters.',
@@ -84,6 +86,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/dead-letters/{id}',
+    operationId: 'getDeadLetter',
     tags: ['Dead Letters'],
     summary: 'Get dead letter',
     description: 'Get details of a specific dead letter with payload.',
@@ -100,6 +103,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/dead-letters/{id}/retry',
+    operationId: 'retryDeadLetter',
     tags: ['Dead Letters'],
     summary: 'Retry dead letter',
     description: 'Manually retry a dead letter.',
@@ -124,6 +128,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/dead-letters/{id}/resolve',
+    operationId: 'resolveDeadLetter',
     tags: ['Dead Letters'],
     summary: 'Resolve dead letter',
     description: 'Mark a dead letter as resolved with a note.',
@@ -143,6 +148,7 @@ export function registerDeadLetterSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/dead-letters/{id}/abandon',
+    operationId: 'abandonDeadLetter',
     tags: ['Dead Letters'],
     summary: 'Abandon dead letter',
     description: 'Give up on auto-retrying a dead letter.',

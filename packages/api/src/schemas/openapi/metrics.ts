@@ -9,6 +9,7 @@ export function registerMetricsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/metrics',
+    operationId: 'getMetrics',
     tags: ['Metrics'],
     summary: 'Get Prometheus metrics',
     description: 'Get metrics in Prometheus text format (default) or JSON format.',

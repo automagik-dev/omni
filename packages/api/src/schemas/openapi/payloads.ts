@@ -70,6 +70,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/{eventId}/payloads',
+    operationId: 'listEventPayloads',
     tags: ['Payloads'],
     summary: 'List event payloads',
     description: 'Get all payloads for an event (metadata only).',
@@ -85,6 +86,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/events/{eventId}/payloads/{stage}',
+    operationId: 'getEventPayloadByStage',
     tags: ['Payloads'],
     summary: 'Get event payload by stage',
     description: 'Get a specific stage payload with decompressed data.',
@@ -107,6 +109,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/events/{eventId}/payloads',
+    operationId: 'deleteEventPayloads',
     tags: ['Payloads'],
     summary: 'Delete event payloads',
     description: 'Soft-delete all payloads for an event.',
@@ -125,6 +128,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/payload-config',
+    operationId: 'listPayloadConfigs',
     tags: ['Payloads'],
     summary: 'List payload configs',
     description: 'Get all payload storage configurations.',
@@ -139,6 +143,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'put',
     path: '/payload-config/{eventType}',
+    operationId: 'updatePayloadConfig',
     tags: ['Payloads'],
     summary: 'Update payload config',
     description: 'Update or create payload storage config for an event type.',
@@ -157,6 +162,7 @@ export function registerPayloadSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/payload-stats',
+    operationId: 'getPayloadStats',
     tags: ['Payloads'],
     summary: 'Get payload stats',
     description: 'Get payload storage statistics.',

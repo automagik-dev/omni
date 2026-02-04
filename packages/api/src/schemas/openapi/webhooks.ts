@@ -49,6 +49,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/webhook-sources',
+    operationId: 'listWebhookSources',
     tags: ['Webhooks'],
     summary: 'List webhook sources',
     description: 'Get all configured webhook sources.',
@@ -64,6 +65,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/webhook-sources/{id}',
+    operationId: 'getWebhookSource',
     tags: ['Webhooks'],
     summary: 'Get webhook source',
     description: 'Get details of a specific webhook source.',
@@ -80,6 +82,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/webhook-sources',
+    operationId: 'createWebhookSource',
     tags: ['Webhooks'],
     summary: 'Create webhook source',
     description: 'Create a new webhook source.',
@@ -96,6 +99,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/webhook-sources/{id}',
+    operationId: 'updateWebhookSource',
     tags: ['Webhooks'],
     summary: 'Update webhook source',
     description: 'Update an existing webhook source.',
@@ -115,6 +119,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/webhook-sources/{id}',
+    operationId: 'deleteWebhookSource',
     tags: ['Webhooks'],
     summary: 'Delete webhook source',
     description: 'Delete a webhook source.',
@@ -128,6 +133,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/webhooks/{source}',
+    operationId: 'receiveWebhook',
     tags: ['Webhooks'],
     summary: 'Receive webhook',
     description: 'Receive webhook from external system. Creates a custom event.',
@@ -146,6 +152,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/events/trigger',
+    operationId: 'triggerEvent',
     tags: ['Webhooks'],
     summary: 'Trigger custom event',
     description: 'Manually trigger a custom event.',

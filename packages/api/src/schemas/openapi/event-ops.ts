@@ -62,6 +62,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/event-ops/metrics',
+    operationId: 'getEventMetrics',
     tags: ['Events'],
     summary: 'Get event metrics',
     description: 'Get event processing metrics.',
@@ -76,6 +77,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/event-ops/replay',
+    operationId: 'startEventReplay',
     tags: ['Events'],
     summary: 'Start replay session',
     description: 'Start an event replay session.',
@@ -92,6 +94,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/event-ops/replay',
+    operationId: 'listReplaySessions',
     tags: ['Events'],
     summary: 'List replay sessions',
     description: 'List all replay sessions.',
@@ -106,6 +109,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/event-ops/replay/{id}',
+    operationId: 'getReplaySession',
     tags: ['Events'],
     summary: 'Get replay session',
     description: 'Get status of a replay session.',
@@ -122,6 +126,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/event-ops/replay/{id}',
+    operationId: 'cancelReplaySession',
     tags: ['Events'],
     summary: 'Cancel replay session',
     description: 'Cancel a running replay session.',
@@ -135,6 +140,7 @@ export function registerEventOpsSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/event-ops/scheduled',
+    operationId: 'runScheduledOps',
     tags: ['Events'],
     summary: 'Run scheduled operations',
     description: 'Manually trigger scheduled operations.',

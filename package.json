@@ -14,10 +14,13 @@
     "test": "turbo test",
     "clean": "turbo clean && rm -rf node_modules",
     "generate:sdk": "bun scripts/generate-sdk.ts",
+    "generate:sdk-python": "bun scripts/generate-sdk-python.ts",
+    "generate:sdk-go": "bun scripts/generate-sdk-go.ts",
     "prepare": "husky"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@openapitools/openapi-generator-cli": "^2.28.0",
     "bun-types": "^1.1.42",
     "husky": "^9.1.7",
     "turbo": "^2.3.3",

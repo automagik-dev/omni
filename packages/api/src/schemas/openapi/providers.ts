@@ -62,6 +62,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/providers',
+    operationId: 'listProviders',
     tags: ['Providers'],
     summary: 'List providers',
     description: 'Get all agent providers.',
@@ -77,6 +78,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/providers/{id}',
+    operationId: 'getProvider',
     tags: ['Providers'],
     summary: 'Get provider',
     description: 'Get details of a specific provider.',
@@ -93,6 +95,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/providers',
+    operationId: 'createProvider',
     tags: ['Providers'],
     summary: 'Create provider',
     description: 'Create a new agent provider.',
@@ -109,6 +112,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'patch',
     path: '/providers/{id}',
+    operationId: 'updateProvider',
     tags: ['Providers'],
     summary: 'Update provider',
     description: 'Update an existing provider.',
@@ -128,6 +132,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'delete',
     path: '/providers/{id}',
+    operationId: 'deleteProvider',
     tags: ['Providers'],
     summary: 'Delete provider',
     description: 'Delete an agent provider.',
@@ -141,6 +146,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/providers/{id}/health',
+    operationId: 'checkProviderHealth',
     tags: ['Providers'],
     summary: 'Check provider health',
     description: 'Check if provider is reachable and healthy.',
@@ -154,6 +160,7 @@ export function registerProviderSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/providers/{id}/agents',
+    operationId: 'listProviderAgents',
     tags: ['Providers'],
     summary: 'List provider agents',
     description: 'List available agents from a provider.',

@@ -77,6 +77,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/persons',
+    operationId: 'searchPersons',
     tags: ['Persons'],
     summary: 'Search persons',
     description: 'Search for persons by name, email, or phone.',
@@ -97,6 +98,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/persons/{id}',
+    operationId: 'getPerson',
     tags: ['Persons'],
     summary: 'Get person by ID',
     description: 'Get details of a specific person.',
@@ -113,6 +115,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/persons/{id}/presence',
+    operationId: 'getPersonPresence',
     tags: ['Persons'],
     summary: 'Get person presence',
     description: 'Get all identities and presence information for a person.',
@@ -129,6 +132,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'get',
     path: '/persons/{id}/timeline',
+    operationId: 'getPersonTimelineById',
     tags: ['Persons'],
     summary: 'Get person timeline',
     description: 'Get cross-channel message timeline for a person.',
@@ -155,6 +159,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/persons/link',
+    operationId: 'linkIdentities',
     tags: ['Persons'],
     summary: 'Link identities',
     description: 'Link two identities to the same person.',
@@ -171,6 +176,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/persons/unlink',
+    operationId: 'unlinkIdentity',
     tags: ['Persons'],
     summary: 'Unlink identity',
     description: 'Unlink an identity from its person.',
@@ -191,6 +197,7 @@ export function registerPersonSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/persons/merge',
+    operationId: 'mergePersons',
     tags: ['Persons'],
     summary: 'Merge persons',
     description: 'Merge two persons into one.',

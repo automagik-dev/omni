@@ -141,6 +141,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages',
+    operationId: 'sendTextMessage',
     tags: ['Messages'],
     summary: 'Send text message',
     description: 'Send a text message through a channel instance.',
@@ -158,6 +159,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/media',
+    operationId: 'sendMediaMessage',
     tags: ['Messages'],
     summary: 'Send media message',
     description: 'Send an image, audio, video, or document through a channel instance.',
@@ -175,6 +177,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/reaction',
+    operationId: 'sendReaction',
     tags: ['Messages'],
     summary: 'Send reaction',
     description: 'React to a message with an emoji.',
@@ -189,6 +192,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/sticker',
+    operationId: 'sendSticker',
     tags: ['Messages'],
     summary: 'Send sticker',
     description: 'Send a sticker through a channel instance.',
@@ -206,6 +210,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/contact',
+    operationId: 'sendContact',
     tags: ['Messages'],
     summary: 'Send contact card',
     description: 'Send a contact card through a channel instance.',
@@ -223,6 +228,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/location',
+    operationId: 'sendLocation',
     tags: ['Messages'],
     summary: 'Send location',
     description: 'Send a location through a channel instance.',
@@ -241,6 +247,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/send/presence',
+    operationId: 'sendPresence',
     tags: ['Messages', 'Presence'],
     summary: 'Send presence indicator',
     description:
@@ -263,6 +270,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/{id}/read',
+    operationId: 'markMessageRead',
     tags: ['Messages', 'Read Receipts'],
     summary: 'Mark message as read',
     description: 'Send read receipt for a specific message. WhatsApp only.',
@@ -289,6 +297,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/messages/read',
+    operationId: 'markMessagesRead',
     tags: ['Messages', 'Read Receipts'],
     summary: 'Mark multiple messages as read',
     description: 'Send read receipts for multiple messages in a single chat. WhatsApp only.',
@@ -312,6 +321,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/chats/{id}/read',
+    operationId: 'markChatRead',
     tags: ['Chats', 'Read Receipts'],
     summary: 'Mark entire chat as read',
     description: 'Mark all unread messages in a chat as read. WhatsApp only.',

@@ -29,6 +29,7 @@ export function registerAuthSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     method: 'post',
     path: '/api/v2/auth/validate',
+    operationId: 'validateApiKey',
     tags: ['Auth'],
     summary: 'Validate API key',
     description: 'Validate the provided API key and return key information. Used by CLI login flow.',
