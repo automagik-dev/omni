@@ -2,7 +2,7 @@
 
 > Enable AI agent calls as an automation action type for composable workflows.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-04
 **Author:** WISH Agent
 **Beads:** omni-b48
@@ -304,3 +304,31 @@ const actionSchema = z.discriminatedUnion('type', [
 **Beads Issue:** omni-b48
 
 See full QA results: `.wishes/call-agent-action/qa/qa-results.md`
+
+---
+
+## Post-QA Fixes
+
+**Date:** 2026-02-04
+
+### Bug Fix
+- Added `callAgentActionSchema` to route validation discriminated union
+- Commit: `fix(api): add call_agent to automations route validation`
+
+### Simplification (per user feedback)
+- Removed over-engineered options: `enableSplit`, `splitDelayMode`, `splitDelayMinMs`, `splitDelayMaxMs`, `showTypingPresence`
+- `call_agent` now just calls the agent and returns response for chaining
+- Split/typing can be added as separate actions if needed (composable building blocks)
+- Commit: `refactor(automations): simplify call_agent action to composable building block`
+
+### Execute Endpoint
+- Added `POST /automations/{id}/execute` to manually trigger automations
+- Added CLI command: `omni automations execute <id> --event <json>`
+- Added SDK method: `client.automations.execute()`
+- Commit: `feat(automations): add execute endpoint for manual automation triggering`
+
+### Tests
+- Added 6 tests for `AutomationService.execute()` documenting behavior
+- Commit: `test(automations): add execute endpoint tests`
+
+**Final Status:** All fixes committed and pushed. 749 tests pass.
