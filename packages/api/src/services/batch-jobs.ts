@@ -96,6 +96,17 @@ export interface ListBatchJobsOptions {
 }
 
 /**
+ * Internal state for job processing
+ */
+interface JobProcessingState {
+  processedItems: number;
+  failedItems: number;
+  totalCostCents: number;
+  totalTokens: number;
+  errors: Array<{ itemId: string; error: string }>;
+}
+
+/**
  * Batch Job Service
  */
 export class BatchJobService {
@@ -263,6 +274,7 @@ export class BatchJobService {
    */
   async cancel(id: string): Promise<BatchJob> {
     const job = await this.getById(id);
+    const instanceId = this.requireInstanceId(job);
 
     if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed') {
       throw new Error(`Cannot cancel job with status: ${job.status}`);
@@ -296,10 +308,10 @@ export class BatchJobService {
         'batch-job.cancelled',
         {
           jobId: id,
-          instanceId: job.instanceId!,
+          instanceId,
           progress: this.buildProgressPayload(updated),
         },
-        { instanceId: job.instanceId! },
+        { instanceId },
       );
     }
 
@@ -371,227 +383,311 @@ export class BatchJobService {
    */
   private async executeJob(jobId: string): Promise<void> {
     const job = await this.getById(jobId);
+    const instanceId = this.requireInstanceId(job);
     const params = (job.requestParams ?? {}) as Partial<CreateBatchJobOptions>;
 
     // Register job as active
     this.activeJobs.set(jobId, { cancelled: false });
 
     try {
-      // Query eligible items
-      const items = await this.queryEligibleItems({
-        jobType: job.jobType as BatchJobType,
-        instanceId: job.instanceId!,
-        chatId: params.chatId,
-        daysBack: params.daysBack,
-        limit: params.limit,
-        contentTypes: params.contentTypes as ProcessableContentType[],
-      });
+      const { eligibleItems, totalItems, skippedItems } = await this.prepareJobExecution(job, instanceId, params);
 
-      // Filter out already processed (unless force)
-      const eligibleItems = params.force === true ? items : items.filter((item) => !this.hasExistingContent(item));
+      await this.markJobRunning(jobId, instanceId, job.jobType as BatchJobType, totalItems);
 
-      const totalItems = eligibleItems.length;
-      const skippedItems = items.length - eligibleItems.length;
-
-      // Update job to running with total count
-      await this.db
-        .update(batchJobs)
-        .set({
-          status: 'running',
-          startedAt: new Date(),
-          totalItems,
-        })
-        .where(eq(batchJobs.id, jobId));
-
-      log.info('Job started', { jobId, totalItems, skippedItems });
-
-      // Emit started event
-      if (this.eventBus) {
-        await this.eventBus.publish(
-          'batch-job.started',
-          {
-            jobId,
-            instanceId: job.instanceId!,
-            jobType: job.jobType as BatchJobType,
-            totalItems,
-          },
-          { instanceId: job.instanceId! },
-        );
-      }
-
-      let processedItems = job.processedItems;
-      let failedItems = job.failedItems;
-      let totalCostCents = job.totalCostUsd ?? 0;
-      let totalTokens = job.totalTokens ?? 0;
-      const errors: Array<{ itemId: string; error: string }> =
-        (job.errors as Array<{ itemId: string; error: string }>) ?? [];
+      const state = this.initializeJobState(job);
       const startTime = Date.now();
 
-      // Process each item
-      for (let i = 0; i < eligibleItems.length; i++) {
-        // Check for cancellation
-        const activeJob = this.activeJobs.get(jobId);
-        if (activeJob?.cancelled) {
-          log.info('Job cancelled by user', { jobId, processedItems });
-          break;
-        }
+      await this.processAllItems(jobId, instanceId, eligibleItems, totalItems, skippedItems, state);
 
-        // Re-check status in DB (in case cancel was called)
-        const currentStatus = await this.db
-          .select({ status: batchJobs.status })
-          .from(batchJobs)
-          .where(eq(batchJobs.id, jobId))
-          .limit(1);
-
-        if (currentStatus[0]?.status === 'cancelled') {
-          log.info('Job cancelled (DB check)', { jobId, processedItems });
-          break;
-        }
-
-        const item = eligibleItems[i]!;
-
-        // Update current item
-        await this.db.update(batchJobs).set({ currentItem: item.id }).where(eq(batchJobs.id, jobId));
-
-        try {
-          const result = await this.processItem(job.instanceId!, item, jobId);
-
-          if (result.success) {
-            processedItems++;
-            totalCostCents += result.costCents;
-            totalTokens += (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
-          } else {
-            failedItems++;
-            errors.push({ itemId: item.id, error: result.errorMessage ?? 'Unknown error' });
-          }
-        } catch (error) {
-          failedItems++;
-          errors.push({ itemId: item.id, error: String(error) });
-          log.warn('Item processing error', { jobId, itemId: item.id, error: String(error) });
-        }
-
-        // Update progress periodically
-        if ((i + 1) % BatchJobService.PROGRESS_UPDATE_INTERVAL === 0 || i === eligibleItems.length - 1) {
-          const progressPercent = totalItems > 0 ? Math.round(((processedItems + failedItems) / totalItems) * 100) : 0;
-
-          await this.db
-            .update(batchJobs)
-            .set({
-              processedItems,
-              failedItems,
-              progressPercent,
-              totalCostUsd: totalCostCents,
-              totalTokens,
-              errors,
-            })
-            .where(eq(batchJobs.id, jobId));
-
-          // Emit progress event
-          if (this.eventBus) {
-            await this.eventBus.publish(
-              'batch-job.progress',
-              {
-                jobId,
-                instanceId: job.instanceId!,
-                progress: {
-                  totalItems,
-                  processedItems,
-                  failedItems,
-                  skippedItems,
-                  currentItem: item.id,
-                  progressPercent,
-                  totalCostCents,
-                  totalTokens,
-                },
-              },
-              { instanceId: job.instanceId! },
-            );
-          }
-        }
-
-        // Small delay to avoid blocking event loop
-        await new Promise((resolve) => setTimeout(resolve, BatchJobService.INTER_ITEM_DELAY_MS));
-      }
-
-      // Final status check
-      const finalStatus = await this.db
-        .select({ status: batchJobs.status })
-        .from(batchJobs)
-        .where(eq(batchJobs.id, jobId))
-        .limit(1);
-
-      if (finalStatus[0]?.status === 'cancelled') {
-        // Job was cancelled, don't update to completed
-        return;
-      }
-
-      const durationMs = Date.now() - startTime;
-
-      // Mark completed
-      await this.db
-        .update(batchJobs)
-        .set({
-          status: 'completed',
-          completedAt: new Date(),
-          processedItems,
-          failedItems,
-          progressPercent: 100,
-          totalCostUsd: totalCostCents,
-          totalTokens,
-          errors,
-          currentItem: null,
-        })
-        .where(eq(batchJobs.id, jobId));
-
-      log.info('Job completed', { jobId, processedItems, failedItems, durationMs, totalCostCents });
-
-      // Emit completed event
-      if (this.eventBus) {
-        await this.eventBus.publish(
-          'batch-job.completed',
-          {
-            jobId,
-            instanceId: job.instanceId!,
-            jobType: job.jobType as BatchJobType,
-            progress: {
-              totalItems,
-              processedItems,
-              failedItems,
-              skippedItems,
-              progressPercent: 100,
-              totalCostCents,
-              totalTokens,
-            },
-            durationMs,
-          },
-          { instanceId: job.instanceId! },
-        );
-      }
+      await this.finalizeJob(
+        jobId,
+        instanceId,
+        job.jobType as BatchJobType,
+        totalItems,
+        skippedItems,
+        state,
+        startTime,
+      );
     } catch (error) {
-      log.error('Job execution failed', { jobId, error: String(error) });
-
-      await this.db
-        .update(batchJobs)
-        .set({
-          status: 'failed',
-          completedAt: new Date(),
-          errorMessage: String(error),
-        })
-        .where(eq(batchJobs.id, jobId));
-
-      if (this.eventBus && job.instanceId) {
-        await this.eventBus.publish(
-          'batch-job.failed',
-          {
-            jobId,
-            instanceId: job.instanceId,
-            error: String(error),
-          },
-          { instanceId: job.instanceId },
-        );
-      }
+      await this.handleJobError(jobId, instanceId, error);
     } finally {
       this.activeJobs.delete(jobId);
+    }
+  }
+
+  /**
+   * Prepare job execution - query and filter items
+   */
+  private async prepareJobExecution(
+    job: BatchJob,
+    instanceId: string,
+    params: Partial<CreateBatchJobOptions>,
+  ): Promise<{ eligibleItems: Message[]; totalItems: number; skippedItems: number }> {
+    const items = await this.queryEligibleItems({
+      jobType: job.jobType as BatchJobType,
+      instanceId,
+      chatId: params.chatId,
+      daysBack: params.daysBack,
+      limit: params.limit,
+      contentTypes: params.contentTypes as ProcessableContentType[],
+    });
+
+    const eligibleItems = params.force === true ? items : items.filter((item) => !this.hasExistingContent(item));
+    const totalItems = eligibleItems.length;
+    const skippedItems = items.length - eligibleItems.length;
+
+    return { eligibleItems, totalItems, skippedItems };
+  }
+
+  /**
+   * Mark job as running and emit started event
+   */
+  private async markJobRunning(
+    jobId: string,
+    instanceId: string,
+    jobType: BatchJobType,
+    totalItems: number,
+  ): Promise<void> {
+    await this.db
+      .update(batchJobs)
+      .set({ status: 'running', startedAt: new Date(), totalItems })
+      .where(eq(batchJobs.id, jobId));
+
+    log.info('Job started', { jobId, totalItems });
+
+    if (this.eventBus) {
+      await this.eventBus.publish('batch-job.started', { jobId, instanceId, jobType, totalItems }, { instanceId });
+    }
+  }
+
+  /**
+   * Initialize job processing state from existing job data
+   */
+  private initializeJobState(job: BatchJob): JobProcessingState {
+    return {
+      processedItems: job.processedItems,
+      failedItems: job.failedItems,
+      totalCostCents: job.totalCostUsd ?? 0,
+      totalTokens: job.totalTokens ?? 0,
+      errors: (job.errors as Array<{ itemId: string; error: string }>) ?? [],
+    };
+  }
+
+  /**
+   * Process all items in the batch
+   */
+  private async processAllItems(
+    jobId: string,
+    instanceId: string,
+    eligibleItems: Message[],
+    totalItems: number,
+    skippedItems: number,
+    state: JobProcessingState,
+  ): Promise<void> {
+    for (let i = 0; i < eligibleItems.length; i++) {
+      if (await this.isJobCancelled(jobId)) break;
+
+      const item = eligibleItems[i];
+      if (!item) continue;
+
+      await this.db.update(batchJobs).set({ currentItem: item.id }).where(eq(batchJobs.id, jobId));
+      await this.processSingleItem(instanceId, item, jobId, state);
+      await this.updateProgressIfNeeded(
+        jobId,
+        instanceId,
+        i,
+        eligibleItems.length,
+        totalItems,
+        skippedItems,
+        item.id,
+        state,
+      );
+      await new Promise((resolve) => setTimeout(resolve, BatchJobService.INTER_ITEM_DELAY_MS));
+    }
+  }
+
+  /**
+   * Check if job was cancelled (via memory flag or DB)
+   */
+  private async isJobCancelled(jobId: string): Promise<boolean> {
+    const activeJob = this.activeJobs.get(jobId);
+    if (activeJob?.cancelled) {
+      log.info('Job cancelled by user', { jobId });
+      return true;
+    }
+
+    const [current] = await this.db
+      .select({ status: batchJobs.status })
+      .from(batchJobs)
+      .where(eq(batchJobs.id, jobId))
+      .limit(1);
+    if (current?.status === 'cancelled') {
+      log.info('Job cancelled (DB check)', { jobId });
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Process a single item and update state
+   */
+  private async processSingleItem(
+    instanceId: string,
+    item: Message,
+    jobId: string,
+    state: JobProcessingState,
+  ): Promise<void> {
+    try {
+      const result = await this.processItem(instanceId, item, jobId);
+      if (result.success) {
+        state.processedItems++;
+        state.totalCostCents += result.costCents;
+        state.totalTokens += (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
+      } else {
+        state.failedItems++;
+        state.errors.push({ itemId: item.id, error: result.errorMessage ?? 'Unknown error' });
+      }
+    } catch (error) {
+      state.failedItems++;
+      state.errors.push({ itemId: item.id, error: String(error) });
+      log.warn('Item processing error', { jobId, itemId: item.id, error: String(error) });
+    }
+  }
+
+  /**
+   * Update progress in DB and emit event if interval reached
+   */
+  private async updateProgressIfNeeded(
+    jobId: string,
+    instanceId: string,
+    index: number,
+    total: number,
+    totalItems: number,
+    skippedItems: number,
+    currentItemId: string,
+    state: JobProcessingState,
+  ): Promise<void> {
+    const isProgressInterval = (index + 1) % BatchJobService.PROGRESS_UPDATE_INTERVAL === 0;
+    const isLastItem = index === total - 1;
+    if (!isProgressInterval && !isLastItem) return;
+
+    const progressPercent =
+      totalItems > 0 ? Math.round(((state.processedItems + state.failedItems) / totalItems) * 100) : 0;
+
+    await this.db
+      .update(batchJobs)
+      .set({
+        processedItems: state.processedItems,
+        failedItems: state.failedItems,
+        progressPercent,
+        totalCostUsd: state.totalCostCents,
+        totalTokens: state.totalTokens,
+        errors: state.errors,
+      })
+      .where(eq(batchJobs.id, jobId));
+
+    if (this.eventBus) {
+      await this.eventBus.publish(
+        'batch-job.progress',
+        {
+          jobId,
+          instanceId,
+          progress: {
+            totalItems,
+            processedItems: state.processedItems,
+            failedItems: state.failedItems,
+            skippedItems,
+            currentItem: currentItemId,
+            progressPercent,
+            totalCostCents: state.totalCostCents,
+            totalTokens: state.totalTokens,
+          },
+        },
+        { instanceId },
+      );
+    }
+  }
+
+  /**
+   * Finalize job - mark completed and emit event
+   */
+  private async finalizeJob(
+    jobId: string,
+    instanceId: string,
+    jobType: BatchJobType,
+    totalItems: number,
+    skippedItems: number,
+    state: JobProcessingState,
+    startTime: number,
+  ): Promise<void> {
+    const [finalStatus] = await this.db
+      .select({ status: batchJobs.status })
+      .from(batchJobs)
+      .where(eq(batchJobs.id, jobId))
+      .limit(1);
+    if (finalStatus?.status === 'cancelled') return;
+
+    const durationMs = Date.now() - startTime;
+
+    await this.db
+      .update(batchJobs)
+      .set({
+        status: 'completed',
+        completedAt: new Date(),
+        processedItems: state.processedItems,
+        failedItems: state.failedItems,
+        progressPercent: 100,
+        totalCostUsd: state.totalCostCents,
+        totalTokens: state.totalTokens,
+        errors: state.errors,
+        currentItem: null,
+      })
+      .where(eq(batchJobs.id, jobId));
+
+    log.info('Job completed', {
+      jobId,
+      processedItems: state.processedItems,
+      failedItems: state.failedItems,
+      durationMs,
+    });
+
+    if (this.eventBus) {
+      await this.eventBus.publish(
+        'batch-job.completed',
+        {
+          jobId,
+          instanceId,
+          jobType,
+          progress: {
+            totalItems,
+            processedItems: state.processedItems,
+            failedItems: state.failedItems,
+            skippedItems,
+            progressPercent: 100,
+            totalCostCents: state.totalCostCents,
+            totalTokens: state.totalTokens,
+          },
+          durationMs,
+        },
+        { instanceId },
+      );
+    }
+  }
+
+  /**
+   * Handle job execution error
+   */
+  private async handleJobError(jobId: string, instanceId: string, error: unknown): Promise<void> {
+    log.error('Job execution failed', { jobId, error: String(error) });
+
+    await this.db
+      .update(batchJobs)
+      .set({ status: 'failed', completedAt: new Date(), errorMessage: String(error) })
+      .where(eq(batchJobs.id, jobId));
+
+    if (this.eventBus) {
+      await this.eventBus.publish('batch-job.failed', { jobId, instanceId, error: String(error) }, { instanceId });
     }
   }
 
@@ -601,91 +697,99 @@ export class BatchJobService {
   private async processItem(instanceId: string, message: Message, batchJobId: string): Promise<ProcessingResult> {
     const mimeType = message.mediaMimeType;
     if (!mimeType || !this.mediaService.canProcess(mimeType)) {
-      return {
-        success: false,
-        contentFormat: 'text',
-        processingType: 'extraction',
-        provider: 'none',
-        model: 'none',
-        processingTimeMs: 0,
-        costCents: 0,
-        errorMessage: `MIME type not processable: ${mimeType}`,
-      };
+      return this.failedResult(`MIME type not processable: ${mimeType}`);
     }
 
-    // Get file path
-    let filePath = message.mediaLocalPath;
-    if (!filePath && message.mediaUrl) {
-      // Download from URL if no local path
-      try {
-        const result = await this.mediaStorage.storeFromUrl(
-          instanceId,
-          message.id,
-          message.mediaUrl,
-          mimeType,
-          message.platformTimestamp ?? undefined,
-        );
-        filePath = result.localPath;
-        await this.mediaStorage.updateMessageLocalPath(message.id, filePath);
-      } catch {
-        return {
-          success: false,
-          contentFormat: 'text',
-          processingType: 'extraction',
-          provider: 'none',
-          model: 'none',
-          processingTimeMs: 0,
-          costCents: 0,
-          errorMessage: 'Failed to download media',
-        };
-      }
-    }
-
+    const filePath = await this.resolveFilePath(instanceId, message, mimeType);
     if (!filePath) {
-      return {
-        success: false,
-        contentFormat: 'text',
-        processingType: 'extraction',
-        provider: 'none',
-        model: 'none',
-        processingTimeMs: 0,
-        costCents: 0,
-        errorMessage: 'No media file path available',
-      };
+      return this.failedResult('No media file path available');
     }
 
     const fullPath = join(this.mediaStorage.getBasePath(), filePath);
-
-    // Process media
     const result = await this.mediaService.process(fullPath, mimeType, {
       language: 'pt',
       caption: message.textContent ?? undefined,
     });
 
     if (result.success && result.content) {
-      // Store result in media_content table
-      await this.db.insert(mediaContent).values({
-        mediaId: message.id,
-        processingType: result.processingType,
-        content: result.content,
-        model: result.model,
-        provider: result.provider,
-        language: result.language,
-        duration: result.duration,
-        tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-        costUsd: result.costCents,
-        processingTimeMs: result.processingTimeMs,
-        batchJobId,
-      });
-
-      // Update message with processed content
-      const updateData = this.getMessageUpdateForType(result.processingType, result.content);
-      if (updateData) {
-        await this.db.update(messages).set(updateData).where(eq(messages.id, message.id));
-      }
+      await this.persistProcessingResult(message.id, result, batchJobId);
     }
 
     return result;
+  }
+
+  /**
+   * Create a failed processing result
+   */
+  private failedResult(errorMessage: string): ProcessingResult {
+    return {
+      success: false,
+      contentFormat: 'text',
+      processingType: 'extraction',
+      provider: 'none',
+      model: 'none',
+      processingTimeMs: 0,
+      costCents: 0,
+      errorMessage,
+    };
+  }
+
+  /**
+   * Resolve file path - download from URL if needed
+   */
+  private async resolveFilePath(instanceId: string, message: Message, mimeType: string): Promise<string | null> {
+    if (message.mediaLocalPath) {
+      return message.mediaLocalPath;
+    }
+
+    if (!message.mediaUrl) {
+      return null;
+    }
+
+    try {
+      const result = await this.mediaStorage.storeFromUrl(
+        instanceId,
+        message.id,
+        message.mediaUrl,
+        mimeType,
+        message.platformTimestamp ?? undefined,
+      );
+      await this.mediaStorage.updateMessageLocalPath(message.id, result.localPath);
+      return result.localPath;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persist processing result to DB (called only when result.success && result.content is truthy)
+   */
+  private async persistProcessingResult(
+    messageId: string,
+    result: ProcessingResult,
+    batchJobId: string,
+  ): Promise<void> {
+    // Content is guaranteed by caller check: `if (result.success && result.content)`
+    const content = result.content ?? '';
+
+    await this.db.insert(mediaContent).values({
+      mediaId: messageId,
+      processingType: result.processingType,
+      content,
+      model: result.model,
+      provider: result.provider,
+      language: result.language,
+      duration: result.duration,
+      tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+      costUsd: result.costCents,
+      processingTimeMs: result.processingTimeMs,
+      batchJobId,
+    });
+
+    const updateData = this.getMessageUpdateForType(result.processingType, content);
+    if (updateData) {
+      await this.db.update(messages).set(updateData).where(eq(messages.id, messageId));
+    }
   }
 
   /**
@@ -785,6 +889,16 @@ export class BatchJobService {
       default:
         return null;
     }
+  }
+
+  /**
+   * Require instanceId from job (throws if null)
+   */
+  private requireInstanceId(job: BatchJob): string {
+    if (!job.instanceId) {
+      throw new Error(`Job ${job.id} has no instanceId`);
+    }
+    return job.instanceId;
   }
 
   /**

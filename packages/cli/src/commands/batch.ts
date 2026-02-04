@@ -222,46 +222,53 @@ async function handleCreate(client: OmniClient, options: CreateOptions): Promise
   output.info(`Cancel: omni batch cancel ${job.id}`);
 }
 
+/** Check if job status indicates completion */
+function isJobFinished(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/** Clear previous output and display new content */
+function updateDisplay(display: string, previousLineCount: number): void {
+  if (previousLineCount > 0) {
+    process.stdout.write(`\x1b[${previousLineCount}A\x1b[0J`);
+  }
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(display);
+}
+
+/** Watch job status with polling */
+async function watchJobStatus(client: OmniClient, jobId: string, interval: number): Promise<void> {
+  let lastLineCount = 0;
+
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log('Watching job status (Ctrl+C to stop)...\n');
+
+  while (true) {
+    try {
+      const status = await client.batchJobs.getStatus(jobId);
+      const display = formatJobStatus(status);
+
+      updateDisplay(display, lastLineCount);
+      lastLineCount = display.split('\n').length;
+
+      if (isJobFinished(status.status)) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.log('\nJob finished.');
+        break;
+      }
+
+      await sleep(interval);
+    } catch (err) {
+      output.error(`Failed to get status: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+}
+
 /** Get job status */
 async function handleStatus(client: OmniClient, jobId: string, options: StatusOptions): Promise<void> {
   if (options.watch) {
-    // Watch mode - poll and update
-    const interval = options.interval ?? 2000;
-    let lastStatus = '';
-
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log('Watching job status (Ctrl+C to stop)...\n');
-
-    while (true) {
-      try {
-        const status = await client.batchJobs.getStatus(jobId);
-        const display = formatJobStatus(status);
-
-        // Clear previous output and show new status
-        if (lastStatus) {
-          const lines = lastStatus.split('\n').length;
-          // Move cursor up and clear
-          process.stdout.write(`\x1b[${lines}A\x1b[0J`);
-        }
-
-        // biome-ignore lint/suspicious/noConsole: CLI output
-        console.log(display);
-        lastStatus = display;
-
-        // Exit if job is done
-        if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
-          // biome-ignore lint/suspicious/noConsole: CLI output
-          console.log('\nJob finished.');
-          break;
-        }
-
-        await sleep(interval);
-      } catch (err) {
-        output.error(`Failed to get status: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      }
-    }
+    await watchJobStatus(client, jobId, options.interval ?? 2000);
   } else {
-    // Single status check
     const status = await client.batchJobs.getStatus(jobId);
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(formatJobStatus(status));
