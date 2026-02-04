@@ -1758,6 +1758,7 @@ export const automations = pgTable(
     // Trigger
     triggerEventType: varchar('trigger_event_type', { length: 255 }).notNull(),
     triggerConditions: jsonb('trigger_conditions').$type<AutomationCondition[]>(),
+    conditionLogic: varchar('condition_logic', { length: 10 }).default('and').$type<'and' | 'or'>(),
 
     // Actions (executed sequentially)
     actions: jsonb('actions').notNull().$type<AutomationAction[]>(),

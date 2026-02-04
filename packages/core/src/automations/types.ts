@@ -154,12 +154,18 @@ export interface ActionExecutionResult {
 /**
  * Automation (from database)
  */
+/**
+ * Condition logic for combining multiple conditions
+ */
+export type ConditionLogic = 'and' | 'or';
+
 export interface Automation {
   id: string;
   name: string;
   description: string | null;
   triggerEventType: string;
   triggerConditions: AutomationCondition[] | null;
+  conditionLogic: ConditionLogic | null;
   actions: AutomationAction[];
   debounce: DebounceConfig | null;
   enabled: boolean;

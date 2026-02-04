@@ -5,7 +5,7 @@
  */
 
 import { createLogger } from '../logger';
-import type { AutomationCondition, ConditionOperator } from './types';
+import type { AutomationCondition, ConditionLogic, ConditionOperator } from './types';
 
 const logger = createLogger('automations:conditions');
 
@@ -149,18 +149,28 @@ export function evaluateCondition(condition: AutomationCondition, payload: Recor
 
 /**
  * Evaluate all conditions against a payload
- * Returns true if ALL conditions match (AND logic)
+ *
+ * @param conditions - Array of conditions to evaluate
+ * @param payload - Event payload to evaluate against
+ * @param logic - 'and' (all must match) or 'or' (any must match). Defaults to 'and'.
+ * @returns true if conditions match according to the logic
  */
 export function evaluateConditions(
   conditions: AutomationCondition[] | null | undefined,
   payload: Record<string, unknown>,
+  logic: ConditionLogic = 'and',
 ): boolean {
   // No conditions = always match
   if (!conditions || conditions.length === 0) {
     return true;
   }
 
-  // All conditions must match (AND logic)
+  if (logic === 'or') {
+    // ANY condition must match (OR logic)
+    return conditions.some((condition) => evaluateCondition(condition, payload));
+  }
+
+  // ALL conditions must match (AND logic) - default
   return conditions.every((condition) => evaluateCondition(condition, payload));
 }
 
@@ -180,10 +190,15 @@ export interface ConditionEvaluationResult {
 
 /**
  * Evaluate conditions with detailed results for debugging/logging
+ *
+ * @param conditions - Array of conditions to evaluate
+ * @param payload - Event payload to evaluate against
+ * @param logic - 'and' (all must match) or 'or' (any must match). Defaults to 'and'.
  */
 export function evaluateConditionsWithDetails(
   conditions: AutomationCondition[] | null | undefined,
   payload: Record<string, unknown>,
+  logic: ConditionLogic = 'and',
 ): ConditionEvaluationResult {
   if (!conditions || conditions.length === 0) {
     return { matched: true, conditions: [] };
@@ -197,8 +212,10 @@ export function evaluateConditionsWithDetails(
     matched: evaluateCondition(condition, payload),
   }));
 
+  const matched = logic === 'or' ? results.some((r) => r.matched) : results.every((r) => r.matched);
+
   return {
-    matched: results.every((r) => r.matched),
+    matched,
     conditions: results,
   };
 }

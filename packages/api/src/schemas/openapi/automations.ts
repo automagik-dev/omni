@@ -99,6 +99,7 @@ export const AutomationSchema = z.object({
   description: z.string().nullable().openapi({ description: 'Description' }),
   triggerEventType: z.string().openapi({ description: 'Trigger event type' }),
   triggerConditions: z.array(ConditionSchema).nullable().openapi({ description: 'Conditions' }),
+  conditionLogic: z.enum(['and', 'or']).nullable().openapi({ description: 'Condition logic' }),
   actions: z.array(ActionSchema).openapi({ description: 'Actions' }),
   debounce: DebounceSchema.nullable().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
@@ -113,6 +114,10 @@ export const CreateAutomationSchema = z.object({
   description: z.string().optional().openapi({ description: 'Description' }),
   triggerEventType: z.string().min(1).openapi({ description: 'Trigger event type' }),
   triggerConditions: z.array(ConditionSchema).optional().openapi({ description: 'Conditions' }),
+  conditionLogic: z
+    .enum(['and', 'or'])
+    .default('and')
+    .openapi({ description: 'Condition logic: "and" (all must match) or "or" (any must match)' }),
   actions: z.array(ActionSchema).min(1).openapi({ description: 'Actions' }),
   debounce: DebounceSchema.optional().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),

@@ -366,6 +366,8 @@ export interface CreateAutomationBody {
       | 'regex';
     value?: unknown;
   }>;
+  /** Condition logic: 'and' (all must match) or 'or' (any must match). Defaults to 'and'. */
+  conditionLogic?: 'and' | 'or';
   actions: Array<{
     type: 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent';
     config: Record<string, unknown>;

@@ -27,6 +27,7 @@ function createMockAutomation(overrides: Partial<Automation> = {}): Automation {
     description: 'Test automation for unit tests',
     triggerEventType: 'message.received',
     triggerConditions: null,
+    conditionLogic: null,
     actions: [
       {
         type: 'log',

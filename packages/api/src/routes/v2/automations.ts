@@ -115,7 +115,11 @@ const createAutomationSchema = z.object({
   name: z.string().min(1).max(255).describe('Automation name'),
   description: z.string().optional().describe('Description'),
   triggerEventType: z.string().min(1).describe('Event type that triggers this automation'),
-  triggerConditions: z.array(conditionSchema).optional().describe('Conditions that must all match'),
+  triggerConditions: z.array(conditionSchema).optional().describe('Conditions to match'),
+  conditionLogic: z
+    .enum(['and', 'or'])
+    .default('and')
+    .describe('Condition logic: "and" (all must match) or "or" (any must match)'),
   actions: z.array(actionSchema).min(1).describe('Actions to execute (in sequence)'),
   debounce: debounceSchema.optional().describe('Message debounce configuration'),
   enabled: z.boolean().default(true).describe('Whether automation is enabled'),

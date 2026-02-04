@@ -84,6 +84,7 @@ export function createAutomationsCommand(): Command {
     .requiredOption('--action <type>', 'Action type (webhook, send_message, emit_event, log, call_agent)')
     .option('--action-config <json>', 'Action config as JSON')
     .option('--condition <json>', 'Trigger conditions as JSON array')
+    .option('--condition-logic <logic>', 'Condition logic: "and" (all must match) or "or" (any must match)')
     .option('--description <desc>', 'Automation description')
     .option('--priority <n>', 'Priority (higher = runs first)', (v) => Number.parseInt(v, 10))
     .option('--disabled', 'Create in disabled state')
@@ -98,6 +99,7 @@ export function createAutomationsCommand(): Command {
         action: string;
         actionConfig?: string;
         condition?: string;
+        conditionLogic?: string;
         description?: string;
         priority?: number;
         disabled?: boolean;
@@ -142,11 +144,22 @@ export function createAutomationsCommand(): Command {
             }
           }
 
+          // Validate conditionLogic if provided
+          let conditionLogic: 'and' | 'or' | undefined;
+          if (options.conditionLogic) {
+            if (options.conditionLogic !== 'and' && options.conditionLogic !== 'or') {
+              output.error('--condition-logic must be "and" or "or"');
+              return;
+            }
+            conditionLogic = options.conditionLogic;
+          }
+
           const automation = await client.automations.create({
             name: options.name,
             description: options.description,
             triggerEventType: options.trigger,
             triggerConditions: conditions as Parameters<typeof client.automations.create>[0]['triggerConditions'],
+            conditionLogic,
             actions: [
               {
                 type: options.action as 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent',

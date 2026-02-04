@@ -294,4 +294,58 @@ describe('evaluateConditions', () => {
     ];
     expect(evaluateConditions(conditions, { type: 'text', sender: 'Alice' })).toBe(false);
   });
+
+  describe('OR logic', () => {
+    test('returns true when any condition matches with or logic', () => {
+      const conditions: AutomationCondition[] = [
+        { field: 'text', operator: 'contains', value: 'help' },
+        { field: 'text', operator: 'contains', value: 'support' },
+        { field: 'text', operator: 'contains', value: 'urgent' },
+      ];
+      expect(evaluateConditions(conditions, { text: 'I need support please' }, 'or')).toBe(true);
+    });
+
+    test('returns true when first condition matches with or logic', () => {
+      const conditions: AutomationCondition[] = [
+        { field: 'type', operator: 'eq', value: 'text' },
+        { field: 'type', operator: 'eq', value: 'image' },
+      ];
+      expect(evaluateConditions(conditions, { type: 'text' }, 'or')).toBe(true);
+    });
+
+    test('returns true when last condition matches with or logic', () => {
+      const conditions: AutomationCondition[] = [
+        { field: 'type', operator: 'eq', value: 'image' },
+        { field: 'type', operator: 'eq', value: 'text' },
+      ];
+      expect(evaluateConditions(conditions, { type: 'text' }, 'or')).toBe(true);
+    });
+
+    test('returns false when no conditions match with or logic', () => {
+      const conditions: AutomationCondition[] = [
+        { field: 'text', operator: 'contains', value: 'help' },
+        { field: 'text', operator: 'contains', value: 'support' },
+      ];
+      expect(evaluateConditions(conditions, { text: 'Hello world' }, 'or')).toBe(false);
+    });
+
+    test('returns true for empty conditions with or logic', () => {
+      expect(evaluateConditions([], { name: 'Alice' }, 'or')).toBe(true);
+    });
+
+    test('returns true for null conditions with or logic', () => {
+      expect(evaluateConditions(null, { name: 'Alice' }, 'or')).toBe(true);
+    });
+
+    test('defaults to and logic when not specified', () => {
+      const conditions: AutomationCondition[] = [
+        { field: 'a', operator: 'eq', value: 1 },
+        { field: 'b', operator: 'eq', value: 2 },
+      ];
+      // Only a matches, should fail with AND (default)
+      expect(evaluateConditions(conditions, { a: 1, b: 3 })).toBe(false);
+      // With OR, should pass since a matches
+      expect(evaluateConditions(conditions, { a: 1, b: 3 }, 'or')).toBe(true);
+    });
+  });
 });
