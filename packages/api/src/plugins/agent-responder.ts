@@ -20,7 +20,7 @@
 import type { EventBus, MessageReceivedPayload } from '@omni/core';
 import { ProviderError, createLogger } from '@omni/core';
 import type { ChannelType, Instance } from '@omni/db';
-import type { AgentRunnerService, Services } from '../services';
+import type { AccessService, AgentRunnerService, Services } from '../services';
 import {
   type MessageContext,
   type SplitDelayConfig,
@@ -286,6 +286,37 @@ function getMessageLimit(channel: ChannelType): number {
 }
 
 /**
+ * Find the best split point for text chunking
+ * Prefers: paragraph > line > sentence > word > hard cut
+ */
+function findSplitPoint(text: string, maxLength: number): number {
+  const minSplit = maxLength * 0.5;
+
+  // Try paragraph boundary (double newline)
+  const paragraphBreak = text.lastIndexOf('\n\n', maxLength);
+  if (paragraphBreak > minSplit) return paragraphBreak + 2;
+
+  // Try line boundary (single newline)
+  const lineBreak = text.lastIndexOf('\n', maxLength);
+  if (lineBreak > minSplit) return lineBreak + 1;
+
+  // Try sentence boundary (. ! ?)
+  const sentenceEnd = Math.max(
+    text.lastIndexOf('. ', maxLength),
+    text.lastIndexOf('! ', maxLength),
+    text.lastIndexOf('? ', maxLength),
+  );
+  if (sentenceEnd > minSplit) return sentenceEnd + 2;
+
+  // Try word boundary (space)
+  const wordBreak = text.lastIndexOf(' ', maxLength);
+  if (wordBreak > minSplit) return wordBreak + 1;
+
+  // Hard cut at maxLength
+  return maxLength;
+}
+
+/**
  * Chunk text into parts that fit within the character limit
  * Tries to split at natural boundaries (newlines, sentences, words)
  */
@@ -303,38 +334,7 @@ function chunkText(text: string, maxLength: number): string[] {
       break;
     }
 
-    // Find a good split point within the limit
-    let splitIndex = maxLength;
-
-    // Try to split at a double newline (paragraph boundary)
-    const paragraphBreak = remaining.lastIndexOf('\n\n', maxLength);
-    if (paragraphBreak > maxLength * 0.5) {
-      splitIndex = paragraphBreak + 2; // Include the newlines
-    } else {
-      // Try to split at a single newline
-      const lineBreak = remaining.lastIndexOf('\n', maxLength);
-      if (lineBreak > maxLength * 0.5) {
-        splitIndex = lineBreak + 1;
-      } else {
-        // Try to split at a sentence boundary (. ! ?)
-        const sentenceEnd = Math.max(
-          remaining.lastIndexOf('. ', maxLength),
-          remaining.lastIndexOf('! ', maxLength),
-          remaining.lastIndexOf('? ', maxLength),
-        );
-        if (sentenceEnd > maxLength * 0.5) {
-          splitIndex = sentenceEnd + 2;
-        } else {
-          // Try to split at a word boundary (space)
-          const wordBreak = remaining.lastIndexOf(' ', maxLength);
-          if (wordBreak > maxLength * 0.5) {
-            splitIndex = wordBreak + 1;
-          }
-          // Otherwise just split at maxLength (hard cut)
-        }
-      }
-    }
-
+    const splitIndex = findSplitPoint(remaining, maxLength);
     chunks.push(remaining.slice(0, splitIndex).trim());
     remaining = remaining.slice(splitIndex).trim();
   }
@@ -483,6 +483,84 @@ async function processAgentResponse(
 // ============================================================================
 
 /**
+ * Handle access denial - send block message if configured
+ */
+async function handleAccessDenied(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  accessResult: { rule?: { action?: string; blockMessage?: string | null } },
+): Promise<void> {
+  if (accessResult.rule?.action === 'silent_block') return;
+  if (!accessResult.rule?.blockMessage) return;
+
+  try {
+    await sendTextMessage(channel, instanceId, chatId, accessResult.rule.blockMessage);
+  } catch (err) {
+    log.debug('Failed to send block message', { error: String(err) });
+  }
+}
+
+/**
+ * Process incoming message for agent response
+ */
+async function processIncomingMessage(
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; channelType?: string; personId?: string; platformIdentityId?: string },
+  timestamp: number,
+  agentRunner: AgentRunnerService,
+  accessService: AccessService,
+  debouncer: MessageDebouncer,
+): Promise<void> {
+  const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+  if (!instance?.agentProviderId) return;
+
+  const messageContext = buildMessageContext(payload, instance);
+  if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
+    log.debug('Message did not pass reply filter', { instanceId: instance.id, chatId: payload.chatId });
+    return;
+  }
+
+  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const accessResult = await accessService.checkAccess(instance.id, payload.from ?? '', channel);
+
+  if (!accessResult.allowed) {
+    log.info('Access denied by rule', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      from: payload.from,
+      reason: accessResult.reason,
+      action: accessResult.rule?.action,
+    });
+    await handleAccessDenied(channel, instance.id, payload.chatId, accessResult);
+    return;
+  }
+
+  const debounceConfig = getDebounceConfig(instance);
+  debouncer.buffer(
+    metadata.instanceId,
+    payload.chatId,
+    {
+      payload,
+      metadata: {
+        instanceId: metadata.instanceId,
+        channelType: metadata.channelType,
+        personId: metadata.personId,
+        platformIdentityId: metadata.platformIdentityId,
+      },
+      timestamp,
+    },
+    debounceConfig,
+  );
+
+  log.debug('Buffered message for agent response', {
+    instanceId: metadata.instanceId,
+    chatId: payload.chatId,
+    debounceMode: debounceConfig.mode,
+  });
+}
+
+/**
  * Set up agent responder - subscribes to message events and triggers agent responses
  */
 export async function setupAgentResponder(eventBus: EventBus, services: Services): Promise<void> {
@@ -514,92 +592,23 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
-        // Skip if no instance ID
-        if (!metadata.instanceId) {
-          return;
-        }
-
-        // Skip messages from ourselves
-        if (payload.from === metadata.platformIdentityId) {
-          return;
-        }
+        if (!metadata.instanceId) return;
+        if (payload.from === metadata.platformIdentityId) return;
 
         try {
-          // Get instance config
-          const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance) {
-            return;
-          }
-
-          // Skip if no agent provider configured
-          if (!instance.agentProviderId) {
-            return;
-          }
-
-          // Build message context and check reply filter
-          const messageContext = buildMessageContext(payload, instance);
-          if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
-            log.debug('Message did not pass reply filter', {
-              instanceId: instance.id,
-              chatId: payload.chatId,
-            });
-            return;
-          }
-
-          // Check access rules (allow/deny list)
-          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-          const accessResult = await accessService.checkAccess(instance.id, payload.from ?? '', channel);
-          if (!accessResult.allowed) {
-            log.info('Access denied by rule', {
-              instanceId: instance.id,
-              chatId: payload.chatId,
-              from: payload.from,
-              reason: accessResult.reason,
-              action: accessResult.rule?.action,
-            });
-
-            // Send block message if configured (and not silent_block)
-            if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
-              try {
-                await sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage);
-              } catch (err) {
-                log.debug('Failed to send block message', { error: String(err) });
-              }
-            }
-            return;
-          }
-
-          // Get debounce config
-          const debounceConfig = getDebounceConfig(instance);
-
-          // Buffer message
-          debouncer.buffer(
-            metadata.instanceId,
-            payload.chatId,
-            {
-              payload,
-              metadata: {
-                instanceId: metadata.instanceId,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-              },
-              timestamp: event.timestamp,
-            },
-            debounceConfig,
+          await processIncomingMessage(
+            payload,
+            metadata as Parameters<typeof processIncomingMessage>[1],
+            event.timestamp,
+            agentRunner,
+            accessService,
+            debouncer,
           );
-
-          log.debug('Buffered message for agent response', {
-            instanceId: metadata.instanceId,
-            chatId: payload.chatId,
-            debounceMode: debounceConfig.mode,
-          });
         } catch (error) {
           log.error('Error processing message for agent response', {
             instanceId: metadata.instanceId,
             error: String(error),
           });
-          // Don't rethrow - this is non-critical and shouldn't fail message persistence
         }
       },
       {

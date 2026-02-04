@@ -7919,6 +7919,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -8056,6 +8061,12 @@ export interface paths {
                             /** @description Value to compare */
                             value?: unknown;
                         }[];
+                        /**
+                         * @description Condition logic: "and" (all must match) or "or" (any must match)
+                         * @default and
+                         * @enum {string}
+                         */
+                        conditionLogic?: "and" | "or";
                         /** @description Actions */
                         actions: ({
                             /** @enum {string} */
@@ -8185,6 +8196,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -8369,6 +8385,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -8584,6 +8605,12 @@ export interface paths {
                             /** @description Value to compare */
                             value?: unknown;
                         }[];
+                        /**
+                         * @description Condition logic: "and" (all must match) or "or" (any must match)
+                         * @default and
+                         * @enum {string}
+                         */
+                        conditionLogic?: "and" | "or";
                         /** @description Actions */
                         actions?: ({
                             /** @enum {string} */
@@ -8713,6 +8740,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -8895,6 +8927,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -9081,6 +9118,11 @@ export interface paths {
                                     /** @description Value to compare */
                                     value?: unknown;
                                 }[] | null;
+                                /**
+                                 * @description Condition logic
+                                 * @enum {string|null}
+                                 */
+                                conditionLogic: "and" | "or" | null;
                                 /** @description Actions */
                                 actions: ({
                                     /** @enum {string} */
@@ -11584,6 +11626,11 @@ export interface components {
                 /** @description Value to compare */
                 value?: unknown;
             }[] | null;
+            /**
+             * @description Condition logic
+             * @enum {string|null}
+             */
+            conditionLogic: "and" | "or" | null;
             /** @description Actions */
             actions: ({
                 /** @enum {string} */
@@ -11702,6 +11749,12 @@ export interface components {
                 /** @description Value to compare */
                 value?: unknown;
             }[];
+            /**
+             * @description Condition logic: "and" (all must match) or "or" (any must match)
+             * @default and
+             * @enum {string}
+             */
+            conditionLogic: "and" | "or";
             /** @description Actions */
             actions: ({
                 /** @enum {string} */

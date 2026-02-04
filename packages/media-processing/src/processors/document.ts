@@ -320,79 +320,78 @@ export class DocumentProcessor extends BaseProcessor {
    * Generate a schema summary of JSON data with examples
    */
   private generateJsonSummary(data: unknown, depth = 0, maxDepth = 5): string {
-    const indent = '  '.repeat(depth);
-
-    // Handle primitives first (no depth limit for primitives)
-    if (data === null) {
-      return 'null';
-    }
-
-    if (typeof data !== 'object') {
-      return this.getValuePreview(data);
-    }
-
-    // Check depth limit for complex types
-    if (depth > maxDepth) {
-      if (Array.isArray(data)) {
-        return `Array[${data.length} items] (...)`;
-      }
-      return 'Object {...}';
-    }
+    if (data === null) return 'null';
+    if (typeof data !== 'object') return this.getValuePreview(data);
+    if (depth > maxDepth) return this.getDepthLimitedPreview(data);
 
     if (Array.isArray(data)) {
-      if (data.length === 0) {
-        return '[] (empty array)';
-      }
+      return this.summarizeArray(data, depth, maxDepth);
+    }
+    return this.summarizeObject(data as Record<string, unknown>, depth, maxDepth);
+  }
 
-      // For primitive arrays, show inline
-      const firstItem = data[0];
-      if (typeof firstItem !== 'object' || firstItem === null) {
-        const preview = data
-          .slice(0, JSON_MAX_ARRAY_EXAMPLES)
-          .map((v) => this.getValuePreview(v))
-          .join(', ');
-        const suffix =
-          data.length > JSON_MAX_ARRAY_EXAMPLES ? `, ... +${data.length - JSON_MAX_ARRAY_EXAMPLES} more` : '';
-        return `[${preview}${suffix}]`;
-      }
+  /** Get preview when depth limit is exceeded */
+  private getDepthLimitedPreview(data: unknown): string {
+    if (Array.isArray(data)) {
+      return `Array[${data.length} items] (...)`;
+    }
+    return 'Object {...}';
+  }
 
-      // For object arrays, show structure
-      const lines: string[] = [];
-      lines.push(`Array[${data.length} items]:`);
+  /** Summarize an array value */
+  private summarizeArray(data: unknown[], depth: number, maxDepth: number): string {
+    if (data.length === 0) return '[] (empty array)';
 
-      const examples = data.slice(0, JSON_MAX_ARRAY_EXAMPLES);
-      for (let i = 0; i < examples.length; i++) {
-        lines.push(`${indent}  [${i}]: ${this.generateJsonSummary(examples[i], depth + 2, maxDepth)}`);
-      }
+    const firstItem = data[0];
+    if (typeof firstItem !== 'object' || firstItem === null) {
+      return this.summarizePrimitiveArray(data);
+    }
+    return this.summarizeObjectArray(data, depth, maxDepth);
+  }
 
-      if (data.length > JSON_MAX_ARRAY_EXAMPLES) {
-        lines.push(`${indent}  ... and ${data.length - JSON_MAX_ARRAY_EXAMPLES} more items`);
-      }
+  /** Summarize array of primitives inline */
+  private summarizePrimitiveArray(data: unknown[]): string {
+    const preview = data
+      .slice(0, JSON_MAX_ARRAY_EXAMPLES)
+      .map((v) => this.getValuePreview(v))
+      .join(', ');
+    const suffix = data.length > JSON_MAX_ARRAY_EXAMPLES ? `, ... +${data.length - JSON_MAX_ARRAY_EXAMPLES} more` : '';
+    return `[${preview}${suffix}]`;
+  }
 
-      return lines.join('\n');
+  /** Summarize array of objects with structure */
+  private summarizeObjectArray(data: unknown[], depth: number, maxDepth: number): string {
+    const indent = '  '.repeat(depth);
+    const lines: string[] = [`Array[${data.length} items]:`];
+
+    const examples = data.slice(0, JSON_MAX_ARRAY_EXAMPLES);
+    for (let i = 0; i < examples.length; i++) {
+      lines.push(`${indent}  [${i}]: ${this.generateJsonSummary(examples[i], depth + 2, maxDepth)}`);
     }
 
-    // Object handling
-    const obj = data as Record<string, unknown>;
+    if (data.length > JSON_MAX_ARRAY_EXAMPLES) {
+      lines.push(`${indent}  ... and ${data.length - JSON_MAX_ARRAY_EXAMPLES} more items`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /** Summarize an object value */
+  private summarizeObject(obj: Record<string, unknown>, depth: number, maxDepth: number): string {
     const keys = Object.keys(obj);
+    if (keys.length === 0) return '{} (empty object)';
 
-    if (keys.length === 0) {
-      return '{} (empty object)';
-    }
-
-    const lines: string[] = [];
-    lines.push(`Object {${keys.length} keys}:`);
+    const indent = '  '.repeat(depth);
+    const lines: string[] = [`Object {${keys.length} keys}:`];
 
     for (const key of keys) {
       const value = obj[key];
       const valueType = this.getJsonValueType(value);
-
-      if (valueType === 'object' || valueType === 'array') {
-        lines.push(`${indent}  "${key}": ${this.generateJsonSummary(value, depth + 2, maxDepth)}`);
-      } else {
-        const preview = this.getValuePreview(value);
-        lines.push(`${indent}  "${key}": ${valueType} = ${preview}`);
-      }
+      const isComplex = valueType === 'object' || valueType === 'array';
+      const valueStr = isComplex
+        ? this.generateJsonSummary(value, depth + 2, maxDepth)
+        : `${valueType} = ${this.getValuePreview(value)}`;
+      lines.push(`${indent}  "${key}": ${valueStr}`);
     }
 
     return lines.join('\n');
