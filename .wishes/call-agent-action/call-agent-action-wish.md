@@ -2,10 +2,10 @@
 
 > Enable AI agent calls as an automation action type for composable workflows.
 
-**Status:** SHIPPED
+**Status:** FORGE
 **Created:** 2026-02-04
 **Author:** WISH Agent
-**Beads:** omni-uri
+**Beads:** omni-b48
 
 ---
 
@@ -272,3 +272,35 @@ No dedicated unit tests for `executeCallAgentAction()`. The existing integration
 ### Recommendation
 
 **SHIP** - All acceptance criteria pass, no blockers. The implementation is clean, follows existing patterns, and integrates well with the automations system.
+
+---
+
+## QA Results
+
+**Verdict:** FAIL
+**Date:** 2026-02-04
+**Tester:** QA Agent
+
+### Critical Bug Found
+
+**[CRITICAL] API Route Validation Missing call_agent**
+
+The route handler at `packages/api/src/routes/v2/automations.ts:68-73` defines its own action schema that doesn't include `call_agent`:
+
+```typescript
+const actionSchema = z.discriminatedUnion('type', [
+  webhookActionSchema,
+  sendMessageActionSchema,
+  emitEventActionSchema,
+  logActionSchema,
+  // MISSING: callAgentActionSchema
+]);
+```
+
+**Impact:** Cannot create automations with `call_agent` action via API or CLI.
+
+**Fix Required:** Add `callAgentActionSchema` to the action union in route handler.
+
+**Beads Issue:** omni-b48
+
+See full QA results: `.wishes/call-agent-action/qa/qa-results.md`
