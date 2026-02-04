@@ -2,7 +2,7 @@
 
 > Add OR logic support for automation trigger conditions.
 
-**Status:** FORGING
+**Status:** REVIEW
 **Created:** 2026-02-02
 **Updated:** 2026-02-04
 **Author:** WISH Agent
@@ -75,12 +75,12 @@
 
 ### System Checklist
 
-- [ ] **Database**: Add `conditionLogic` column, run `make db-push`
-- [ ] **Core**: Update `evaluateConditions()` for OR logic
-- [ ] **API**: Add to route validation and OpenAPI schema
-- [ ] **SDK**: Regenerate after API changes
-- [ ] **CLI**: Add `--condition-logic` option to create command
-- [ ] **Tests**: Add OR logic tests to conditions.test.ts
+- [x] **Database**: Add `conditionLogic` column, run `make db-push`
+- [x] **Core**: Update `evaluateConditions()` for OR logic
+- [x] **API**: Add to route validation and OpenAPI schema
+- [x] **SDK**: Regenerate after API changes
+- [x] **CLI**: Add `--condition-logic` option to create command
+- [x] **Tests**: Add OR logic tests to conditions.test.ts
 
 ---
 
@@ -93,16 +93,16 @@
 **Packages:** db, core
 
 **Deliverables:**
-- [ ] Add `conditionLogic` column to `automations` table in schema.ts
-- [ ] Add `conditionLogic` to `Automation` type in core/types.ts
-- [ ] Update `evaluateConditions()` to accept logic parameter
-- [ ] Add tests for OR condition evaluation
+- [x] Add `conditionLogic` column to `automations` table in schema.ts
+- [x] Add `conditionLogic` to `Automation` type in core/types.ts
+- [x] Update `evaluateConditions()` to accept logic parameter
+- [x] Add tests for OR condition evaluation
 
 **Acceptance Criteria:**
-- [ ] `make db-push` succeeds
-- [ ] `evaluateConditions([...], payload, 'or')` returns true if ANY condition matches
-- [ ] Default 'and' behavior unchanged
-- [ ] Tests pass
+- [x] `make db-push` succeeds
+- [x] `evaluateConditions([...], payload, 'or')` returns true if ANY condition matches
+- [x] Default 'and' behavior unchanged
+- [x] Tests pass
 
 **Validation:**
 ```bash
@@ -119,16 +119,16 @@ bun test packages/core/src/automations/__tests__/conditions.test.ts
 **Packages:** api, cli, sdk
 
 **Deliverables:**
-- [ ] Add `conditionLogic` to route validation schema
-- [ ] Add to OpenAPI documentation
-- [ ] Add `--condition-logic <and|or>` to CLI create command
-- [ ] Regenerate SDK
+- [x] Add `conditionLogic` to route validation schema
+- [x] Add to OpenAPI documentation
+- [x] Add `--condition-logic <and|or>` to CLI create command
+- [x] Regenerate SDK
 
 **Acceptance Criteria:**
-- [ ] Can create automation with `conditionLogic: 'or'` via API
-- [ ] Can create automation with `--condition-logic or` via CLI
-- [ ] SDK types include `conditionLogic` field
-- [ ] `make check` passes
+- [x] Can create automation with `conditionLogic: 'or'` via API
+- [x] Can create automation with `--condition-logic or` via CLI
+- [x] SDK types include `conditionLogic` field
+- [x] `make check` passes
 
 **Validation:**
 ```bash
