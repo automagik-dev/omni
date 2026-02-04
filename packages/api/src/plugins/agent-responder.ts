@@ -20,7 +20,7 @@
 import type { EventBus, MessageReceivedPayload } from '@omni/core';
 import { ProviderError, createLogger } from '@omni/core';
 import type { ChannelType, Instance } from '@omni/db';
-import type { AgentRunnerService, Services } from '../services';
+import type { AccessService, AgentRunnerService, Services } from '../services';
 import {
   type MessageContext,
   type SplitDelayConfig,
@@ -487,6 +487,7 @@ async function processAgentResponse(
  */
 export async function setupAgentResponder(eventBus: EventBus, services: Services): Promise<void> {
   const agentRunner = services.agentRunner;
+  const accessService = services.access;
 
   // Create debouncer
   const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
@@ -542,6 +543,29 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
               instanceId: instance.id,
               chatId: payload.chatId,
             });
+            return;
+          }
+
+          // Check access rules (allow/deny list)
+          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+          const accessResult = await accessService.checkAccess(instance.id, payload.from ?? '', channel);
+          if (!accessResult.allowed) {
+            log.info('Access denied by rule', {
+              instanceId: instance.id,
+              chatId: payload.chatId,
+              from: payload.from,
+              reason: accessResult.reason,
+              action: accessResult.rule?.action,
+            });
+
+            // Send block message if configured (and not silent_block)
+            if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
+              try {
+                await sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage);
+              } catch (err) {
+                log.debug('Failed to send block message', { error: String(err) });
+              }
+            }
             return;
           }
 
