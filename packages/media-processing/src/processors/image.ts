@@ -53,7 +53,7 @@ export class ImageProcessor extends BaseProcessor {
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
       this.log.info('Gemini model initialized');
     }
     return this.geminiModel;
@@ -117,7 +117,7 @@ export class ImageProcessor extends BaseProcessor {
   private async describeWithGemini(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.0-flash');
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.5-flash');
     }
 
     let lastError: Error | null = null;
@@ -141,7 +141,7 @@ export class ImageProcessor extends BaseProcessor {
         const inputTokens = usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-        const costCents = calculateCost('gemini_vision', 'gemini-2.0-flash', {
+        const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
           inputTokens,
           outputTokens,
         });
@@ -152,7 +152,7 @@ export class ImageProcessor extends BaseProcessor {
           contentFormat: 'text',
           processingType: 'description',
           provider: 'google',
-          model: 'gemini-2.0-flash',
+          model: 'gemini-2.5-flash',
           processingTimeMs: 0,
           inputTokens,
           outputTokens,
@@ -171,7 +171,7 @@ export class ImageProcessor extends BaseProcessor {
       }
     }
 
-    return this.createFailedResult(lastError?.message ?? 'Description failed', 'google', 'gemini-2.0-flash');
+    return this.createFailedResult(lastError?.message ?? 'Description failed', 'google', 'gemini-2.5-flash');
   }
 
   /**

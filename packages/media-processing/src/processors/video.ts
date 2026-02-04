@@ -55,7 +55,7 @@ export class VideoProcessor extends BaseProcessor {
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
       this.log.info('Gemini 2.5 Flash model initialized for video');
     }
     return this.geminiModel;
@@ -77,7 +77,7 @@ export class VideoProcessor extends BaseProcessor {
       return this.createFailedResult(
         `Video too large (${fileSizeMb.toFixed(1)}MB). Max: ${MAX_VIDEO_SIZE_MB}MB. Use batch processing for larger files.`,
         'google',
-        'gemini-2.0-flash',
+        'gemini-2.5-flash',
       );
     }
 
@@ -115,7 +115,7 @@ export class VideoProcessor extends BaseProcessor {
   private async describeWithGemini(videoData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.0-flash');
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.5-flash');
     }
 
     let lastError: Error | null = null;
@@ -139,7 +139,7 @@ export class VideoProcessor extends BaseProcessor {
         const inputTokens = usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-        const costCents = calculateCost('gemini_video', 'gemini-2.0-flash', {
+        const costCents = calculateCost('gemini_video', 'gemini-2.5-flash', {
           inputTokens,
           outputTokens,
         });
@@ -150,7 +150,7 @@ export class VideoProcessor extends BaseProcessor {
           contentFormat: 'text',
           processingType: 'description',
           provider: 'google',
-          model: 'gemini-2.0-flash',
+          model: 'gemini-2.5-flash',
           processingTimeMs: 0,
           inputTokens,
           outputTokens,
@@ -169,7 +169,7 @@ export class VideoProcessor extends BaseProcessor {
       }
     }
 
-    return this.createFailedResult(lastError?.message ?? 'Video description failed', 'google', 'gemini-2.0-flash');
+    return this.createFailedResult(lastError?.message ?? 'Video description failed', 'google', 'gemini-2.5-flash');
   }
 
   /**

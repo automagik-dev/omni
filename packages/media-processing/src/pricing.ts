@@ -69,12 +69,12 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
   // ============================================================================
   // GEMINI VISION (Image Description - Primary)
   // ============================================================================
-  'gemini_vision:gemini-2.0-flash': {
-    model: 'gemini-2.0-flash',
+  'gemini_vision:gemini-2.5-flash': {
+    model: 'gemini-2.5-flash',
     provider: 'google',
     unit: 'per_million_tokens',
-    inputRate: 0.1, // $0.10 per 1M input tokens
-    outputRate: 0.4, // $0.40 per 1M output tokens
+    inputRate: 0.15, // $0.15 per 1M input tokens
+    outputRate: 0.6, // $0.60 per 1M output tokens
   },
   'gemini_vision:gemini-2.5-flash': {
     model: 'gemini-2.5-flash',
@@ -87,12 +87,12 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
   // ============================================================================
   // GEMINI VIDEO (Video Description)
   // ============================================================================
-  'gemini_video:gemini-2.0-flash': {
-    model: 'gemini-2.0-flash',
+  'gemini_video:gemini-2.5-flash': {
+    model: 'gemini-2.5-flash',
     provider: 'google',
     unit: 'per_million_tokens',
-    inputRate: 0.1, // $0.10 per 1M input tokens (video frames + audio)
-    outputRate: 0.4, // $0.40 per 1M output tokens
+    inputRate: 0.15, // $0.15 per 1M input tokens (video frames + audio)
+    outputRate: 0.6, // $0.60 per 1M output tokens
   },
 
   // ============================================================================
