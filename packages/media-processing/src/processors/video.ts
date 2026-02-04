@@ -81,9 +81,7 @@ export class VideoProcessor extends BaseProcessor {
       );
     }
 
-    const prompt = options?.caption
-      ? `${DEFAULT_PROMPT}\n\nAdditional context: ${options.caption}`
-      : DEFAULT_PROMPT;
+    const prompt = options?.caption ? `${DEFAULT_PROMPT}\n\nAdditional context: ${options.caption}` : DEFAULT_PROMPT;
 
     // Read video file
     const videoData = readFileSync(filePath);

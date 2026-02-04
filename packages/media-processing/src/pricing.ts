@@ -76,13 +76,6 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
     inputRate: 0.15, // $0.15 per 1M input tokens
     outputRate: 0.6, // $0.60 per 1M output tokens
   },
-  'gemini_vision:gemini-2.5-flash': {
-    model: 'gemini-2.5-flash',
-    provider: 'google',
-    unit: 'per_million_tokens',
-    inputRate: 0.15, // $0.15 per 1M input tokens
-    outputRate: 0.6, // $0.60 per 1M output tokens
-  },
 
   // ============================================================================
   // GEMINI VIDEO (Video Description)

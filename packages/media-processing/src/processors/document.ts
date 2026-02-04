@@ -336,7 +336,7 @@ export class DocumentProcessor extends BaseProcessor {
       if (Array.isArray(data)) {
         return `Array[${data.length} items] (...)`;
       }
-      return `Object {...}`;
+      return 'Object {...}';
     }
 
     if (Array.isArray(data)) {
@@ -347,8 +347,12 @@ export class DocumentProcessor extends BaseProcessor {
       // For primitive arrays, show inline
       const firstItem = data[0];
       if (typeof firstItem !== 'object' || firstItem === null) {
-        const preview = data.slice(0, JSON_MAX_ARRAY_EXAMPLES).map((v) => this.getValuePreview(v)).join(', ');
-        const suffix = data.length > JSON_MAX_ARRAY_EXAMPLES ? `, ... +${data.length - JSON_MAX_ARRAY_EXAMPLES} more` : '';
+        const preview = data
+          .slice(0, JSON_MAX_ARRAY_EXAMPLES)
+          .map((v) => this.getValuePreview(v))
+          .join(', ');
+        const suffix =
+          data.length > JSON_MAX_ARRAY_EXAMPLES ? `, ... +${data.length - JSON_MAX_ARRAY_EXAMPLES} more` : '';
         return `[${preview}${suffix}]`;
       }
 
