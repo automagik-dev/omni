@@ -43,7 +43,7 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
-import { gzipMiddleware } from './middleware/compression';
+// import { gzipMiddleware } from './middleware/compression'; // Disabled - see note below
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';
@@ -90,9 +90,10 @@ export function createApp(
     httpLog.info(`→ ${c.req.method} ${c.req.path}`, { status: c.res.status, ms });
   });
 
-  // Response compression (gzip) - only for API routes
-  // serveStatic handles its own encoding, compression middleware causes ERR_CONTENT_DECODING_FAILED
-  app.use('/api/*', gzipMiddleware);
+  // NOTE: Compression disabled - Hono's compress middleware with Bun has bugs
+  // that cause ERR_CONTENT_DECODING_FAILED in browsers (Content-Encoding mismatch)
+  // API responses are small enough that compression isn't critical
+  // app.use('/api/*', gzipMiddleware);
   // Configure CORS with allowed origins
   const allowedOrigins = getAllowedOrigins();
   app.use(
