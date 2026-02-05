@@ -16,6 +16,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8882',
         changeOrigin: true,
+        configure: (proxy) => {
+          // Fix ERR_CONTENT_DECODING_FAILED by removing accept-encoding
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('accept-encoding');
+          });
+        },
       },
     },
   },

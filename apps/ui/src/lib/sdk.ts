@@ -52,9 +52,11 @@ export function getClient(): OmniClient {
   }
 
   if (!client) {
-    // In dev, Vite proxies /api to the API server
-    // In prod, the API serves the UI and /api/v2 is the same origin
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    // In dev, Vite proxies /api to the API server (localhost:5173/api -> localhost:8882/api)
+    // In prod, the API serves the UI and /api/v2 is on the same origin
+    // SDK appends /api/v2 to baseUrl, so baseUrl should be origin only (empty for same-origin)
+    // Using window.location.origin as fallback since SDK requires non-empty baseUrl
+    const baseUrl = import.meta.env.VITE_API_URL || window.location.origin;
 
     client = createOmniClient({
       baseUrl,
