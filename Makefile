@@ -1,8 +1,8 @@
 # Omni v2 Makefile
 # Universal Event-Driven Omnichannel Platform
 
-.PHONY: help install dev dev-api dev-services dev-stop build clean \
-        test test-watch test-api test-db typecheck lint lint-fix format check \
+.PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean \
+        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -21,6 +21,7 @@ help:
 	@echo "  make install       Install deps + .env + init database"
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
+	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
 	@echo "  make dev-services  Start pgserve + nats via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
@@ -49,6 +50,7 @@ help:
 	@echo ""
 	@echo "Building:"
 	@echo "  make build         Build all packages"
+	@echo "  make build-ui      Build UI for production"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Production:"
@@ -146,6 +148,10 @@ dev-stop:
 	-pm2 delete ecosystem.config.cjs 2>/dev/null || true
 	@echo "Dev services stopped"
 
+# Start UI dev server (Vite)
+dev-ui:
+	cd apps/ui && bun run dev
+
 # ============================================================================
 # Quality Checks
 # ============================================================================
@@ -165,6 +171,12 @@ lint-api:
 
 lint-db:
 	bunx biome check packages/db
+
+lint-ui:
+	cd apps/ui && bun run lint
+
+typecheck-ui:
+	cd apps/ui && bun run typecheck
 
 lint-core:
 	bunx biome check packages/core
@@ -232,9 +244,13 @@ db-reset:
 build:
 	bun run build
 
+build-ui:
+	cd apps/ui && bun run build
+
 clean:
 	rm -rf node_modules/.cache
 	rm -rf packages/*/dist
+	rm -rf apps/*/dist
 	rm -rf .turbo
 	@echo "Clean complete"
 

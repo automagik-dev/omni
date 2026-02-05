@@ -2,10 +2,13 @@
  * Hono application setup
  */
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { Hono } from 'hono';
+import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
@@ -123,7 +126,54 @@ export function createApp(
 
   app.route('/api/v2', protectedApp);
 
-  // 404 handler
+  // ============================================
+  // UI Static Files (production only)
+  // ============================================
+  // Serve built UI from apps/ui/dist when available
+  // In dev, use Vite on :5173 instead
+  const uiDistPath = path.resolve(process.cwd(), 'apps/ui/dist');
+  const serveUI = existsSync(uiDistPath);
+
+  if (serveUI) {
+    httpLog.info('Serving UI from apps/ui/dist');
+
+    // Serve static assets (JS, CSS, images, fonts)
+    app.use(
+      '/assets/*',
+      serveStatic({
+        root: uiDistPath,
+        rewriteRequestPath: (p) => p.replace(/^\/assets/, '/assets'),
+      }),
+    );
+
+    // Serve other static files (favicon, etc.)
+    app.get('/favicon.svg', serveStatic({ path: `${uiDistPath}/favicon.svg` }));
+    app.get('/favicon.ico', serveStatic({ path: `${uiDistPath}/favicon.ico` }));
+
+    // SPA fallback - serve index.html for non-API routes
+    app.get('*', async (c) => {
+      // Don't catch API routes
+      if (c.req.path.startsWith('/api')) {
+        return c.json(
+          {
+            error: {
+              code: 'NOT_FOUND',
+              message: `Endpoint not found: ${c.req.method} ${c.req.path}`,
+            },
+          },
+          404,
+        );
+      }
+      // Serve index.html for client-side routing
+      const indexPath = `${uiDistPath}/index.html`;
+      const file = Bun.file(indexPath);
+      return new Response(file, {
+        headers: { 'Content-Type': 'text/html' },
+      });
+    });
+  }
+
+  // 404 handler (only for API routes when UI is served, or all routes when not)
   app.notFound((c) => {
     return c.json(
       {

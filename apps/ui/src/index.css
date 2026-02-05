@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@theme {
+  /* Colors - Light mode (default) */
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.145 0 0);
+  --color-primary: oklch(0.546 0.245 262.881);
+  --color-primary-foreground: oklch(0.985 0.001 106.423);
+  --color-secondary: oklch(0.97 0.001 106.424);
+  --color-secondary-foreground: oklch(0.205 0.015 285.823);
+  --color-muted: oklch(0.97 0.001 106.424);
+  --color-muted-foreground: oklch(0.556 0.014 285.938);
+  --color-accent: oklch(0.97 0.001 106.424);
+  --color-accent-foreground: oklch(0.205 0.015 285.823);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.985 0.001 106.423);
+  --color-border: oklch(0.922 0.004 286.067);
+  --color-input: oklch(0.922 0.004 286.067);
+  --color-ring: oklch(0.546 0.245 262.881);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.145 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.145 0 0);
+
+  /* Radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  /* Fonts */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", monospace;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-background: oklch(0.145 0 0);
+    --color-foreground: oklch(0.985 0 0);
+    --color-primary: oklch(0.707 0.165 254.624);
+    --color-primary-foreground: oklch(0.205 0.015 285.823);
+    --color-secondary: oklch(0.269 0.015 285.786);
+    --color-secondary-foreground: oklch(0.985 0.001 106.423);
+    --color-muted: oklch(0.269 0.015 285.786);
+    --color-muted-foreground: oklch(0.711 0.014 285.938);
+    --color-accent: oklch(0.269 0.015 285.786);
+    --color-accent-foreground: oklch(0.985 0.001 106.423);
+    --color-destructive: oklch(0.704 0.191 22.216);
+    --color-destructive-foreground: oklch(0.985 0.001 106.423);
+    --color-border: oklch(0.269 0.015 285.786);
+    --color-input: oklch(0.269 0.015 285.786);
+    --color-ring: oklch(0.707 0.165 254.624);
+    --color-card: oklch(0.145 0 0);
+    --color-card-foreground: oklch(0.985 0 0);
+    --color-popover: oklch(0.145 0 0);
+    --color-popover-foreground: oklch(0.985 0 0);
+  }
+}
+
+/* Base styles */
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}

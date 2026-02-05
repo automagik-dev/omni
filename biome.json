@@ -44,7 +44,7 @@
     }
   },
   "files": {
-    "ignore": ["node_modules", "dist", ".turbo", "*.min.js", ".pgserve-data", "bin", "*.generated.ts"]
+    "ignore": ["node_modules", "dist", "dist-node", ".turbo", "*.min.js", ".pgserve-data", "bin", "*.generated.ts"]
   },
   "overrides": [
     {
