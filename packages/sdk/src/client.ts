@@ -888,12 +888,25 @@ export function createOmniClient(config: OmniClientConfig) {
   const baseUrl = config.baseUrl.replace(/\/$/, '');
 
   // Auth middleware
+  // Note: Accept-Encoding: identity disables compression to avoid Bun/Hono gzip compatibility issues
   const authMiddleware: Middleware = {
     async onRequest({ request }) {
       request.headers.set('x-api-key', config.apiKey);
+      request.headers.set('Accept-Encoding', 'identity');
       return request;
     },
   };
+
+  // Helper for direct fetch calls with consistent headers
+  const apiFetch = (url: string, init?: RequestInit) =>
+    fetch(url, {
+      ...init,
+      headers: {
+        'x-api-key': config.apiKey,
+        'Accept-Encoding': 'identity',
+        ...init?.headers,
+      },
+    });
 
   // Create openapi-fetch client
   const client = createClient<paths>({ baseUrl: `${baseUrl}/api/v2` });
@@ -913,9 +926,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Note: Uses type assertion until SDK types are regenerated
        */
       async validate(): Promise<AuthValidateResponse> {
-        const resp = await fetch(`${baseUrl}/api/v2/auth/validate`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/auth/validate`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) {
           throw OmniApiError.from(await resp.json(), resp.status);
@@ -1075,9 +1087,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Sync instance profile immediately
        */
       async syncProfile(id: string): Promise<SyncProfileResult> {
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync/profile`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync/profile`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SyncProfileResult };
@@ -1088,9 +1099,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Start a sync job (messages, contacts, groups, or all)
        */
       async startSync(id: string, body: StartSyncBody): Promise<SyncJobCreated> {
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1105,9 +1116,7 @@ export function createOmniClient(config: OmniClientConfig) {
         const query = new URLSearchParams();
         if (params?.status) query.set('status', params.status);
         if (params?.limit) query.set('limit', String(params.limit));
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: SyncJobSummary[]; meta?: PaginationMeta };
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
@@ -1117,9 +1126,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get sync job status
        */
       async getSyncStatus(id: string, jobId: string): Promise<SyncJobStatus> {
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/sync/${jobId}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync/${jobId}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SyncJobStatus };
         if (!json?.data) throw new OmniApiError('Sync job not found', 'NOT_FOUND', undefined, 404);
@@ -1137,9 +1144,7 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
         if (params?.guildId) query.set('guildId', params.guildId);
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/contacts?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/contacts?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           items?: Contact[];
@@ -1158,9 +1163,7 @@ export function createOmniClient(config: OmniClientConfig) {
         const query = new URLSearchParams();
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/groups?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/groups?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           items?: Group[];
@@ -1173,9 +1176,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get user profile from channel
        */
       async getUserProfile(id: string, userId: string): Promise<UserProfile> {
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/users/${userId}/profile`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/users/${userId}/profile`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: UserProfile };
         if (!json?.data) throw new OmniApiError('User profile not found', 'NOT_FOUND', undefined, 404);
@@ -1207,9 +1208,7 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('includeArchived', params?.includeArchived);
         setIfDefined('limit', params?.limit);
         setIfDefined('cursor', params?.cursor);
-        const resp = await fetch(`${baseUrl}/api/v2/chats?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: Chat[]; meta?: PaginationMeta };
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
@@ -1219,9 +1218,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get a chat by ID
        */
       async get(id: string): Promise<Chat> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
         if (!json?.data) throw new OmniApiError('Chat not found', 'NOT_FOUND', undefined, 404);
@@ -1232,9 +1229,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Create a chat
        */
       async create(body: CreateChatBody): Promise<Chat> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1247,9 +1244,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Update a chat
        */
       async update(id: string, body: UpdateChatBody): Promise<Chat> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}`, {
           method: 'PATCH',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1262,9 +1259,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Delete a chat
        */
       async delete(id: string): Promise<void> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}`, {
           method: 'DELETE',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
       },
@@ -1273,9 +1269,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Archive a chat
        */
       async archive(id: string): Promise<Chat> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
@@ -1287,9 +1282,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Unarchive a chat
        */
       async unarchive(id: string): Promise<Chat> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
@@ -1305,9 +1299,7 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.before) query.set('before', params.before);
         if (params?.after) query.set('after', params.after);
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/messages?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/messages?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: Message[] };
         return json?.items ?? [];
@@ -1317,9 +1309,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * List participants of a chat
        */
       async listParticipants(id: string): Promise<ChatParticipant[]> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/participants`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/participants`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: ChatParticipant[] };
         return json?.items ?? [];
@@ -1329,9 +1319,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Add a participant to a chat
        */
       async addParticipant(id: string, body: AddParticipantBody): Promise<ChatParticipant> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/participants`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/participants`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1344,9 +1334,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Remove a participant from a chat
        */
       async removeParticipant(id: string, platformUserId: string): Promise<void> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/participants/${platformUserId}`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/participants/${platformUserId}`, {
           method: 'DELETE',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
       },
@@ -1355,9 +1344,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Mark entire chat as read
        */
       async markRead(id: string, body: MarkChatReadBody): Promise<MarkReadResult> {
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/read`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/read`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1432,9 +1421,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Send a poll (Discord only)
        */
       async sendPoll(body: SendPollBody): Promise<{ messageId: string; status: string }> {
-        const resp = await fetch(`${baseUrl}/api/v2/messages/poll`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/poll`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1446,9 +1435,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Send an embed (Discord only)
        */
       async sendEmbed(body: SendEmbedBody): Promise<{ messageId: string; status: string }> {
-        const resp = await fetch(`${baseUrl}/api/v2/messages/embed`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/embed`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1460,9 +1449,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Send presence indicator (typing, recording, etc.)
        */
       async sendPresence(body: SendPresenceBody): Promise<SendPresenceResult> {
-        const resp = await fetch(`${baseUrl}/api/v2/messages/send/presence`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/presence`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1481,9 +1470,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Mark a single message as read
        */
       async markRead(messageId: string, body: MarkMessageReadBody): Promise<MarkReadResult> {
-        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/read`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/${messageId}/read`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1495,9 +1484,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Mark multiple messages as read in batch
        */
       async batchMarkRead(body: BatchMarkReadBody): Promise<MarkReadResult> {
-        const resp = await fetch(`${baseUrl}/api/v2/messages/read`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/read`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1569,9 +1558,7 @@ export function createOmniClient(config: OmniClientConfig) {
         summary: Record<string, unknown>;
         byChannel: Record<string, unknown>;
       }> {
-        const resp = await fetch(`${baseUrl}/api/v2/persons/${id}/presence`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/${id}/presence`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           data?: {
@@ -1690,9 +1677,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Create a provider
        */
       async create(body: NewAgentProvider): Promise<Provider> {
-        const resp = await fetch(`${baseUrl}/api/v2/providers`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/providers`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) {
@@ -1737,9 +1724,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * List agents from Agno provider
        */
       async listAgents(id: string): Promise<AgnoAgent[]> {
-        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/agents`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/providers/${id}/agents`, {
           method: 'GET',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) {
           throw new OmniApiError(`Failed to list agents: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
@@ -1752,9 +1738,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * List teams from Agno provider
        */
       async listTeams(id: string): Promise<AgnoTeam[]> {
-        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/teams`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/providers/${id}/teams`, {
           method: 'GET',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) {
           throw new OmniApiError(`Failed to list teams: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
@@ -1767,9 +1752,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * List workflows from Agno provider
        */
       async listWorkflows(id: string): Promise<AgnoWorkflow[]> {
-        const resp = await fetch(`${baseUrl}/api/v2/providers/${id}/workflows`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/providers/${id}/workflows`, {
           method: 'GET',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) {
           throw new OmniApiError(`Failed to list workflows: ${resp.statusText}`, 'FETCH_ERROR', undefined, resp.status);
@@ -1839,9 +1823,9 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async create(body: CreateAutomationBody): Promise<Automation> {
         // Use fetch to avoid complex type assertions with discriminated unions
-        const resp = await fetch(`${baseUrl}/api/v2/automations`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/automations`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -1855,9 +1839,9 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async update(id: string, body: Partial<CreateAutomationBody>): Promise<Automation> {
         // Use fetch to avoid complex type assertions with discriminated unions
-        const resp = await fetch(`${baseUrl}/api/v2/automations/${id}`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/automations/${id}`, {
           method: 'PATCH',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -2263,9 +2247,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Create a batch processing job
        */
       async create(body: CreateBatchJobBody): Promise<BatchJob> {
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -2278,9 +2262,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get a batch job by ID
        */
       async get(id: string): Promise<BatchJob> {
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJob };
         if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
@@ -2291,9 +2273,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get batch job status (lightweight, for polling)
        */
       async getStatus(id: string): Promise<BatchJobStatusResponse> {
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}/status`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}/status`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJobStatusResponse };
         if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
@@ -2310,9 +2290,7 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.jobType) query.set('jobType', params.jobType.join(','));
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs?${query}`, {
-          headers: { 'x-api-key': config.apiKey },
-        });
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs?${query}`, {});
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: BatchJob[]; meta?: PaginationMeta };
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
@@ -2322,9 +2300,8 @@ export function createOmniClient(config: OmniClientConfig) {
        * Cancel a running batch job
        */
       async cancel(id: string): Promise<BatchJob> {
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/${id}/cancel`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}/cancel`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey },
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJob };
@@ -2336,9 +2313,9 @@ export function createOmniClient(config: OmniClientConfig) {
        * Estimate cost before creating a job
        */
       async estimate(body: Omit<CreateBatchJobBody, 'force'>): Promise<CostEstimate> {
-        const resp = await fetch(`${baseUrl}/api/v2/batch-jobs/estimate`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/estimate`, {
           method: 'POST',
-          headers: { 'x-api-key': config.apiKey, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
@@ -2360,8 +2337,16 @@ export function createOmniClient(config: OmniClientConfig) {
        * Get health status (no auth required)
        */
       async health(): Promise<HealthResponse> {
-        // Health endpoint doesn't require auth, use a separate client
+        // Health endpoint doesn't require auth, but we need Accept-Encoding: identity
+        // to avoid Bun/Hono gzip compatibility issues
         const healthClient = createClient<paths>({ baseUrl: `${baseUrl}/api/v2` });
+        const noCompressionMiddleware: Middleware = {
+          async onRequest({ request }) {
+            request.headers.set('Accept-Encoding', 'identity');
+            return request;
+          },
+        };
+        healthClient.use(noCompressionMiddleware);
         const { data, error, response } = await healthClient.GET('/health');
         throwIfError(response, error);
         return data ?? { status: 'unhealthy' };

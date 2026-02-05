@@ -2,7 +2,7 @@
 
 > Benchmark, profile, and optimize the API for production-ready concurrent load.
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Created:** 2026-02-05
 **Author:** WISH Agent
 **Beads:** omni-e5p
@@ -441,3 +441,77 @@ After this wish ships:
 3. **Database optimization** - Query analysis, indexing, N+1 detection
 4. **CDN integration** - Static asset offloading
 5. **WebSocket performance** - Separate load testing for real-time features
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-05
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Baseline numbers documented | PASS | `docs/performance/baseline.md` exists with latency data |
+| Profiling scripts created | PASS | `scripts/perf/baseline.ts`, `scripts/perf/profile.ts` |
+| Cache interface pluggable | PASS | `CacheProvider` interface in `@omni/core` |
+| API key caching implemented | PASS | 60s TTL, invalidation on revoke/delete |
+| HTTP compression enabled | PASS | gzip middleware in app.ts |
+| Request timeout middleware | PASS | 30s default in `timeout.ts` |
+| Body size limit | PASS | 10MB default in `body-limit.ts` |
+| k6 scenarios created | PASS | 5 scenarios: health, messages, chats, mixed, soak |
+| Test runner script | PASS | `scripts/load-test/run.sh` executable |
+| Load test documentation | PASS | `docs/performance/load-test-results.md` |
+| All tests pass | PASS | 822 tests pass, 0 failures |
+| TypeScript compiles | PASS | `make check` succeeds |
+
+### Performance Improvements
+
+| Metric | Before | After | Status |
+|--------|--------|-------|--------|
+| Average latency | 31.57 ms | 20.27 ms | 36% faster |
+| Messages endpoint | 116.9 ms | 52.1 ms | 55% faster |
+| p50 latency | - | ~20 ms | PASS (<50ms) |
+| p95 latency | - | ~38 ms | PASS (<200ms) |
+| p99 latency | - | ~44 ms | PASS (<500ms) |
+| Error rate | - | 0% | PASS (<0.1%) |
+
+### Findings
+
+- **LOW**: Complexity warnings in scripts (7 functions exceed threshold)
+  - These are in utility scripts, not core code
+  - Summary functions require multiple metric calculations
+  - Acceptable for scripts
+
+### Recommendation
+
+Ready to merge. All acceptance criteria met, performance thresholds achieved.
+
+---
+
+## QA Results
+
+**Date:** 2026-02-05
+**Verdict:** PASS
+
+See full results: `.wishes/api-performance/qa/qa-results.md`
+
+### Summary
+
+| Category | Result |
+|----------|--------|
+| API Tests | 5/5 PASS |
+| CLI Unit Tests | 36/36 PASS |
+| CLI Live Server | PASS (fixed with Accept-Encoding: identity) |
+| Cache Tests | 20/20 PASS |
+| Regression | 822/822 PASS |
+
+### Finding: CLI Decompression Issue [RESOLVED]
+
+**Severity:** MEDIUM → **RESOLVED**
+**Impact:** CLI commands fail against live server with compression
+**Root Cause:** Bun's fetch decompressor incompatible with Hono's gzip output
+**Fix:** SDK updated to send `Accept-Encoding: identity` in all requests
+
+**Status:** Fixed in commit `fix(sdk): add Accept-Encoding: identity`
