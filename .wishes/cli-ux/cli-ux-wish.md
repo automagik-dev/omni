@@ -2,7 +2,7 @@
 
 > Improve CLI help text with examples, grouped options, inline status, and command context.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-05
 **Author:** WISH Agent
 **Beads:** omni-ndl
