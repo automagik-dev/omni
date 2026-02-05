@@ -487,3 +487,31 @@ After this wish ships:
 ### Recommendation
 
 Ready to merge. All acceptance criteria met, performance thresholds achieved.
+
+---
+
+## QA Results
+
+**Date:** 2026-02-05
+**Verdict:** PARTIAL
+
+See full results: `.wishes/api-performance/qa/qa-results.md`
+
+### Summary
+
+| Category | Result |
+|----------|--------|
+| API Tests | 5/5 PASS |
+| CLI Unit Tests | 36/36 PASS |
+| CLI Live Server | PARTIAL (ZlibError - Bun/Hono compat) |
+| Cache Tests | 20/20 PASS |
+| Regression | 822/822 PASS |
+
+### Finding: CLI Decompression Issue
+
+**Severity:** MEDIUM
+**Impact:** CLI commands fail against live server with compression
+**Root Cause:** Bun's fetch decompressor incompatible with Hono's gzip output
+**Workaround:** CLI SDK needs to send `Accept-Encoding: identity`
+
+**Recommendation:** Ship as-is, file follow-up issue for CLI fix.
