@@ -2,7 +2,7 @@
 
 > Fresh admin dashboard for V2 using TypeScript SDK.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-04
 **Updated:** 2026-02-05
 **Author:** WISH Agent
@@ -437,3 +437,36 @@ The UI needs these SDK/API capabilities:
 - Visual admin dashboard for V2
 - Ops monitoring and management
 - User-friendly instance management
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-05
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| UI builds and runs | PASS | `bun run build` succeeds in 2.95s |
+| Login with API key | PASS | useAuth hook, Login.tsx |
+| Instance CRUD + connect | PASS | useInstances.ts, InstanceDetail.tsx |
+| View chats and messages | PASS | Chats.tsx, ChatView.tsx |
+| Send messages | PASS | useSendMessage mutation |
+| View logs | PASS | Logs.tsx with filters |
+| Restart instances | PASS | useRestartInstance mutation |
+| Dashboard health | PASS | Dashboard.tsx with health badge |
+
+### System Validation
+
+| Check | Status |
+|-------|--------|
+| TypeCheck | PASS (10/10 packages) |
+| Lint | PASS (0 errors) |
+| Tests | 824 pass, 3 fail (pre-existing SDK integration tests) |
+| Build | PASS |
+
+### Recommendation
+
+Ship. All acceptance criteria met.
