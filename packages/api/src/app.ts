@@ -131,7 +131,17 @@ export function createApp(
   // ============================================
   // Serve built UI from apps/ui/dist when available
   // In dev, use Vite on :5173 instead
-  const uiDistPath = path.resolve(process.cwd(), 'apps/ui/dist');
+  // Try cwd first (works for worktrees), then fall back to OMNI_PACKAGES_DIR
+  const cwdUiPath = path.resolve(process.cwd(), 'apps/ui/dist');
+  const packagesUiPath = process.env.OMNI_PACKAGES_DIR
+    ? path.resolve(process.env.OMNI_PACKAGES_DIR, '..', 'apps/ui/dist')
+    : null;
+
+  const uiDistPath = existsSync(cwdUiPath)
+    ? cwdUiPath
+    : packagesUiPath && existsSync(packagesUiPath)
+      ? packagesUiPath
+      : cwdUiPath; // fallback to cwd path even if not exists
   const serveUI = existsSync(uiDistPath);
 
   if (serveUI) {
