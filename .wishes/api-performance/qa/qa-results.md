@@ -1,6 +1,6 @@
 # QA Results: API Performance Evaluation & Optimization
 
-**Verdict:** PARTIAL
+**Verdict:** PASS
 **Date:** 2026-02-05
 **Tester:** QA Agent
 
@@ -9,7 +9,7 @@
 | Category | Passed | Failed | Skipped |
 |----------|--------|--------|---------|
 | API | 5 | 0 | 0 |
-| CLI | 1 | 1 | 0 |
+| CLI | 2 | 0 | 0 |
 | Integration | 2 | 0 | 0 |
 | Regression | 2 | 0 | 0 |
 | UI | 0 | 0 | 1 |
@@ -27,7 +27,7 @@
 ### CLI Tests
 
 - [x] CLI unit tests pass (36/36) ✓
-- [ ] CLI `omni status` against live server - **PARTIAL** (ZlibError)
+- [x] CLI `omni status` against live server - **PASS** (fixed with Accept-Encoding: identity)
 
 ### Integration Tests
 
@@ -45,17 +45,15 @@
 
 ## Findings
 
-### [MEDIUM] CLI Decompression Error with Live Server
+### [RESOLVED] CLI Decompression Error with Live Server
 
 **Test:** `omni status` against live API
 **Expected:** CLI shows status correctly
-**Actual:** ZlibError when Bun's fetch tries to decompress gzip response
+**Actual:** Initially ZlibError, now PASS
 **Root Cause:** Bun's default fetch sends `Accept-Encoding: gzip,deflate` but its decompressor has compatibility issues with Hono's compress middleware output.
-**Workaround:** Send `Accept-Encoding: identity` header to disable compression
+**Fix Applied:** Updated SDK client to send `Accept-Encoding: identity` header in all requests.
 
-**Note:** This is a Bun/Hono compatibility issue, not a bug in the wish implementation. CLI unit tests pass because they mock responses.
-
-**Recommended Fix:** Update SDK client to send `Accept-Encoding: identity` header by default.
+**Commit:** `fix(sdk): add Accept-Encoding: identity to prevent Bun gzip issues`
 
 ## Performance Verified
 
@@ -79,10 +77,6 @@
 
 ## Recommendation
 
-**PARTIAL verdict** - The wish implementation is complete and working, but there's a CLI compatibility issue when running against the live server with compression enabled. This is a pre-existing Bun/Hono compatibility issue exposed by the new compression middleware.
+**PASS verdict** - All tests pass including the CLI against live server. The Bun/Hono compression compatibility issue has been fixed by updating the SDK to send `Accept-Encoding: identity` in all requests.
 
-**Options:**
-1. Ship as-is, file follow-up issue for CLI fix (recommended)
-2. Disable compression until CLI fix is in place
-
-The compression works correctly - the issue is on the client side (Bun's fetch decompressor).
+Ready to merge.

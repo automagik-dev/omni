@@ -493,7 +493,7 @@ Ready to merge. All acceptance criteria met, performance thresholds achieved.
 ## QA Results
 
 **Date:** 2026-02-05
-**Verdict:** PARTIAL
+**Verdict:** PASS
 
 See full results: `.wishes/api-performance/qa/qa-results.md`
 
@@ -503,15 +503,15 @@ See full results: `.wishes/api-performance/qa/qa-results.md`
 |----------|--------|
 | API Tests | 5/5 PASS |
 | CLI Unit Tests | 36/36 PASS |
-| CLI Live Server | PARTIAL (ZlibError - Bun/Hono compat) |
+| CLI Live Server | PASS (fixed with Accept-Encoding: identity) |
 | Cache Tests | 20/20 PASS |
 | Regression | 822/822 PASS |
 
-### Finding: CLI Decompression Issue
+### Finding: CLI Decompression Issue [RESOLVED]
 
-**Severity:** MEDIUM
+**Severity:** MEDIUM → **RESOLVED**
 **Impact:** CLI commands fail against live server with compression
 **Root Cause:** Bun's fetch decompressor incompatible with Hono's gzip output
-**Workaround:** CLI SDK needs to send `Accept-Encoding: identity`
+**Fix:** SDK updated to send `Accept-Encoding: identity` in all requests
 
-**Recommendation:** Ship as-is, file follow-up issue for CLI fix.
+**Status:** Fixed in commit `fix(sdk): add Accept-Encoding: identity`
