@@ -10,9 +10,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { OmniClient } from '@omni/sdk';
+import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
+import { type Example, type OptionDef, formatExamples, formatOptionGroup } from '../help.js';
+import { areColorsEnabled } from '../output.js';
 import * as output from '../output.js';
 
 /** Get media type from file extension */
@@ -231,8 +234,114 @@ function getMessageType(options: SendOptions): keyof typeof messageSenders | nul
   return null;
 }
 
+/** Get chalk instance (respects color setting) */
+function c(): ChalkInstance {
+  if (areColorsEnabled()) {
+    return chalk;
+  }
+  return new Chalk({ level: 0 });
+}
+
+/** Build grouped help text for send command */
+function buildGroupedSendHelp(): string {
+  const config = loadConfig();
+  const defaultInstance = config.defaultInstance || 'not set';
+
+  // Option groups
+  const commonOptions: OptionDef[] = [
+    { flags: '--instance <id>', description: `Instance ID (default: ${defaultInstance})` },
+    { flags: '--to <recipient>', description: 'Recipient (phone, chat ID, or channel ID)' },
+  ];
+
+  const textOptions: OptionDef[] = [
+    { flags: '--text <text>', description: 'Message content' },
+    { flags: '--reply-to <id>', description: 'Reply to specific message' },
+  ];
+
+  const mediaOptions: OptionDef[] = [
+    { flags: '--media <path>', description: 'Image, video, audio, or document' },
+    { flags: '--caption <text>', description: 'Caption for media' },
+    { flags: '--voice', description: 'Send audio as voice note' },
+  ];
+
+  const reactionOptions: OptionDef[] = [
+    { flags: '--reaction <emoji>', description: 'React to a message' },
+    { flags: '--message <id>', description: 'Message ID to react to' },
+  ];
+
+  const stickerOptions: OptionDef[] = [{ flags: '--sticker <url>', description: 'Sticker URL or base64' }];
+
+  const contactOptions: OptionDef[] = [
+    { flags: '--contact', description: 'Send contact' },
+    { flags: '--name <name>', description: 'Contact name (required)' },
+    { flags: '--phone <phone>', description: 'Contact phone' },
+    { flags: '--email <email>', description: 'Contact email' },
+  ];
+
+  const locationOptions: OptionDef[] = [
+    { flags: '--location', description: 'Send location' },
+    { flags: '--lat <latitude>', description: 'Latitude (required)' },
+    { flags: '--lng <longitude>', description: 'Longitude (required)' },
+    { flags: '--address <text>', description: 'Location address' },
+  ];
+
+  const pollOptions: OptionDef[] = [
+    { flags: '--poll <question>', description: 'Create poll' },
+    { flags: '--options <a,b,c>', description: 'Poll choices (comma-separated)' },
+    { flags: '--multi-select', description: 'Allow multiple selections' },
+    { flags: '--duration <hours>', description: 'Poll duration' },
+  ];
+
+  const embedOptions: OptionDef[] = [
+    { flags: '--embed', description: 'Send embed message' },
+    { flags: '--title <title>', description: 'Embed title' },
+    { flags: '--description <d>', description: 'Embed description' },
+    { flags: '--color <hex>', description: 'Embed color' },
+    { flags: '--url <url>', description: 'Embed URL' },
+  ];
+
+  const presenceOptions: OptionDef[] = [
+    { flags: '--presence <type>', description: 'Send typing/recording/paused indicator' },
+  ];
+
+  // Examples
+  const examples: Example[] = [
+    { command: 'omni send --to +5511999 --text "Hello!"', description: 'Send text' },
+    { command: 'omni send --to +5511999 --media ./photo.jpg --caption "Check this"', description: 'Send media' },
+    { command: 'omni send --to +5511999 --reaction "👍" --message msg_abc', description: 'React to message' },
+    { command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"', description: 'Create poll' },
+  ];
+
+  // Build help output
+  const help = `Usage: omni send [options]
+
+Send a message to a recipient
+
+${c().bold('Options')}:
+${formatOptionGroup('Common', commonOptions)}
+${formatOptionGroup('Text Message', textOptions)}
+${formatOptionGroup('Media Message', mediaOptions)}
+${formatOptionGroup('Reaction', reactionOptions)}
+${formatOptionGroup('Sticker', stickerOptions)}
+${formatOptionGroup('Contact Card', contactOptions)}
+${formatOptionGroup('Location', locationOptions)}
+${formatOptionGroup('Poll (Discord)', pollOptions)}
+${formatOptionGroup('Embed (Discord)', embedOptions)}
+${formatOptionGroup('Presence', presenceOptions)}
+
+${formatExamples(examples)}
+`;
+
+  return help;
+}
+
 export function createSendCommand(): Command {
   const send = new Command('send').description('Send messages');
+
+  // Override help to show grouped options
+  send.configureHelp({
+    formatHelp: () => buildGroupedSendHelp(),
+  });
 
   send
     .description('Send a message to a recipient')
