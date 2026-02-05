@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
 export default defineConfig({
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -15,6 +15,12 @@ export default defineConfig({
             '/api': {
                 target: 'http://localhost:8882',
                 changeOrigin: true,
+                configure: (proxy) => {
+                    // Fix ERR_CONTENT_DECODING_FAILED by removing accept-encoding
+                    proxy.on('proxyReq', (proxyReq) => {
+                        proxyReq.removeHeader('accept-encoding');
+                    });
+                },
             },
         },
     },

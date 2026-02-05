@@ -2,7 +2,7 @@
 
 > Monorepo infrastructure for the UI package with Bun, Tailwind v4, Biome, and production serving.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-05
 **Author:** WISH Agent
 **Beads:** omni-j2s
@@ -560,3 +560,63 @@ shadcn/ui may need adaptation for Tailwind v4. Options:
 3. **Manual component updates** - Adjust as we add components
 
 This will be handled in UI Foundation wish when adding components.
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-05
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `bun install` works from root | PASS | `Checked 474 installs across 616 packages (no changes)` |
+| `make dev-ui` starts UI dev server | PASS | `bun run dev` starts Vite on :5173 |
+| `make build-ui` creates production build | PASS | `vite v6.4.1 building for production... ✓ built in 1.44s` |
+| API serves UI in production mode | PASS | `packages/api/src/app.ts` has serveStatic + SPA fallback |
+| Tailwind v4 classes work | PASS | CSS compiled with v4.1.18, theme tokens in build output |
+| Biome linting works | PASS | `biome check src/ - Checked 3 files in 2ms` |
+| Husky hooks include UI in lint/typecheck | PASS | pre-commit: `make lint`, pre-push: `make typecheck` |
+| Can import and use `@omni/sdk` | PASS | `import { createOmniClient } from "@omni/sdk"` works |
+| Typecheck passes | PASS | `turbo typecheck` - 10/10 packages successful |
+| Lint passes | PASS | `biome check . - Checked 367 files` |
+
+### Findings
+
+**No blocking issues found.**
+
+**Minor observations:**
+1. 3 SDK type-safety tests fail when API not running (pre-existing, not related to UI)
+2. `make help` doesn't show UI targets in output (cosmetic - targets work correctly)
+
+### Quality Gates
+
+```
+$ make typecheck
+Tasks: 10 successful, 10 total (including @omni/ui)
+
+$ make lint
+Checked 367 files in 166ms. No fixes applied.
+
+$ make build-ui
+vite v6.4.1 building for production... ✓ built in 1.44s
+```
+
+### Deliverables Verified
+
+- [x] `apps/ui/` directory with proper structure
+- [x] `package.json` with @omni/sdk workspace dependency
+- [x] Root workspaces updated: `["packages/*", "apps/*"]`
+- [x] Vite config with React, path aliases, API proxy
+- [x] Tailwind v4 CSS-first config with @theme tokens
+- [x] Dark mode support via prefers-color-scheme
+- [x] Biome config extending root
+- [x] Makefile targets: dev-ui, build-ui, lint-ui, typecheck-ui
+- [x] API static serving with SPA fallback
+
+### Recommendation
+
+**Ready to merge.** All acceptance criteria pass. UI infrastructure is complete and ready for component development.
