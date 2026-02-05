@@ -90,8 +90,9 @@ export function createApp(
     httpLog.info(`→ ${c.req.method} ${c.req.path}`, { status: c.res.status, ms });
   });
 
-  // Response compression (gzip)
-  app.use('*', gzipMiddleware);
+  // Response compression (gzip) - only for API routes
+  // serveStatic handles its own encoding, compression middleware causes ERR_CONTENT_DECODING_FAILED
+  app.use('/api/*', gzipMiddleware);
   // Configure CORS with allowed origins
   const allowedOrigins = getAllowedOrigins();
   app.use(
