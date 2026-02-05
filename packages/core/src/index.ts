@@ -60,3 +60,6 @@ export * from './automations';
 
 // Providers
 export * from './providers';
+
+// Cache
+export * from './cache';

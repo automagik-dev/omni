@@ -39,9 +39,12 @@ function getAllowedOrigins(): string[] | '*' {
 }
 
 import { authMiddleware } from './middleware/auth';
+import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { gzipMiddleware } from './middleware/compression';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';
+import { defaultTimeoutMiddleware } from './middleware/timeout';
 import { healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
@@ -71,12 +74,21 @@ export function createApp(
 
   // Global middleware
   app.use('*', timing());
+
+  // Request safety: timeout and body size limits
+  app.use('*', defaultTimeoutMiddleware);
+  app.use('*', defaultBodyLimitMiddleware);
+
+  // HTTP logging
   app.use('*', async (c, next) => {
     const start = Date.now();
     await next();
     const ms = Date.now() - start;
     httpLog.info(`→ ${c.req.method} ${c.req.path}`, { status: c.res.status, ms });
   });
+
+  // Response compression (gzip)
+  app.use('*', gzipMiddleware);
   // Configure CORS with allowed origins
   const allowedOrigins = getAllowedOrigins();
   app.use(
