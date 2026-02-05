@@ -12,12 +12,203 @@
  * omni chats participants <id>
  */
 
-import type { Channel } from '@omni/sdk';
+import type { Channel, Chat, Message } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
+
+// ============================================================================
+// Helper Types - Extended fields from API (SDK types incomplete)
+// ============================================================================
+
+interface ExtendedChat extends Chat {
+  unreadCount?: number;
+  lastMessageAt?: string | null;
+  lastMessagePreview?: string | null;
+  messageCount?: number;
+}
+
+interface ExtendedMessage extends Message {
+  senderDisplayName?: string | null;
+  hasMedia?: boolean;
+  mediaMimeType?: string | null;
+  mediaMetadata?: { filename?: string; size?: number; duration?: number } | null;
+  transcription?: string | null;
+  imageDescription?: string | null;
+  videoDescription?: string | null;
+  documentExtraction?: string | null;
+}
+
+// ============================================================================
+// Formatting Helpers
+// ============================================================================
+
+/**
+ * Format chat name - use name if available, otherwise format externalId
+ */
+function formatChatName(chat: ExtendedChat): string {
+  if (chat.name) return chat.name;
+
+  // Format WhatsApp-style external IDs (e.g., "5551999237715@s.whatsapp.net")
+  const externalId = chat.externalId;
+  if (externalId.includes('@s.whatsapp.net')) {
+    const phone = externalId.replace('@s.whatsapp.net', '');
+    return phone.length > 10 ? `+${phone}` : phone;
+  }
+  if (externalId.includes('@g.us')) {
+    return externalId.replace('@g.us', ' (group)');
+  }
+
+  return externalId;
+}
+
+/**
+ * Format relative time - "5m ago", "2h ago", "yesterday", etc.
+ */
+function formatRelativeTime(date: Date | string | null | undefined): string {
+  if (!date) return '-';
+
+  const now = new Date();
+  const then = typeof date === 'string' ? new Date(date) : date;
+  const diffMs = now.getTime() - then.getTime();
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMins < 1) return 'now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Format time as HH:MM
+ */
+function formatTime(date: Date | string | null | undefined): string {
+  if (!date) return '-';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/**
+ * Truncate text with ellipsis
+ */
+function truncate(text: string | null | undefined, maxLen: number): string {
+  if (!text) return '-';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 3)}...`;
+}
+
+/**
+ * Get media type badge for display
+ */
+function getMediaBadge(type: string): string {
+  const badges: Record<string, string> = {
+    audio: '[AUDIO]',
+    image: '[IMAGE]',
+    video: '[VIDEO]',
+    document: '[DOC]',
+    sticker: '[STICKER]',
+    contact: '[CONTACT]',
+    location: '[LOCATION]',
+  };
+  return badges[type] ?? `[${type.toUpperCase()}]`;
+}
+
+/**
+ * Get media content description (transcription/description/extraction)
+ */
+function getMediaDescription(msg: ExtendedMessage): string | null {
+  if (msg.transcription) return msg.transcription;
+  if (msg.imageDescription) return msg.imageDescription;
+  if (msg.videoDescription) return msg.videoDescription;
+  if (msg.documentExtraction) return msg.documentExtraction;
+  return null;
+}
+
+/**
+ * Format sender name
+ */
+function formatSender(msg: ExtendedMessage): string {
+  if (msg.isFromMe) return 'You';
+  return msg.senderDisplayName ?? 'Unknown';
+}
+
+/**
+ * Check if message is a media type
+ */
+function isMediaMessage(msg: ExtendedMessage): boolean {
+  return msg.hasMedia === true || ['audio', 'image', 'video', 'document', 'sticker'].includes(msg.messageType);
+}
+
+/**
+ * Format duration as MM:SS
+ */
+function formatDuration(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Build content string for rich message display
+ */
+function buildRichContent(msg: ExtendedMessage): string {
+  const isMedia = isMediaMessage(msg);
+  if (!isMedia) {
+    return truncate(msg.textContent, 50) ?? '-';
+  }
+
+  const badge = getMediaBadge(msg.messageType);
+  const parts = [badge];
+
+  const filename = msg.mediaMetadata?.filename;
+  if (filename) parts.push(filename);
+
+  const duration = msg.mediaMetadata?.duration;
+  if (duration) parts.push(formatDuration(duration));
+
+  const mediaDesc = getMediaDescription(msg);
+  if (mediaDesc) {
+    parts.push(`- "${truncate(mediaDesc, 40)}"`);
+  } else if (msg.textContent) {
+    parts.push(`- "${truncate(msg.textContent, 40)}"`);
+  }
+
+  return parts.join(' ');
+}
+
+/**
+ * Format messages for rich display
+ */
+function formatRichMessages(
+  messages: ExtendedMessage[],
+): { time: string; from: string; type: string; content: string }[] {
+  return messages.map((m) => ({
+    time: formatTime(m.platformTimestamp),
+    from: truncate(formatSender(m), 15),
+    type: isMediaMessage(m) ? m.messageType : 'text',
+    content: buildRichContent(m),
+  }));
+}
+
+/**
+ * Format messages for standard display
+ */
+function formatStandardMessages(
+  messages: ExtendedMessage[],
+): { id: string; type: string; content: string; fromMe: string; timestamp: string | null }[] {
+  return messages.map((m) => ({
+    id: m.id,
+    type: m.messageType,
+    content: m.textContent ?? '-',
+    fromMe: m.isFromMe ? 'yes' : 'no',
+    timestamp: m.platformTimestamp,
+  }));
+}
 
 export function createChatsCommand(): Command {
   const chats = new Command('chats').description('Manage chats');
@@ -31,6 +222,10 @@ export function createChatsCommand(): Command {
     .option('--search <query>', 'Search by name')
     .option('--archived', 'Include archived chats')
     .option('--limit <n>', 'Limit results', Number.parseInt)
+    .option('--unread', 'Only show chats with unread messages')
+    .option('--sort <field>', 'Sort by: activity (default), unread, name')
+    .option('--type <type>', 'Filter by chat type: dm, group, channel')
+    .option('--verbose', 'Show full details (ID, channel, archived)')
     .action(
       async (options: {
         instance?: string;
@@ -38,6 +233,10 @@ export function createChatsCommand(): Command {
         search?: string;
         archived?: boolean;
         limit?: number;
+        unread?: boolean;
+        sort?: string;
+        type?: string;
+        verbose?: boolean;
       }) => {
         const client = getClient();
 
@@ -48,17 +247,47 @@ export function createChatsCommand(): Command {
             search: options.search,
             includeArchived: options.archived,
             limit: options.limit,
+            chatType: options.type,
           });
 
-          const items = result.items.map((c) => ({
-            id: c.id,
-            name: c.name ?? c.externalId,
-            channel: c.channel,
-            type: c.chatType,
-            archived: c.isArchived ? 'yes' : 'no',
-          }));
+          // Cast to extended type to access additional fields
+          let chats = result.items as ExtendedChat[];
 
-          output.list(items, { emptyMessage: 'No chats found.' });
+          // Client-side filtering for --unread
+          if (options.unread) {
+            chats = chats.filter((c) => (c.unreadCount ?? 0) > 0);
+          }
+
+          // Client-side sorting
+          if (options.sort === 'unread') {
+            chats.sort((a, b) => (b.unreadCount ?? 0) - (a.unreadCount ?? 0));
+          } else if (options.sort === 'name') {
+            chats.sort((a, b) => formatChatName(a).localeCompare(formatChatName(b)));
+          }
+          // Default is 'activity' - already sorted by lastMessageAt from API
+
+          if (options.verbose) {
+            // Verbose format - show full details
+            const items = chats.map((c) => ({
+              id: c.id,
+              name: c.name ?? c.externalId,
+              channel: c.channel,
+              type: c.chatType,
+              unread: c.unreadCount ?? 0,
+              messages: c.messageCount ?? 0,
+              archived: c.isArchived ? 'yes' : 'no',
+            }));
+            output.list(items, { emptyMessage: 'No chats found.' });
+          } else {
+            // Default format - compact view with preview
+            const items = chats.map((c) => ({
+              name: truncate(formatChatName(c), 25),
+              unread: c.unreadCount ?? 0,
+              'last message': truncate(c.lastMessagePreview?.replace(/\n/g, ' '), 35),
+              time: formatRelativeTime(c.lastMessageAt),
+            }));
+            output.list(items, { emptyMessage: 'No chats found.' });
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to list chats: ${message}`);
@@ -216,30 +445,45 @@ export function createChatsCommand(): Command {
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
-    .action(async (id: string, options: { limit?: number; before?: string; after?: string }) => {
-      const client = getClient();
+    .option('--rich', 'Show rich format with transcriptions/descriptions')
+    .option('--media-only', 'Only show media messages')
+    .action(
+      async (
+        id: string,
+        options: { limit?: number; before?: string; after?: string; rich?: boolean; mediaOnly?: boolean },
+      ) => {
+        const client = getClient();
 
-      try {
-        const messages = await client.chats.getMessages(id, {
-          limit: options.limit,
-          before: options.before,
-          after: options.after,
-        });
+        try {
+          const rawMessages = await client.chats.getMessages(id, {
+            limit: options.limit,
+            before: options.before,
+            after: options.after,
+          });
 
-        const items = messages.map((m) => ({
-          id: m.id,
-          type: m.messageType,
-          content: m.textContent ?? '-',
-          fromMe: m.isFromMe ? 'yes' : 'no',
-          timestamp: m.platformTimestamp,
-        }));
+          // Cast to extended type
+          let messages = rawMessages as ExtendedMessage[];
 
-        output.list(items, { emptyMessage: 'No messages found.' });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to get messages: ${message}`);
-      }
-    });
+          // Filter media-only if requested
+          if (options.mediaOnly) {
+            messages = messages.filter(
+              (m) => m.hasMedia || ['audio', 'image', 'video', 'document'].includes(m.messageType),
+            );
+          }
+
+          if (options.rich) {
+            const items = formatRichMessages(messages);
+            output.list(items, { emptyMessage: 'No messages found.' });
+          } else {
+            const items = formatStandardMessages(messages);
+            output.list(items, { emptyMessage: 'No messages found.' });
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to get messages: ${message}`);
+        }
+      },
+    );
 
   // omni chats participants <id>
   chats
