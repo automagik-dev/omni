@@ -21,23 +21,23 @@ from pydantic import Field, StrictBool, StrictStr, field_validator
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.get_event200_response import GetEvent200Response
-from omni_generated.models.get_event_analytics200_response import GetEventAnalytics200Response
-from omni_generated.models.get_event_metrics200_response import GetEventMetrics200Response
-from omni_generated.models.get_events_by_sender200_response import GetEventsBySender200Response
-from omni_generated.models.get_person_timeline200_response import GetPersonTimeline200Response
-from omni_generated.models.list_events200_response import ListEvents200Response
-from omni_generated.models.list_replay_sessions200_response import ListReplaySessions200Response
-from omni_generated.models.list_replay_sessions200_response_items_inner_options import ListReplaySessions200ResponseItemsInnerOptions
-from omni_generated.models.run_scheduled_ops200_response import RunScheduledOps200Response
-from omni_generated.models.search_events200_response import SearchEvents200Response
-from omni_generated.models.search_events_request import SearchEventsRequest
-from omni_generated.models.start_event_replay202_response import StartEventReplay202Response
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.get_event200_response import GetEvent200Response
+from ..models.get_event_analytics200_response import GetEventAnalytics200Response
+from ..models.get_event_metrics200_response import GetEventMetrics200Response
+from ..models.get_events_by_sender200_response import GetEventsBySender200Response
+from ..models.get_person_timeline200_response import GetPersonTimeline200Response
+from ..models.list_events200_response import ListEvents200Response
+from ..models.list_replay_sessions200_response import ListReplaySessions200Response
+from ..models.list_replay_sessions200_response_items_inner_options import ListReplaySessions200ResponseItemsInnerOptions
+from ..models.run_scheduled_ops200_response import RunScheduledOps200Response
+from ..models.search_events200_response import SearchEvents200Response
+from ..models.search_events_request import SearchEventsRequest
+from ..models.start_event_replay202_response import StartEventReplay202Response
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class EventsApi:

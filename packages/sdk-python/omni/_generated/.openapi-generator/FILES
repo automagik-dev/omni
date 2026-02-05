@@ -1,4 +1,3 @@
-.openapi-generator-ignore
 omni_generated/__init__.py
 omni_generated/api/__init__.py
 omni_generated/api/access_api.py

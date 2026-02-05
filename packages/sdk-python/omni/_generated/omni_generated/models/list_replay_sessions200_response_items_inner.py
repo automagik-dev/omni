@@ -20,8 +20,8 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List
 from uuid import UUID
-from omni_generated.models.list_replay_sessions200_response_items_inner_options import ListReplaySessions200ResponseItemsInnerOptions
-from omni_generated.models.list_replay_sessions200_response_items_inner_progress import ListReplaySessions200ResponseItemsInnerProgress
+from .list_replay_sessions200_response_items_inner_options import ListReplaySessions200ResponseItemsInnerOptions
+from .list_replay_sessions200_response_items_inner_progress import ListReplaySessions200ResponseItemsInnerProgress
 from typing import Optional, Set
 from typing_extensions import Self
 

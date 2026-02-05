@@ -18,23 +18,23 @@ from typing_extensions import Annotated
 
 from typing import Optional
 from uuid import UUID
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.mark_message_read200_response import MarkMessageRead200Response
-from omni_generated.models.mark_message_read_request import MarkMessageReadRequest
-from omni_generated.models.mark_messages_read_request import MarkMessagesReadRequest
-from omni_generated.models.send_contact_request import SendContactRequest
-from omni_generated.models.send_location_request import SendLocationRequest
-from omni_generated.models.send_media_message_request import SendMediaMessageRequest
-from omni_generated.models.send_presence200_response import SendPresence200Response
-from omni_generated.models.send_presence_request import SendPresenceRequest
-from omni_generated.models.send_reaction_request import SendReactionRequest
-from omni_generated.models.send_sticker_request import SendStickerRequest
-from omni_generated.models.send_text_message201_response import SendTextMessage201Response
-from omni_generated.models.send_text_message_request import SendTextMessageRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.mark_message_read200_response import MarkMessageRead200Response
+from ..models.mark_message_read_request import MarkMessageReadRequest
+from ..models.mark_messages_read_request import MarkMessagesReadRequest
+from ..models.send_contact_request import SendContactRequest
+from ..models.send_location_request import SendLocationRequest
+from ..models.send_media_message_request import SendMediaMessageRequest
+from ..models.send_presence200_response import SendPresence200Response
+from ..models.send_presence_request import SendPresenceRequest
+from ..models.send_reaction_request import SendReactionRequest
+from ..models.send_sticker_request import SendStickerRequest
+from ..models.send_text_message201_response import SendTextMessage201Response
+from ..models.send_text_message_request import SendTextMessageRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class MessagesApi:

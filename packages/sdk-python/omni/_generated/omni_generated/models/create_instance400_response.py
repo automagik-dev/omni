@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.create_instance400_response_error import CreateInstance400ResponseError
+from .create_instance400_response_error import CreateInstance400ResponseError
 from typing import Optional, Set
 from typing_extensions import Self
 

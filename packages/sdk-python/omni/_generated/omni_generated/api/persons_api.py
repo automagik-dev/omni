@@ -21,19 +21,19 @@ from pydantic import Field, StrictStr
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.get_person200_response import GetPerson200Response
-from omni_generated.models.get_person_presence200_response import GetPersonPresence200Response
-from omni_generated.models.get_person_timeline_by_id200_response import GetPersonTimelineById200Response
-from omni_generated.models.link_identities_request import LinkIdentitiesRequest
-from omni_generated.models.merge_persons200_response import MergePersons200Response
-from omni_generated.models.merge_persons_request import MergePersonsRequest
-from omni_generated.models.search_persons200_response import SearchPersons200Response
-from omni_generated.models.unlink_identity200_response import UnlinkIdentity200Response
-from omni_generated.models.unlink_identity_request import UnlinkIdentityRequest
+from ..models.get_person200_response import GetPerson200Response
+from ..models.get_person_presence200_response import GetPersonPresence200Response
+from ..models.get_person_timeline_by_id200_response import GetPersonTimelineById200Response
+from ..models.link_identities_request import LinkIdentitiesRequest
+from ..models.merge_persons200_response import MergePersons200Response
+from ..models.merge_persons_request import MergePersonsRequest
+from ..models.search_persons200_response import SearchPersons200Response
+from ..models.unlink_identity200_response import UnlinkIdentity200Response
+from ..models.unlink_identity_request import UnlinkIdentityRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class PersonsApi:

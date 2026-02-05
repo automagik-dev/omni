@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictBool
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.mark_message_read200_response_data import MarkMessageRead200ResponseData
+from .mark_message_read200_response_data import MarkMessageRead200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

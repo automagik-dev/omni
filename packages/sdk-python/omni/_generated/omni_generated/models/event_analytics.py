@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
 from typing import Any, ClassVar, Dict, List, Union
-from omni_generated.models.get_event_analytics200_response_by_direction import GetEventAnalytics200ResponseByDirection
+from .get_event_analytics200_response_by_direction import GetEventAnalytics200ResponseByDirection
 from typing import Optional, Set
 from typing_extensions import Self
 

@@ -19,18 +19,18 @@ from typing_extensions import Annotated
 from pydantic import StrictStr, field_validator
 from typing import Optional
 from uuid import UUID
-from omni_generated.models.delete_event_payloads_request import DeleteEventPayloadsRequest
-from omni_generated.models.get_event_payload_by_stage200_response import GetEventPayloadByStage200Response
-from omni_generated.models.get_payload_stats200_response import GetPayloadStats200Response
-from omni_generated.models.list_event_payloads200_response import ListEventPayloads200Response
-from omni_generated.models.list_payload_configs200_response import ListPayloadConfigs200Response
-from omni_generated.models.run_scheduled_ops200_response_data_payload_cleanup import RunScheduledOps200ResponseDataPayloadCleanup
-from omni_generated.models.update_payload_config200_response import UpdatePayloadConfig200Response
-from omni_generated.models.update_payload_config_request import UpdatePayloadConfigRequest
+from ..models.delete_event_payloads_request import DeleteEventPayloadsRequest
+from ..models.get_event_payload_by_stage200_response import GetEventPayloadByStage200Response
+from ..models.get_payload_stats200_response import GetPayloadStats200Response
+from ..models.list_event_payloads200_response import ListEventPayloads200Response
+from ..models.list_payload_configs200_response import ListPayloadConfigs200Response
+from ..models.run_scheduled_ops200_response_data_payload_cleanup import RunScheduledOps200ResponseDataPayloadCleanup
+from ..models.update_payload_config200_response import UpdatePayloadConfig200Response
+from ..models.update_payload_config_request import UpdatePayloadConfigRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class PayloadsApi:

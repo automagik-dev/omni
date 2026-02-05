@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.validate_api_key200_response_data import ValidateApiKey200ResponseData
+from .validate_api_key200_response_data import ValidateApiKey200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

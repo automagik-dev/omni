@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictBool
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.send_presence200_response_data import SendPresence200ResponseData
+from .send_presence200_response_data import SendPresence200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

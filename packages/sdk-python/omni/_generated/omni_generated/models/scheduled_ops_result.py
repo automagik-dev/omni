@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.run_scheduled_ops200_response_data_dead_letter_retry import RunScheduledOps200ResponseDataDeadLetterRetry
-from omni_generated.models.run_scheduled_ops200_response_data_payload_cleanup import RunScheduledOps200ResponseDataPayloadCleanup
+from .run_scheduled_ops200_response_data_dead_letter_retry import RunScheduledOps200ResponseDataDeadLetterRetry
+from .run_scheduled_ops200_response_data_payload_cleanup import RunScheduledOps200ResponseDataPayloadCleanup
 from typing import Optional, Set
 from typing_extensions import Self
 

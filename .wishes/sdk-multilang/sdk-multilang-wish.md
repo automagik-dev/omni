@@ -285,3 +285,42 @@ registry.registerPath({
 - Comprehensive README documentation for each SDK
 
 The 3 test failures are pre-existing integration tests that require a running server, not related to this change.
+
+---
+
+## Post-Ship Fixes
+
+**Date:** 2026-02-05
+
+### Issues Identified During QA
+
+1. **TypeScript SDK tests hardcoded port** - Tests in `type-safety.test.ts` used hardcoded `http://localhost:8881` instead of `process.env.API_URL`
+2. **Python SDK import errors** - Generated code had absolute imports (`from omni_generated.xxx`) that failed when package is nested at `omni._generated.omni_generated/`
+3. **Docker file ownership** - Generated files were owned by `root` because Docker runs as root by default
+
+### Fixes Applied
+
+1. **TypeScript test fix** (`packages/sdk/src/__tests__/type-safety.test.ts`):
+   - Changed to use `process.env.API_URL || 'http://localhost:8881'`
+
+2. **Python SDK generator fix** (`scripts/generate-sdk-python.ts`):
+   - Added `-u ${uid}:${gid}` to Docker command for correct file ownership
+   - Added post-processing to convert absolute imports to relative imports:
+     - `from omni_generated.api.x` → `from .x` (same package)
+     - `from omni_generated.models.x` → `from ..models.x` (cross-package)
+     - `from omni_generated import rest` → `from . import rest`
+     - Handle bare `omni_generated.models` references
+
+3. **Go SDK generator fix** (`scripts/generate-sdk-go.ts`):
+   - Added `-u ${uid}:${gid}` to Docker command for correct file ownership
+
+4. **Regenerated both SDKs** with correct ownership and fixed imports
+
+### Test Results After Fix
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Tests passed | 804 | 807 |
+| Tests failed | 3 | 0 |
+| Python SDK imports | ✗ Broken | ✓ Working |
+| File ownership | root | user |

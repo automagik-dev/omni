@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.validate_api_key401_response_error import ValidateApiKey401ResponseError
+from .validate_api_key401_response_error import ValidateApiKey401ResponseError
 from typing import Optional, Set
 from typing_extensions import Self
 

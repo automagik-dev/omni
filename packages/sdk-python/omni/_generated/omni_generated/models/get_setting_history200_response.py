@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_setting_history200_response_items_inner import GetSettingHistory200ResponseItemsInner
+from .get_setting_history200_response_items_inner import GetSettingHistory200ResponseItemsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

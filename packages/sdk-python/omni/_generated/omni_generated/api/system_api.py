@@ -16,13 +16,13 @@ from pydantic import validate_call, Field, StrictFloat, StrictStr, StrictInt
 from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
-from omni_generated.models.get_health200_response import GetHealth200Response
-from omni_generated.models.get_info200_response import GetInfo200Response
-from omni_generated.models.get_internal_health200_response import GetInternalHealth200Response
+from ..models.get_health200_response import GetHealth200Response
+from ..models.get_info200_response import GetInfo200Response
+from ..models.get_internal_health200_response import GetInternalHealth200Response
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class SystemApi:

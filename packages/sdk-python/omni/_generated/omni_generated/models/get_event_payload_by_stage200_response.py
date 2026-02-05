@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_event_payload_by_stage200_response_data import GetEventPayloadByStage200ResponseData
+from .get_event_payload_by_stage200_response_data import GetEventPayloadByStage200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

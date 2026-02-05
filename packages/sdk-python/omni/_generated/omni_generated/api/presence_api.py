@@ -17,12 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
 from typing import Optional
-from omni_generated.models.send_presence200_response import SendPresence200Response
-from omni_generated.models.send_presence_request import SendPresenceRequest
+from ..models.send_presence200_response import SendPresence200Response
+from ..models.send_presence_request import SendPresenceRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class PresenceApi:

@@ -20,7 +20,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from typing import Any, ClassVar, Dict, List, Optional
-from omni_generated.models.get_person_presence200_response_data_identities_inner import GetPersonPresence200ResponseDataIdentitiesInner
+from .get_person_presence200_response_data_identities_inner import GetPersonPresence200ResponseDataIdentitiesInner
 from typing import Optional, Set
 from typing_extensions import Self
 

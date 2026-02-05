@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_health200_response_checks_database import GetHealth200ResponseChecksDatabase
+from .get_health200_response_checks_database import GetHealth200ResponseChecksDatabase
 from typing import Optional, Set
 from typing_extensions import Self
 

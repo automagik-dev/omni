@@ -205,6 +205,26 @@ client := omni.NewClientWithConfig(&omni.Config{
 
 The SDK also includes a fully-generated client from the OpenAPI spec in the `generated/` directory. This provides complete type coverage for all API endpoints and can be used directly if needed.
 
+## Development
+
+### Regenerating the SDK
+
+The SDK is generated from the OpenAPI spec using Docker:
+
+```bash
+# From the project root
+bun run scripts/generate-sdk-go.ts
+```
+
+This will:
+1. Generate the base client using `openapi-generator-cli` (Docker)
+2. Set correct file ownership (not root)
+
+### Requirements
+
+- Docker (for openapi-generator-cli)
+- Go 1.21+
+
 ## License
 
 MIT

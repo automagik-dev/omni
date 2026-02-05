@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_info200_response_events import GetInfo200ResponseEvents
-from omni_generated.models.get_info200_response_instances import GetInfo200ResponseInstances
+from .get_info200_response_events import GetInfo200ResponseEvents
+from .get_info200_response_instances import GetInfo200ResponseInstances
 from typing import Optional, Set
 from typing_extensions import Self
 

@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.request_pairing_code200_response_data import RequestPairingCode200ResponseData
+from .request_pairing_code200_response_data import RequestPairingCode200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

@@ -20,8 +20,8 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
-from omni_generated.models.get_health200_response_checks import GetHealth200ResponseChecks
-from omni_generated.models.get_health200_response_instances import GetHealth200ResponseInstances
+from .get_health200_response_checks import GetHealth200ResponseChecks
+from .get_health200_response_instances import GetHealth200ResponseInstances
 from typing import Optional, Set
 from typing_extensions import Self
 

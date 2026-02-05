@@ -19,17 +19,17 @@ from typing_extensions import Annotated
 from pydantic import StrictBool, StrictStr
 from typing import Any, Dict, Optional
 from uuid import UUID
-from omni_generated.models.create_webhook_source201_response import CreateWebhookSource201Response
-from omni_generated.models.create_webhook_source_request import CreateWebhookSourceRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.list_webhook_sources200_response import ListWebhookSources200Response
-from omni_generated.models.receive_webhook200_response import ReceiveWebhook200Response
-from omni_generated.models.trigger_event_request import TriggerEventRequest
-from omni_generated.models.update_webhook_source_request import UpdateWebhookSourceRequest
+from ..models.create_webhook_source201_response import CreateWebhookSource201Response
+from ..models.create_webhook_source_request import CreateWebhookSourceRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.list_webhook_sources200_response import ListWebhookSources200Response
+from ..models.receive_webhook200_response import ReceiveWebhook200Response
+from ..models.trigger_event_request import TriggerEventRequest
+from ..models.update_webhook_source_request import UpdateWebhookSourceRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class WebhooksApi:

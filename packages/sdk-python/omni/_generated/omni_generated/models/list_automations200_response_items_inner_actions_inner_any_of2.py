@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.list_automations200_response_items_inner_actions_inner_any_of2_config import ListAutomations200ResponseItemsInnerActionsInnerAnyOf2Config
+from .list_automations200_response_items_inner_actions_inner_any_of2_config import ListAutomations200ResponseItemsInnerActionsInnerAnyOf2Config
 from typing import Optional, Set
 from typing_extensions import Self
 

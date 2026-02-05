@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.list_payload_configs200_response_items_inner import ListPayloadConfigs200ResponseItemsInner
+from .list_payload_configs200_response_items_inner import ListPayloadConfigs200ResponseItemsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

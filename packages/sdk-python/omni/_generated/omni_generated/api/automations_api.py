@@ -20,20 +20,20 @@ from pydantic import Field, StrictBool, StrictStr, field_validator
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.create_automation201_response import CreateAutomation201Response
-from omni_generated.models.create_automation_request import CreateAutomationRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.execute_automation200_response import ExecuteAutomation200Response
-from omni_generated.models.get_automation_logs200_response import GetAutomationLogs200Response
-from omni_generated.models.get_automation_metrics200_response import GetAutomationMetrics200Response
-from omni_generated.models.list_automations200_response import ListAutomations200Response
-from omni_generated.models.test_automation200_response import TestAutomation200Response
-from omni_generated.models.test_automation_request import TestAutomationRequest
-from omni_generated.models.update_automation_request import UpdateAutomationRequest
+from ..models.create_automation201_response import CreateAutomation201Response
+from ..models.create_automation_request import CreateAutomationRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.execute_automation200_response import ExecuteAutomation200Response
+from ..models.get_automation_logs200_response import GetAutomationLogs200Response
+from ..models.get_automation_metrics200_response import GetAutomationMetrics200Response
+from ..models.list_automations200_response import ListAutomations200Response
+from ..models.test_automation200_response import TestAutomation200Response
+from ..models.test_automation_request import TestAutomationRequest
+from ..models.update_automation_request import UpdateAutomationRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class AutomationsApi:

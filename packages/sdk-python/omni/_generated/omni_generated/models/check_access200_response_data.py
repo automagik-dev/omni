@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
-from omni_generated.models.check_access200_response_data_rule import CheckAccess200ResponseDataRule
+from .check_access200_response_data_rule import CheckAccess200ResponseDataRule
 from typing import Optional, Set
 from typing_extensions import Self
 

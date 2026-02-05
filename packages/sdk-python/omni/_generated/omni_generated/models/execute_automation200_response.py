@@ -20,7 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from typing import Any, ClassVar, Dict, List
 from uuid import UUID
-from omni_generated.models.execute_automation200_response_results_inner import ExecuteAutomation200ResponseResultsInner
+from .execute_automation200_response_results_inner import ExecuteAutomation200ResponseResultsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

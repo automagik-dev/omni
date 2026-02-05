@@ -18,13 +18,13 @@ from typing_extensions import Annotated
 
 from typing import Optional
 from uuid import UUID
-from omni_generated.models.mark_message_read200_response import MarkMessageRead200Response
-from omni_generated.models.mark_message_read_request import MarkMessageReadRequest
-from omni_generated.models.mark_messages_read_request import MarkMessagesReadRequest
+from ..models.mark_message_read200_response import MarkMessageRead200Response
+from ..models.mark_message_read_request import MarkMessageReadRequest
+from ..models.mark_messages_read_request import MarkMessagesReadRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class ReadReceiptsApi:

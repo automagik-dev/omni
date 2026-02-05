@@ -20,25 +20,25 @@ from pydantic import Field, StrictStr
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.connect_instance200_response import ConnectInstance200Response
-from omni_generated.models.connect_instance_request import ConnectInstanceRequest
-from omni_generated.models.create_instance201_response import CreateInstance201Response
-from omni_generated.models.create_instance_request import CreateInstanceRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.get_instance_qr200_response import GetInstanceQr200Response
-from omni_generated.models.get_instance_status200_response import GetInstanceStatus200Response
-from omni_generated.models.get_user_profile200_response import GetUserProfile200Response
-from omni_generated.models.list_instance_contacts200_response import ListInstanceContacts200Response
-from omni_generated.models.list_instance_groups200_response import ListInstanceGroups200Response
-from omni_generated.models.list_instances200_response import ListInstances200Response
-from omni_generated.models.list_supported_channels200_response import ListSupportedChannels200Response
-from omni_generated.models.request_pairing_code200_response import RequestPairingCode200Response
-from omni_generated.models.request_pairing_code_request import RequestPairingCodeRequest
-from omni_generated.models.update_instance_request import UpdateInstanceRequest
+from ..models.connect_instance200_response import ConnectInstance200Response
+from ..models.connect_instance_request import ConnectInstanceRequest
+from ..models.create_instance201_response import CreateInstance201Response
+from ..models.create_instance_request import CreateInstanceRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.get_instance_qr200_response import GetInstanceQr200Response
+from ..models.get_instance_status200_response import GetInstanceStatus200Response
+from ..models.get_user_profile200_response import GetUserProfile200Response
+from ..models.list_instance_contacts200_response import ListInstanceContacts200Response
+from ..models.list_instance_groups200_response import ListInstanceGroups200Response
+from ..models.list_instances200_response import ListInstances200Response
+from ..models.list_supported_channels200_response import ListSupportedChannels200Response
+from ..models.request_pairing_code200_response import RequestPairingCode200Response
+from ..models.request_pairing_code_request import RequestPairingCodeRequest
+from ..models.update_instance_request import UpdateInstanceRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class InstancesApi:

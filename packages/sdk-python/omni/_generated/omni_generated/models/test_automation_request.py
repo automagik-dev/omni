@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.test_automation_request_event import TestAutomationRequestEvent
+from .test_automation_request_event import TestAutomationRequestEvent
 from typing import Optional, Set
 from typing_extensions import Self
 

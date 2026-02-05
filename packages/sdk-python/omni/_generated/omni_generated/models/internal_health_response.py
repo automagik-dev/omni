@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_internal_health200_response_memory import GetInternalHealth200ResponseMemory
+from .get_internal_health200_response_memory import GetInternalHealth200ResponseMemory
 from typing import Optional, Set
 from typing_extensions import Self
 

@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.send_text_message201_response_data import SendTextMessage201ResponseData
+from .send_text_message201_response_data import SendTextMessage201ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

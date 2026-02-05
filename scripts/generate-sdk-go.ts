@@ -26,8 +26,13 @@ async function main() {
   console.log('2. Generating Go SDK with openapi-generator (Docker)...');
 
   try {
+    // Get current user's UID/GID to set correct ownership
+    const uid = process.getuid?.() ?? 1000;
+    const gid = process.getgid?.() ?? 1000;
+
     await $`docker run --rm \
       -v ${projectRoot}:/local \
+      -u ${uid}:${gid} \
       openapitools/openapi-generator-cli generate \
       -i /local/dist/openapi.json \
       -g go \

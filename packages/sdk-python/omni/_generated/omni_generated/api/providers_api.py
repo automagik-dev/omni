@@ -19,17 +19,17 @@ from typing_extensions import Annotated
 from pydantic import StrictBool
 from typing import Optional
 from uuid import UUID
-from omni_generated.models.check_provider_health200_response import CheckProviderHealth200Response
-from omni_generated.models.create_provider201_response import CreateProvider201Response
-from omni_generated.models.create_provider_request import CreateProviderRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.list_provider_agents200_response import ListProviderAgents200Response
-from omni_generated.models.list_providers200_response import ListProviders200Response
-from omni_generated.models.update_provider_request import UpdateProviderRequest
+from ..models.check_provider_health200_response import CheckProviderHealth200Response
+from ..models.create_provider201_response import CreateProvider201Response
+from ..models.create_provider_request import CreateProviderRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.list_provider_agents200_response import ListProviderAgents200Response
+from ..models.list_providers200_response import ListProviders200Response
+from ..models.update_provider_request import UpdateProviderRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class ProvidersApi:

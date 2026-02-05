@@ -20,7 +20,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from typing import Any, ClassVar, Dict, List, Optional
-from omni_generated.models.get_payload_stats200_response_data_by_stage import GetPayloadStats200ResponseDataByStage
+from .get_payload_stats200_response_data_by_stage import GetPayloadStats200ResponseDataByStage
 from typing import Optional, Set
 from typing_extensions import Self
 

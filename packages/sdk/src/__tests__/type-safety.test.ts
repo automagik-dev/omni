@@ -7,9 +7,12 @@
 import { describe, expect, test } from 'bun:test';
 import { createOmniClient } from '../index';
 
+const API_URL = process.env.API_URL || 'http://localhost:8881';
+const API_KEY = process.env.API_KEY || 'test-key';
+
 const client = createOmniClient({
-  baseUrl: 'http://localhost:8881',
-  apiKey: 'test-key',
+  baseUrl: API_URL,
+  apiKey: API_KEY,
 });
 
 describe('SDK Type Safety', () => {

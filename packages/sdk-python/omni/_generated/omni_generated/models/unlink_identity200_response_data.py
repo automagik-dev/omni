@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_person_presence200_response_data_identities_inner import GetPersonPresence200ResponseDataIdentitiesInner
-from omni_generated.models.search_persons200_response_items_inner import SearchPersons200ResponseItemsInner
+from .get_person_presence200_response_data_identities_inner import GetPersonPresence200ResponseDataIdentitiesInner
+from .search_persons200_response_items_inner import SearchPersons200ResponseItemsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

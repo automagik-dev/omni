@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.get_recent_logs200_response_items_inner import GetRecentLogs200ResponseItemsInner
-from omni_generated.models.get_recent_logs200_response_meta import GetRecentLogs200ResponseMeta
+from .get_recent_logs200_response_items_inner import GetRecentLogs200ResponseItemsInner
+from .get_recent_logs200_response_meta import GetRecentLogs200ResponseMeta
 from typing import Optional, Set
 from typing_extensions import Self
 

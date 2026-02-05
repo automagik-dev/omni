@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.connect_instance200_response_data import ConnectInstance200ResponseData
+from .connect_instance200_response_data import ConnectInstance200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

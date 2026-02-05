@@ -19,17 +19,17 @@ from typing_extensions import Annotated
 from pydantic import StrictStr, field_validator
 from typing import Optional
 from uuid import UUID
-from omni_generated.models.check_access200_response import CheckAccess200Response
-from omni_generated.models.check_access_request import CheckAccessRequest
-from omni_generated.models.create_access_rule201_response import CreateAccessRule201Response
-from omni_generated.models.create_access_rule_request import CreateAccessRuleRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.list_access_rules200_response import ListAccessRules200Response
-from omni_generated.models.update_access_rule_request import UpdateAccessRuleRequest
+from ..models.check_access200_response import CheckAccess200Response
+from ..models.check_access_request import CheckAccessRequest
+from ..models.create_access_rule201_response import CreateAccessRule201Response
+from ..models.create_access_rule_request import CreateAccessRuleRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.list_access_rules200_response import ListAccessRules200Response
+from ..models.update_access_rule_request import UpdateAccessRuleRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class AccessApi:

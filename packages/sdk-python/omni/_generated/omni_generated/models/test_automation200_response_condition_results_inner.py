@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictBool
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.list_automations200_response_items_inner_trigger_conditions_inner import ListAutomations200ResponseItemsInnerTriggerConditionsInner
+from .list_automations200_response_items_inner_trigger_conditions_inner import ListAutomations200ResponseItemsInnerTriggerConditionsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

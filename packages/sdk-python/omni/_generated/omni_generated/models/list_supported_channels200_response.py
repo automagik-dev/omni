@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.list_supported_channels200_response_items_inner import ListSupportedChannels200ResponseItemsInner
+from .list_supported_channels200_response_items_inner import ListSupportedChannels200ResponseItemsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

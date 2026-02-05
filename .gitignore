@@ -41,3 +41,7 @@ coverage/
 # Misc
 *.bak
 *.tmp
+
+# Python
+__pycache__/
+*.pyc

@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from typing import Any, ClassVar, Dict, List, Optional
-from omni_generated.models.list_automations200_response_items_inner_actions_inner import ListAutomations200ResponseItemsInnerActionsInner
-from omni_generated.models.test_automation200_response_condition_results_inner import TestAutomation200ResponseConditionResultsInner
+from .list_automations200_response_items_inner_actions_inner import ListAutomations200ResponseItemsInnerActionsInner
+from .test_automation200_response_condition_results_inner import TestAutomation200ResponseConditionResultsInner
 from typing import Optional, Set
 from typing_extensions import Self
 

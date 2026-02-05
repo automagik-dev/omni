@@ -20,11 +20,11 @@ from pydantic import Field, StrictStr
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.list_instance_contacts200_response import ListInstanceContacts200Response
+from ..models.list_instance_contacts200_response import ListInstanceContacts200Response
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class ContactsApi:

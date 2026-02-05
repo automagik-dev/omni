@@ -21,15 +21,15 @@ from pydantic import Field, StrictStr
 from typing import Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.get_dead_letter200_response import GetDeadLetter200Response
-from omni_generated.models.get_dead_letter_stats200_response import GetDeadLetterStats200Response
-from omni_generated.models.list_dead_letters200_response import ListDeadLetters200Response
-from omni_generated.models.resolve_dead_letter_request import ResolveDeadLetterRequest
-from omni_generated.models.retry_dead_letter200_response import RetryDeadLetter200Response
+from ..models.get_dead_letter200_response import GetDeadLetter200Response
+from ..models.get_dead_letter_stats200_response import GetDeadLetterStats200Response
+from ..models.list_dead_letters200_response import ListDeadLetters200Response
+from ..models.resolve_dead_letter_request import ResolveDeadLetterRequest
+from ..models.retry_dead_letter200_response import RetryDeadLetter200Response
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class DeadLettersApi:

@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.run_scheduled_ops200_response_data import RunScheduledOps200ResponseData
+from .run_scheduled_ops200_response_data import RunScheduledOps200ResponseData
 from typing import Optional, Set
 from typing_extensions import Self
 

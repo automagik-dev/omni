@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from omni_generated.models.list_instances200_response_items_inner import ListInstances200ResponseItemsInner
-from omni_generated.models.list_instances200_response_meta import ListInstances200ResponseMeta
+from .list_instances200_response_items_inner import ListInstances200ResponseItemsInner
+from .list_instances200_response_meta import ListInstances200ResponseMeta
 from typing import Optional, Set
 from typing_extensions import Self
 

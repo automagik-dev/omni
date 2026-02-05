@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
 from typing_extensions import Annotated
 from uuid import UUID
-from omni_generated.models.send_contact_request_contact import SendContactRequestContact
+from .send_contact_request_contact import SendContactRequestContact
 from typing import Optional, Set
 from typing_extensions import Self
 

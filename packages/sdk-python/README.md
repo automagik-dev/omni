@@ -187,6 +187,27 @@ with ApiClient(config) as api_client:
     response = instances_api.list_instances()
 ```
 
+## Development
+
+### Regenerating the SDK
+
+The SDK is generated from the OpenAPI spec using Docker:
+
+```bash
+# From the project root
+bun run scripts/generate-sdk-python.ts
+```
+
+This will:
+1. Generate the base client using `openapi-generator-cli` (Docker)
+2. Fix Python imports (absolute → relative) for proper package nesting
+3. Set correct file ownership (not root)
+
+### Requirements
+
+- Docker (for openapi-generator-cli)
+- Python 3.9+
+
 ## License
 
 MIT

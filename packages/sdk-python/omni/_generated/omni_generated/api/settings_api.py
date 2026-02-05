@@ -20,16 +20,16 @@ from datetime import datetime
 from pydantic import Field, StrictStr
 from typing import Optional
 from typing_extensions import Annotated
-from omni_generated.models.bulk_update_settings_request import BulkUpdateSettingsRequest
-from omni_generated.models.delete_instance200_response import DeleteInstance200Response
-from omni_generated.models.get_setting200_response import GetSetting200Response
-from omni_generated.models.get_setting_history200_response import GetSettingHistory200Response
-from omni_generated.models.list_settings200_response import ListSettings200Response
-from omni_generated.models.set_setting_request import SetSettingRequest
+from ..models.bulk_update_settings_request import BulkUpdateSettingsRequest
+from ..models.delete_instance200_response import DeleteInstance200Response
+from ..models.get_setting200_response import GetSetting200Response
+from ..models.get_setting_history200_response import GetSettingHistory200Response
+from ..models.list_settings200_response import ListSettings200Response
+from ..models.set_setting_request import SetSettingRequest
 
-from omni_generated.api_client import ApiClient, RequestSerialized
-from omni_generated.api_response import ApiResponse
-from omni_generated.rest import RESTResponseType
+from ..api_client import ApiClient, RequestSerialized
+from ..api_response import ApiResponse
+from ..rest import RESTResponseType
 
 
 class SettingsApi:
