@@ -1,0 +1,9 @@
+export { Login } from './Login';
+export { Dashboard } from './Dashboard';
+export { Instances } from './Instances';
+export { InstanceDetail } from './InstanceDetail';
+export { Chats } from './Chats';
+export { ChatView } from './ChatView';
+export { Events } from './Events';
+export { Logs } from './Logs';
+export { Settings } from './Settings';

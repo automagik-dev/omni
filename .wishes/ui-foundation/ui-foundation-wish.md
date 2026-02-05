@@ -2,7 +2,7 @@
 
 > Fresh admin dashboard for V2 using TypeScript SDK.
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Created:** 2026-02-04
 **Updated:** 2026-02-05
 **Author:** WISH Agent
@@ -297,17 +297,17 @@ export function useRestartService() {
 **Goal:** Create fresh React app with SDK integration.
 
 **Deliverables:**
-- [ ] Create `apps/ui/` with Vite + React + TypeScript
-- [ ] Install dependencies (tailwind, shadcn, tanstack-query)
-- [ ] Configure SDK integration (`lib/sdk.ts`)
-- [ ] Setup TanStack Query provider
-- [ ] Create app shell with sidebar navigation
-- [ ] Implement auth flow (API key login)
+- [x] Create `apps/ui/` with Vite + React + TypeScript
+- [x] Install dependencies (tailwind, shadcn, tanstack-query)
+- [x] Configure SDK integration (`lib/sdk.ts`)
+- [x] Setup TanStack Query provider
+- [x] Create app shell with sidebar navigation
+- [x] Implement auth flow (API key login)
 
 **Acceptance Criteria:**
-- [ ] `bun run dev` starts UI on port 5173
-- [ ] SDK client connects to API
-- [ ] Login with API key works
+- [x] `bun run dev` starts UI on port 5173
+- [x] SDK client connects to API
+- [x] Login with API key works
 
 ---
 
@@ -316,17 +316,17 @@ export function useRestartService() {
 **Goal:** Full instance CRUD and management.
 
 **Deliverables:**
-- [ ] Instances list page with table
-- [ ] Create instance modal
-- [ ] Instance detail page
-- [ ] Connect/disconnect/restart actions
-- [ ] QR code display component
-- [ ] Instance status polling
+- [x] Instances list page with table
+- [x] Create instance modal
+- [x] Instance detail page
+- [x] Connect/disconnect/restart actions
+- [x] QR code display component
+- [x] Instance status polling
 
 **Acceptance Criteria:**
-- [ ] Can create/edit/delete instances
-- [ ] Can connect WhatsApp via QR
-- [ ] Status updates automatically
+- [x] Can create/edit/delete instances
+- [x] Can connect WhatsApp via QR
+- [x] Status updates automatically
 
 ---
 
@@ -335,16 +335,16 @@ export function useRestartService() {
 **Goal:** View and send messages.
 
 **Deliverables:**
-- [ ] Chat list component
-- [ ] Chat view with message bubbles
-- [ ] Send message form (text)
-- [ ] Message history with pagination
-- [ ] Contact/person sidebar
+- [x] Chat list component
+- [x] Chat view with message bubbles
+- [x] Send message form (text)
+- [x] Message history with pagination
+- [ ] Contact/person sidebar (out of scope for MVP)
 
 **Acceptance Criteria:**
-- [ ] Can view all chats for an instance
-- [ ] Can view message history
-- [ ] Can send text messages
+- [x] Can view all chats for an instance
+- [x] Can view message history
+- [x] Can send text messages
 
 ---
 
@@ -353,17 +353,17 @@ export function useRestartService() {
 **Goal:** Ops dashboard with logs and service management.
 
 **Deliverables:**
-- [ ] Logs page with real-time polling
-- [ ] Log filters (source, level, instance)
-- [ ] Service status component
-- [ ] Restart service action
-- [ ] Dashboard with health indicators
+- [x] Logs page with real-time polling
+- [x] Log filters (source, level, instance)
+- [x] Service status component (in Settings page)
+- [ ] Restart service action (API endpoint not available yet)
+- [x] Dashboard with health indicators
 
 **Acceptance Criteria:**
-- [ ] Can view logs from all sources
-- [ ] Can filter logs
-- [ ] Can restart service from UI
-- [ ] Dashboard shows system health
+- [x] Can view logs from all sources
+- [x] Can filter logs
+- [ ] Can restart service from UI (deferred - API endpoint needed)
+- [x] Dashboard shows system health
 
 ---
 
@@ -372,17 +372,17 @@ export function useRestartService() {
 **Goal:** Events viewer and final polish.
 
 **Deliverables:**
-- [ ] Events list page with filters
-- [ ] Event detail modal
-- [ ] Settings page
-- [ ] Error handling throughout
-- [ ] Loading states
-- [ ] Production build
+- [x] Events list page with filters
+- [x] Event detail modal (expandable details)
+- [x] Settings page
+- [x] Error handling throughout
+- [x] Loading states
+- [x] Production build
 
 **Acceptance Criteria:**
-- [ ] Can query events with filters
-- [ ] Error states handled gracefully
-- [ ] Production build works
+- [x] Can query events with filters
+- [x] Error states handled gracefully
+- [x] Production build works
 
 ---
 
@@ -415,14 +415,14 @@ The UI needs these SDK/API capabilities:
 
 ## Success Criteria
 
-- [ ] UI builds and runs
-- [ ] Can login with API key
-- [ ] Can manage instances (CRUD + connect)
-- [ ] Can view chats and messages
-- [ ] Can send messages
-- [ ] Can view logs from all sources
-- [ ] Can restart instances and service
-- [ ] Dashboard shows system health
+- [x] UI builds and runs
+- [x] Can login with API key
+- [x] Can manage instances (CRUD + connect)
+- [x] Can view chats and messages
+- [x] Can send messages
+- [x] Can view logs from all sources
+- [x] Can restart instances (service restart deferred)
+- [x] Dashboard shows system health
 
 ---
 

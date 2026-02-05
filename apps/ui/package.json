@@ -12,17 +12,24 @@
     "lint:fix": "biome check --write src/"
   },
   "dependencies": {
+    "@omni/sdk": "workspace:*",
+    "@tanstack/react-query": "^5.90.20",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.563.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@omni/sdk": "workspace:*"
+    "react-router-dom": "^7.13.0",
+    "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^25.2.1",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
-    "typescript": "^5.5.0",
-    "vite": "^6.0.0",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/vite": "^4.0.0"
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0"
   }
 }
