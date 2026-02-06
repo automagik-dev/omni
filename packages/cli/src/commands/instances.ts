@@ -158,6 +158,28 @@ export function createInstancesCommand(): Command {
     .action(async (id: string, options: { base64?: boolean; watch?: boolean }) => {
       const client = getClient();
 
+      const renderQrAscii = async (qrData: string, expiresAt?: string): Promise<void> => {
+        return new Promise<void>((resolve) => {
+          qrcode.generate(qrData, { small: true }, (qrArt: string) => {
+            output.raw(qrArt);
+            if (expiresAt) output.dim(`Expires: ${expiresAt}`);
+            resolve();
+          });
+        });
+      };
+
+      const outputQrResult = async (result: {
+        qr: string | null;
+        expiresAt: string | null;
+        message: string;
+      }): Promise<void> => {
+        if (options.base64 || output.getCurrentFormat() === 'json') {
+          output.data({ qr: result.qr, expiresAt: result.expiresAt });
+        } else if (result.qr) {
+          await renderQrAscii(result.qr, result.expiresAt ?? undefined);
+        }
+      };
+
       const fetchAndShowQr = async (watch: boolean): Promise<boolean> => {
         const status = await client.instances.status(id);
         if (status.isConnected) {
@@ -171,24 +193,11 @@ export function createInstancesCommand(): Command {
           return false;
         }
 
-        const qrData = result.qr;
-
-        if (options.base64 || output.getCurrentFormat() === 'json') {
-          output.data({ qr: qrData, expiresAt: result.expiresAt });
-          return false;
-        }
-
         // biome-ignore lint/suspicious/noConsole: CLI clear screen
         if (watch) console.clear();
         if (watch) output.info('Scan with WhatsApp (auto-refreshing, Ctrl+C to stop)\n');
 
-        await new Promise<void>((resolve) => {
-          qrcode.generate(qrData, { small: true }, (qrArt: string) => {
-            output.raw(qrArt);
-            if (result.expiresAt) output.dim(`Expires: ${result.expiresAt}`);
-            resolve();
-          });
-        });
+        await outputQrResult(result);
         return false;
       };
 
