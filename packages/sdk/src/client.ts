@@ -764,6 +764,71 @@ export interface AuthValidateResponse {
 }
 
 // ============================================================================
+// API KEY TYPES
+// ============================================================================
+
+/** API key status */
+export type ApiKeyStatus = 'active' | 'revoked' | 'expired';
+
+/** API key record */
+export interface ApiKeyRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  keyPrefix: string;
+  scopes: string[];
+  instanceIds?: string[] | null;
+  status: ApiKeyStatus;
+  rateLimit?: number | null;
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
+  usageCount: number;
+  revokedAt?: string | null;
+  revokedBy?: string | null;
+  revokeReason?: string | null;
+  createdAt: string;
+  createdBy?: string | null;
+  updatedAt: string;
+}
+
+/** Body for creating an API key */
+export interface CreateApiKeyBody {
+  name: string;
+  description?: string;
+  scopes: string[];
+  instanceIds?: string[];
+  rateLimit?: number;
+  expiresAt?: string;
+}
+
+/** Body for updating an API key */
+export interface UpdateApiKeyBody {
+  name?: string;
+  description?: string | null;
+  scopes?: string[];
+  instanceIds?: string[] | null;
+  rateLimit?: number | null;
+  expiresAt?: string | null;
+}
+
+/** Body for revoking an API key */
+export interface RevokeApiKeyBody {
+  reason?: string;
+  revokedBy?: string;
+}
+
+/** Query parameters for listing API keys */
+export interface ListApiKeysParams {
+  status?: ApiKeyStatus;
+  limit?: number;
+}
+
+/** Result of creating an API key (includes the plaintext key) */
+export interface CreateApiKeyResult extends ApiKeyRecord {
+  plainTextKey: string;
+}
+
+// ============================================================================
 // Presence & Read Receipt Types (api-completeness)
 // ============================================================================
 
@@ -2334,6 +2399,95 @@ export function createOmniClient(config: OmniClientConfig) {
         const json = (await resp.json()) as { data?: CostEstimate };
         if (!json?.data) throw new OmniApiError('Failed to estimate', 'ESTIMATE_FAILED', undefined, resp.status);
         return json.data;
+      },
+    },
+
+    // ========================================================================
+    // KEYS
+    // ========================================================================
+
+    /**
+     * API key management
+     */
+    keys: {
+      /**
+       * Create a new API key
+       * The plainTextKey is only returned in this response.
+       */
+      async create(body: CreateApiKeyBody): Promise<CreateApiKeyResult> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: CreateApiKeyResult };
+        if (!json?.data) throw new OmniApiError('Failed to create API key', 'CREATE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * List API keys
+       */
+      async list(params?: ListApiKeysParams): Promise<{ items: ApiKeyRecord[]; meta: { total: number } }> {
+        const query = new URLSearchParams();
+        if (params?.status) query.set('status', params.status);
+        if (params?.limit) query.set('limit', String(params.limit));
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys?${query}`, {});
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { items?: ApiKeyRecord[]; meta?: { total: number } };
+        return { items: json?.items ?? [], meta: json?.meta ?? { total: 0 } };
+      },
+
+      /**
+       * Get an API key by ID
+       */
+      async get(id: string): Promise<ApiKeyRecord> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}`, {});
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!json?.data) throw new OmniApiError('API key not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * Update an API key
+       */
+      async update(id: string, body: UpdateApiKeyBody): Promise<ApiKeyRecord> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!json?.data) throw new OmniApiError('Failed to update API key', 'UPDATE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Revoke an API key
+       */
+      async revoke(id: string, body?: RevokeApiKeyBody): Promise<ApiKeyRecord> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}/revoke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!json?.data) throw new OmniApiError('Failed to revoke API key', 'REVOKE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Delete an API key permanently
+       */
+      async delete(id: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}`, {
+          method: 'DELETE',
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
       },
     },
 
