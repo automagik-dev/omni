@@ -9,16 +9,26 @@ import { getClient } from '@/lib/sdk';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
-import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 export function Events() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
 
   const instanceId = searchParams.get('instanceId') ?? undefined;
   const eventType = searchParams.get('eventType') ?? undefined;
   const limit = Number(searchParams.get('limit')) || 50;
+  const expandedEvent = searchParams.get('eventId') ?? null;
+
+  const setExpandedEvent = (eventId: string | null) => {
+    setSearchParams((prev) => {
+      if (eventId) {
+        prev.set('eventId', eventId);
+      } else {
+        prev.delete('eventId');
+      }
+      return prev;
+    });
+  };
 
   const { data: instances } = useInstances();
 

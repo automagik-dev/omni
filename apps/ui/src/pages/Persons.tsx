@@ -17,15 +17,39 @@ import { cn } from '@/lib/utils';
 import type { Person } from '@omni/sdk';
 import { GitMerge, Search, Users, X } from 'lucide-react';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 /**
  * Persons (Users) management page
  */
 export function Persons() {
-  const [search, setSearch] = useState('');
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const search = searchParams.get('q') ?? '';
+  const selectedPersonId = searchParams.get('id');
   const [mergeMode, setMergeMode] = useState(false);
   const [selectedForMerge, setSelectedForMerge] = useState<Person[]>([]);
+
+  const setSearch = (value: string) => {
+    setSearchParams((prev) => {
+      if (value) {
+        prev.set('q', value);
+      } else {
+        prev.delete('q');
+      }
+      return prev;
+    });
+  };
+
+  const setSelectedPersonId = (id: string | null) => {
+    setSearchParams((prev) => {
+      if (id) {
+        prev.set('id', id);
+      } else {
+        prev.delete('id');
+      }
+      return prev;
+    });
+  };
   const [showMergeDialog, setShowMergeDialog] = useState(false);
 
   const { data: persons, isLoading, isFetching, refetch } = usePersons({ search, limit: 50 });

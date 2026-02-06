@@ -7,7 +7,6 @@ import {
   AccessRules,
   Automations,
   BatchJobs,
-  ChatView,
   Chats,
   Contacts,
   Dashboard,
@@ -74,7 +73,7 @@ export default function App() {
               <Route path="/instances" element={<Instances />} />
               <Route path="/instances/:id" element={<InstanceDetail />} />
               <Route path="/chats" element={<Chats />} />
-              <Route path="/chats/:id" element={<ChatView />} />
+              <Route path="/chats/:id" element={<Chats />} />
               <Route path="/people" element={<Persons />} />
               <Route path="/contacts" element={<Contacts />} />
               <Route path="/providers" element={<Providers />} />
