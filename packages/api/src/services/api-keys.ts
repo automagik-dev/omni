@@ -62,6 +62,18 @@ export interface CreateApiKeyResult {
   plainTextKey: string; // Only returned once at creation
 }
 
+/**
+ * Options for updating an API key
+ */
+export interface UpdateApiKeyOptions {
+  name?: string;
+  description?: string | null;
+  scopes?: string[];
+  instanceIds?: string[] | null;
+  rateLimit?: number | null;
+  expiresAt?: Date | null;
+}
+
 export class ApiKeyService {
   constructor(private db: Database) {}
 
@@ -242,6 +254,33 @@ export class ApiKeyService {
       key: created,
       plainTextKey, // Only returned once!
     };
+  }
+
+  /**
+   * Update an API key
+   */
+  async update(id: string, options: UpdateApiKeyOptions): Promise<ApiKey | null> {
+    // Prevent renaming primary key
+    if (options.name !== undefined && (await this.isPrimaryKey(id))) {
+      throw new Error('Cannot rename primary API key');
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (options.name !== undefined) updates.name = options.name;
+    if (options.description !== undefined) updates.description = options.description;
+    if (options.scopes !== undefined) updates.scopes = options.scopes;
+    if (options.instanceIds !== undefined) updates.instanceIds = options.instanceIds;
+    if (options.rateLimit !== undefined) updates.rateLimit = options.rateLimit;
+    if (options.expiresAt !== undefined) updates.expiresAt = options.expiresAt;
+
+    const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+
+    if (updated) {
+      await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
+      log.info('API key updated', { id, fields: Object.keys(options) });
+    }
+
+    return updated ?? null;
   }
 
   /**
