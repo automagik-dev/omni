@@ -502,10 +502,12 @@ Based on analysis of the production v1 UI at `omni-sampaio.namastex.io`, we'll a
 
 ### Features to Replicate
 
-1. **Instance Management**
-   - Per-instance settings (Auto-read, Always online, Reject calls, Ignore groups, Full sync)
-   - Restart/Logout actions
-   - API key display (masked with reveal)
+1. **Instance Management (5 tabs)**
+   - **Connection**: Profile info, QR code, Restart/Logout actions
+   - **Agent**: AI agent configuration, model selection
+   - **Messages**: Debounce settings (min/max delay), auto-split, username prefix toggle
+   - **Behavior**: Auto-reject calls, Always online, Auto-read, Ignore groups, Full sync toggles
+   - **Webhooks**: Webhook/WebSocket/RabbitMQ integration info
 
 2. **System Monitoring**
    - Server metrics (RAM, CPU, Disk, Load Average, Uptime)
@@ -529,6 +531,105 @@ Screenshots captured during analysis:
 - `v1-chats-list.png` - Chat list view
 - `v1-chat-view.png` - Conversation view
 - `v1-contacts.png` - Contacts page
+- `v1-light-mode.png` - Light theme variant
+- `v1-settings-general.png` - Settings general tab
+- `v1-settings-providers.png` - Agent providers config
+- `v1-settings-media.png` - Media processing settings
+- `v1-settings-system.png` - System/database settings
+- `v1-users.png` - Users/identities page
+- `v1-access-rules.png` - Access rules table
+- `v1-media-processing.png` - Media job history
+- `v1-new-instance-modal.png` - New instance form
+- `v1-instance-detail-connection.png` - Instance connection tab
+- `v1-instance-agent.png` - Instance agent configuration
+- `v1-instance-behavior.png` - Instance behavior toggles
+- `v1-instance-messages.png` - Instance message handling
+- `v1-instance-webhooks.png` - Instance webhooks info
+
+---
+
+## Design System Best Practices
+
+### Recommended Foundations
+
+1. **shadcn/ui** (https://ui.shadcn.com)
+   - Already in use, excellent base for consistent components
+   - Built on Radix UI primitives (accessibility-first)
+   - Copy-paste components, full customization control
+   - Great dark mode support out of the box
+
+2. **Radix UI** (https://radix-ui.com)
+   - Underlying primitive for shadcn components
+   - Accessible by default (ARIA, keyboard nav, focus management)
+   - Unstyled = full control over appearance
+
+3. **Tailwind CSS v4** (current setup)
+   - OKLCH color space = better color contrast/accessibility
+   - CSS variables for themeing
+   - Design tokens via `--color-*` variables
+
+### Design References to Follow
+
+1. **Linear** (https://linear.app)
+   - Best-in-class dashboard UX for data-heavy apps
+   - Clean sidebar navigation, keyboard shortcuts
+   - Excellent dark/light theme implementation
+
+2. **Vercel Dashboard** (https://vercel.com/dashboard)
+   - Clean stats cards, deployment lists
+   - Good use of status indicators
+   - Smooth transitions and loading states
+
+3. **GitHub Projects**
+   - Table views, kanban boards
+   - Filter/sort patterns
+   - Multi-select actions
+
+4. **Notion** (for settings pages)
+   - Clean settings organization by category
+   - Toggle groups, clear descriptions
+
+### Component Pattern Guidelines
+
+1. **Color Tokens**
+   ```css
+   /* Semantic colors (not raw values) */
+   --color-success: oklch(0.76 0.18 145);  /* green */
+   --color-warning: oklch(0.82 0.16 84);   /* yellow */
+   --color-error: oklch(0.64 0.21 25);     /* red */
+   --color-accent: oklch(0.55 0.25 263);   /* purple */
+   ```
+
+2. **Consistent Spacing**
+   - Use Tailwind spacing scale (4, 8, 12, 16, 24, 32, 48)
+   - Cards: `p-4` or `p-6`
+   - Gaps: `gap-2`, `gap-4`, `gap-6`
+
+3. **Loading States**
+   - Skeleton loaders for content areas
+   - Spinner for actions/buttons
+   - Progress bars for known-length operations
+
+4. **Empty States**
+   - Icon + message + action
+   - Never leave blank
+
+5. **Status Indicators**
+   - Dots for binary status (online/offline)
+   - Progress bars for capacity/metrics
+   - Badges for counts/tags
+
+6. **Responsive Tables → Cards**
+   - Tables on desktop
+   - Cards on mobile (future)
+
+### Accessibility Checklist
+
+- [ ] All interactive elements keyboard accessible
+- [ ] Color contrast meets WCAG AA (4.5:1 for text)
+- [ ] Focus indicators visible
+- [ ] Screen reader labels on icons
+- [ ] Reduced motion respects `prefers-reduced-motion`
 
 ---
 
