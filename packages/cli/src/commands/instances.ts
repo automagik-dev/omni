@@ -18,6 +18,7 @@
 
 import type { Channel } from '@omni/sdk';
 import { Command } from 'commander';
+import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
@@ -153,34 +154,64 @@ export function createInstancesCommand(): Command {
     .command('qr <id>')
     .description('Get QR code for WhatsApp instances')
     .option('--base64', 'Output raw base64 instead of ASCII')
-    .action(async (id: string, options: { base64?: boolean }) => {
+    .option('--watch', 'Auto-refresh QR until connected')
+    .action(async (id: string, options: { base64?: boolean; watch?: boolean }) => {
       const client = getClient();
 
-      try {
-        const result = await client.instances.qr(id);
-
-        if (!result.qr) {
-          output.warn(result.message);
-          return;
+      const fetchAndShowQr = async (watch: boolean): Promise<boolean> => {
+        const status = await client.instances.status(id);
+        if (status.isConnected) {
+          output.success('Connected!');
+          return true;
         }
+
+        const result = await client.instances.qr(id);
+        if (!result.qr) {
+          output.warn(result.message || 'No QR available');
+          return false;
+        }
+
+        const qrData = result.qr;
 
         if (options.base64 || output.getCurrentFormat() === 'json') {
-          output.data({
-            qr: result.qr,
-            expiresAt: result.expiresAt,
-          });
-        } else {
-          // For terminal, we'd ideally render as ASCII QR
-          // For now, just show the data
-          output.info('QR Code (base64):');
-          output.raw(result.qr);
-          if (result.expiresAt) {
-            output.dim(`Expires: ${result.expiresAt}`);
-          }
+          output.data({ qr: qrData, expiresAt: result.expiresAt });
+          return false;
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to get QR code: ${message}`);
+
+        // biome-ignore lint/suspicious/noConsole: CLI clear screen
+        if (watch) console.clear();
+        if (watch) output.info('Scan with WhatsApp (auto-refreshing, Ctrl+C to stop)\n');
+
+        await new Promise<void>((resolve) => {
+          qrcode.generate(qrData, { small: true }, (qrArt: string) => {
+            output.raw(qrArt);
+            if (result.expiresAt) output.dim(`Expires: ${result.expiresAt}`);
+            resolve();
+          });
+        });
+        return false;
+      };
+
+      const QR_POLL_INTERVAL_MS = 5000;
+
+      if (options.watch) {
+        const poll = async (): Promise<void> => {
+          try {
+            const connected = await fetchAndShowQr(true);
+            if (!connected) setTimeout(poll, QR_POLL_INTERVAL_MS);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            output.error(`Failed to get QR code: ${message}`);
+          }
+        };
+        await poll();
+      } else {
+        try {
+          await fetchAndShowQr(false);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to get QR code: ${message}`);
+        }
       }
     });
 
