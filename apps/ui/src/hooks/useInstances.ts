@@ -27,11 +27,11 @@ export function useInstance(id: string) {
 /**
  * Hook for getting instance status
  */
-export function useInstanceStatus(id: string) {
+export function useInstanceStatus(id: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.instanceStatus(id),
     queryFn: () => getClient().instances.status(id),
-    enabled: !!id,
+    enabled: !!id && enabled,
     refetchInterval: 5000, // Poll every 5 seconds
   });
 }
@@ -135,6 +135,36 @@ export function useLogoutInstance() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.instance(id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.instanceStatus(id) });
+    },
+  });
+}
+
+/**
+ * Hook for pairing an instance via phone number
+ */
+export function usePairInstance() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, phoneNumber }: { id: string; phoneNumber: string }) =>
+      getClient().instances.pair(id, { phoneNumber }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.instanceStatus(variables.id) });
+    },
+  });
+}
+
+/**
+ * Hook for updating an instance
+ */
+export function useUpdateInstance() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => getClient().instances.update(id, data),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.instance(variables.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.instances });
     },
   });
 }

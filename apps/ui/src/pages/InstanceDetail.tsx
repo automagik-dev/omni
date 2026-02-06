@@ -1,3 +1,4 @@
+import { AgentConfigForm } from '@/components/instances/AgentConfigForm';
 import { Header } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -246,31 +247,7 @@ export function InstanceDetail() {
 
           {/* Agent Tab */}
           <TabsContent value="agent">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Bot className="h-5 w-5" />
-                  Agent Configuration
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Agent Provider</p>
-                    <p className="font-mono text-sm">{instance.agentProviderId ?? 'Not configured'}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Agent ID</p>
-                    <p className="font-mono text-sm">{instance.agentId ?? 'Not configured'}</p>
-                  </div>
-                </div>
-                {!instance.agentProviderId && (
-                  <p className="mt-4 text-sm text-muted-foreground">
-                    No agent is configured for this instance. Messages will not be processed automatically.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+            <AgentConfigForm instance={instance} />
           </TabsContent>
 
           {/* Messages Tab */}

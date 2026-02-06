@@ -48,6 +48,7 @@ export const queryKeys = {
   chatsList: (params?: Record<string, unknown>) => [...queryKeys.chats, 'list', params] as const,
   chat: (id: string) => [...queryKeys.chats, id] as const,
   chatMessages: (id: string, params?: Record<string, unknown>) => [...queryKeys.chats, id, 'messages', params] as const,
+  chatParticipants: (id: string) => [...queryKeys.chats, id, 'participants'] as const,
 
   // Events
   events: ['events'] as const,

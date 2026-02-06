@@ -1,29 +1,72 @@
 import { Header } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useInstances } from '@/hooks/useInstances';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import { formatRelativeTime } from '@/lib/utils';
+import { cn, formatRelativeTime } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertCircle, Database, Gauge, MessageSquare, Radio, Server } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  BarChart3,
+  Database,
+  Gauge,
+  MessageSquare,
+  Radio,
+  RefreshCw,
+  Server,
+  TrendingUp,
+  Zap,
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
+
+// Event metrics type from API
+interface EventMetrics {
+  total: number;
+  byType: Record<string, number>;
+  byInstance: Record<string, number>;
+  last24Hours: number;
+  lastHour: number;
+  avgPerMinute: number;
+  avgPerHour: number;
+}
 
 export function Dashboard() {
   // Fetch instances
-  const { data: instances, isLoading: loadingInstances } = useInstances();
+  const { data: instances, isLoading: loadingInstances, refetch: refetchInstances } = useInstances();
 
   // Fetch recent events
-  const { data: events, isLoading: loadingEvents } = useQuery({
-    queryKey: queryKeys.eventsList({ limit: 10 }),
-    queryFn: () => getClient().events.list({ limit: 10 }),
+  const {
+    data: events,
+    isLoading: loadingEvents,
+    refetch: refetchEvents,
+  } = useQuery({
+    queryKey: queryKeys.eventsList({ limit: 20 }),
+    queryFn: () => getClient().events.list({ limit: 20 }),
+  });
+
+  // Fetch event metrics
+  const {
+    data: metrics,
+    isLoading: loadingMetrics,
+    refetch: refetchMetrics,
+    dataUpdatedAt,
+  } = useQuery({
+    queryKey: ['event-metrics'],
+    queryFn: async () => {
+      const data = await getClient().eventOps.metrics();
+      return data as unknown as EventMetrics;
+    },
+    refetchInterval: 30000, // Refresh every 30 seconds
   });
 
   // Fetch system health
-  const { data: health } = useQuery({
+  const { data: health, refetch: refetchHealth } = useQuery({
     queryKey: queryKeys.systemHealth(),
     queryFn: () => getClient().system.health(),
   });
@@ -31,14 +74,47 @@ export function Dashboard() {
   const connectedInstances = instances?.items.filter((i) => i.isActive).length ?? 0;
   const totalInstances = instances?.items.length ?? 0;
 
+  const handleRefreshAll = () => {
+    refetchInstances();
+    refetchEvents();
+    refetchMetrics();
+    refetchHealth();
+  };
+
+  // Get top event types from metrics
+  const topEventTypes = metrics?.byType
+    ? Object.entries(metrics.byType)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+    : [];
+
+  const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
+
   return (
     <>
-      <Header title="Dashboard" subtitle="Overview of your Omni installation" />
+      <Header
+        title="Dashboard"
+        subtitle="Overview of your Omni installation"
+        actions={
+          <div className="flex items-center gap-2">
+            {lastUpdated && (
+              <span className="text-xs text-muted-foreground">
+                Updated {formatRelativeTime(lastUpdated.toISOString())}
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={handleRefreshAll}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
 
       <div className="flex-1 overflow-auto p-6">
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="metrics">Metrics</TabsTrigger>
             <TabsTrigger value="instances">Instances</TabsTrigger>
             <TabsTrigger value="system">System</TabsTrigger>
           </TabsList>
@@ -46,7 +122,7 @@ export function Dashboard() {
           {/* Overview Tab */}
           <TabsContent value="overview">
             {/* Stats cards */}
-            <div className="mb-8 grid gap-4 md:grid-cols-3">
+            <div className="mb-8 grid gap-4 md:grid-cols-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium">Instances</CardTitle>
@@ -61,6 +137,7 @@ export function Dashboard() {
                         {connectedInstances}/{totalInstances}
                       </div>
                       <p className="text-xs text-muted-foreground">connected</p>
+                      <Progress value={connectedInstances} max={totalInstances || 1} className="mt-2 h-1" />
                     </>
                   )}
                 </CardContent>
@@ -68,16 +145,33 @@ export function Dashboard() {
 
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-sm font-medium">Recent Events</CardTitle>
-                  <Activity className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-sm font-medium">Events/Hour</CardTitle>
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  {loadingEvents ? (
+                  {loadingMetrics ? (
                     <Spinner size="sm" />
                   ) : (
                     <>
-                      <div className="text-2xl font-bold">{events?.items.length ?? 0}</div>
-                      <p className="text-xs text-muted-foreground">in last hour</p>
+                      <div className="text-2xl font-bold">{metrics?.avgPerHour?.toFixed(1) ?? '0'}</div>
+                      <p className="text-xs text-muted-foreground">average rate</p>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">Last 24h</CardTitle>
+                  <Activity className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  {loadingMetrics ? (
+                    <Spinner size="sm" />
+                  ) : (
+                    <>
+                      <div className="text-2xl font-bold">{metrics?.last24Hours?.toLocaleString() ?? '0'}</div>
+                      <p className="text-xs text-muted-foreground">total events</p>
                     </>
                   )}
                 </CardContent>
@@ -101,37 +195,168 @@ export function Dashboard() {
               </Card>
             </div>
 
-            {/* Recent events list */}
+            {/* Two column layout */}
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Recent events list */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Recent Events
+                  </CardTitle>
+                  <CardDescription>Latest {events?.items.length ?? 0} events</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {loadingEvents ? (
+                    <div className="flex justify-center py-8">
+                      <Spinner />
+                    </div>
+                  ) : events?.items.length === 0 ? (
+                    <p className="py-8 text-center text-muted-foreground">No recent events</p>
+                  ) : (
+                    <div className="space-y-2 max-h-[400px] overflow-auto">
+                      {events?.items.map((event) => (
+                        <div key={event.id} className="flex items-center justify-between rounded-md border p-3">
+                          <div className="flex items-center gap-3">
+                            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                            <div>
+                              <p className="text-sm font-medium">{event.eventType}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {event.instanceId ? `Instance: ${event.instanceId.slice(0, 8)}...` : 'System'}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-xs text-muted-foreground">{formatRelativeTime(event.receivedAt)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Top event types */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5" />
+                    Event Distribution
+                  </CardTitle>
+                  <CardDescription>Top event types by volume</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {loadingMetrics ? (
+                    <div className="flex justify-center py-8">
+                      <Spinner />
+                    </div>
+                  ) : topEventTypes.length === 0 ? (
+                    <p className="py-8 text-center text-muted-foreground">No event data</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {topEventTypes.map(([type, count]) => {
+                        const total = metrics?.total || 1;
+                        const percentage = Math.round((count / total) * 100);
+                        return (
+                          <div key={type} className="space-y-1">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-medium">{type}</span>
+                              <span className="text-muted-foreground">
+                                {count.toLocaleString()} ({percentage}%)
+                              </span>
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-muted">
+                              <div className="h-full bg-primary transition-all" style={{ width: `${percentage}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* Metrics Tab */}
+          <TabsContent value="metrics">
+            <div className="grid gap-4 md:grid-cols-3 mb-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Zap className="h-4 w-4" />
+                    Events/Minute
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold">{metrics?.avgPerMinute?.toFixed(2) ?? '0'}</div>
+                  <p className="text-xs text-muted-foreground mt-1">average rate</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4" />
+                    Events/Hour
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold">{metrics?.avgPerHour?.toFixed(1) ?? '0'}</div>
+                  <p className="text-xs text-muted-foreground mt-1">average rate</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Activity className="h-4 w-4" />
+                    Total Events
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-3xl font-bold">{metrics?.total?.toLocaleString() ?? '0'}</div>
+                  <p className="text-xs text-muted-foreground mt-1">all time</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Events by type breakdown */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Activity className="h-5 w-5" />
-                  Recent Events
+                  <BarChart3 className="h-5 w-5" />
+                  Events by Type
                 </CardTitle>
+                <CardDescription>Complete breakdown of event types</CardDescription>
               </CardHeader>
               <CardContent>
-                {loadingEvents ? (
+                {loadingMetrics ? (
                   <div className="flex justify-center py-8">
                     <Spinner />
                   </div>
-                ) : events?.items.length === 0 ? (
-                  <p className="py-8 text-center text-muted-foreground">No recent events</p>
+                ) : !metrics?.byType || Object.keys(metrics.byType).length === 0 ? (
+                  <p className="py-8 text-center text-muted-foreground">No event data available</p>
                 ) : (
-                  <div className="space-y-2">
-                    {events?.items.map((event) => (
-                      <div key={event.id} className="flex items-center justify-between rounded-md border p-3">
-                        <div className="flex items-center gap-3">
-                          <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                          <div>
-                            <p className="text-sm font-medium">{event.eventType}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {event.instanceId ? `Instance: ${event.instanceId.slice(0, 8)}...` : 'System'}
-                            </p>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {Object.entries(metrics.byType)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([type, count]) => {
+                        const total = metrics.total || 1;
+                        const percentage = Math.round((count / total) * 100);
+                        return (
+                          <div key={type} className="rounded-lg border p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium truncate">{type}</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {percentage}%
+                              </Badge>
+                            </div>
+                            <div className="text-2xl font-bold">{count.toLocaleString()}</div>
+                            <div className="h-1.5 overflow-hidden rounded-full bg-muted mt-2">
+                              <div className="h-full bg-primary transition-all" style={{ width: `${percentage}%` }} />
+                            </div>
                           </div>
-                        </div>
-                        <span className="text-xs text-muted-foreground">{formatRelativeTime(event.receivedAt)}</span>
-                      </div>
-                    ))}
+                        );
+                      })}
                   </div>
                 )}
               </CardContent>
@@ -146,6 +371,9 @@ export function Dashboard() {
                   <Server className="h-5 w-5" />
                   All Instances
                 </CardTitle>
+                <CardDescription>
+                  {connectedInstances} of {totalInstances} instances connected
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 {loadingInstances ? (
@@ -153,7 +381,13 @@ export function Dashboard() {
                     <Spinner />
                   </div>
                 ) : instances?.items.length === 0 ? (
-                  <p className="py-8 text-center text-muted-foreground">No instances configured</p>
+                  <div className="py-8 text-center">
+                    <Server className="mx-auto h-12 w-12 text-muted-foreground" />
+                    <p className="mt-4 text-muted-foreground">No instances configured</p>
+                    <Link to="/instances">
+                      <Button className="mt-4">Create Instance</Button>
+                    </Link>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {instances?.items.map((instance) => (
@@ -164,7 +398,10 @@ export function Dashboard() {
                       >
                         <div className="flex items-center gap-3">
                           <div
-                            className={`h-2 w-2 rounded-full ${instance.isActive ? 'bg-green-500' : 'bg-muted-foreground'}`}
+                            className={cn(
+                              'h-3 w-3 rounded-full',
+                              instance.isActive ? 'bg-green-500' : 'bg-muted-foreground',
+                            )}
                           />
                           <div>
                             <p className="font-medium">{instance.name}</p>

@@ -4,15 +4,18 @@ import { cn } from '@/lib/utils';
 import {
   Activity,
   BookUser,
+  Bot,
   ChevronLeft,
   ChevronRight,
   FileText,
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  Package,
   Server,
   Settings,
   Users,
+  Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
@@ -29,6 +32,9 @@ const navItems: NavItem[] = [
   { icon: MessageSquare, label: 'Chats', href: '/chats' },
   { icon: Users, label: 'People', href: '/people' },
   { icon: BookUser, label: 'Contacts', href: '/contacts' },
+  { icon: Bot, label: 'Providers', href: '/providers' },
+  { icon: Zap, label: 'Automations', href: '/automations' },
+  { icon: Package, label: 'Batch Jobs', href: '/batch-jobs' },
   { icon: Activity, label: 'Events', href: '/events' },
   { icon: FileText, label: 'Logs', href: '/logs' },
   { icon: Settings, label: 'Settings', href: '/settings' },

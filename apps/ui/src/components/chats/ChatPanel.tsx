@@ -1,5 +1,5 @@
 import { Spinner } from '@/components/ui/spinner';
-import { useSendMessage } from '@/hooks/useChats';
+import { useChatParticipants, useSendMedia, useSendMessage } from '@/hooks/useChats';
 import { flattenAndReverseMessages, useInfiniteMessages } from '@/hooks/useInfiniteMessages';
 import { useInstance } from '@/hooks/useInstances';
 import type { Chat } from '@omni/sdk';
@@ -14,6 +14,9 @@ interface ChatPanelProps {
   onBack: () => void;
 }
 
+// Chat types that are considered group chats (show sender names)
+const GROUP_CHAT_TYPES = ['group', 'channel', 'thread', 'forum', 'community', 'announcement'];
+
 /**
  * Full chat conversation panel
  */
@@ -23,9 +26,12 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
 
   const { data: instance } = useInstance(chat.instanceId);
   const { data, isLoading, isFetchingNextPage, hasNextPage, fetchNextPage } = useInfiniteMessages(chat.id);
+  const { data: participants } = useChatParticipants(chat.id);
   const sendMessage = useSendMessage();
+  const sendMedia = useSendMedia();
 
   const messages = flattenAndReverseMessages(data);
+  const isGroupChat = GROUP_CHAT_TYPES.includes(chat.chatType);
 
   // Scroll to bottom on new messages
   const scrollToBottom = useCallback(() => {
@@ -69,9 +75,29 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
     }
   };
 
+  const handleSendMedia = async (file: File, caption?: string) => {
+    try {
+      await sendMedia.mutateAsync({
+        instanceId: chat.instanceId,
+        to: chat.externalId,
+        file,
+        caption,
+      });
+    } catch {
+      // Error handled by mutation
+    }
+  };
+
+  const error =
+    sendMessage.error instanceof Error
+      ? sendMessage.error.message
+      : sendMedia.error instanceof Error
+        ? sendMedia.error.message
+        : null;
+
   return (
     <div className="flex h-full flex-col">
-      <ChatHeader chat={chat} instance={instance} onBack={onBack} />
+      <ChatHeader chat={chat} instance={instance} onBack={onBack} participantCount={participants?.length} />
 
       {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-auto p-4">
@@ -93,7 +119,12 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
         ) : (
           <div className="space-y-3">
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble
+                key={message.id}
+                message={message}
+                showSenderName={isGroupChat}
+                isGroupChat={isGroupChat}
+              />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -103,8 +134,9 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
       {/* Input */}
       <MessageInput
         onSend={handleSend}
-        disabled={sendMessage.isPending}
-        error={sendMessage.error instanceof Error ? sendMessage.error.message : null}
+        onSendMedia={handleSendMedia}
+        disabled={sendMessage.isPending || sendMedia.isPending}
+        error={error}
       />
     </div>
   );

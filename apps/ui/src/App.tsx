@@ -3,6 +3,8 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { createQueryClient } from '@/lib/query';
 import { isAuthenticated } from '@/lib/sdk';
 import {
+  Automations,
+  BatchJobs,
   ChatView,
   Chats,
   Contacts,
@@ -13,6 +15,7 @@ import {
   Login,
   Logs,
   Persons,
+  Providers,
   Settings,
 } from '@/pages';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -71,6 +74,9 @@ export default function App() {
               <Route path="/chats/:id" element={<ChatView />} />
               <Route path="/people" element={<Persons />} />
               <Route path="/contacts" element={<Contacts />} />
+              <Route path="/providers" element={<Providers />} />
+              <Route path="/automations" element={<Automations />} />
+              <Route path="/batch-jobs" element={<BatchJobs />} />
               <Route path="/events" element={<Events />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />
