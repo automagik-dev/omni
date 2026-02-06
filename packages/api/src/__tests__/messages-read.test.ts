@@ -10,14 +10,12 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError, OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
-import { chats, createDb, instances, messages } from '@omni/db';
+import { chats, instances, messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+import { describeWithDb, getTestDb } from './db-helper';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -62,7 +60,7 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describe('Read Receipt Endpoints', () => {
+describeWithDb('Read Receipt Endpoints', () => {
   let db: Database;
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
@@ -72,7 +70,7 @@ describe('Read Receipt Endpoints', () => {
   const insertedMessageIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
 
     // Create a test instance
     const [instance] = await db

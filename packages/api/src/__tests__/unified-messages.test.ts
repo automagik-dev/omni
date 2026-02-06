@@ -5,20 +5,21 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type Database, createDb, getDefaultDatabaseUrl } from '@omni/db';
+import type { Database } from '@omni/db';
 import { chatParticipants, chats, instances, messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { ChatService } from '../services/chats';
 import { MessageService } from '../services/messages';
+import { describeWithDb, getTestDb } from './db-helper';
 
-describe('Unified Messages', () => {
+describeWithDb('Unified Messages', () => {
   let db: Database;
   let chatService: ChatService;
   let messageService: MessageService;
   let testInstanceId: string;
 
   beforeAll(async () => {
-    db = createDb({ url: process.env.DATABASE_URL ?? getDefaultDatabaseUrl() });
+    db = getTestDb();
     chatService = new ChatService(db, null);
     messageService = new MessageService(db, null);
 

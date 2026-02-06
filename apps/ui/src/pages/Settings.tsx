@@ -1,5 +1,6 @@
 import { Header } from '@/components/layout';
 import { SettingRow } from '@/components/settings';
+import type { SettingOption } from '@/components/settings/SettingRow';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,11 +8,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroupedSettings } from '@/hooks/useSettings';
+import { useVoices } from '@/hooks/useVoices';
 import { queryKeys } from '@/lib/query';
 import { getApiKey, getClient } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { Key, RefreshCw, Server, Settings as SettingsIcon, Sliders } from 'lucide-react';
+import { useMemo } from 'react';
 
 /**
  * Skeleton for settings list
@@ -53,6 +56,26 @@ export function Settings() {
   });
 
   const { grouped, categories, isLoading: loadingSettings } = useGroupedSettings();
+  const { data: voices } = useVoices();
+
+  const voiceOptions = useMemo<SettingOption[]>(
+    () => voices?.map((v) => ({ value: v.voiceId, label: `${v.name} (${v.category})` })) ?? [],
+    [voices],
+  );
+
+  const modelOptions: SettingOption[] = [
+    { value: 'eleven_v3', label: 'Eleven v3 (Latest)' },
+    { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
+    { value: 'eleven_monolingual_v1', label: 'Eleven Monolingual v1' },
+    { value: 'eleven_turbo_v2_5', label: 'Eleven Turbo v2.5' },
+    { value: 'eleven_turbo_v2', label: 'Eleven Turbo v2' },
+  ];
+
+  const optionsForKey = (key: string): SettingOption[] | undefined => {
+    if (key === 'elevenlabs.default_voice') return voiceOptions;
+    if (key === 'elevenlabs.default_model') return modelOptions;
+    return undefined;
+  };
 
   const apiKey = getApiKey();
   const maskedKey = apiKey ? `${apiKey.slice(0, 8)}${'*'.repeat(20)}` : '';
@@ -251,7 +274,7 @@ export function Settings() {
                   <CardContent>
                     <div className="space-y-2">
                       {grouped[category].map((setting) => (
-                        <SettingRow key={setting.key} setting={setting} />
+                        <SettingRow key={setting.key} setting={setting} options={optionsForKey(setting.key)} />
                       ))}
                     </div>
                   </CardContent>
