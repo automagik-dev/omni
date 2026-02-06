@@ -3,9 +3,9 @@
  * Integration test for all message types across channels
  *
  * Configure in .env:
- *   TEST_WHATSAPP_INSTANCE=<instance-id>
- *   TEST_WHATSAPP_RECIPIENT=<jid like 555197285829@s.whatsapp.net>
- *   TEST_DISCORD_INSTANCE=<instance-id>
+ *   TEST_WHATSAPP_INSTANCE=<instance-uuid>
+ *   TEST_WHATSAPP_RECIPIENT=<jid like 5511999990000@s.whatsapp.net>
+ *   TEST_DISCORD_INSTANCE=<instance-uuid>
  *   TEST_DISCORD_CHANNEL=<channel-id>
  *   TEST_PERSON_ID=<person-uuid> (optional, for testing person resolution)
  *
