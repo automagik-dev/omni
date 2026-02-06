@@ -20,6 +20,7 @@ import { createConfigCommand } from './commands/config.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
 import { createInstancesCommand } from './commands/instances.js';
+import { createKeysCommand } from './commands/keys.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMessagesCommand } from './commands/messages.js';
 import { createPayloadsCommand } from './commands/payloads.js';
@@ -97,6 +98,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'AI/LLM providers configuration',
+  },
+  {
+    create: createKeysCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'API key management',
   },
   {
     create: createAccessCommand,
