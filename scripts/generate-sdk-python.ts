@@ -8,6 +8,59 @@ import { join, resolve } from 'node:path';
 import { $ } from 'bun';
 
 /**
+ * Fix package-style imports based on current location.
+ * Converts absolute imports to relative imports.
+ */
+function fixPackageImports(input: string, currentSubpackage: string): string {
+  let result = input;
+  if (currentSubpackage) {
+    // Same package: from omni_generated.api.x -> from .x (when in api/)
+    const samePackagePattern = new RegExp(`from omni_generated\\.${currentSubpackage}\\.`, 'g');
+    result = result.replace(samePackagePattern, 'from .');
+    // Cross-package: from omni_generated.other.x -> from ..other.x
+    result = result.replace(/from omni_generated\./g, 'from ..');
+    result = result.replace(/from omni_generated import /g, 'from .. import ');
+  } else {
+    result = result.replace(/from omni_generated\./g, 'from .');
+    result = result.replace(/from omni_generated import /g, 'from . import ');
+  }
+  // Handle 'import omni_generated.xxx' -> 'from . import xxx'
+  result = result.replace(/import omni_generated\.(\w+)/g, 'from . import $1');
+  return result;
+}
+
+/**
+ * Fix bare 'omni_generated.models' references by adding imports and updating refs.
+ */
+function fixModelsReferences(input: string, currentSubpackage: string): string {
+  if (!input.includes('omni_generated.models')) {
+    return input;
+  }
+  let result = input;
+  const hasModelsImport = result.includes('from . import models') || result.includes('from .. import models');
+  if (!hasModelsImport) {
+    const importLine = currentSubpackage ? 'from .. import models\n' : 'from . import models\n';
+    result = result.replace(/(from typing.*?\n)/, `$1${importLine}`);
+  }
+  return result.replace(/omni_generated\.models/g, 'models');
+}
+
+/**
+ * Process a single Python file to fix its imports.
+ */
+function processPythonFile(filePath: string, currentSubpackage: string): void {
+  let content = readFileSync(filePath, 'utf-8');
+  const original = content;
+
+  content = fixPackageImports(content, currentSubpackage);
+  content = fixModelsReferences(content, currentSubpackage);
+
+  if (content !== original) {
+    writeFileSync(filePath, content);
+  }
+}
+
+/**
  * Recursively fix imports in generated Python files.
  *
  * The OpenAPI generator creates absolute imports like:
@@ -24,59 +77,15 @@ function fixPythonImports(rootDir: string, currentDir?: string): void {
   const dir = currentDir ?? rootDir;
   const entries = readdirSync(dir, { withFileTypes: true });
 
-  // Calculate the relative path from root to determine current subpackage
   const relativePath = dir.slice(rootDir.length).replace(/^\//, '');
-  const currentSubpackage = relativePath.split('/')[0]; // e.g., 'api', 'models', or ''
+  const currentSubpackage = relativePath.split('/')[0];
 
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
-
     if (entry.isDirectory()) {
       fixPythonImports(rootDir, fullPath);
     } else if (entry.name.endsWith('.py')) {
-      let content = readFileSync(fullPath, 'utf-8');
-      const original = content;
-
-      if (currentSubpackage) {
-        // We're in a subpackage (api/, models/, docs/)
-
-        // Same package imports: from omni_generated.api.x -> from .x (when in api/)
-        const samePackagePattern = new RegExp(`from omni_generated\\.${currentSubpackage}\\.`, 'g');
-        content = content.replace(samePackagePattern, 'from .');
-
-        // Cross-package imports: from omni_generated.other.x -> from ..other.x
-        // This handles imports from api/ to models/ or vice versa
-        content = content.replace(/from omni_generated\./g, 'from ..');
-      } else {
-        // We're at root level - simple conversion
-        content = content.replace(/from omni_generated\./g, 'from .');
-      }
-
-      // Handle 'from omni_generated import xxx' -> 'from . import xxx'
-      if (currentSubpackage) {
-        content = content.replace(/from omni_generated import /g, 'from .. import ');
-      } else {
-        content = content.replace(/from omni_generated import /g, 'from . import ');
-      }
-
-      // Handle 'import omni_generated.xxx' -> 'from . import xxx'
-      content = content.replace(/import omni_generated\.(\w+)/g, 'from . import $1');
-
-      // Handle bare 'omni_generated.xxx' references (e.g., in getattr calls)
-      // Need to add proper import and fix references
-      if (content.includes('omni_generated.models')) {
-        // Add models import at top if not present
-        if (!content.includes('from . import models') && !content.includes('from .. import models')) {
-          const importLine = currentSubpackage ? 'from .. import models\n' : 'from . import models\n';
-          // Insert after other imports
-          content = content.replace(/(from typing.*?\n)/, `$1${importLine}`);
-        }
-        content = content.replace(/omni_generated\.models/g, 'models');
-      }
-
-      if (content !== original) {
-        writeFileSync(fullPath, content);
-      }
+      processPythonFile(fullPath, currentSubpackage);
     }
   }
 }

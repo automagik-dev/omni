@@ -2,13 +2,13 @@
  * SDK Client Integration Tests
  *
  * These tests verify the SDK works correctly against a running API.
- * Run with: bun test (with API running at http://localhost:8881)
+ * Run with: bun test (with API running at http://localhost:8882)
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { OmniApiError, type OmniClient, OmniConfigError, createOmniClient } from '../index';
 
-const API_URL = process.env.API_URL || 'http://localhost:8881';
+const API_URL = process.env.API_URL || 'http://localhost:8882';
 const API_KEY = process.env.API_KEY || 'test-key';
 
 describe('createOmniClient', () => {

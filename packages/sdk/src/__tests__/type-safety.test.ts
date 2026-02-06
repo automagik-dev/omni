@@ -2,12 +2,13 @@
  * Type safety verification tests
  *
  * These tests verify that the SDK provides proper TypeScript type safety.
+ * Tests that make API calls require RUN_INTEGRATION_TESTS=1
  */
 
 import { describe, expect, test } from 'bun:test';
 import { createOmniClient } from '../index';
 
-const API_URL = process.env.API_URL || 'http://localhost:8881';
+const API_URL = process.env.API_URL || 'http://localhost:8882';
 const API_KEY = process.env.API_KEY || 'test-key';
 
 const client = createOmniClient({
@@ -15,7 +16,8 @@ const client = createOmniClient({
   apiKey: API_KEY,
 });
 
-describe('SDK Type Safety', () => {
+// Integration tests - require running API
+describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)('SDK Type Safety', () => {
   test('raw client provides typed responses for /health', async () => {
     const result = await client.raw.GET('/health');
 

@@ -45,3 +45,9 @@ coverage/
 # Python
 __pycache__/
 *.pyc
+# Worker worktrees (genie-cli spawns these)
+omni-*/
+# bd worktree
+omni-soi/
+# bd worktree
+omni-j2s/
