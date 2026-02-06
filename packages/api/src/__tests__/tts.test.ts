@@ -6,7 +6,27 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import type { TTSSettingsReader } from '../services/tts';
 import { TTSService } from '../services/tts';
+
+/** Create a mock settings reader that falls back to env vars */
+function createMockSettings(overrides: Record<string, string> = {}): TTSSettingsReader {
+  return {
+    async getSecret(key: string, envFallback?: string) {
+      if (overrides[key]) return overrides[key];
+      if (envFallback) return process.env[envFallback] || undefined;
+      return undefined;
+    },
+    async getString(key: string, envFallback?: string, defaultValue?: string) {
+      if (overrides[key]) return overrides[key];
+      if (envFallback) {
+        const envValue = process.env[envFallback];
+        if (envValue) return envValue;
+      }
+      return defaultValue;
+    },
+  };
+}
 
 describe('TTSService', () => {
   describe('synthesize', () => {
@@ -14,7 +34,7 @@ describe('TTSService', () => {
       const originalKey = process.env.ELEVENLABS_API_KEY;
       process.env.ELEVENLABS_API_KEY = undefined;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         await expect(service.synthesize('Hello world')).rejects.toThrow('ElevenLabs API key not configured');
@@ -35,7 +55,7 @@ describe('TTSService', () => {
         Promise.resolve(new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' })),
       ) as unknown as typeof fetch;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         await expect(service.synthesize('Hello world')).rejects.toThrow('ElevenLabs API error (401)');
@@ -71,7 +91,7 @@ describe('TTSService', () => {
         });
       }) as unknown as typeof fetch;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         // This will succeed the ElevenLabs call but fail at ffmpeg conversion
@@ -122,7 +142,7 @@ describe('TTSService', () => {
         });
       }) as unknown as typeof fetch;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         await service.synthesize('Test');
@@ -166,7 +186,7 @@ describe('TTSService', () => {
         });
       }) as unknown as typeof fetch;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         await service.synthesize('Test');
@@ -198,7 +218,7 @@ describe('TTSService', () => {
         Promise.resolve(new Response('Internal Server Error', { status: 500 })),
       ) as unknown as typeof fetch;
 
-      const service = new TTSService();
+      const service = new TTSService(createMockSettings());
 
       try {
         await service.synthesize('Hello');

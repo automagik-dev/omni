@@ -77,3 +77,26 @@ export function getClientOrNull(): OmniClient | null {
     return null;
   }
 }
+
+/**
+ * Make an authenticated API fetch call.
+ * Used for endpoints not yet in the auto-generated SDK.
+ */
+export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error('Not authenticated');
+  }
+
+  const baseUrl = import.meta.env.VITE_API_URL || window.location.origin;
+  const url = `${baseUrl}/api/v2${path}`;
+
+  return fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      ...options?.headers,
+    },
+  });
+}

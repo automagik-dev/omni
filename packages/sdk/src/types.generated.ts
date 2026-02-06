@@ -556,6 +556,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/messages/tts/voices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List available TTS voices
+         * @description List available ElevenLabs voices for text-to-speech. Results are cached for 5 minutes.
+         */
+        get: operations["listTtsVoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/send/tts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send TTS voice note
+         * @description Convert text to speech using ElevenLabs, shows recording presence, then sends as a voice note.
+         */
+        post: operations["sendTtsMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -2116,6 +2156,62 @@ export interface components {
             text: string;
             /** @description Message ID to reply to */
             replyTo?: string;
+        };
+        TTSVoice: {
+            /** @description ElevenLabs voice ID */
+            voiceId: string;
+            /** @description Voice name */
+            name: string;
+            /** @description Voice category (premade, cloned, etc.) */
+            category: string;
+            /** @description Voice description */
+            description: string | null;
+            /** @description URL to preview audio sample */
+            previewUrl: string | null;
+            /** @description Voice labels (accent, gender, etc.) */
+            labels: {
+                [key: string]: string;
+            };
+        };
+        SendTtsRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID to send from
+             */
+            instanceId: string;
+            /** @description Recipient (phone number or platform ID) */
+            to: string;
+            /** @description Text to convert to speech */
+            text: string;
+            /** @description ElevenLabs voice ID */
+            voiceId?: string;
+            /** @description ElevenLabs model (default: eleven_v3) */
+            modelId?: string;
+            /** @description Voice stability (0-1) */
+            stability?: number;
+            /** @description Similarity boost (0-1) */
+            similarityBoost?: number;
+            /** @description Recording presence duration in ms */
+            presenceDelay?: number;
+        };
+        TtsResponse: {
+            /** @description Internal message ID */
+            messageId: string;
+            /** @description External platform message ID */
+            externalMessageId: string;
+            /** @description Message status */
+            status: string;
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId: string;
+            /** @description Recipient */
+            to: string;
+            /** @description Audio size in KB */
+            audioSizeKb: number;
+            /** @description Audio duration in ms */
+            durationMs: number;
         };
         SendMediaRequest: {
             /**
@@ -6140,6 +6236,172 @@ export interface operations {
                 };
             };
             /** @description Chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listTtsVoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of available voices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            voices: {
+                                /** @description ElevenLabs voice ID */
+                                voiceId: string;
+                                /** @description Voice name */
+                                name: string;
+                                /** @description Voice category (premade, cloned, etc.) */
+                                category: string;
+                                /** @description Voice description */
+                                description: string | null;
+                                /** @description URL to preview audio sample */
+                                previewUrl: string | null;
+                                /** @description Voice labels (accent, gender, etc.) */
+                                labels: {
+                                    [key: string]: string;
+                                };
+                            }[];
+                        };
+                    };
+                };
+            };
+            /** @description ElevenLabs API key not configured */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendTtsMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Instance ID to send from
+                     */
+                    instanceId: string;
+                    /** @description Recipient (phone number or platform ID) */
+                    to: string;
+                    /** @description Text to convert to speech */
+                    text: string;
+                    /** @description ElevenLabs voice ID */
+                    voiceId?: string;
+                    /** @description ElevenLabs model (default: eleven_v3) */
+                    modelId?: string;
+                    /** @description Voice stability (0-1) */
+                    stability?: number;
+                    /** @description Similarity boost (0-1) */
+                    similarityBoost?: number;
+                    /** @description Recording presence duration in ms */
+                    presenceDelay?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description TTS voice note sent */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Internal message ID */
+                            messageId: string;
+                            /** @description External platform message ID */
+                            externalMessageId: string;
+                            /** @description Message status */
+                            status: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /** @description Recipient */
+                            to: string;
+                            /** @description Audio size in KB */
+                            audioSizeKb: number;
+                            /** @description Audio duration in ms */
+                            durationMs: number;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Instance not found */
             404: {
                 headers: {
                     [name: string]: unknown;

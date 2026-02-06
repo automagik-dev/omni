@@ -1095,8 +1095,23 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
 });
 
 // ============================================================================
-// TTS Route (Text-to-Speech)
+// TTS Routes (Text-to-Speech)
 // ============================================================================
+
+/**
+ * GET /messages/tts/voices - List available TTS voices
+ *
+ * Returns available ElevenLabs voices. Results are cached for 5 minutes.
+ */
+messagesRoutes.get('/tts/voices', async (c) => {
+  const services = c.get('services');
+
+  const voices = await services.tts.listVoices();
+
+  return c.json({
+    data: { voices },
+  });
+});
 
 // Send TTS schema
 const sendTtsSchema = z.object({
@@ -1136,10 +1151,10 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
   // Resolve recipient
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  // Synthesize speech
+  // Synthesize speech (request > instance defaults > global defaults)
   const ttsResult = await services.tts.synthesize(data.text, {
-    voiceId: data.voiceId,
-    modelId: data.modelId,
+    voiceId: data.voiceId || instance.ttsVoiceId || undefined,
+    modelId: data.modelId || instance.ttsModelId || undefined,
     stability: data.stability,
     similarityBoost: data.similarityBoost,
   });

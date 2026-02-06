@@ -40,23 +40,120 @@ export interface TTSResult {
 }
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
+const ELEVENLABS_VOICES_URL = 'https://api.elevenlabs.io/v1/voices';
+
+/** Simplified voice info returned from listVoices */
+export interface TTSVoice {
+  voiceId: string;
+  name: string;
+  category: string;
+  description: string | null;
+  previewUrl: string | null;
+  labels: Record<string, string>;
+}
+
+/** In-memory cache for voices list */
+interface VoicesCache {
+  voices: TTSVoice[];
+  expiresAt: number;
+}
+
+/** Settings reader interface — avoids circular dep on SettingsService */
+export interface TTSSettingsReader {
+  getSecret(key: string, envFallback?: string): Promise<string | undefined>;
+  getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | undefined>;
+}
 
 export class TTSService {
+  private voicesCache: VoicesCache | null = null;
+  private static readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  constructor(private settings: TTSSettingsReader) {}
+
+  /**
+   * Get ElevenLabs API key from settings DB or env var
+   */
+  private async getApiKey(): Promise<string> {
+    const apiKey = await this.settings.getSecret('elevenlabs.api_key', 'ELEVENLABS_API_KEY');
+    if (!apiKey) {
+      throw new OmniError({
+        code: ERROR_CODES.VALIDATION,
+        message: 'ElevenLabs API key not configured. Set it in Settings > TTS or via ELEVENLABS_API_KEY env var.',
+        recoverable: false,
+      });
+    }
+    return apiKey;
+  }
+
+  /**
+   * List available ElevenLabs voices.
+   * Results are cached in memory for 5 minutes.
+   */
+  async listVoices(): Promise<TTSVoice[]> {
+    // Return cached if fresh
+    if (this.voicesCache && Date.now() < this.voicesCache.expiresAt) {
+      return this.voicesCache.voices;
+    }
+
+    const apiKey = await this.getApiKey();
+
+    const response = await fetch(ELEVENLABS_VOICES_URL, {
+      headers: { 'xi-api-key': apiKey },
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => 'Unknown error');
+      throw new OmniError({
+        code: ERROR_CODES.CHANNEL_SEND_FAILED,
+        message: `ElevenLabs voices API error (${response.status}): ${errorBody}`,
+        context: { status: response.status },
+        recoverable: response.status >= 500,
+      });
+    }
+
+    const data = (await response.json()) as {
+      voices: Array<{
+        voice_id: string;
+        name: string;
+        category: string;
+        description: string | null;
+        preview_url: string | null;
+        labels: Record<string, string>;
+      }>;
+    };
+
+    const voices: TTSVoice[] = data.voices.map((v) => ({
+      voiceId: v.voice_id,
+      name: v.name,
+      category: v.category,
+      description: v.description,
+      previewUrl: v.preview_url,
+      labels: v.labels ?? {},
+    }));
+
+    this.voicesCache = {
+      voices,
+      expiresAt: Date.now() + TTSService.CACHE_TTL_MS,
+    };
+
+    return voices;
+  }
+
   /**
    * Synthesize text to OGG/Opus audio ready for voice note sending
    */
   async synthesize(text: string, options?: TTSOptions): Promise<TTSResult> {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) {
-      throw new OmniError({
-        code: ERROR_CODES.VALIDATION,
-        message: 'ElevenLabs API key not configured (ELEVENLABS_API_KEY)',
-        recoverable: false,
-      });
-    }
+    const apiKey = await this.getApiKey();
 
-    const voiceId = options?.voiceId || process.env.ELEVENLABS_DEFAULT_VOICE || 'JBFqnCBsd6RMkjVDRZzb';
-    const modelId = options?.modelId || 'eleven_v3';
+    const defaultVoice = await this.settings.getString(
+      'elevenlabs.default_voice',
+      'ELEVENLABS_DEFAULT_VOICE',
+      'JBFqnCBsd6RMkjVDRZzb',
+    );
+    const defaultModel = await this.settings.getString('elevenlabs.default_model', undefined, 'eleven_v3');
+
+    const voiceId = options?.voiceId || defaultVoice || 'JBFqnCBsd6RMkjVDRZzb';
+    const modelId = options?.modelId || defaultModel || 'eleven_v3';
     const stability = options?.stability ?? 0.5;
     const similarityBoost = options?.similarityBoost ?? 0.75;
 

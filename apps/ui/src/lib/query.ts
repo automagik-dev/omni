@@ -85,4 +85,7 @@ export const queryKeys = {
   deadLetters: ['dead-letters'] as const,
   deadLettersList: (params?: Record<string, unknown>) => [...queryKeys.deadLetters, 'list', params] as const,
   deadLetter: (id: string) => [...queryKeys.deadLetters, id] as const,
+
+  // TTS Voices
+  ttsVoices: ['tts-voices'] as const,
 } as const;

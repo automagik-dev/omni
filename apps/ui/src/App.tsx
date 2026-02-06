@@ -19,6 +19,7 @@ import {
   Persons,
   Providers,
   Settings,
+  Voices,
 } from '@/pages';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
@@ -83,6 +84,7 @@ export default function App() {
               <Route path="/dead-letters" element={<DeadLetters />} />
               <Route path="/events" element={<Events />} />
               <Route path="/logs" element={<Logs />} />
+              <Route path="/voices" element={<Voices />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
 

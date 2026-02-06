@@ -321,6 +321,13 @@ async function main() {
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
 
+  // Seed default settings
+  try {
+    await services.settings.seedDefaults();
+  } catch (error) {
+    log.error('Failed to seed default settings', { error: String(error) });
+  }
+
   // Initialize primary API key
   log.info('Initializing API key');
   let apiKeyInfo: { displayKey: string; isNew: boolean; isFromEnv: boolean } | undefined;

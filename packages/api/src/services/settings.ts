@@ -2,10 +2,78 @@
  * Settings service - manages global settings
  */
 
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type GlobalSetting, type SettingValueType, globalSettings, settingChangeHistory } from '@omni/db';
 import { desc, eq } from 'drizzle-orm';
+
+const log = createLogger('settings');
+
+/**
+ * Known default settings that should always exist in the database.
+ * Seeded on API startup so they appear in UI.
+ */
+const DEFAULT_SETTINGS: Array<{
+  key: string;
+  category: string;
+  valueType: SettingValueType;
+  isSecret: boolean;
+  description: string;
+  defaultValue?: string;
+}> = [
+  {
+    key: 'elevenlabs.api_key',
+    category: 'tts',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'ElevenLabs API key for text-to-speech',
+  },
+  {
+    key: 'elevenlabs.default_voice',
+    category: 'tts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default ElevenLabs voice ID',
+    defaultValue: 'JBFqnCBsd6RMkjVDRZzb',
+  },
+  {
+    key: 'elevenlabs.default_model',
+    category: 'tts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default ElevenLabs model',
+    defaultValue: 'eleven_v3',
+  },
+  {
+    key: 'groq.api_key',
+    category: 'media',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'Groq API key for Whisper audio transcription',
+  },
+  {
+    key: 'openai.api_key',
+    category: 'media',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'OpenAI API key (fallback for audio, vision)',
+  },
+  {
+    key: 'gemini.api_key',
+    category: 'media',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'Google Gemini API key (vision, document OCR)',
+  },
+  {
+    key: 'media.default_language',
+    category: 'media',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default language for media processing',
+    defaultValue: 'pt',
+  },
+];
 
 export interface SettingWithHistory extends GlobalSetting {
   history?: Array<{
@@ -169,6 +237,87 @@ export class SettingsService {
     }
 
     return query.orderBy(desc(settingChangeHistory.changedAt));
+  }
+
+  /**
+   * Seed default settings into the database.
+   * Only inserts settings that don't already exist (won't overwrite user values).
+   * Called on API startup.
+   */
+  async seedDefaults(): Promise<number> {
+    let seeded = 0;
+
+    for (const def of DEFAULT_SETTINGS) {
+      const existing = await this.db
+        .select({ key: globalSettings.key })
+        .from(globalSettings)
+        .where(eq(globalSettings.key, def.key))
+        .limit(1);
+
+      if (existing.length === 0) {
+        await this.db.insert(globalSettings).values({
+          key: def.key,
+          value: def.defaultValue ?? null,
+          valueType: def.valueType,
+          category: def.category,
+          description: def.description,
+          isSecret: def.isSecret,
+          defaultValue: def.defaultValue ?? null,
+          createdBy: 'system',
+          updatedBy: 'system',
+        });
+        seeded++;
+      }
+    }
+
+    if (seeded > 0) {
+      log.info('Seeded default settings', { count: seeded });
+    }
+
+    return seeded;
+  }
+
+  /**
+   * Get a secret value, reading from settings DB first, falling back to env var.
+   * Returns the unmasked value (for internal service use only).
+   */
+  async getSecret(key: string, envFallback?: string): Promise<string | undefined> {
+    try {
+      const setting = await this.getByKey(key);
+      if (setting.value) {
+        return setting.value;
+      }
+    } catch {
+      // Setting not found, fall through to env
+    }
+
+    if (envFallback) {
+      return process.env[envFallback] || undefined;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Get a setting value as string, with optional env fallback.
+   * Unlike getSecret, this is for non-secret string values.
+   */
+  async getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | undefined> {
+    try {
+      const setting = await this.getByKey(key);
+      if (setting.value) {
+        return setting.value;
+      }
+    } catch {
+      // Setting not found
+    }
+
+    if (envFallback) {
+      const envValue = process.env[envFallback];
+      if (envValue) return envValue;
+    }
+
+    return defaultValue;
   }
 
   /**

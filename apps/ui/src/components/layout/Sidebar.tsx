@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  Mic,
   Package,
   Server,
   Settings,
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
   { icon: Package, label: 'Batch Jobs', href: '/batch-jobs' },
   { icon: AlertTriangle, label: 'Dead Letters', href: '/dead-letters' },
   { icon: Activity, label: 'Events', href: '/events' },
+  { icon: Mic, label: 'Voices', href: '/voices' },
   { icon: FileText, label: 'Logs', href: '/logs' },
   { icon: Settings, label: 'Settings', href: '/settings' },
 ];
