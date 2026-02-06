@@ -1,7 +1,7 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import type { SearchPersonsParams } from '@omni/sdk';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**
  * Search for persons
@@ -33,5 +33,103 @@ export function usePersonPresence(id: string | undefined) {
     queryKey: [...queryKeys.personsDetail(id!), 'presence'],
     queryFn: () => getClient().persons.presence(id!),
     enabled: !!id,
+  });
+}
+
+/**
+ * Link two identities to the same person
+ */
+export function useLinkIdentities() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ identityA, identityB }: { identityA: string; identityB: string }) => {
+      const client = getClient();
+      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
+      const response = await fetch(`${baseUrl}/api/v2/persons/link`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
+        },
+        body: JSON.stringify({ identityA, identityB }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error?.error?.message || 'Failed to link identities');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['persons'] });
+    },
+  });
+}
+
+/**
+ * Unlink an identity from its person
+ */
+export function useUnlinkIdentity() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ identityId, reason }: { identityId: string; reason: string }) => {
+      const client = getClient();
+      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
+      const response = await fetch(`${baseUrl}/api/v2/persons/unlink`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
+        },
+        body: JSON.stringify({ identityId, reason }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error?.error?.message || 'Failed to unlink identity');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['persons'] });
+    },
+  });
+}
+
+/**
+ * Merge two persons into one
+ */
+export function useMergePersons() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      sourcePersonId,
+      targetPersonId,
+      reason,
+    }: {
+      sourcePersonId: string;
+      targetPersonId: string;
+      reason?: string;
+    }) => {
+      const client = getClient();
+      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
+      const response = await fetch(`${baseUrl}/api/v2/persons/merge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
+        },
+        body: JSON.stringify({ sourcePersonId, targetPersonId, reason }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error?.error?.message || 'Failed to merge persons');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['persons'] });
+    },
   });
 }

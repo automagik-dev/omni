@@ -3,12 +3,14 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { createQueryClient } from '@/lib/query';
 import { isAuthenticated } from '@/lib/sdk';
 import {
+  AccessRules,
   Automations,
   BatchJobs,
   ChatView,
   Chats,
   Contacts,
   Dashboard,
+  DeadLetters,
   Events,
   InstanceDetail,
   Instances,
@@ -77,6 +79,8 @@ export default function App() {
               <Route path="/providers" element={<Providers />} />
               <Route path="/automations" element={<Automations />} />
               <Route path="/batch-jobs" element={<BatchJobs />} />
+              <Route path="/access-rules" element={<AccessRules />} />
+              <Route path="/dead-letters" element={<DeadLetters />} />
               <Route path="/events" element={<Events />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />

@@ -75,4 +75,14 @@ export const queryKeys = {
   automations: ['automations'] as const,
   automationsList: (params?: Record<string, unknown>) => [...queryKeys.automations, 'list', params] as const,
   automation: (id: string) => [...queryKeys.automations, id] as const,
+
+  // Access Rules
+  accessRules: ['access-rules'] as const,
+  accessRulesList: (params?: Record<string, unknown>) => [...queryKeys.accessRules, 'list', params] as const,
+  accessRule: (id: string) => [...queryKeys.accessRules, id] as const,
+
+  // Dead Letters
+  deadLetters: ['dead-letters'] as const,
+  deadLettersList: (params?: Record<string, unknown>) => [...queryKeys.deadLetters, 'list', params] as const,
+  deadLetter: (id: string) => [...queryKeys.deadLetters, id] as const,
 } as const;

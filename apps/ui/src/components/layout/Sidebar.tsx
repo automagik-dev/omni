@@ -3,6 +3,7 @@ import { clearApiKey } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 import {
   Activity,
+  AlertTriangle,
   BookUser,
   Bot,
   ChevronLeft,
@@ -14,6 +15,7 @@ import {
   Package,
   Server,
   Settings,
+  Shield,
   Users,
   Zap,
 } from 'lucide-react';
@@ -34,7 +36,9 @@ const navItems: NavItem[] = [
   { icon: BookUser, label: 'Contacts', href: '/contacts' },
   { icon: Bot, label: 'Providers', href: '/providers' },
   { icon: Zap, label: 'Automations', href: '/automations' },
+  { icon: Shield, label: 'Access Rules', href: '/access-rules' },
   { icon: Package, label: 'Batch Jobs', href: '/batch-jobs' },
+  { icon: AlertTriangle, label: 'Dead Letters', href: '/dead-letters' },
   { icon: Activity, label: 'Events', href: '/events' },
   { icon: FileText, label: 'Logs', href: '/logs' },
   { icon: Settings, label: 'Settings', href: '/settings' },
