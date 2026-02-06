@@ -11,15 +11,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { createDb, omniEvents } from '@omni/db';
+import { omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-
-// Test database URL - use test database or in-memory
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+import { describeWithDb, getTestDb } from './db-helper';
 
 // Use null for instanceId to avoid FK constraint issues in tests
 // In production, events have real instance IDs
@@ -38,13 +35,13 @@ const createTestEvent = (overrides: Partial<NewOmniEvent> = {}): NewOmniEvent =>
   ...overrides,
 });
 
-describe('Events Service', () => {
+describeWithDb('Events Service', () => {
   let db: Database;
   let services: ReturnType<typeof createServices>;
   let insertedEventIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
     services = createServices(db, null);
   });
 
@@ -303,13 +300,13 @@ describe('Events Service', () => {
   });
 });
 
-describe('Events API Routes', () => {
+describeWithDb('Events API Routes', () => {
   let db: Database;
   let app: Hono<{ Variables: AppVariables }>;
   let insertedEventIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
     const services = createServices(db, null);
 
     // Create a minimal test app with events routes

@@ -8,24 +8,22 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import { createDb, omniEvents } from '@omni/db';
+import { omniEvents } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { setupEventPersistence } from '../plugins/event-persistence';
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+import { describeWithDb, getTestDb } from './db-helper';
 
 // Use null for instanceId to avoid FK constraint issues in tests
 // In production, events have real instance IDs
 
-describe('Event Persistence Handler', () => {
+describeWithDb('Event Persistence Handler', () => {
   let db: Database;
   let mockEventBus: EventBus;
   let subscriptions: Map<string, ((event: unknown) => Promise<void>)[]>;
   let insertedEventIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
     subscriptions = new Map();
 
     // Create a mock event bus that tracks subscriptions

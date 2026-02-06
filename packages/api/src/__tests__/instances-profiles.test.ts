@@ -10,14 +10,12 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError, OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
-import { createDb, instances } from '@omni/db';
+import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+import { describeWithDb, getTestDb } from './db-helper';
 
 // Helper to create a mock plugin with configurable methods
 function createMockPlugin(
@@ -69,14 +67,14 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describe('Profile and Contacts Endpoints', () => {
+describeWithDb('Profile and Contacts Endpoints', () => {
   let db: Database;
   let whatsappInstance: Instance;
   let discordInstance: Instance;
   const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
 
     // Create WhatsApp test instance
     const [waInstance] = await db

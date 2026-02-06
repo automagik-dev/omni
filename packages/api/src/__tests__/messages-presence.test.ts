@@ -4,17 +4,15 @@
  * @see api-completeness wish
  */
 
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
 import { OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
-import { createDb, instances } from '@omni/db';
+import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+import { describeWithDb, getTestDb } from './db-helper';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -57,13 +55,13 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describe('POST /messages/send/presence', () => {
+describeWithDb('POST /messages/send/presence', () => {
   let db: Database;
   let testInstance: Instance;
   const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = createDb({ url: TEST_DATABASE_URL });
+    db = getTestDb();
 
     // Create a test instance
     const [instance] = await db
