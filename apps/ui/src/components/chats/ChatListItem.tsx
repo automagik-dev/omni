@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { getChatDisplayName } from '@/lib/chat-utils';
 import { cn, formatRelativeTime, truncate } from '@/lib/utils';
 import type { Chat } from '@omni/sdk';
 import { Hash, Megaphone, MessageCircle, Mic, Radio, User, Users } from 'lucide-react';
@@ -138,7 +139,7 @@ export function ChatListItem({ chat, isSelected = false, onClick }: ChatListItem
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className={cn('truncate font-medium', !isSelected && 'text-foreground')}>
-            {chat.name ?? chat.externalId}
+            {getChatDisplayName(chat)}
           </span>
           <span className={cn('shrink-0 text-xs', secondaryTextClass)}>{formatRelativeTime(chat.updatedAt)}</span>
         </div>

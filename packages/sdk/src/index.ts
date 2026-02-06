@@ -71,6 +71,7 @@ export type {
   AuthValidateResponse,
   // Chat types
   Chat,
+  ChatSettings,
   Message,
   ChatParticipant,
   ListChatsParams,

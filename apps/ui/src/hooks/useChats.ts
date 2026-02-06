@@ -125,3 +125,27 @@ async function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+interface ToggleAgentParams {
+  chatId: string;
+  paused: boolean;
+}
+
+/**
+ * Hook for toggling agent pause state on a chat
+ */
+export function useToggleAgent() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ chatId, paused }: ToggleAgentParams) => {
+      return getClient().chats.update(chatId, {
+        settings: { agentPaused: paused },
+      });
+    },
+    onSuccess: (_, { chatId }) => {
+      // Invalidate the chat to refetch with new settings
+      queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    },
+  });
+}

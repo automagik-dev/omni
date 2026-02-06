@@ -208,6 +208,7 @@ export interface ChatSettings {
   archived?: boolean;
   readOnly?: boolean;
   slowMode?: number; // seconds
+  agentPaused?: boolean; // Pause AI agent responses for this chat
   [key: string]: unknown;
 }
 

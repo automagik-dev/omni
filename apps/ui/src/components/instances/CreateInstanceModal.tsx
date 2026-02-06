@@ -13,6 +13,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { Channel, Instance } from '@omni/sdk';
 import { ArrowLeft, ArrowRight, Check, Phone, QrCode, X } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useState } from 'react';
 
 // Discord icon component
@@ -319,7 +320,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
                       {status?.state === 'qr' && qr?.qr ? (
                         <div className="flex flex-col items-center space-y-4">
                           <div className="rounded-lg bg-white p-4">
-                            <img src={qr.qr} alt="QR Code" className="h-56 w-56" />
+                            <QRCodeSVG value={qr.qr} size={224} level="M" />
                           </div>
                           <div className="text-center">
                             <p className="text-sm font-medium">Scan with WhatsApp</p>

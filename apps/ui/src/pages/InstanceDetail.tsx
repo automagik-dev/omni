@@ -31,6 +31,7 @@ import {
   Webhook,
   Wifi,
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 export function InstanceDetail() {
@@ -204,7 +205,7 @@ export function InstanceDetail() {
                   {status?.state === 'qr' && qr?.qr ? (
                     <div className="space-y-4">
                       <div className="flex justify-center rounded-lg bg-white p-4">
-                        <img src={qr.qr} alt="QR Code" className="h-64 w-64" />
+                        <QRCodeSVG value={qr.qr} size={256} level="M" />
                       </div>
                       <p className="text-center text-sm text-muted-foreground">
                         Scan this QR code with WhatsApp to connect

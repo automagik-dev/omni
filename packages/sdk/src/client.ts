@@ -26,6 +26,17 @@ export type LogEntry = components['schemas']['LogEntry'];
 
 // Types that will be added after SDK regeneration
 // For now, use generic interfaces
+export interface ChatSettings {
+  muted?: boolean;
+  muteUntil?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  readOnly?: boolean;
+  slowMode?: number;
+  agentPaused?: boolean;
+  [key: string]: unknown;
+}
+
 export interface Chat {
   id: string;
   instanceId: string;
@@ -36,6 +47,7 @@ export interface Chat {
   description?: string | null;
   avatarUrl?: string | null;
   isArchived: boolean;
+  settings?: ChatSettings | null;
   createdAt: string;
   updatedAt: string;
 }

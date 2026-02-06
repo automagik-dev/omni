@@ -1,5 +1,5 @@
 import { Spinner } from '@/components/ui/spinner';
-import { useChatParticipants, useSendMedia, useSendMessage } from '@/hooks/useChats';
+import { useChatParticipants, useSendMedia, useSendMessage, useToggleAgent } from '@/hooks/useChats';
 import { flattenAndReverseMessages, useInfiniteMessages } from '@/hooks/useInfiniteMessages';
 import { useInstance } from '@/hooks/useInstances';
 import type { Chat } from '@omni/sdk';
@@ -29,6 +29,9 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
   const { data: participants } = useChatParticipants(chat.id);
   const sendMessage = useSendMessage();
   const sendMedia = useSendMedia();
+  const toggleAgent = useToggleAgent();
+
+  const agentPaused = chat.settings?.agentPaused ?? false;
 
   const messages = flattenAndReverseMessages(data);
   const isGroupChat = GROUP_CHAT_TYPES.includes(chat.chatType);
@@ -88,6 +91,17 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
     }
   };
 
+  const handleToggleAgent = async () => {
+    try {
+      await toggleAgent.mutateAsync({
+        chatId: chat.id,
+        paused: !agentPaused,
+      });
+    } catch {
+      // Error handled by mutation
+    }
+  };
+
   const error =
     sendMessage.error instanceof Error
       ? sendMessage.error.message
@@ -97,7 +111,15 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <ChatHeader chat={chat} instance={instance} onBack={onBack} participantCount={participants?.length} />
+      <ChatHeader
+        chat={chat}
+        instance={instance}
+        onBack={onBack}
+        participantCount={participants?.length}
+        agentPaused={agentPaused}
+        onToggleAgent={handleToggleAgent}
+        agentToggleLoading={toggleAgent.isPending}
+      />
 
       {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-auto p-4">

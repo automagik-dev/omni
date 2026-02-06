@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { getChatDisplayName } from '@/lib/chat-utils';
 import { cn } from '@/lib/utils';
 import type { Chat, Instance } from '@omni/sdk';
 import { ArrowLeft, Bot, BotOff, Hash, Megaphone, MessageCircle, Mic, Radio, User, Users } from 'lucide-react';
@@ -84,7 +85,7 @@ export function ChatHeader({
         {/* Info */}
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="font-semibold">{chat.name ?? chat.externalId}</h2>
+            <h2 className="font-semibold">{getChatDisplayName(chat)}</h2>
             {chat.chatType === 'broadcast' && (
               <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-500/20 text-[10px]">
                 <Megaphone className="mr-1 h-3 w-3" />
