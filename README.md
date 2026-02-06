@@ -2,347 +2,257 @@
 
 > **The universal translator for AI agents to communicate across any messaging platform.**
 
-## Vision
-
-Omni v2 is a complete architectural rebuild focused on:
-
-- **Event-First Architecture** - Every action is an event, enabling real-time processing and complete audit trails
-- **True Plug-and-Play Channels** - Add new messaging platforms in days, not weeks
-- **Omnipresence Identity** - Unified user identity across all platforms ("show me everything from Mom")
-- **LLM-Native Design** - Built-in SDK and CLI optimized for AI agent consumption
-- **Production Scale** - Battle-tested patterns for 100+ instances, thousands of concurrent conversations
-
-## Key Improvements Over v1
-
-| Aspect | v1 (Current) | v2 (New) |
-|--------|--------------|----------|
-| **Language** | Python + TypeScript (mixed) | TypeScript only (unified) |
-| **WhatsApp** | Evolution API fork (problematic) | Baileys direct + Official Cloud API |
-| **Identity** | Basic user linking | Full identity graph with omnipresence |
-| **Events** | Database-centric | Event-driven (NATS JetStream) |
-| **Channels** | Hardcoded handlers | True plugin interface with SDK |
-| **OAuth** | Per-channel implementations | Centralized OAuth manager |
-| **Media** | Inline processing | Event-driven pipeline with retry |
-| **Schema** | SQLAlchemy + Prisma (conflicts) | Drizzle ORM (unified) |
-| **API** | REST only | REST + tRPC (type-safe) |
-| **CLI** | None | LLM-optimized CLI |
-| **SDK** | None | Auto-generated SDKs (TS, Python, Go) |
-
-## API Strategy
-
-```
-/api/v2/*     ← PRIMARY (all new development)
-/api/v1/*     ← COMPATIBILITY LAYER (for current UI during migration)
-```
-
-We're building v2 from scratch. v1 endpoints are thin wrappers that allow the existing React UI to work during migration.
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              OMNI v2                                     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐     │
-│  │   REST API      │    │    tRPC API     │    │   WebSocket     │     │
-│  │   (Hono)        │    │  (Type-safe)    │    │  (Real-time)    │     │
-│  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘     │
-│           │                      │                      │               │
-│  ┌────────┴──────────────────────┴──────────────────────┴────────┐     │
-│  │                     EVENT BUS (NATS JetStream)                 │     │
-│  └────────┬──────────────────────┬──────────────────────┬────────┘     │
-│           │                      │                      │               │
-│  ┌────────▼────────┐    ┌────────▼────────┐    ┌────────▼────────┐     │
-│  │    IDENTITY     │    │     MEDIA       │    │     AGENT       │     │
-│  │     GRAPH       │    │   PIPELINE      │    │    ROUTER       │     │
-│  └─────────────────┘    └─────────────────┘    └─────────────────┘     │
-│                                                                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                         CHANNEL PLUGINS                                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
-│  │ WhatsApp │ │ WhatsApp │ │ Discord  │ │  Slack   │ │ Telegram │      │
-│  │ (Baileys)│ │ (Cloud)  │ │          │ │          │ │          │      │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘      │
-│                                                                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                         DATA LAYER                                       │
-│  ┌──────────────────────────────┐    ┌──────────────────────────────┐  │
-│  │   PostgreSQL (Drizzle ORM)   │    │   NATS KV (Session State)    │  │
-│  └──────────────────────────────┘    └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## Key UI Features to Preserve
-
-The current UI has operational features that v2 must support:
-
-- **Service Management** - Start/stop/restart backend services from UI
-- **Real-Time Logs** - WebSocket streaming of all backend logs
-- **Onboarding Wizard** - Guided setup for new installations
-- **Instance QR Codes** - WhatsApp connection flow
-- **Batch Media Processing** - Reprocess historical audio/images
-
-## MCP Integration
-
-Omni v2 includes a Model Context Protocol (MCP) server for AI assistant integration:
-
-```bash
-# Start MCP server
-bun run mcp:http    # HTTP mode for web clients
-bun run mcp:stdio   # Stdio mode for Claude Desktop
-
-# Available tools
-omni_list_instances, omni_send_message, omni_search_messages,
-omni_search_persons, omni_get_timeline, omni_create_instance...
-```
-
-Supports Claude Desktop, Cursor, VSCode, Windsurf, and any MCP-compatible client.
-
-## Documentation
-
-### Architecture
-- [Architecture Overview](./docs/architecture/overview.md) - High-level system design
-- [Event System](./docs/architecture/event-system.md) - Event-driven architecture with NATS
-- [Identity Graph](./docs/architecture/identity-graph.md) - Omnipresence and cross-channel identity
-- [Plugin System](./docs/architecture/plugin-system.md) - Channel plugin SDK and interface
-
-### API
-- [API Design](./docs/api/design.md) - API philosophy and patterns
-- [REST Endpoints](./docs/api/endpoints.md) - Complete endpoint reference
-- [tRPC Router](./docs/api/trpc.md) - Type-safe API for internal use
-
-### SDK & CLI
-- [TypeScript SDK](./docs/sdk/typescript-sdk.md) - Official SDK documentation
-- [SDK Auto-Generation](./docs/sdk/auto-generation.md) - How SDKs are auto-generated from schemas
-- [CLI Design](./docs/cli/design.md) - LLM-optimized command-line interface
-- [CLI Commands](./docs/cli/commands.md) - Complete command reference
-
-### Media Processing
-- [Media Pipeline](./docs/media/processing.md) - Audio, image, video, document processing
-- [Provider Configuration](./docs/media/providers.md) - Groq, OpenAI, Gemini setup
-
-### Migration
-- [Migration Plan](./docs/migration/plan.md) - v1 to v2 migration strategy
-- [UI Reuse Strategy](./docs/migration/ui-reuse.md) - Reusing the React dashboard
-- [V1 Features Analysis](./docs/migration/v1-features-analysis.md) - What's kept, changed, or dropped
-
 ## Quick Start
 
 ```bash
-# Clone the repository
+# Prerequisites: Bun (https://bun.sh), PM2 (bun add -g pm2)
+
 git clone https://github.com/namastexlabs/omni-v2.git
 cd omni-v2
 
-# See all available commands
-make help
-
-# One-command setup (RECOMMENDED)
+# One-command setup: install deps, create .env, start services, run API
 make setup
-
-# Or step-by-step:
-bun install             # Install dependencies
-make dev-services       # Start PostgreSQL + NATS + API via PM2
-make status             # Check service status
 ```
 
-**Default URLs:**
-- API: http://localhost:8882
-- Swagger Docs: http://localhost:8882/api/v2/docs
-- PostgreSQL: localhost:8432
-- NATS: localhost:4222
+That's it. The API will be running at `http://localhost:8882` with Swagger docs at `/api/v2/docs`.
 
-**Git Hooks:**
-- Pre-commit: Runs `make lint` (blocks commits with lint errors)
-- Pre-push: Runs `make typecheck` (blocks pushes with type errors)
-
-Hooks are automatically installed via `bun install` (Husky prepare script).
-
-## Deployment (PM2)
-
-We use PM2 for production deployment (no containers required).
-
-**Development services managed via `ecosystem.config.cjs`:**
-- `omni-v2-pgserve` - PostgreSQL (pgserve)
-- `omni-v2-nats` - NATS JetStream
-- `omni-v2-api` - API server (uses tsx for Baileys WS compatibility)
+On first boot, the API generates a primary API key and prints it in the startup banner. **Save it** — it's only shown once.
 
 ```bash
-# Start all services
-make dev-services
-
-# View service status
-make status
-
-# Individual service control
-make restart-api      # Restart API only
-make restart-nats     # Restart NATS only
-make restart-pgserve  # Restart PostgreSQL only
-make logs-api         # View API logs
-
-# Stop all services
-make stop
+# Check the API logs for your key
+make logs-api
 ```
 
-**Service URLs:**
-- API: http://localhost:8882 (default, configurable via `API_PORT` in `.env`)
-- Swagger Docs: http://localhost:8882/api/v2/docs
+## Step-by-Step Setup
+
+If you prefer more control:
+
+```bash
+# 1. Install dependencies and create .env
+make install
+
+# 2. (Optional) Edit .env to customize ports or disable managed services
+#    Defaults: API=8882, PostgreSQL=8432, NATS=4222
+
+# 3. Start infrastructure (PostgreSQL + NATS + API via PM2)
+make dev-services
+
+# 4. Check everything is running
+make status
+```
+
+### What `dev-services` starts (via PM2)
+
+| Service | PM2 Name | Default Port | Controlled By |
+|---------|----------|-------------|---------------|
+| PostgreSQL (pgserve) | `omni-v2-pgserve` | 8432 | `PGSERVE_MANAGED=true` |
+| NATS JetStream | `omni-v2-nats` | 4222 | `NATS_MANAGED=true` |
+| API Server | `omni-v2-api` | 8882 | `API_MANAGED=true` |
+
+Set any `*_MANAGED=false` in `.env` if you run that service externally.
+
+### Service Control
+
+```bash
+make status            # View all services and URLs
+make restart-api       # Restart API only
+make restart-nats      # Restart NATS only
+make restart-pgserve   # Restart PostgreSQL only
+make logs-api          # Tail API logs
+make logs              # Tail all logs
+make stop              # Stop everything
+```
+
+## UI (Dashboard)
+
+### Development
+
+```bash
+make dev-ui            # Vite dev server on http://localhost:5173
+                       # Hot reload, proxies /api → localhost:8882
+```
+
+### Production Build
+
+```bash
+make build-ui          # Builds to apps/ui/dist
+make restart-api       # API auto-detects dist/ and serves UI on :8882
+```
+
+In production, everything runs on a single port — the API serves the built UI as a SPA with client-side routing fallback. No separate web server needed.
+
+## CLI
+
+The CLI provides LLM-optimized access to the API.
+
+```bash
+# Run directly from source
+make cli ARGS="--help"
+make cli ARGS="messages list --limit 5"
+
+# Build and link globally (recommended)
+make cli-link          # Builds + links 'omni' command globally
+
+# Then use anywhere
+omni --help
+omni auth login --api-key <your-key>
+omni instances list
+omni messages list --person "Mom" --format json
+omni send --to "+1234567890" --text "Hello"
+```
+
+## SDK
+
+Auto-generated TypeScript SDK from the OpenAPI spec:
+
+```bash
+make sdk-generate      # Regenerate types from current API schema
+```
+
+The SDK lives at `packages/sdk/` and is used by both the CLI and UI.
+
+## Database
+
+```bash
+make db-push           # Push schema changes (development)
+make db-studio         # Open Drizzle Studio (visual DB browser)
+make db-reset          # Reset database (DESTRUCTIVE)
+```
+
+## Quality Checks
+
+```bash
+make check             # Run ALL checks (typecheck + lint + test)
+make typecheck         # TypeScript only
+make lint              # Biome linter
+make lint-fix          # Auto-fix lint issues
+make test              # Run all tests
+make test-api          # API tests only
+make test-file F=path  # Specific test file
+```
+
+**Git hooks** (auto-installed via `bun install`):
+- **Pre-commit**: `make lint` — blocks commits with lint errors
+- **Pre-push**: `make typecheck` — blocks pushes with type errors
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                            OMNI v2                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐          │
+│  │   REST API   │    │   tRPC API   │    │  WebSocket   │          │
+│  │   (Hono)     │    │ (Type-safe)  │    │ (Real-time)  │          │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘          │
+│         │                   │                   │                   │
+│  ┌──────┴───────────────────┴───────────────────┴──────┐           │
+│  │              EVENT BUS (NATS JetStream)              │           │
+│  └──────┬───────────────────┬───────────────────┬──────┘           │
+│         │                   │                   │                   │
+│  ┌──────▼──────┐    ┌──────▼──────┐    ┌──────▼──────┐            │
+│  │  IDENTITY   │    │    MEDIA    │    │    AGENT    │            │
+│  │   GRAPH     │    │  PIPELINE   │    │   ROUTER    │            │
+│  └─────────────┘    └─────────────┘    └─────────────┘            │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                       CHANNEL PLUGINS                               │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │
+│  │ WhatsApp │ │ WhatsApp │ │ Discord  │ │ Telegram │              │
+│  │(Baileys) │ │ (Cloud)  │ │          │ │          │              │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                        DATA LAYER                                   │
+│  ┌────────────────────────────┐  ┌────────────────────────────┐    │
+│  │  PostgreSQL (Drizzle ORM)  │  │  NATS KV (Session State)   │    │
+│  └────────────────────────────┘  └────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ## Project Structure
 
 ```
 omni-v2/
 ├── packages/
-│   ├── core/                    # Core system (events, identity, schemas)
-│   ├── api/                     # HTTP API (Hono + tRPC + OpenAPI)
-│   ├── channel-sdk/             # Plugin SDK → published to npm
-│   │
-│   │   # Official channels (in monorepo)
-│   ├── channel-whatsapp/        # WhatsApp (Baileys + Cloud API)
-│   ├── channel-discord/         # Discord
-│   ├── channel-slack/           # Slack
-│   │
-│   ├── cli/                     # LLM-optimized CLI
-│   ├── sdk/                     # TypeScript SDK (auto-generated)
-│   └── mcp/                     # MCP Server for AI assistants
-│
+│   ├── core/              # Events, identity, schemas (shared)
+│   ├── db/                # Database schema (Drizzle ORM)
+│   ├── api/               # HTTP API (Hono + tRPC + OpenAPI)
+│   ├── channel-sdk/       # Plugin SDK for channel developers
+│   ├── channel-whatsapp/  # WhatsApp (Baileys)
+│   ├── channel-discord/   # Discord
+│   ├── cli/               # LLM-optimized CLI
+│   ├── sdk/               # Auto-generated TypeScript SDK
+│   └── mcp/               # MCP Server for AI assistants
 ├── apps/
-│   └── ui/                      # React dashboard (migrated from v1)
-│
-├── scripts/                     # Build, deploy, SDK generation
-├── docs/                        # Documentation
-└── ecosystem.config.js          # PM2 configuration
+│   └── ui/                # React dashboard (Vite + Tailwind)
+├── scripts/               # Build, deploy, SDK generation
+├── docs/                  # Documentation
+└── ecosystem.config.cjs   # PM2 configuration
 ```
 
-**External/Community Channels** (separate npm packages, not in this repo):
-```
-omni-channel-telegram            # npm install omni-channel-telegram
-omni-channel-matrix              # npm install omni-channel-matrix
-@yourcompany/omni-sms            # Private npm package
-```
+## Environment Variables
 
-## Core Principles
+Copy `.env.example` to `.env` (done automatically by `make install`).
 
-### 1. Event-First
-Every action produces an event. Events are the source of truth.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_PORT` | `8882` | API server port |
+| `API_HOST` | `0.0.0.0` | API bind address |
+| `API_MANAGED` | `true` | PM2 manages the API |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:8432/omni` | PostgreSQL connection |
+| `PGSERVE_MANAGED` | `true` | PM2 manages pgserve |
+| `PGSERVE_PORT` | `8432` | PostgreSQL port |
+| `NATS_URL` | `nats://localhost:4222` | NATS connection |
+| `NATS_MANAGED` | `true` | PM2 manages NATS |
+| `NATS_PORT` | `4222` | NATS port |
+| `OMNI_API_KEY` | *(auto-generated)* | Override primary API key |
 
-```typescript
-// Everything is an event
-await eventBus.publish({
-  type: 'message.received',
-  payload: { ... }
-});
+## MCP Integration
 
-// React to events
-eventBus.subscribe('message.received', async (event) => {
-  // Process message
-});
-```
-
-### 2. Plugin Architecture
-Channels are plugins, not core code. Official channels live in the monorepo; community/custom channels are npm packages.
-
-```typescript
-// omni.config.ts
-export default defineConfig({
-  channels: [
-    // Official (monorepo)
-    '@omni/channel-whatsapp',
-    '@omni/channel-discord',
-
-    // Community (npm install)
-    'omni-channel-telegram',
-
-    // Private/local
-    './plugins/my-custom-channel',
-  ],
-});
-```
-
-See [Plugin System](./docs/architecture/plugin-system.md) for creating external plugins.
-
-### 3. Identity Unification
-One person across all platforms.
-
-```typescript
-// Query across all channels
-const timeline = await identityService.getPersonTimeline(personId, {
-  channels: ['whatsapp', 'discord', 'slack'],
-  since: '2025-01-01',
-});
-```
-
-### 4. LLM-Native
-Designed for AI agent consumption.
+Omni v2 includes a Model Context Protocol server for AI assistant integration:
 
 ```bash
-# CLI optimized for LLM use
-omni messages list --person "Mom" --format json --limit 10
-omni send --to "+1234567890" --text "Hello from CLI"
+bun run mcp:http    # HTTP mode for web clients
+bun run mcp:stdio   # Stdio mode for Claude Desktop
 ```
 
-### 5. Auto-Generated SDKs
-Define schemas once, generate everything else.
+Supports Claude Desktop, Cursor, VSCode, Windsurf, and any MCP-compatible client.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Runtime | Bun |
+| HTTP | Hono |
+| Type-safe API | tRPC + OpenAPI |
+| Database | PostgreSQL + Drizzle ORM |
+| Event Bus | NATS JetStream |
+| Validation | Zod |
+| Frontend | React + Vite + Tailwind |
+| Monorepo | Turborepo |
+| Process Manager | PM2 |
+| Linter | Biome |
+
+## All Make Commands
+
+Run `make help` to see the full list. Key commands:
 
 ```
-Zod Schemas → OpenAPI Spec → TypeScript SDK
-                          → Python SDK
-                          → Go SDK
-                          → API Docs (Swagger)
+make setup           # Full setup (install + services + dev)
+make dev             # Start services + API in watch mode
+make dev-ui          # UI dev server (Vite :5173)
+make dev-services    # Start PostgreSQL + NATS + API via PM2
+make check           # All quality checks
+make build-ui        # Build UI for production
+make sdk-generate    # Regenerate SDK from OpenAPI
+make cli-link        # Build + link CLI globally
+make status          # Service status and URLs
+make logs-api        # View API logs
+make stop            # Stop all services
+make reset           # Full clean and reinstall
 ```
-
-See [SDK Auto-Generation](./docs/sdk/auto-generation.md) for details.
-
-## Technology Stack
-
-| Component | Technology | Rationale |
-|-----------|------------|-----------|
-| Runtime | Bun | Fast, TypeScript-native, built-in test runner |
-| HTTP | Hono | Lightweight, fast, great middleware |
-| Type-safe API | tRPC | End-to-end type safety |
-| Database | PostgreSQL + Drizzle | Type-safe ORM, great DX |
-| Event Bus | NATS JetStream | Lightweight, persistent, exactly-once delivery |
-| WhatsApp | Baileys + Cloud API | Direct WebSocket (unofficial) + Official API |
-| Discord | discord.js | Industry standard |
-| Slack | @slack/bolt | Official SDK |
-| Telegram | grammY | Modern, typed, excellent |
-| Frontend | React + Vite | Reused from v1, proven stack |
-| Monorepo | Turborepo | Fast builds, caching |
-
-## Roadmap
-
-### Phase 1: Foundation (Weeks 1-4)
-- [ ] Core event system with NATS
-- [ ] Zod schemas (single source of truth)
-- [ ] Database schema (Drizzle)
-- [ ] Identity graph implementation
-- [ ] Basic API with OpenAPI generation
-- [ ] WhatsApp Baileys plugin
-
-### Phase 2: Channels (Weeks 5-8)
-- [ ] WhatsApp Cloud API plugin
-- [ ] Discord plugin
-- [ ] Slack plugin (OAuth flow)
-- [ ] Telegram plugin
-- [ ] Plugin SDK documentation
-
-### Phase 3: Features (Weeks 9-12)
-- [ ] Media processing pipeline
-- [ ] Access control system
-- [ ] SDK auto-generation pipeline (TS, Python, Go)
-- [ ] LLM CLI
-- [ ] UI migration with real-time chats
-
-### Phase 4: Production (Weeks 13-16)
-- [ ] Performance optimization
-- [ ] Monitoring and observability
-- [ ] Documentation completion
-- [ ] v1 migration tools
-- [ ] Production deployment
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines.
 
 ## License
 
