@@ -35,9 +35,9 @@ ask_yn() {
   local prompt="$1" default="${2:-y}"
   local yn
   if [[ "$default" == "y" ]]; then
-    printf "${BOLD}?${NC} %s ${DIM}[Y/n]${NC} " "$prompt"
+    printf "${BOLD}?${NC} %s ${DIM}[Y/n]${NC} " "$prompt" >/dev/tty
   else
-    printf "${BOLD}?${NC} %s ${DIM}[y/N]${NC} " "$prompt"
+    printf "${BOLD}?${NC} %s ${DIM}[y/N]${NC} " "$prompt" >/dev/tty
   fi
   read -r yn </dev/tty
   yn="${yn:-$default}"
@@ -47,9 +47,9 @@ ask_yn() {
 ask_input() {
   local prompt="$1" default="${2:-}"
   if [[ -n "$default" ]]; then
-    printf "${BOLD}?${NC} %s ${DIM}[%s]${NC} " "$prompt" "$default"
+    printf "${BOLD}?${NC} %s ${DIM}[%s]${NC} " "$prompt" "$default" >/dev/tty
   else
-    printf "${BOLD}?${NC} %s " "$prompt"
+    printf "${BOLD}?${NC} %s " "$prompt" >/dev/tty
   fi
   local val
   read -r val </dev/tty
@@ -60,9 +60,9 @@ ask_secret() {
   local prompt="$1" default="${2:-}"
   if [[ -n "$default" ]]; then
     local masked="${default:0:10}...${default: -4}"
-    printf "${BOLD}?${NC} %s ${DIM}[%s]${NC} " "$prompt" "$masked"
+    printf "${BOLD}?${NC} %s ${DIM}[%s]${NC} " "$prompt" "$masked" >/dev/tty
   else
-    printf "${BOLD}?${NC} %s " "$prompt"
+    printf "${BOLD}?${NC} %s " "$prompt" >/dev/tty
   fi
   local val
   read -r val </dev/tty
@@ -73,13 +73,13 @@ ask_choice() {
   local prompt="$1"
   shift
   local options=("$@")
-  printf "${BOLD}?${NC} %s\n" "$prompt"
+  printf "${BOLD}?${NC} %s\n" "$prompt" >/dev/tty
   local i=1
   for opt in "${options[@]}"; do
-    printf "  ${CYAN}%d)${NC} %s\n" "$i" "$opt"
+    printf "  ${CYAN}%d)${NC} %s\n" "$i" "$opt" >/dev/tty
     ((i++))
   done
-  printf "${BOLD}?${NC} ${DIM}[1-%d]${NC} " "${#options[@]}"
+  printf "${BOLD}?${NC} ${DIM}[1-%d]${NC} " "${#options[@]}" >/dev/tty
   local choice
   read -r choice </dev/tty
   echo "${choice:-1}"
