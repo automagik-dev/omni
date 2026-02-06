@@ -18,6 +18,7 @@
 
 import type { Channel } from '@omni/sdk';
 import { Command } from 'commander';
+import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
@@ -153,30 +154,48 @@ export function createInstancesCommand(): Command {
     .command('qr <id>')
     .description('Get QR code for WhatsApp instances')
     .option('--base64', 'Output raw base64 instead of ASCII')
-    .action(async (id: string, options: { base64?: boolean }) => {
+    .option('--watch', 'Auto-refresh QR until connected')
+    .action(async (id: string, options: { base64?: boolean; watch?: boolean }) => {
       const client = getClient();
 
-      try {
-        const result = await client.instances.qr(id);
+      const fetchAndShowQr = async (watch: boolean): Promise<boolean> => {
+        const status = await client.instances.status(id);
+        if (status.isConnected) {
+          output.success('Connected!');
+          return true;
+        }
 
+        const result = await client.instances.qr(id);
         if (!result.qr) {
-          output.warn(result.message);
-          return;
+          output.warn(result.message || 'No QR available');
+          return false;
         }
 
         if (options.base64 || output.getCurrentFormat() === 'json') {
-          output.data({
-            qr: result.qr,
-            expiresAt: result.expiresAt,
-          });
+          output.data({ qr: result.qr, expiresAt: result.expiresAt });
+          return false;
+        }
+
+        // biome-ignore lint/suspicious/noConsole: CLI clear screen
+        if (watch) console.clear();
+        if (watch) output.info('Scan with WhatsApp (auto-refreshing, Ctrl+C to stop)\n');
+
+        qrcode.generate(result.qr, { small: true }, (qrArt: string) => {
+          output.raw(qrArt);
+          if (result.expiresAt) output.dim(`Expires: ${result.expiresAt}`);
+        });
+        return false;
+      };
+
+      try {
+        if (options.watch) {
+          const poll = async (): Promise<void> => {
+            const connected = await fetchAndShowQr(true);
+            if (!connected) setTimeout(poll, 5000);
+          };
+          await poll();
         } else {
-          // For terminal, we'd ideally render as ASCII QR
-          // For now, just show the data
-          output.info('QR Code (base64):');
-          output.raw(result.qr);
-          if (result.expiresAt) {
-            output.dim(`Expires: ${result.expiresAt}`);
-          }
+          await fetchAndShowQr(false);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
