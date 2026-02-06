@@ -225,6 +225,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached contacts from sync events per instance */
   private contactsCache = new Map<string, Map<string, SyncContact>>();
 
+  /** Cached group metadata (subject/name) per instance */
+  private groupsCache = new Map<string, Map<string, { subject: string; desc?: string }>>();
+
+  /** Cached chat display names per instance (for DMs from chats.upsert) */
+  private chatNamesCache = new Map<string, Map<string, string>>();
+
   /**
    * Plugin-specific initialization
    */
@@ -1266,6 +1272,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (content.contact) extendedPayload.contact = content.contact;
     if (content.targetMessageId) extendedPayload.targetMessageId = content.targetMessageId;
 
+    // Add chatName from cached group/chat metadata
+    this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);
+
     await this.emitMessageReceived({
       instanceId,
       externalId,
@@ -1441,18 +1450,47 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle chats upsert (new chats)
+   * Caches chat display names for later use when emitting messages
    * @internal
    */
-  handleChatsUpsert(_instanceId: string, _chats: unknown[]): void {
-    // TODO: Emit chats.upsert event
+  handleChatsUpsert(instanceId: string, chats: unknown[]): void {
+    let cache = this.chatNamesCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.chatNamesCache.set(instanceId, cache);
+    }
+
+    for (const chat of chats) {
+      // Baileys Chat type extends IConversation which has displayName
+      const c = chat as { id?: string; displayName?: string; name?: string };
+      if (c.id) {
+        const name = c.displayName || c.name;
+        if (name) {
+          cache.set(c.id, name);
+          this.logger.debug('Cached chat name', { instanceId, chatId: c.id, name });
+        }
+      }
+    }
   }
 
   /**
    * Handle chats update
+   * Updates cached chat display names
    * @internal
    */
-  handleChatsUpdate(_instanceId: string, _updates: unknown[]): void {
-    // TODO: Emit chats.update event
+  handleChatsUpdate(instanceId: string, updates: unknown[]): void {
+    const cache = this.chatNamesCache.get(instanceId);
+    if (!cache) return;
+
+    for (const update of updates) {
+      const u = update as { id?: string; displayName?: string; name?: string };
+      if (!u.id) continue;
+
+      const name = u.displayName || u.name;
+      if (name) {
+        cache.set(u.id, name);
+      }
+    }
   }
 
   /**
@@ -1555,18 +1593,47 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle groups upsert (new groups)
+   * Caches group metadata for later use when emitting messages
    * @internal
    */
-  handleGroupsUpsert(_instanceId: string, _groups: unknown[]): void {
-    // TODO: Emit groups.upsert event
+  handleGroupsUpsert(instanceId: string, groups: unknown[]): void {
+    let cache = this.groupsCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.groupsCache.set(instanceId, cache);
+    }
+
+    for (const group of groups) {
+      const g = group as { id?: string; subject?: string; desc?: string };
+      if (g.id && g.subject) {
+        cache.set(g.id, { subject: g.subject, desc: g.desc });
+        this.logger.debug('Cached group metadata', { instanceId, groupId: g.id, subject: g.subject });
+      }
+    }
   }
 
   /**
    * Handle groups update
+   * Updates cached group metadata
    * @internal
    */
-  handleGroupsUpdate(_instanceId: string, _updates: unknown[]): void {
-    // TODO: Emit groups.update event
+  handleGroupsUpdate(instanceId: string, updates: unknown[]): void {
+    const cache = this.groupsCache.get(instanceId);
+    if (!cache) return;
+
+    for (const update of updates) {
+      const u = update as { id?: string; subject?: string; desc?: string };
+      if (!u.id) continue;
+
+      const existing = cache.get(u.id);
+      if (existing) {
+        if (u.subject) existing.subject = u.subject;
+        if (u.desc !== undefined) existing.desc = u.desc;
+        cache.set(u.id, existing);
+      } else if (u.subject) {
+        cache.set(u.id, { subject: u.subject, desc: u.desc });
+      }
+    }
   }
 
   /**
@@ -1694,6 +1761,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // No active sync job - this is initial connection history sync
       // Emit the message so it gets stored in the database
       // Note: We store isFromMe messages too for history completeness
+
+      // Build rawPayload with chatName from cache
+      const rawPayload: Record<string, unknown> = {
+        ...(msg as unknown as Record<string, unknown>),
+      };
+      this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
+
       await this.emitMessageReceived({
         instanceId,
         externalId: msg.key.id,
@@ -1705,8 +1779,27 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           mediaUrl: content.mediaUrl,
           mimeType: content.mimeType,
         },
-        rawPayload: msg as unknown as Record<string, unknown>,
+        rawPayload,
       });
+    }
+  }
+
+  /**
+   * Enrich rawPayload with chat name from cached group/chat metadata
+   * @internal
+   */
+  private enrichPayloadWithChatName(payload: Record<string, unknown>, instanceId: string, chatId: string): void {
+    if (chatId.includes('@g.us')) {
+      const group = this.groupsCache.get(instanceId)?.get(chatId);
+      if (group?.subject) {
+        payload.chatName = group.subject;
+        payload.isGroup = true;
+      }
+    } else {
+      const chatName = this.chatNamesCache.get(instanceId)?.get(chatId);
+      if (chatName) {
+        payload.chatName = chatName;
+      }
     }
   }
 

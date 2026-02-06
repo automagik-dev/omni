@@ -230,11 +230,24 @@ async function handleMessageReceived(
   const rawPayload = payload.rawPayload;
 
   // Step 1: Find or create chat
-  const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
-    chatType: inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined),
+  const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
+  // For DMs, use pushName as chat name since it's the contact's WhatsApp display name
+  // For groups, chatName would come from group subject (handled separately)
+  const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
+  const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
+  const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
+
+  const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
+    chatType,
     channel,
-    name: truncate(rawPayload?.chatName as string | undefined, 255),
+    name: effectiveName,
   });
+
+  // Update chat name if it's missing and we have a pushName (for DMs)
+  if (!chatCreated && !chat.name && chatType === 'dm' && pushName) {
+    await services.chats.update(chat.id, { name: pushName });
+    chat.name = pushName; // Update local reference
+  }
 
   // Step 2: Process sender identity (before participant, so we have IDs)
   const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
