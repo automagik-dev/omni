@@ -120,6 +120,32 @@ function MessageContent({ message, isFromMe }: { message: ExtendedMessage; isFro
     );
   }
 
+  if (message.videoDescription) {
+    return (
+      <div className="space-y-1">
+        <p className="whitespace-pre-wrap break-words">{message.videoDescription}</p>
+        <span
+          className={cn('text-[10px] italic', isFromMe ? 'text-primary-foreground/50' : 'text-muted-foreground/70')}
+        >
+          (video description)
+        </span>
+      </div>
+    );
+  }
+
+  if (message.documentExtraction) {
+    return (
+      <div className="space-y-1">
+        <p className="whitespace-pre-wrap break-words line-clamp-6">{message.documentExtraction}</p>
+        <span
+          className={cn('text-[10px] italic', isFromMe ? 'text-primary-foreground/50' : 'text-muted-foreground/70')}
+        >
+          (document extraction)
+        </span>
+      </div>
+    );
+  }
+
   // Fallback: show message type
   return (
     <p className={cn('italic', isFromMe ? 'text-primary-foreground/70' : 'text-muted-foreground')}>

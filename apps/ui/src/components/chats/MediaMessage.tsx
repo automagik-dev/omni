@@ -8,21 +8,57 @@ interface MediaMessageProps {
 }
 
 /**
+ * Inline processed content (transcription/description) shown below media
+ */
+function ProcessedContent({ message, isFromMe }: { message: ExtendedMessage; isFromMe: boolean }) {
+  const text =
+    message.transcription || message.imageDescription || message.videoDescription || message.documentExtraction;
+  if (!text) return null;
+
+  const label = message.transcription
+    ? 'transcribed'
+    : message.imageDescription
+      ? 'image description'
+      : message.videoDescription
+        ? 'video description'
+        : 'document extraction';
+
+  return (
+    <div className="mt-2 space-y-0.5">
+      <p className={cn('text-xs whitespace-pre-wrap break-words', message.transcription ? '' : 'line-clamp-4')}>
+        {text}
+      </p>
+      <span className={cn('text-[10px] italic', isFromMe ? 'text-primary-foreground/50' : 'text-muted-foreground/70')}>
+        ({label})
+      </span>
+    </div>
+  );
+}
+
+/**
  * Render media content based on message type
  */
 export function MediaMessage({ message, isFromMe }: MediaMessageProps) {
   const { messageType, mediaUrl, mediaMimeType, mediaMetadata, textContent } = message;
 
+  let mediaElement: React.ReactNode;
+
   // Handle each media type
   switch (messageType) {
     case 'image':
-      return <ImageContent url={mediaUrl} caption={textContent} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      mediaElement = <ImageContent url={mediaUrl} caption={textContent} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      break;
     case 'video':
-      return <VideoContent url={mediaUrl} caption={textContent} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      mediaElement = <VideoContent url={mediaUrl} caption={textContent} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      break;
     case 'audio':
-      return <AudioContent url={mediaUrl} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      mediaElement = <AudioContent url={mediaUrl} metadata={mediaMetadata} isFromMe={isFromMe} />;
+      break;
     case 'document':
-      return <DocumentContent url={mediaUrl} metadata={mediaMetadata} mimeType={mediaMimeType} isFromMe={isFromMe} />;
+      mediaElement = (
+        <DocumentContent url={mediaUrl} metadata={mediaMetadata} mimeType={mediaMimeType} isFromMe={isFromMe} />
+      );
+      break;
     case 'sticker':
       return <StickerContent url={mediaUrl} metadata={mediaMetadata} />;
     case 'location':
@@ -32,6 +68,13 @@ export function MediaMessage({ message, isFromMe }: MediaMessageProps) {
     default:
       return <FallbackMedia messageType={messageType} isFromMe={isFromMe} />;
   }
+
+  return (
+    <div>
+      {mediaElement}
+      <ProcessedContent message={message} isFromMe={isFromMe} />
+    </div>
+  );
 }
 
 // Image message
