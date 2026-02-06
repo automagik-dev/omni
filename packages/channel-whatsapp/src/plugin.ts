@@ -1253,14 +1253,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     rawMessage: WAMessage,
     isFromMe: boolean,
   ): Promise<void> {
-    // Skip messages from self (already sent via sendMessage)
-    if (isFromMe) {
-      return;
-    }
+    // Note: We process fromMe messages to capture messages sent from the phone
+    // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
 
     // Build extended raw payload with structured content data
     const extendedPayload: Record<string, unknown> = {
       ...(rawMessage as unknown as Record<string, unknown>),
+      isFromMe, // Include for message-persistence to use
     };
 
     // Add structured extended fields if present
@@ -1304,9 +1303,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     targetMessageId: string,
     isFromMe: boolean,
   ): Promise<void> {
-    if (isFromMe) {
-      return;
-    }
+    // Note: We process fromMe reactions to capture reactions made from the phone
 
     await this.emitMessageReceived({
       instanceId,
@@ -1317,7 +1314,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         type: 'reaction',
         text: emoji,
       },
-      rawPayload: { targetMessageId },
+      rawPayload: { targetMessageId, isFromMe },
     });
   }
 

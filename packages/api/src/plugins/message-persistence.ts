@@ -275,7 +275,7 @@ async function handleMessageReceived(
     senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
     senderPersonId: personId,
     senderPlatformIdentityId: platformIdentityId,
-    isFromMe: false,
+    isFromMe: rawPayload?.isFromMe === true,
     hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
     mediaMimeType: truncate(payload.content.mimeType, 100),
     mediaUrl: payload.content.mediaUrl,

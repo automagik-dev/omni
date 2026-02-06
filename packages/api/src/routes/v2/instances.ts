@@ -954,23 +954,45 @@ instancesRoutes.get('/:id/contacts', zValidator('query', listContactsQuerySchema
       }
     ).fetchContacts(id, fetchOptions);
 
-    // Apply limit for non-Discord (WhatsApp returns all cached contacts)
-    const contacts = result.contacts.slice(0, limit);
+    // If plugin returns contacts, use them
+    if (result.contacts.length > 0) {
+      const contacts = result.contacts.slice(0, limit);
+
+      return c.json({
+        items: contacts.map((contact) => ({
+          platformUserId: contact.platformUserId,
+          displayName: contact.name,
+          phone: contact.phone,
+          avatarUrl: contact.profilePicUrl,
+          isGroup: contact.isGroup,
+          isBusiness: contact.isBusiness,
+          platformMetadata: contact.metadata,
+        })),
+        meta: {
+          totalFetched: result.totalFetched,
+          hasMore: contacts.length < result.contacts.length,
+          cursor: undefined,
+        },
+      });
+    }
+
+    // Fallback: get contacts from stored platform identities
+    const identitiesResult = await services.persons.listIdentitiesByInstance(id, { limit });
 
     return c.json({
-      items: contacts.map((contact) => ({
-        platformUserId: contact.platformUserId,
-        displayName: contact.name,
-        phone: contact.phone,
-        avatarUrl: contact.profilePicUrl,
-        isGroup: contact.isGroup,
-        isBusiness: contact.isBusiness,
-        platformMetadata: contact.metadata,
+      items: identitiesResult.items.map((identity) => ({
+        platformUserId: identity.platformUserId,
+        displayName: identity.platformUsername,
+        phone: identity.platformUserId.includes('@s.whatsapp.net') ? identity.platformUserId.split('@')[0] : undefined,
+        avatarUrl: identity.profilePicUrl,
+        isGroup: identity.platformUserId.includes('@g.us'),
+        isBusiness: undefined,
+        platformMetadata: identity.profileData as Record<string, unknown> | undefined,
       })),
       meta: {
-        totalFetched: result.totalFetched,
-        hasMore: contacts.length < result.contacts.length,
-        cursor: undefined, // TODO: implement pagination cursor
+        totalFetched: identitiesResult.items.length,
+        hasMore: identitiesResult.hasMore,
+        cursor: identitiesResult.cursor,
       },
     });
   } catch (error) {

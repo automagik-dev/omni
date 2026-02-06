@@ -390,6 +390,41 @@ export class PersonService {
   }
 
   /**
+   * List identities for an instance (used as fallback for contacts)
+   */
+  async listIdentitiesByInstance(
+    instanceId: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<{ items: PlatformIdentity[]; hasMore: boolean; cursor?: string }> {
+    const { limit = 100, cursor } = options;
+    const fetchLimit = limit + 1;
+
+    const conditions = [eq(platformIdentities.instanceId, instanceId)];
+    if (cursor) {
+      conditions.push(sql`${platformIdentities.createdAt} < ${cursor}`);
+    }
+
+    const items = await this.db
+      .select()
+      .from(platformIdentities)
+      .where(and(...conditions))
+      .orderBy(desc(platformIdentities.createdAt))
+      .limit(fetchLimit);
+
+    const hasMore = items.length > limit;
+    if (hasMore) {
+      items.pop();
+    }
+
+    const lastItem = items[items.length - 1];
+    return {
+      items,
+      hasMore,
+      cursor: lastItem?.createdAt.toISOString(),
+    };
+  }
+
+  /**
    * Update identity profile data (avatar, bio, platform-specific data)
    */
   async updateIdentityProfile(
