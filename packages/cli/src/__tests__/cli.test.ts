@@ -22,8 +22,8 @@ import { join } from 'node:path';
 import { spawn } from 'bun';
 
 const CLI_PATH = join(import.meta.dir, '../../bin/omni');
-const API_URL = process.env.API_URL || 'http://localhost:8881';
-const API_KEY = process.env.API_KEY || 'test-key';
+const API_URL = process.env.API_URL || 'http://localhost:8882';
+const API_KEY = process.env.OMNI_API_KEY || process.env.API_KEY || 'test-key';
 
 // Temp config dir for tests
 const TEST_CONFIG_DIR = join(tmpdir(), `.omni-test-${Date.now()}`);
