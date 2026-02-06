@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { OmniApiError, type OmniClient, OmniConfigError, createOmniClient } from '../index';
 
 const API_URL = process.env.API_URL || 'http://localhost:8882';
-const API_KEY = process.env.API_KEY || 'test-key';
+const API_KEY = process.env.OMNI_API_KEY || process.env.API_KEY || 'test-key';
 
 describe('createOmniClient', () => {
   test('throws OmniConfigError when baseUrl is missing', () => {
