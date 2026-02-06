@@ -171,8 +171,10 @@ export function createInstancesCommand(): Command {
           return false;
         }
 
+        const qrData = result.qr;
+
         if (options.base64 || output.getCurrentFormat() === 'json') {
-          output.data({ qr: result.qr, expiresAt: result.expiresAt });
+          output.data({ qr: qrData, expiresAt: result.expiresAt });
           return false;
         }
 
@@ -180,26 +182,36 @@ export function createInstancesCommand(): Command {
         if (watch) console.clear();
         if (watch) output.info('Scan with WhatsApp (auto-refreshing, Ctrl+C to stop)\n');
 
-        qrcode.generate(result.qr, { small: true }, (qrArt: string) => {
-          output.raw(qrArt);
-          if (result.expiresAt) output.dim(`Expires: ${result.expiresAt}`);
+        await new Promise<void>((resolve) => {
+          qrcode.generate(qrData, { small: true }, (qrArt: string) => {
+            output.raw(qrArt);
+            if (result.expiresAt) output.dim(`Expires: ${result.expiresAt}`);
+            resolve();
+          });
         });
         return false;
       };
 
-      try {
-        if (options.watch) {
-          const poll = async (): Promise<void> => {
+      const QR_POLL_INTERVAL_MS = 5000;
+
+      if (options.watch) {
+        const poll = async (): Promise<void> => {
+          try {
             const connected = await fetchAndShowQr(true);
-            if (!connected) setTimeout(poll, 5000);
-          };
-          await poll();
-        } else {
+            if (!connected) setTimeout(poll, QR_POLL_INTERVAL_MS);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            output.error(`Failed to get QR code: ${message}`);
+          }
+        };
+        await poll();
+      } else {
+        try {
           await fetchAndShowQr(false);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to get QR code: ${message}`);
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to get QR code: ${message}`);
       }
     });
 
