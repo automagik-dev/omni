@@ -63,8 +63,8 @@ export const queryKeys = {
 
   // Persons
   persons: ['persons'] as const,
-  personSearch: (search: string) => [...queryKeys.persons, 'search', search] as const,
-  person: (id: string) => [...queryKeys.persons, id] as const,
+  personsList: (params?: Record<string, unknown>) => [...queryKeys.persons, 'list', params] as const,
+  personsDetail: (id: string) => [...queryKeys.persons, id] as const,
 
   // Settings
   settings: ['settings'] as const,

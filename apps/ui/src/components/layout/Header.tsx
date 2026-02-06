@@ -1,7 +1,9 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
+import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 
@@ -32,6 +34,9 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
       <div className="flex items-center gap-4">
         {actions}
 
+        {/* Theme toggle */}
+        <ThemeToggle />
+
         {/* System status */}
         <div className="flex items-center gap-2">
           <Badge variant={health?.status === 'healthy' ? 'success' : 'destructive'}>
@@ -44,8 +49,4 @@ export function Header({ title, subtitle, actions }: HeaderProps) {
       </div>
     </header>
   );
-}
-
-function cn(...classes: (string | boolean | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
 }

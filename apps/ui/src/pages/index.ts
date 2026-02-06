@@ -4,6 +4,8 @@ export { Instances } from './Instances';
 export { InstanceDetail } from './InstanceDetail';
 export { Chats } from './Chats';
 export { ChatView } from './ChatView';
+export { Persons } from './Persons';
+export { Contacts } from './Contacts';
 export { Events } from './Events';
 export { Logs } from './Logs';
 export { Settings } from './Settings';
