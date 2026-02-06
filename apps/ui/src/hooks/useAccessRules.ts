@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/toaster';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import type { CreateAccessRuleBody, ListAccessRulesParams } from '@omni/sdk';
@@ -23,6 +24,10 @@ export function useCreateAccessRule() {
     mutationFn: (body: CreateAccessRuleBody) => getClient().access.createRule(body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['access-rules'] });
+      toast.success('Access rule created');
+    },
+    onError: (error) => {
+      toast.error(`Failed to create rule: ${error instanceof Error ? error.message : 'Unknown error'}`);
     },
   });
 }
@@ -37,6 +42,10 @@ export function useDeleteAccessRule() {
     mutationFn: (id: string) => getClient().access.deleteRule(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['access-rules'] });
+      toast.success('Access rule deleted');
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete rule: ${error instanceof Error ? error.message : 'Unknown error'}`);
     },
   });
 }

@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/toaster';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import type { ListDeadLettersParams, ResolveDeadLetterBody } from '@omni/sdk';
@@ -35,6 +36,10 @@ export function useRetryDeadLetter() {
     mutationFn: (id: string) => getClient().deadLetters.retry(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.deadLetters });
+      toast.success('Dead letter queued for retry');
+    },
+    onError: (error) => {
+      toast.error(`Failed to retry: ${error instanceof Error ? error.message : 'Unknown error'}`);
     },
   });
 }
@@ -50,6 +55,10 @@ export function useResolveDeadLetter() {
       getClient().deadLetters.resolve(id, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.deadLetters });
+      toast.success('Dead letter marked as resolved');
+    },
+    onError: (error) => {
+      toast.error(`Failed to resolve: ${error instanceof Error ? error.message : 'Unknown error'}`);
     },
   });
 }
@@ -64,6 +73,10 @@ export function useAbandonDeadLetter() {
     mutationFn: (id: string) => getClient().deadLetters.abandon(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.deadLetters });
+      toast.success('Dead letter abandoned');
+    },
+    onError: (error) => {
+      toast.error(`Failed to abandon: ${error instanceof Error ? error.message : 'Unknown error'}`);
     },
   });
 }

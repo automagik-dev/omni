@@ -1,4 +1,5 @@
 import { Shell } from '@/components/layout';
+import { Toaster } from '@/components/ui/toaster';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { createQueryClient } from '@/lib/query';
 import { isAuthenticated } from '@/lib/sdk';
@@ -90,6 +91,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        <Toaster />
       </ThemeProvider>
     </QueryClientProvider>
   );
