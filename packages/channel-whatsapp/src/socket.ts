@@ -7,6 +7,7 @@
 
 import type { AuthenticationState, WASocket } from '@whiskeysockets/baileys';
 import {
+  Browsers,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   default as makeWASocket,
@@ -52,7 +53,7 @@ export interface SocketConfig {
  */
 export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
   logLevel: 'warn',
-  browser: ['Omni', 'Chrome', '120.0.0'],
+  browser: Browsers.ubuntu('Chrome'),
   mobile: false,
   connectTimeoutMs: 60_000,
   defaultQueryTimeoutMs: 60_000,

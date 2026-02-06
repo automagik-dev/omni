@@ -62,12 +62,12 @@ if (natsManaged) {
   });
 }
 
-// API server (uses tsx for Baileys WebSocket compatibility)
+// API server (uses Bun runtime for Baileys + Hono compatibility)
 if (apiManaged) {
   apps.push({
     name: 'omni-v2-api',
-    script: 'npx',
-    args: 'tsx watch packages/api/src/index.ts',
+    script: 'bun',
+    args: '--watch packages/api/src/index.ts',
     cwd: __dirname,
     env: {
       NODE_ENV: 'development',
