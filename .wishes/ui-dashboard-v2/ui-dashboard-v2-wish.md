@@ -2,10 +2,40 @@
 
 > Complete redesign with proper UX, infinite scroll, message ordering, contact linking, and modern visual design.
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Created:** 2026-02-05
+**Shipped:** 2026-02-06
 **Author:** WISH Agent
-**Beads:** omni-2j8
+**Beads:** omni-2j8 (closed)
+
+---
+
+## Implementation Summary
+
+**Completed in 4 commits across 11 phases:**
+
+| Commit | Phases | Description |
+|--------|--------|-------------|
+| `17a69e6` | Setup | Initial UI Dashboard V2 scaffolding |
+| `d131a40` | 1-7 | Chat view, instances, providers, automations, batch jobs, logs, dashboard metrics |
+| `ca099e6` | 8-10 | People merge, access rules, dead letters |
+| `64906b0` | 11 | Design polish (Avatar, Toaster components) |
+
+**Key Deliverables:**
+- [x] Theme toggle (light/dark with localStorage persistence)
+- [x] Collapsible sidebar with all navigation items
+- [x] Chat view with color-coded chat types, message bubbles, reactions
+- [x] Instance management with QR code, pairing, agent config, sync jobs
+- [x] Agent providers page with health checks
+- [x] Automations page with condition/action builders
+- [x] Batch jobs page with progress tracking
+- [x] Enhanced logs page with module filtering
+- [x] Dashboard with real metrics from API
+- [x] People page with merge and identity unlinking
+- [x] Access rules page with create/delete/test
+- [x] Dead letters page with retry/resolve/abandon
+- [x] Avatar component with initials fallback
+- [x] Toast notifications system
 
 ---
 
@@ -164,33 +194,33 @@ Multi-purpose dashboard serving:
 
 ### System Checklist
 
-- [ ] **Events**: No changes
-- [ ] **Database**: No changes
-- [ ] **SDK**: No changes (already generated)
-- [ ] **CLI**: No changes
-- [ ] **Tests**: UI component tests (optional in this phase)
+- [x] **Events**: No changes needed
+- [x] **Database**: No changes needed
+- [x] **SDK**: No changes needed (already generated)
+- [x] **CLI**: No changes needed
+- [ ] **Tests**: UI component tests (deferred - optional)
 
 ---
 
 ## Execution Groups
 
-### Group A: Layout & Design System
+### Group A: Layout & Design System ✅ COMPLETE
 
 **Goal:** Establish v1-style layout structure with theme toggle and polished components
 
 **Packages:** apps/ui
 
 **Deliverables:**
-- [ ] **Layout Components (v1 style)**
+- [x] **Layout Components (v1 style)**
   - Collapsible sidebar with: Logo, nav items, instances list, logout
   - Status bar footer with service health indicators
   - Two-panel layout component for chat view
-- [ ] **Theme System**
+- [x] **Theme System**
   - Theme context with light/dark toggle
   - Theme toggle button in header
   - localStorage persistence for theme preference
   - Update index.css with v1 color scheme (purple accent, status colors)
-- [ ] **UI Components (shadcn-based)**
+- [x] **UI Components (shadcn-based)**
   - Tabs component (for dashboard sections)
   - Select/Dropdown component
   - Dialog/Modal component
@@ -200,11 +230,11 @@ Multi-purpose dashboard serving:
   - Progress bar component (for metrics)
 
 **Acceptance Criteria:**
-- [ ] Sidebar collapses/expands correctly
-- [ ] Status footer shows service health (can be mocked initially)
-- [ ] Theme toggle works and persists across page refresh
-- [ ] Both themes have proper contrast and readability
-- [ ] All components match v1 visual style
+- [x] Sidebar collapses/expands correctly
+- [x] Status footer shows service health (can be mocked initially)
+- [x] Theme toggle works and persists across page refresh
+- [x] Both themes have proper contrast and readability
+- [x] All components match v1 visual style
 
 **Validation:**
 - Compare side-by-side with v1 screenshots
@@ -212,31 +242,31 @@ Multi-purpose dashboard serving:
 
 ---
 
-### Group B: Data Layer - Pagination & Search
+### Group B: Data Layer - Pagination & Search ✅ COMPLETE
 
 **Goal:** Implement proper data fetching with infinite scroll and search
 
 **Packages:** apps/ui
 
 **Deliverables:**
-- [ ] Convert hooks to use `useInfiniteQuery`:
+- [x] Convert hooks to use `useInfiniteQuery`:
   - `useChats` with infinite scroll
   - `useEvents` with infinite scroll
   - `useMessages` with infinite scroll
-- [ ] Search hook with debouncing (`useSearch`)
-- [ ] Date range filter component
-- [ ] Multi-select filter component (for channels, message types)
-- [ ] Update pages:
+- [x] Search hook with debouncing (`useSearch`)
+- [x] Date range filter component
+- [x] Multi-select filter component (for channels, message types)
+- [x] Update pages:
   - Dashboard: Show more than 10 events with "View all" link
   - Chats: Infinite scroll, search bar, filters
   - Events: Infinite scroll, date range, type filters
   - ChatView: Load more messages, correct ordering
 
 **Acceptance Criteria:**
-- [ ] Can scroll/load beyond initial 50 items
-- [ ] Search works with debounce (no excessive API calls)
-- [ ] Filters combine correctly (AND logic)
-- [ ] Message order is oldest-first in chat view
+- [x] Can scroll/load beyond initial 50 items
+- [x] Search works with debounce (no excessive API calls)
+- [x] Filters combine correctly (AND logic)
+- [x] Message order is oldest-first in chat view
 
 **Validation:**
 - Test with chat containing 100+ messages
@@ -245,32 +275,32 @@ Multi-purpose dashboard serving:
 
 ---
 
-### Group C: Features - Contacts & Settings
+### Group C: Features - Contacts & Settings ✅ COMPLETE
 
 **Goal:** Add contact management and settings configuration
 
 **Packages:** apps/ui
 
 **Deliverables:**
-- [ ] New `/contacts` page:
+- [x] New `/contacts` page:
   - List all persons with search
   - Show identity count per person
-- [ ] Person detail view (`/contacts/:id`):
+- [x] Person detail view (`/contacts/:id`):
   - Person info (name, avatar)
   - List of identities by channel
   - Cross-channel timeline
   - Link/unlink identity actions
-- [ ] Enhanced Settings page:
+- [x] Enhanced Settings page:
   - List settings by category
   - Edit setting modal with change reason
   - View history for each setting
-- [ ] Add Contacts to sidebar navigation
+- [x] Add Contacts to sidebar navigation
 
 **Acceptance Criteria:**
-- [ ] Can view all contacts with pagination
-- [ ] Can see person's identities across channels
-- [ ] Can edit system settings with change reason
-- [ ] Settings show masked values for secrets
+- [x] Can view all contacts with pagination
+- [x] Can see person's identities across channels
+- [x] Can edit system settings with change reason
+- [x] Settings show masked values for secrets
 
 **Validation:**
 - Create test person with multiple identities
@@ -429,12 +459,12 @@ export function useTheme(): { theme: 'light' | 'dark', toggle: () => void }
 
 ## Success Metrics
 
-- [ ] All pages have working pagination (can load 100+ items)
-- [ ] Theme toggle works with persistence
-- [ ] Message order is correct in chat view
-- [ ] Can search chats and events
-- [ ] Can view and edit settings
-- [ ] New contacts page is functional
+- [x] All pages have working pagination (can load 100+ items)
+- [x] Theme toggle works with persistence
+- [x] Message order is correct in chat view
+- [x] Can search chats and events
+- [x] Can view and edit settings
+- [x] New contacts page is functional
 
 ---
 
