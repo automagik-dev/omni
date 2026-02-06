@@ -4,7 +4,7 @@
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean \
         test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
         db-push db-migrate db-studio db-reset \
-        ensure-nats ensure-ffmpeg check-ffmpeg start stop restart logs status \
+        ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
         cli cli-build cli-link \
@@ -75,6 +75,7 @@ help:
 	@echo "  make sdk-generate    Generate SDK from OpenAPI spec"
 	@echo ""
 	@echo "Setup:"
+	@echo "  make check-deps    Check for required dependencies"
 	@echo "  make ensure-nats   Download NATS binary if missing"
 	@echo "  make ensure-ffmpeg Install ffmpeg (for WhatsApp voice note conversion)"
 	@echo "  make check-ffmpeg  Check if ffmpeg is installed"
@@ -115,8 +116,12 @@ _init-db: _setup-env
 	echo "✓ Database schema initialized" || \
 	echo "⚠️  Database initialization skipped (PostgreSQL may not be running yet)"
 
+# Check dependencies
+check-deps:
+	@./scripts/check-dependencies.sh
+
 # Complete setup: install + services + start all
-setup: install dev-services
+setup: check-deps install dev-services
 	@echo ""
 	@echo "✓ Setup complete! Starting development..."
 	bun run dev
@@ -290,16 +295,16 @@ status:
 
 # Individual service control
 restart-api:
-	pm2 restart omni-v2-api
+	pm2 restart omni-api
 
 restart-nats:
-	pm2 restart omni-v2-nats
+	pm2 restart omni-nats
 
 restart-pgserve:
-	pm2 restart omni-v2-pgserve
+	pm2 restart omni-pgserve
 
 logs-api:
-	pm2 logs omni-v2-api --lines 100
+	pm2 logs omni-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
