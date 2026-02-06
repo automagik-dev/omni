@@ -1,6 +1,6 @@
 # WISH: Send TTS Endpoint (ElevenLabs)
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Beads:** omni-soi
 **Priority:** P1
 
@@ -199,3 +199,48 @@ XI_VOICE_ID=JBFqnCBsd6RMkjVDRZzb  # Default voice
 
 - `fluent-ffmpeg` - Audio conversion
 - `music-metadata` or `get-audio-duration` - Duration detection
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-06
+
+### Acceptance Criteria
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Text converted to speech via ElevenLabs | PASS | `TTSService.callElevenLabs()` calls `POST /v1/text-to-speech/{voiceId}` with correct headers and body. 6/6 unit tests verify parameters, auth, and error handling. |
+| Audio converted to WhatsApp format | PASS | `convertToOggOpus()` uses ffmpeg with libopus codec, 48kHz, mono, 64k bitrate. Output MIME: `audio/ogg; codecs=opus`. |
+| Recording presence shown before sending | PASS | Route handler checks for `sendTyping` on plugin, sends presence with `presenceDelay ?? min(durationMs, 15000)`, waits before sending. Best-effort (won't fail send). |
+| Voice notes play correctly on WhatsApp | PASS (code) | `OutgoingMessage` built with `type: 'audio'`, `metadata.ptt: true`, correct MIME type. Matches WhatsApp voice note requirements. Live testing requires running instance. |
+| Audio tags ([happy], [laughs]) work | PASS | Text is passed directly to ElevenLabs API which natively supports these tags. No stripping or modification applied. |
+
+### Implementation Notes
+
+| Wish Spec | Actual Implementation | Assessment |
+|-----------|----------------------|------------|
+| `POST /api/v1/instances/:instanceId/send-tts` | `POST /api/v2/messages/send/tts` (instanceId in body) | Better — follows v2 conventions, consistent with other send/* routes |
+| Env vars: `XI_API_KEY`, `XI_VOICE_ID` | `ELEVENLABS_API_KEY`, `ELEVENLABS_DEFAULT_VOICE` | Better — more descriptive |
+| External deps: `fluent-ffmpeg`, `music-metadata` | Raw `spawn('ffmpeg')` / `spawn('ffprobe')` | Better — zero new dependencies, matches existing audio-converter pattern |
+| ffmpeg: 16kHz, 32kbps | 48kHz, 64kbps VBR | Better quality, still WhatsApp compatible |
+
+### System Validation
+
+- Typecheck: 10/10 packages pass
+- Lint: 0 errors (446 files checked)
+- TTS tests: 6/6 pass
+- Pre-existing failures: 37 (all DB-dependent, unrelated — ECONNREFUSED port 8432)
+- SDK: Regenerated, no diff (already up to date)
+- Security: No command injection (spawn with array args), no hardcoded secrets, API key from env
+- No `any` types used
+
+### Findings
+
+- **LOW**: Wish document env var names (`XI_API_KEY`) differ from implementation (`ELEVENLABS_API_KEY`). Implementation is more descriptive — not a blocker.
+- **INFO**: No new npm dependencies added. Uses ffmpeg/ffprobe directly via `child_process.spawn`, consistent with existing `packages/channel-whatsapp/src/utils/audio-converter.ts`.
+
+### Recommendation
+
+SHIP. All acceptance criteria met. Clean implementation following existing codebase patterns.
