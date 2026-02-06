@@ -7,14 +7,21 @@ import type { Setting } from '@omni/sdk';
 import { Check, Eye, EyeOff, Pencil, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+export interface SettingOption {
+  value: string;
+  label: string;
+}
+
 interface SettingRowProps {
   setting: Setting;
+  /** When provided, renders a dropdown instead of a text input */
+  options?: SettingOption[];
 }
 
 /**
  * Editable setting row - displays value with inline edit capability
  */
-export function SettingRow({ setting }: SettingRowProps) {
+export function SettingRow({ setting, options }: SettingRowProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [showSecret, setShowSecret] = useState(false);
@@ -82,26 +89,42 @@ export function SettingRow({ setting }: SettingRowProps) {
       <div className="flex items-center gap-2 rounded-md border border-primary/50 p-3">
         <div className="min-w-0 flex-1">
           <p className="mb-1 truncate text-sm font-medium">{setting.key}</p>
-          <div className="relative">
-            <input
-              ref={inputRef}
-              type={isSecret && !showSecret ? 'password' : 'text'}
+          {options ? (
+            <select
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isSecret ? 'Enter new value...' : 'Enter value...'}
-              className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm focus:border-primary focus:outline-none"
-            />
-            {isSecret && (
-              <button
-                type="button"
-                onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            )}
-          </div>
+              className="w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+            >
+              <option value="">Not set</option>
+              {options.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="relative">
+              <input
+                ref={inputRef}
+                type={isSecret && !showSecret ? 'password' : 'text'}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={isSecret ? 'Enter new value...' : 'Enter value...'}
+                className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm focus:border-primary focus:outline-none"
+              />
+              {isSecret && (
+                <button
+                  type="button"
+                  onClick={() => setShowSecret(!showSecret)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex gap-1">
           <Button
@@ -135,7 +158,7 @@ export function SettingRow({ setting }: SettingRowProps) {
       </div>
       <div className="ml-3 flex items-center gap-2">
         <Badge variant={getBadgeVariant(setting.value)} className="shrink-0">
-          {formatValue(setting.value)}
+          {options?.find((o) => o.value === setting.value)?.label ?? formatValue(setting.value)}
         </Badge>
         <Button
           size="sm"
