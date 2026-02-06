@@ -7,8 +7,8 @@
 ```bash
 # Prerequisites: Bun (https://bun.sh), PM2 (bun add -g pm2)
 
-git clone https://github.com/namastexlabs/omni-v2.git
-cd omni-v2
+git clone https://github.com/automagik-dev/omni.git
+cd omni
 
 # One-command setup: install deps, create .env, start services, run API
 make setup
@@ -45,9 +45,9 @@ make status
 
 | Service | PM2 Name | Default Port | Controlled By |
 |---------|----------|-------------|---------------|
-| PostgreSQL (pgserve) | `omni-v2-pgserve` | 8432 | `PGSERVE_MANAGED=true` |
-| NATS JetStream | `omni-v2-nats` | 4222 | `NATS_MANAGED=true` |
-| API Server | `omni-v2-api` | 8882 | `API_MANAGED=true` |
+| PostgreSQL (pgserve) | `omni-pgserve` | 8432 | `PGSERVE_MANAGED=true` |
+| NATS JetStream | `omni-nats` | 4222 | `NATS_MANAGED=true` |
+| API Server | `omni-api` | 8882 | `API_MANAGED=true` |
 
 Set any `*_MANAGED=false` in `.env` if you run that service externally.
 
