@@ -23,6 +23,7 @@ import { PersonService } from './persons';
 import { ProviderService } from './providers';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
+import { TTSService } from './tts';
 import { WebhookService } from './webhooks';
 
 /**
@@ -46,6 +47,7 @@ export interface Services {
   syncJobs: SyncJobService;
   batchJobs: BatchJobService;
   agentRunner: AgentRunnerService;
+  tts: TTSService;
 }
 
 /**
@@ -74,6 +76,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     syncJobs: new SyncJobService(db, eventBus),
     batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
+    tts: new TTSService(),
   };
 }
 
@@ -95,3 +98,5 @@ export { MessageService } from './messages';
 export { SyncJobService } from './sync-jobs';
 export { BatchJobService } from './batch-jobs';
 export { AgentRunnerService } from './agent-runner';
+export { TTSService } from './tts';
+export type { TTSOptions, TTSResult } from './tts';

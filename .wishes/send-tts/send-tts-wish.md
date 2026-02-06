@@ -1,6 +1,6 @@
 # WISH: Send TTS Endpoint (ElevenLabs)
 
-**Status:** DRAFT
+**Status:** REVIEW
 **Beads:** omni-soi
 **Priority:** P1
 

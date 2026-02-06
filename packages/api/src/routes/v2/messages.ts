@@ -22,6 +22,7 @@
  * Send operations (via channel plugins):
  * - POST /messages/send          - Send text message
  * - POST /messages/send/media    - Send media message
+ * - POST /messages/send/tts      - Send TTS voice note (ElevenLabs)
  * - POST /messages/send/reaction - Send reaction
  * - POST /messages/send/sticker  - Send sticker
  * - POST /messages/send/contact  - Send contact card
@@ -1086,6 +1087,121 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
         messageId: result.messageId,
         externalMessageId: result.messageId,
         status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+// ============================================================================
+// TTS Route (Text-to-Speech)
+// ============================================================================
+
+// Send TTS schema
+const sendTtsSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID to send from'),
+  to: z.string().min(1).describe('Recipient (phone number or platform ID)'),
+  text: z.string().min(1).max(5000).describe('Text to convert to speech (supports [happy], [laughs] tags)'),
+  voiceId: z.string().optional().describe('ElevenLabs voice ID'),
+  modelId: z.string().optional().describe('ElevenLabs model (default: eleven_v3)'),
+  stability: z.number().min(0).max(1).optional().describe('Voice stability (0-1, default: 0.5)'),
+  similarityBoost: z.number().min(0).max(1).optional().describe('Similarity boost (0-1, default: 0.75)'),
+  presenceDelay: z
+    .number()
+    .int()
+    .min(0)
+    .max(30000)
+    .optional()
+    .describe('Custom recording presence duration in ms (default: match audio duration)'),
+});
+
+/**
+ * POST /messages/send/tts - Send TTS voice note
+ *
+ * Converts text to speech using ElevenLabs, converts to OGG/Opus,
+ * shows recording presence, then sends as a voice note.
+ */
+messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    data.instanceId,
+    'canSendMedia',
+  );
+
+  // Resolve recipient
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  // Synthesize speech
+  const ttsResult = await services.tts.synthesize(data.text, {
+    voiceId: data.voiceId,
+    modelId: data.modelId,
+    stability: data.stability,
+    similarityBoost: data.similarityBoost,
+  });
+
+  // Show "recording" presence before sending (if plugin supports it)
+  if ('sendTyping' in plugin && typeof plugin.sendTyping === 'function') {
+    const presenceDuration = data.presenceDelay ?? Math.min(ttsResult.durationMs, 15000);
+    try {
+      await (plugin as { sendTyping: (id: string, chatId: string, duration?: number) => Promise<void> }).sendTyping(
+        data.instanceId,
+        resolvedTo,
+        presenceDuration,
+      );
+      // Wait for presence duration before sending
+      if (presenceDuration > 0) {
+        await new Promise((resolve) => setTimeout(resolve, presenceDuration));
+      }
+    } catch {
+      // Presence is best-effort, don't fail the send
+    }
+  }
+
+  // Build outgoing voice note message
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: {
+      type: 'audio',
+      mimeType: ttsResult.mimeType,
+    } as OutgoingContent,
+    metadata: {
+      audioBuffer: ttsResult.buffer,
+      ptt: true,
+    },
+  };
+
+  // Send via channel plugin
+  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+
+  if (!result.success) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: result.error ?? 'Failed to send TTS voice note',
+      context: {
+        channelType: instance.channel,
+        instanceId: data.instanceId,
+        errorCode: result.errorCode,
+        retryable: result.retryable,
+      },
+      recoverable: result.retryable ?? false,
+    });
+  }
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        externalMessageId: result.messageId,
+        status: 'sent',
+        instanceId: instance.id,
+        to: data.to,
+        audioSizeKb: ttsResult.sizeKb,
+        durationMs: ttsResult.durationMs,
         timestamp: result.timestamp,
       },
     },
