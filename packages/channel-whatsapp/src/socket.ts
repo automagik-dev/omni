@@ -64,10 +64,21 @@ export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
 };
 
 /**
- * Create a Pino logger for Baileys
+ * Create a Pino logger for Baileys with newsletter noise filtered out
  */
 function createLogger(level: string) {
-  return pino({ level });
+  return pino({
+    level,
+    hooks: {
+      logMethod(inputArgs, method) {
+        // Suppress noisy "Invalid mex newsletter notification" warnings
+        // that dump massive raw byte arrays into logs (Baileys bug in rc.9)
+        const msg = inputArgs.find((a): a is string => typeof a === 'string');
+        if (msg?.includes('mex newsletter notification')) return;
+        method.apply(this, inputArgs as Parameters<typeof method>);
+      },
+    },
+  });
 }
 
 /**
