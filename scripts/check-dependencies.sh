@@ -122,10 +122,23 @@ else
 fi
 
 echo ""
+echo "${BLUE}Database (pgserve):${NC}"
+if command -v psql >/dev/null 2>&1; then
+  version=$(psql --version 2>&1)
+  printf "${GREEN}✓${NC} %-15s $version\n" "PostgreSQL"
+else
+  printf "${YELLOW}⚠${NC} %-15s OPTIONAL - PostgreSQL client not installed\n" "PostgreSQL"
+  MISSING_OPTIONAL=$((MISSING_OPTIONAL + 1))
+  if [ "$AUTO_INSTALL" = "true" ]; then
+    echo "  Installing PostgreSQL client..."
+    check_and_install_command "psql" "false" "PostgreSQL client" "postgresql-client"
+  fi
+fi
+
+echo ""
 echo "${BLUE}Optional Dependencies:${NC}"
 check_and_install_command "ffmpeg" "false" "Media processing (for WhatsApp voice notes)" "ffmpeg"
 check_and_install_command "node" "false" "Node.js (for tsx dev mode if needed)" "nodejs"
-check_and_install_command "psql" "false" "PostgreSQL client (for manual DB access)" "postgresql-client"
 check_and_install_command "docker" "false" "Docker (for containerized deployment)" "docker.io"
 
 echo ""
@@ -168,9 +181,10 @@ fi
 if [ $MISSING_OPTIONAL -gt 0 ]; then
   printf "\n${YELLOW}Missing $MISSING_OPTIONAL optional dependency(ies)${NC}\n"
   echo "These are not required for basic functionality but provide:"
+  echo "  - PostgreSQL client: Direct database access and administration"
+  echo "    (Note: PostgreSQL server is managed by pgserve/PM2 in dev mode)"
   echo "  - ffmpeg: WhatsApp voice note conversion"
   echo "  - node: Alternative to bun (not recommended)"
-  echo "  - psql: Direct database access"
   echo "  - docker: Containerized deployments"
 fi
 
