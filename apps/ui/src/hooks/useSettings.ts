@@ -1,7 +1,7 @@
 import { queryKeys } from '@/lib/query';
-import { getClient } from '@/lib/sdk';
+import { apiFetch, getClient } from '@/lib/sdk';
 import type { ListSettingsParams, Setting } from '@omni/sdk';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 /**
@@ -39,4 +39,52 @@ export function useGroupedSettings(params?: ListSettingsParams) {
     grouped,
     categories: Object.keys(grouped).sort(),
   };
+}
+
+/**
+ * Update a single setting by key
+ */
+export function useUpdateSetting() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ key, value }: { key: string; value: unknown }) => {
+      const response = await apiFetch(`/settings/${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ value }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error((err as { error?: string }).error ?? `Failed to update setting: ${response.status}`);
+      }
+      return (await response.json()) as { data: Setting };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+  });
+}
+
+/**
+ * Bulk update multiple settings
+ */
+export function useBulkUpdateSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ settings, reason }: { settings: Record<string, unknown>; reason?: string }) => {
+      const response = await apiFetch('/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ settings, reason }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error((err as { error?: string }).error ?? `Failed to update settings: ${response.status}`);
+      }
+      return (await response.json()) as { items: Setting[] };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+  });
 }

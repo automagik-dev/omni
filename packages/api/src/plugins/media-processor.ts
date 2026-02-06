@@ -253,8 +253,20 @@ async function processMessageMedia(
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
-  // Initialize media processing service with API keys from environment
-  const mediaService = createMediaProcessingService();
+  // Read API keys from settings DB with env var fallback
+  const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage] = await Promise.all([
+    services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+    services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+    services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+    services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+  ]);
+
+  const mediaService = createMediaProcessingService({
+    groqApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    defaultLanguage,
+  });
   const mediaStorage = new MediaStorageService(db);
 
   const ctx: MediaProcessorContext = {

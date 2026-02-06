@@ -58,12 +58,14 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
 
+  const settings = new SettingsService(db);
+
   return {
     apiKeys,
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),
     events: new EventService(db),
-    settings: new SettingsService(db),
+    settings,
     access: new AccessService(db, eventBus),
     providers: new ProviderService(db),
     deadLetters,
@@ -76,7 +78,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     syncJobs: new SyncJobService(db, eventBus),
     batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
-    tts: new TTSService(),
+    tts: new TTSService(settings),
   };
 }
 
@@ -99,4 +101,4 @@ export { SyncJobService } from './sync-jobs';
 export { BatchJobService } from './batch-jobs';
 export { AgentRunnerService } from './agent-runner';
 export { TTSService } from './tts';
-export type { TTSOptions, TTSResult } from './tts';
+export type { TTSOptions, TTSResult, TTSVoice, TTSSettingsReader } from './tts';

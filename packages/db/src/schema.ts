@@ -444,6 +444,10 @@ export const instances = pgTable(
     messageSplitDelayMinMs: integer('message_split_delay_min_ms').notNull().default(300),
     messageSplitDelayMaxMs: integer('message_split_delay_max_ms').notNull().default(1000),
 
+    // ---- TTS Configuration ----
+    ttsVoiceId: text('tts_voice_id'), // ElevenLabs voice ID override
+    ttsModelId: text('tts_model_id'), // ElevenLabs model override
+
     // ---- Media Processing ----
     processAudio: boolean('process_audio').notNull().default(true),
     processImages: boolean('process_images').notNull().default(true),

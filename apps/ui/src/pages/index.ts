@@ -14,3 +14,4 @@ export { Logs } from './Logs';
 export { Persons } from './Persons';
 export { Providers } from './Providers';
 export { Settings } from './Settings';
+export { Voices } from './Voices';

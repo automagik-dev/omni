@@ -62,6 +62,8 @@ const createInstanceSchema = z.object({
   enableAutoSplit: z.boolean().default(true).describe('Split responses on double newlines'),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
+  ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
+  ttsModelId: z.string().optional().nullable().describe('Default ElevenLabs model for this instance'),
 });
 
 // Update instance schema

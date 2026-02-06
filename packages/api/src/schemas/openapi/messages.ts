@@ -123,9 +123,51 @@ export const ReadReceiptResponseSchema = z.object({
   messageCount: z.number().optional().openapi({ description: 'Number of messages marked (batch only)' }),
 });
 
+// TTS Voice schema
+export const TTSVoiceSchema = z.object({
+  voiceId: z.string().openapi({ description: 'ElevenLabs voice ID' }),
+  name: z.string().openapi({ description: 'Voice name' }),
+  category: z.string().openapi({ description: 'Voice category (premade, cloned, etc.)' }),
+  description: z.string().nullable().openapi({ description: 'Voice description' }),
+  previewUrl: z.string().nullable().openapi({ description: 'URL to preview audio sample' }),
+  labels: z.record(z.string(), z.string()).openapi({ description: 'Voice labels (accent, gender, etc.)' }),
+});
+
+// Send TTS request
+export const SendTtsSchema = z.object({
+  instanceId: z.string().uuid().openapi({ description: 'Instance ID to send from' }),
+  to: z.string().min(1).openapi({ description: 'Recipient (phone number or platform ID)' }),
+  text: z.string().min(1).max(5000).openapi({ description: 'Text to convert to speech' }),
+  voiceId: z.string().optional().openapi({ description: 'ElevenLabs voice ID' }),
+  modelId: z.string().optional().openapi({ description: 'ElevenLabs model (default: eleven_v3)' }),
+  stability: z.number().min(0).max(1).optional().openapi({ description: 'Voice stability (0-1)' }),
+  similarityBoost: z.number().min(0).max(1).optional().openapi({ description: 'Similarity boost (0-1)' }),
+  presenceDelay: z
+    .number()
+    .int()
+    .min(0)
+    .max(30000)
+    .optional()
+    .openapi({ description: 'Recording presence duration in ms' }),
+});
+
+// TTS response
+export const TtsResponseSchema = z.object({
+  messageId: z.string().openapi({ description: 'Internal message ID' }),
+  externalMessageId: z.string().openapi({ description: 'External platform message ID' }),
+  status: z.string().openapi({ description: 'Message status' }),
+  instanceId: z.string().uuid().openapi({ description: 'Instance UUID' }),
+  to: z.string().openapi({ description: 'Recipient' }),
+  audioSizeKb: z.number().openapi({ description: 'Audio size in KB' }),
+  durationMs: z.number().openapi({ description: 'Audio duration in ms' }),
+});
+
 export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.register('MessageResponse', MessageResponseSchema);
   registry.register('SendTextRequest', SendTextSchema);
+  registry.register('TTSVoice', TTSVoiceSchema);
+  registry.register('SendTtsRequest', SendTtsSchema);
+  registry.register('TtsResponse', TtsResponseSchema);
   registry.register('SendMediaRequest', SendMediaSchema);
   registry.register('SendReactionRequest', SendReactionSchema);
   registry.register('SendStickerRequest', SendStickerSchema);
@@ -341,6 +383,47 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: ErrorSchema } },
       },
       404: { description: 'Chat not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  // TTS: List voices
+  registry.registerPath({
+    method: 'get',
+    path: '/messages/tts/voices',
+    operationId: 'listTtsVoices',
+    tags: ['Messages', 'TTS'],
+    summary: 'List available TTS voices',
+    description: 'List available ElevenLabs voices for text-to-speech. Results are cached for 5 minutes.',
+    responses: {
+      200: {
+        description: 'List of available voices',
+        content: {
+          'application/json': { schema: z.object({ data: z.object({ voices: z.array(TTSVoiceSchema) }) }) },
+        },
+      },
+      401: {
+        description: 'ElevenLabs API key not configured',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  // TTS: Send voice note
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/send/tts',
+    operationId: 'sendTtsMessage',
+    tags: ['Messages', 'TTS'],
+    summary: 'Send TTS voice note',
+    description: 'Convert text to speech using ElevenLabs, shows recording presence, then sends as a voice note.',
+    request: { body: { content: { 'application/json': { schema: SendTtsSchema } } } },
+    responses: {
+      201: {
+        description: 'TTS voice note sent',
+        content: { 'application/json': { schema: z.object({ data: TtsResponseSchema }) } },
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 }

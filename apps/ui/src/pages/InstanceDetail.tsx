@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { toast } from '@/components/ui/toaster';
 import { useChats } from '@/hooks/useChats';
 import {
   useConnectInstance,
@@ -15,7 +16,9 @@ import {
   useInstanceStatus,
   useLogoutInstance,
   useRestartInstance,
+  useUpdateInstance,
 } from '@/hooks/useInstances';
+import { useVoices } from '@/hooks/useVoices';
 import { cn, formatDateTime, formatRelativeTime } from '@/lib/utils';
 import {
   ArrowLeft,
@@ -23,6 +26,7 @@ import {
   Cog,
   LogOut,
   MessageSquare,
+  Mic,
   Power,
   PowerOff,
   QrCode,
@@ -32,6 +36,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 export function InstanceDetail() {
@@ -102,6 +107,10 @@ export function InstanceDetail() {
             <TabsTrigger value="messages">
               <MessageSquare className="mr-2 h-4 w-4" />
               Messages
+            </TabsTrigger>
+            <TabsTrigger value="tts">
+              <Mic className="mr-2 h-4 w-4" />
+              TTS
             </TabsTrigger>
             <TabsTrigger value="behavior">
               <Cog className="mr-2 h-4 w-4" />
@@ -291,6 +300,15 @@ export function InstanceDetail() {
             </Card>
           </TabsContent>
 
+          {/* TTS Tab */}
+          <TabsContent value="tts">
+            <TtsConfigPanel
+              instanceId={instance.id}
+              currentVoiceId={(instance as Record<string, unknown>).ttsVoiceId as string | null}
+              currentModelId={(instance as Record<string, unknown>).ttsModelId as string | null}
+            />
+          </TabsContent>
+
           {/* Behavior Tab */}
           <TabsContent value="behavior">
             <Card>
@@ -343,5 +361,103 @@ export function InstanceDetail() {
         </Tabs>
       </div>
     </>
+  );
+}
+
+/**
+ * TTS configuration panel for an instance
+ */
+function TtsConfigPanel({
+  instanceId,
+  currentVoiceId,
+  currentModelId,
+}: {
+  instanceId: string;
+  currentVoiceId: string | null;
+  currentModelId: string | null;
+}) {
+  const { data: voices, isLoading: loadingVoices } = useVoices();
+  const updateInstance = useUpdateInstance();
+  const [selectedVoice, setSelectedVoice] = useState(currentVoiceId ?? '');
+  const [selectedModel, setSelectedModel] = useState(currentModelId ?? '');
+  const isDirty = selectedVoice !== (currentVoiceId ?? '') || selectedModel !== (currentModelId ?? '');
+
+  const handleSave = async () => {
+    try {
+      await updateInstance.mutateAsync({
+        id: instanceId,
+        data: {
+          ttsVoiceId: selectedVoice || null,
+          ttsModelId: selectedModel || null,
+        },
+      });
+      toast.success('TTS settings saved');
+    } catch (err) {
+      toast.error(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Mic className="h-5 w-5" />
+          Text-to-Speech
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Voice selector */}
+        <div>
+          <label htmlFor="tts-voice" className="mb-1 block text-sm font-medium">
+            Default Voice
+          </label>
+          <select
+            id="tts-voice"
+            value={selectedVoice}
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:border-primary focus:outline-none"
+          >
+            <option value="">Use global default</option>
+            {loadingVoices ? (
+              <option disabled>Loading voices...</option>
+            ) : (
+              voices?.map((voice) => (
+                <option key={voice.voiceId} value={voice.voiceId}>
+                  {voice.name} ({voice.category})
+                </option>
+              ))
+            )}
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">Override the global default voice for this instance</p>
+        </div>
+
+        {/* Model selector */}
+        <div>
+          <label htmlFor="tts-model" className="mb-1 block text-sm font-medium">
+            Default Model
+          </label>
+          <select
+            id="tts-model"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:border-primary focus:outline-none"
+          >
+            <option value="">Use global default</option>
+            <option value="eleven_v3">Eleven v3 (Latest)</option>
+            <option value="eleven_multilingual_v2">Eleven Multilingual v2</option>
+            <option value="eleven_monolingual_v1">Eleven Monolingual v1</option>
+            <option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option>
+            <option value="eleven_turbo_v2">Eleven Turbo v2</option>
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">Override the global default model for this instance</p>
+        </div>
+
+        {isDirty && (
+          <Button onClick={handleSave} disabled={updateInstance.isPending}>
+            {updateInstance.isPending ? 'Saving...' : 'Save Changes'}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
   );
 }
