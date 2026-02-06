@@ -20,8 +20,11 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # ============================================================================
-# Helpers
+# Helpers — all I/O goes through /dev/tty, results go into $REPLY
+# This avoids $() subshell issues when running via curl|bash
 # ============================================================================
+
+REPLY=""
 
 info()    { printf "${BLUE}ℹ${NC}  %s\n" "$*"; }
 ok()      { printf "${GREEN}✓${NC}  %s\n" "$*"; }
@@ -32,8 +35,7 @@ step()    { printf "\n${BOLD}${CYAN}▸ %s${NC}\n" "$*"; }
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 ask_yn() {
-  local prompt="$1" default="${2:-y}"
-  local yn
+  local prompt="$1" default="${2:-y}" yn
   if [[ "$default" == "y" ]]; then
     printf "${BOLD}?${NC} %s ${DIM}[Y/n]${NC} " "$prompt" >/dev/tty
   else
@@ -44,6 +46,7 @@ ask_yn() {
   [[ "$yn" =~ ^[Yy] ]]
 }
 
+# ask_input "prompt" "default" → sets $REPLY
 ask_input() {
   local prompt="$1" default="${2:-}"
   if [[ -n "$default" ]]; then
@@ -51,11 +54,11 @@ ask_input() {
   else
     printf "${BOLD}?${NC} %s " "$prompt" >/dev/tty
   fi
-  local val
-  read -r val </dev/tty
-  echo "${val:-$default}"
+  read -r REPLY </dev/tty
+  REPLY="${REPLY:-$default}"
 }
 
+# ask_secret "prompt" "default" → sets $REPLY
 ask_secret() {
   local prompt="$1" default="${2:-}"
   if [[ -n "$default" ]]; then
@@ -64,14 +67,13 @@ ask_secret() {
   else
     printf "${BOLD}?${NC} %s " "$prompt" >/dev/tty
   fi
-  local val
-  read -r val </dev/tty
-  echo "${val:-$default}"
+  read -r REPLY </dev/tty
+  REPLY="${REPLY:-$default}"
 }
 
+# ask_choice "prompt" "opt1" "opt2" ... → sets $REPLY to number
 ask_choice() {
-  local prompt="$1"
-  shift
+  local prompt="$1"; shift
   local options=("$@")
   printf "${BOLD}?${NC} %s\n" "$prompt" >/dev/tty
   local i=1
@@ -80,9 +82,8 @@ ask_choice() {
     ((i++))
   done
   printf "${BOLD}?${NC} ${DIM}[1-%d]${NC} " "${#options[@]}" >/dev/tty
-  local choice
-  read -r choice </dev/tty
-  echo "${choice:-1}"
+  read -r REPLY </dev/tty
+  REPLY="${REPLY:-1}"
 }
 
 banner() {
@@ -101,7 +102,7 @@ EOF
 }
 
 # ============================================================================
-# Dependency checks
+# Dependencies
 # ============================================================================
 
 ensure_bun() {
@@ -113,7 +114,6 @@ ensure_bun() {
   curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
-  # Source bashrc for bun path
   [[ -f "$HOME/.bashrc" ]] && source "$HOME/.bashrc" 2>/dev/null || true
   if has_cmd bun; then
     ok "bun $(bun --version) installed"
@@ -125,13 +125,13 @@ ensure_bun() {
 ensure_git() {
   if has_cmd git; then
     ok "git $(git --version | awk '{print $3}')"
-    return 0
+  else
+    fail "git is required. Install: macOS → xcode-select --install | Linux → sudo apt install git"
   fi
-  fail "git is required. Install it first:\n  macOS: xcode-select --install\n  Linux: sudo apt install git"
 }
 
 # ============================================================================
-# Install modes
+# Install: CLI only
 # ============================================================================
 
 install_cli_only() {
@@ -160,14 +160,11 @@ install_cli_only() {
   ok "CLI built"
 
   info "Linking globally..."
-  bun link 2>/dev/null
-  ok "CLI linked"
+  bun link 2>/dev/null || true
 
-  # Verify
   if has_cmd omni; then
     ok "'omni' command available"
   else
-    # Fallback: install to ~/.omni/bin
     local bin_dir="$HOME/.omni/bin"
     mkdir -p "$bin_dir"
     cp -r "$tmpdir/omni/packages/cli" "$HOME/.omni/cli-pkg"
@@ -177,19 +174,22 @@ install_cli_only() {
 exec bun "$HOME/.omni/cli-pkg/src/index.ts" "$@"
 WRAPPER
     chmod +x "$bin_dir/omni"
-    warn "bun link didn't register in PATH. Installed to ~/.omni/bin/omni"
-    warn "Add to your shell: export PATH=\"\$HOME/.omni/bin:\$PATH\""
+    warn "Installed to ~/.omni/bin/omni — add to PATH: export PATH=\"\$HOME/.omni/bin:\$PATH\""
   fi
 
   trap - EXIT
   rm -rf "$tmpdir"
 }
 
+# ============================================================================
+# Install: Full server
+# ============================================================================
+
 install_full_server() {
   step "Installing Omni v2 (full server)"
 
-  local install_dir
-  install_dir=$(ask_input "Install directory:" "$HOME/omni")
+  ask_input "Install directory:" "$HOME/omni"
+  local install_dir="$REPLY"
 
   if [[ -d "$install_dir/.git" ]]; then
     info "Existing install detected, pulling latest..."
@@ -217,23 +217,13 @@ install_full_server() {
     health=$(curl -s http://localhost:8882/api/v2/health 2>/dev/null || echo '{"status":"error"}')
     if echo "$health" | grep -q '"healthy"'; then
       ok "Server is healthy!"
-      # Extract API key from logs
       local api_key
       api_key=$(pm2 logs omni-v2-api --nostream --lines 50 2>&1 | grep -o 'omni_sk_[A-Za-z0-9]*' | head -1)
       if [[ -n "$api_key" ]]; then
-        printf "\n"
-        printf "  ${BOLD}API Key:${NC} ${GREEN}%s${NC}\n" "$api_key"
-        printf "  ${YELLOW}Save this key — shown only once!${NC}\n"
-
-        # Auto-configure CLI
+        printf "\n  ${BOLD}API Key:${NC} ${GREEN}%s${NC}\n" "$api_key"
+        printf "  ${YELLOW}Save this key — shown only once!${NC}\n\n"
         mkdir -p "$HOME/.omni"
-        cat > "$HOME/.omni/config.json" << EOF
-{
-  "apiUrl": "http://localhost:8882",
-  "apiKey": "$api_key",
-  "format": "human"
-}
-EOF
+        printf '{\n  "apiUrl": "http://localhost:8882",\n  "apiKey": "%s",\n  "format": "human"\n}\n' "$api_key" > "$HOME/.omni/config.json"
         chmod 600 "$HOME/.omni/config.json"
         ok "CLI auto-configured with local server"
       fi
@@ -244,53 +234,42 @@ EOF
 }
 
 # ============================================================================
-# Post-install: Configure connection
+# Configure connection
 # ============================================================================
 
 configure_connection() {
   step "Configure connection"
 
-  local api_url api_key
+  ask_input "Omni API URL:" "$DEFAULT_API_URL"
+  local api_url="$REPLY"
 
-  api_url=$(ask_input "Omni API URL:" "$DEFAULT_API_URL")
-  api_key=$(ask_secret "API Key (omni_sk_...):" "")
+  ask_secret "API Key (omni_sk_...):" ""
+  local api_key="$REPLY"
 
   if [[ -z "$api_key" ]]; then
-    warn "No API key provided. Set later with: omni auth login --api-key <key>"
+    warn "No API key provided. Set later: omni auth login --api-key <key>"
     return 1
   fi
 
-  # Write config
   mkdir -p "$HOME/.omni"
-  cat > "$HOME/.omni/config.json" << EOF
-{
-  "apiUrl": "$api_url",
-  "apiKey": "$api_key",
-  "format": "human"
-}
-EOF
+  printf '{\n  "apiUrl": "%s",\n  "apiKey": "%s",\n  "format": "human"\n}\n' "$api_url" "$api_key" > "$HOME/.omni/config.json"
   chmod 600 "$HOME/.omni/config.json"
   ok "Config saved to ~/.omni/config.json"
 
-  # Test connection
   info "Testing connection..."
   local health
   health=$(curl -s -H "Authorization: Bearer $api_key" "$api_url/api/v2/health" 2>/dev/null || echo "")
   if echo "$health" | grep -q '"healthy"'; then
     ok "Connected to Omni at $api_url"
-    local version
-    version=$(echo "$health" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
-    [[ -n "$version" ]] && info "Server version: $version"
     return 0
   else
-    warn "Could not connect to $api_url"
-    warn "Check the URL and API key. You can update later with: omni config set apiUrl <url>"
+    warn "Could not connect to $api_url — check URL and API key"
     return 1
   fi
 }
 
 # ============================================================================
-# Post-install: Setup wizard (optional steps)
+# Setup wizard (optional post-install steps)
 # ============================================================================
 
 setup_wizard() {
@@ -298,19 +277,17 @@ setup_wizard() {
   api_url=$(grep -o '"apiUrl"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.omni/config.json" 2>/dev/null | cut -d'"' -f4)
   api_key=$(grep -o '"apiKey"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.omni/config.json" 2>/dev/null | cut -d'"' -f4)
 
-  if [[ -z "$api_url" ]] || [[ -z "$api_key" ]]; then
-    return 0
-  fi
+  [[ -z "$api_url" || -z "$api_key" ]] && return 0
 
   local auth_header="Authorization: Bearer $api_key"
 
-  # ── Create a WhatsApp instance ──────────────────────────────────────
+  # ── WhatsApp instance ─────────────────────────────────────────────
   printf "\n"
   if ask_yn "Create a WhatsApp instance?" "n"; then
     step "Creating WhatsApp instance"
 
-    local instance_name
-    instance_name=$(ask_input "Instance name:" "my-whatsapp")
+    ask_input "Instance name:" "my-whatsapp"
+    local instance_name="$REPLY"
 
     info "Creating instance '$instance_name'..."
     local result
@@ -325,102 +302,83 @@ setup_wizard() {
     if [[ -n "$instance_id" ]]; then
       ok "Instance created: $instance_id"
 
-      # Set as default
-      if has_cmd omni; then
-        omni config set defaultInstance "$instance_id" 2>/dev/null || true
-      else
-        # Update config directly
-        local tmp
-        tmp=$(mktemp)
-        python3 -c "
-import json
-c = json.load(open('$HOME/.omni/config.json'))
-c['defaultInstance'] = '$instance_id'
-json.dump(c, open('$tmp', 'w'), indent=2)
-" 2>/dev/null && mv "$tmp" "$HOME/.omni/config.json" && chmod 600 "$HOME/.omni/config.json"
-      fi
+      # Set as default instance in config
+      python3 -c "
+import json, sys
+try:
+    c = json.load(open('$HOME/.omni/config.json'))
+    c['defaultInstance'] = '$instance_id'
+    json.dump(c, open('$HOME/.omni/config.json', 'w'), indent=2)
+except: pass
+" 2>/dev/null
       ok "Set as default instance"
 
-      # Offer QR code pairing
-      if ask_yn "Pair via QR code now? (opens in terminal)"; then
-        info "Fetching QR code... (scan with WhatsApp > Linked Devices > Link a Device)"
-        printf "\n"
+      # QR code pairing
+      if ask_yn "Pair via QR code now? (scan with WhatsApp)"; then
+        info "Fetching QR code..."
         local qr_result
-        qr_result=$(curl -s "$api_url/api/v2/instances/$instance_id/qr" \
-          -H "$auth_header" 2>/dev/null)
+        qr_result=$(curl -s "$api_url/api/v2/instances/$instance_id/qr" -H "$auth_header" 2>/dev/null)
         local qr_code
         qr_code=$(echo "$qr_result" | grep -o '"qr":"[^"]*"' | cut -d'"' -f4)
 
         if [[ -n "$qr_code" ]]; then
-          # Try to render QR in terminal using node/bun
           if has_cmd bun; then
-            bun -e "const q=require('qrcode-terminal');q.generate('$qr_code',{small:true})" 2>/dev/null || echo "$qr_code"
-          elif has_cmd node; then
-            node -e "try{require('qrcode-terminal').generate('$qr_code',{small:true})}catch{console.log('$qr_code')}" 2>/dev/null || echo "$qr_code"
+            bun -e "const q=require('qrcode-terminal');q.generate('$qr_code',{small:true})" 2>/dev/null || printf "  QR: %s\n" "$qr_code"
           else
-            echo "$qr_code"
+            printf "  QR: %s\n" "$qr_code"
           fi
           printf "\n"
-          info "Waiting for scan... (press Enter when done)"
+          info "Scan with WhatsApp > Linked Devices > Link a Device"
+          info "Press Enter when done..."
           read -r </dev/tty
 
-          # Check status
           local status_result
-          status_result=$(curl -s "$api_url/api/v2/instances/$instance_id" \
-            -H "$auth_header" 2>/dev/null)
+          status_result=$(curl -s "$api_url/api/v2/instances/$instance_id" -H "$auth_header" 2>/dev/null)
           if echo "$status_result" | grep -q '"isActive":true'; then
             ok "WhatsApp connected!"
           else
-            warn "Not connected yet. Check later: omni instances status $instance_id"
+            warn "Not connected yet. Try later: omni instances qr $instance_id"
           fi
         else
-          local error_msg
-          error_msg=$(echo "$qr_result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
-          if [[ -n "$error_msg" ]]; then
-            warn "QR not available: $error_msg"
-          else
-            warn "QR code not available yet. Try: omni instances qr $instance_id"
-          fi
+          warn "QR not available yet. Try: omni instances qr $instance_id"
         fi
       fi
 
-      # Offer phone number pairing
-      if ! echo "${status_result:-}" | grep -q '"isActive":true' 2>/dev/null; then
-        if ask_yn "Pair via phone number instead?" "n"; then
-          local phone
-          phone=$(ask_input "Phone number (with country code, e.g. +5511999999999):" "")
-          if [[ -n "$phone" ]]; then
-            info "Requesting pairing code for $phone..."
-            local pair_result
-            pair_result=$(curl -s -X POST "$api_url/api/v2/instances/$instance_id/pair" \
-              -H "$auth_header" \
-              -H "Content-Type: application/json" \
-              -d "{\"phone\": \"$phone\"}" 2>/dev/null)
-            local pair_code
-            pair_code=$(echo "$pair_result" | grep -o '"code":"[^"]*"' | cut -d'"' -f4)
-            if [[ -n "$pair_code" ]]; then
-              printf "\n  ${BOLD}Pairing code: ${GREEN}%s${NC}\n\n" "$pair_code"
-              info "Enter this code in WhatsApp > Linked Devices > Link a Device > Link with phone number"
-            else
-              warn "Could not get pairing code. Try: omni instances pair $instance_id --phone $phone"
-            fi
+      # Phone number pairing (alternative)
+      if ask_yn "Pair via phone number instead?" "n"; then
+        ask_input "Phone number (e.g. +5511999999999):" ""
+        local phone="$REPLY"
+        if [[ -n "$phone" ]]; then
+          info "Requesting pairing code for $phone..."
+          local pair_result
+          pair_result=$(curl -s -X POST "$api_url/api/v2/instances/$instance_id/pair" \
+            -H "$auth_header" \
+            -H "Content-Type: application/json" \
+            -d "{\"phone\": \"$phone\"}" 2>/dev/null)
+          local pair_code
+          pair_code=$(echo "$pair_result" | grep -o '"code":"[^"]*"' | cut -d'"' -f4)
+          if [[ -n "$pair_code" ]]; then
+            printf "\n  ${BOLD}Pairing code: ${GREEN}%s${NC}\n\n" "$pair_code"
+            info "Enter this code in WhatsApp > Linked Devices > Link with phone number"
+          else
+            warn "Could not get pairing code. Try: omni instances pair $instance_id --phone $phone"
           fi
         fi
       fi
     else
-      local error_msg
-      error_msg=$(echo "$result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
-      warn "Failed to create instance: ${error_msg:-unknown error}"
+      warn "Failed to create instance"
     fi
   fi
 
-  # ── Create a Discord instance ───────────────────────────────────────
+  # ── Discord instance ──────────────────────────────────────────────
   if ask_yn "Create a Discord instance?" "n"; then
     step "Creating Discord instance"
 
-    local discord_name discord_token
-    discord_name=$(ask_input "Instance name:" "my-discord")
-    discord_token=$(ask_secret "Discord bot token:" "")
+    ask_input "Instance name:" "my-discord"
+    local discord_name="$REPLY"
+
+    ask_secret "Discord bot token:" ""
+    local discord_token="$REPLY"
 
     if [[ -n "$discord_token" ]]; then
       info "Creating Discord instance..."
@@ -429,84 +387,77 @@ json.dump(c, open('$tmp', 'w'), indent=2)
         -H "$auth_header" \
         -H "Content-Type: application/json" \
         -d "{\"name\": \"$discord_name\", \"channel\": \"discord\", \"config\": {\"token\": \"$discord_token\"}}" 2>/dev/null)
-
       if echo "$result" | grep -q '"id"'; then
         ok "Discord instance created"
       else
-        warn "Failed to create Discord instance"
+        warn "Failed. Set up later: omni instances create --name $discord_name --channel discord"
       fi
     else
-      warn "No token provided. Create later: omni instances create --name $discord_name --channel discord"
+      warn "No token. Create later: omni instances create --help"
     fi
   fi
 
-  # ── Set default output format ───────────────────────────────────────
+  # ── Output format ─────────────────────────────────────────────────
   if ask_yn "Configure output format?" "n"; then
-    local fmt_choice
-    fmt_choice=$(ask_choice "Output format:" "human (colored, tables)" "json (machine-readable)")
+    ask_choice "Output format:" "human (colored, tables)" "json (machine-readable)"
     local fmt="human"
-    [[ "$fmt_choice" == "2" ]] && fmt="json"
-
-    local tmp
-    tmp=$(mktemp)
+    [[ "$REPLY" == "2" ]] && fmt="json"
     python3 -c "
 import json
 c = json.load(open('$HOME/.omni/config.json'))
 c['format'] = '$fmt'
-json.dump(c, open('$tmp', 'w'), indent=2)
-" 2>/dev/null && mv "$tmp" "$HOME/.omni/config.json" && chmod 600 "$HOME/.omni/config.json"
-    ok "Output format set to: $fmt"
+json.dump(c, open('$HOME/.omni/config.json', 'w'), indent=2)
+" 2>/dev/null
+    ok "Output format: $fmt"
   fi
 
-  # ── Configure an AI provider ────────────────────────────────────────
+  # ── AI provider ──────────────────────────────────────────────────
   if ask_yn "Configure an AI provider (for auto-replies)?" "n"; then
     step "AI Provider setup"
 
-    local provider_choice
-    provider_choice=$(ask_choice "Provider type:" "OpenAI" "Anthropic" "Custom")
-
+    ask_choice "Provider type:" "OpenAI" "Anthropic" "Custom"
+    local provider_choice="$REPLY"
     local schema="openai" provider_name="" provider_url="" provider_key=""
 
     case "$provider_choice" in
       1)
         schema="openai"
-        provider_name=$(ask_input "Provider name:" "openai")
+        ask_input "Provider name:" "openai";           provider_name="$REPLY"
         provider_url="https://api.openai.com/v1"
-        provider_key=$(ask_secret "OpenAI API key:" "")
+        ask_secret "OpenAI API key:" "";               provider_key="$REPLY"
         ;;
       2)
         schema="anthropic"
-        provider_name=$(ask_input "Provider name:" "anthropic")
+        ask_input "Provider name:" "anthropic";        provider_name="$REPLY"
         provider_url="https://api.anthropic.com"
-        provider_key=$(ask_secret "Anthropic API key:" "")
+        ask_secret "Anthropic API key:" "";             provider_key="$REPLY"
         ;;
       3)
         schema="openai"
-        provider_name=$(ask_input "Provider name:" "my-provider")
-        provider_url=$(ask_input "Base URL:" "")
-        provider_key=$(ask_secret "API key:" "")
+        ask_input "Provider name:" "my-provider";      provider_name="$REPLY"
+        ask_input "Base URL:" "";                      provider_url="$REPLY"
+        ask_secret "API key:" "";                      provider_key="$REPLY"
         ;;
     esac
 
-    if [[ -n "$provider_key" ]] && [[ -n "$provider_url" ]]; then
+    if [[ -n "$provider_key" && -n "$provider_url" ]]; then
       info "Creating provider '$provider_name'..."
       local result
       result=$(curl -s -X POST "$api_url/api/v2/providers" \
         -H "$auth_header" \
         -H "Content-Type: application/json" \
         -d "{\"name\": \"$provider_name\", \"schema\": \"$schema\", \"baseUrl\": \"$provider_url\", \"apiKey\": \"$provider_key\"}" 2>/dev/null)
-
       if echo "$result" | grep -q '"id"'; then
         ok "Provider '$provider_name' created"
       else
-        warn "Failed to create provider. Set up later: omni providers create --help"
+        warn "Failed. Set up later: omni providers create --help"
       fi
     else
       warn "Incomplete config. Set up later: omni providers create --help"
     fi
   fi
 
-  # ── Send a test message ─────────────────────────────────────────────
+  # ── Test message ──────────────────────────────────────────────────
   local instances_json
   instances_json=$(curl -s "$api_url/api/v2/instances" -H "$auth_header" 2>/dev/null)
   local has_active
@@ -514,24 +465,23 @@ json.dump(c, open('$tmp', 'w'), indent=2)
 
   if [[ "$has_active" -gt 0 ]]; then
     if ask_yn "Send a test message?" "n"; then
-      local test_to test_text
-      test_to=$(ask_input "Send to (phone with country code):" "")
-      test_text=$(ask_input "Message:" "Hello from Omni! 🚀")
+      ask_input "Send to (phone with country code):" ""
+      local test_to="$REPLY"
+
+      ask_input "Message:" "Hello from Omni! 🚀"
+      local test_text="$REPLY"
 
       if [[ -n "$test_to" ]]; then
-        info "Sending message..."
+        info "Sending..."
         local send_result
         send_result=$(curl -s -X POST "$api_url/api/v2/messages/send" \
           -H "$auth_header" \
           -H "Content-Type: application/json" \
           -d "{\"to\": \"$test_to\", \"content\": {\"text\": \"$test_text\"}}" 2>/dev/null)
-
         if echo "$send_result" | grep -q '"id"'; then
           ok "Message sent!"
         else
-          local error_msg
-          error_msg=$(echo "$send_result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
-          warn "Send failed: ${error_msg:-unknown error}"
+          warn "Send failed"
         fi
       fi
     fi
@@ -539,22 +489,21 @@ json.dump(c, open('$tmp', 'w'), indent=2)
 }
 
 # ============================================================================
-# Wizard
+# Main wizard
 # ============================================================================
 
 wizard() {
   banner
 
-  printf "${BOLD}What would you like to install?${NC}\n\n"
-  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Control a remote Omni server from this machine\n"
-  printf "  ${CYAN}2)${NC} ${BOLD}Full server${NC}    — Install Omni v2 + all services locally\n"
-  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI and configure remote server\n"
-  printf "\n"
+  printf "${BOLD}What would you like to install?${NC}\n\n" >/dev/tty
+  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Control a remote Omni server from this machine\n" >/dev/tty
+  printf "  ${CYAN}2)${NC} ${BOLD}Full server${NC}    — Install Omni v2 + all services locally\n" >/dev/tty
+  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI and configure remote server\n" >/dev/tty
+  printf "\n" >/dev/tty
 
-  local choice
-  choice=$(ask_input "Choose [1/2/3]:" "1")
+  ask_input "Choose [1/2/3]:" "1"
+  local choice="$REPLY"
 
-  # Check dependencies
   step "Checking dependencies"
   ensure_git
   ensure_bun
@@ -594,13 +543,12 @@ wizard() {
   printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
   printf "\n"
 
-  # Show config
   if [[ -f "$HOME/.omni/config.json" ]]; then
     local saved_url saved_instance
     saved_url=$(grep -o '"apiUrl"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.omni/config.json" | cut -d'"' -f4)
     saved_instance=$(grep -o '"defaultInstance"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.omni/config.json" 2>/dev/null | cut -d'"' -f4)
     printf "  ${DIM}Server:${NC}    %s\n" "${saved_url:-not configured}"
-    [[ -n "$saved_instance" ]] && printf "  ${DIM}Instance:${NC}  %s\n" "$saved_instance"
+    [[ -n "${saved_instance:-}" ]] && printf "  ${DIM}Instance:${NC}  %s\n" "$saved_instance"
     printf "  ${DIM}Config:${NC}    ~/.omni/config.json\n"
     printf "\n"
   fi
@@ -617,37 +565,29 @@ wizard() {
 }
 
 # ============================================================================
-# CLI flags (non-interactive)
+# Non-interactive flags
 # ============================================================================
 
 if [[ "${1:-}" == "--cli" ]]; then
-  ensure_git
-  ensure_bun
-  install_cli_only
-  if [[ -n "${2:-}" ]]; then
-    DEFAULT_API_URL="$2"
-    configure_connection
-  fi
+  ensure_git; ensure_bun; install_cli_only
+  [[ -n "${2:-}" ]] && { DEFAULT_API_URL="$2"; configure_connection; }
   exit 0
 fi
 
 if [[ "${1:-}" == "--server" ]]; then
-  ensure_git
-  ensure_bun
-  install_full_server
+  ensure_git; ensure_bun; install_full_server
   exit 0
 fi
 
-if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   banner
   printf "Usage:\n"
   printf "  curl -fsSL <url>/install.sh | bash                             Interactive wizard\n"
-  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only (no prompts)\n"
-  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli <api-url>       CLI + configure remote\n"
-  printf "  curl -fsSL <url>/install.sh | bash -s -- --server              Full server install\n"
+  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only\n"
+  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli <api-url>       CLI + configure\n"
+  printf "  curl -fsSL <url>/install.sh | bash -s -- --server              Full server\n"
   printf "\n"
   exit 0
 fi
 
-# Default: run wizard
 wizard
