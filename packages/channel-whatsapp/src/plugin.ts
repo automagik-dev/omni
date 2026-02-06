@@ -1229,6 +1229,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       type: ContentType;
       text?: string;
       mediaUrl?: string;
+      mediaLocalPath?: string;
       mimeType?: string;
       caption?: string;
       filename?: string;
@@ -1270,6 +1271,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (content.location) extendedPayload.location = content.location;
     if (content.contact) extendedPayload.contact = content.contact;
     if (content.targetMessageId) extendedPayload.targetMessageId = content.targetMessageId;
+    if (content.mediaLocalPath) extendedPayload.mediaLocalPath = content.mediaLocalPath;
 
     // Add chatName from cached group/chat metadata
     this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);

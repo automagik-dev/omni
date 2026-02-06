@@ -279,6 +279,7 @@ async function handleMessageReceived(
     hasMedia: !!(payload.content.mediaUrl || payload.content.mimeType),
     mediaMimeType: truncate(payload.content.mimeType, 100),
     mediaUrl: payload.content.mediaUrl,
+    mediaLocalPath: rawPayload?.mediaLocalPath as string | undefined,
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
     quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),

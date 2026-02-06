@@ -9,11 +9,14 @@
  * - Lifecycle: edit, delete
  */
 
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
 import { fromJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
+import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 
 const log = createLogger('whatsapp:messages');
 
@@ -24,6 +27,7 @@ interface ExtractedContent {
   type: ContentType;
   text?: string;
   mediaUrl?: string;
+  mediaLocalPath?: string;
   mimeType?: string;
   caption?: string;
   filename?: string;
@@ -427,6 +431,57 @@ function shouldProcessMessage(msg: WAMessage): boolean {
 }
 
 /**
+ * Default media storage base path
+ */
+const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
+
+/**
+ * Download media from a message and return the API-serving URL.
+ *
+ * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ * Returns:   /api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ */
+async function tryDownloadMedia(
+  msg: WAMessage,
+  instanceId: string,
+  externalId: string,
+): Promise<{ mediaUrl: string; mediaLocalPath: string; mimeType: string; size: number } | null> {
+  const mediaInfo = detectMediaType(msg);
+  if (!mediaInfo) return null;
+
+  try {
+    const result = await downloadMediaToBuffer(msg);
+    if (!result) return null;
+
+    // Build path matching MediaStorageService layout
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const ext = getExtension(result.mimeType);
+    const relativePath = join(instanceId, yearMonth, `${externalId}${ext}`);
+    const fullPath = join(MEDIA_BASE_PATH, relativePath);
+
+    // Write to disk
+    const dir = dirname(fullPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(fullPath, result.buffer);
+
+    log.debug('Downloaded media', { externalId, path: relativePath, size: result.buffer.length });
+
+    return {
+      mediaUrl: `/api/v2/media/${relativePath}`,
+      mediaLocalPath: relativePath,
+      mimeType: result.mimeType,
+      size: result.buffer.length,
+    };
+  } catch (error) {
+    log.warn('Media download failed, continuing without media', { externalId, error: String(error) });
+    return null;
+  }
+}
+
+/**
  * Process a single message
  */
 async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
@@ -472,6 +527,14 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   if (content.type === 'delete' && content.targetMessageId) {
     await plugin.handleMessageDeleted(instanceId, content.targetMessageId, chatId, isFromMe(msg));
     return;
+  }
+
+  // Download media if present (non-blocking on failure)
+  const mediaResult = await tryDownloadMedia(msg, instanceId, externalId);
+  if (mediaResult) {
+    content.mediaUrl = mediaResult.mediaUrl;
+    content.mediaLocalPath = mediaResult.mediaLocalPath;
+    content.mimeType = mediaResult.mimeType;
   }
 
   // Pass all content fields including extended ones (poll, event, product, etc.)
