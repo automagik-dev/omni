@@ -136,6 +136,14 @@ export type {
   CreateBatchJobBody,
   ListBatchJobsParams,
   CostEstimate,
+  // API Key types
+  ApiKeyRecord,
+  ApiKeyStatus,
+  CreateApiKeyBody,
+  CreateApiKeyResult,
+  UpdateApiKeyBody,
+  RevokeApiKeyBody,
+  ListApiKeysParams,
 } from './client';
 
 // Errors
