@@ -2,7 +2,36 @@
 
 > **The universal translator for AI agents to communicate across any messaging platform.**
 
-## Quick Start
+## Install
+
+One command — interactive wizard handles the rest:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash
+```
+
+The wizard offers three modes:
+
+| Mode | What it does |
+|------|-------------|
+| **CLI only** | Install the `omni` command to control a remote server |
+| **Full server** | Clone repo + install deps + start services locally |
+| **CLI + connect** | Install CLI and configure a remote server URL + API key |
+
+### Non-interactive
+
+```bash
+# CLI only (no prompts)
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli
+
+# CLI + connect to remote server
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli https://your-omni-server.com
+
+# Full server (no prompts)
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --server
+```
+
+## Quick Start (manual)
 
 ```bash
 # Prerequisites: Bun (https://bun.sh), PM2 (bun add -g pm2)
