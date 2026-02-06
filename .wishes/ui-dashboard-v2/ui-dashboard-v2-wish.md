@@ -104,6 +104,9 @@ Multi-purpose dashboard serving:
    - Conversation view with message bubbles
    - Message input with emoji, attachment, send
    - Correct chronological order (oldest first)
+   - **Pause/Resume Agent** button per chat (human takeover feature)
+   - Audio message player with waveform
+   - Copy message ID action
 
 6. **Search & Filters**
    - Search in chats, contacts, events
@@ -111,19 +114,25 @@ Multi-purpose dashboard serving:
    - Date range filters for events
    - Status filters for contacts
 
-7. **Contact/Person View**
+7. **Users & Identity Management**
+   - `/users` page with search, channel filter, instance filter
+   - User cards with name, channel, message count, last seen
+   - **Potential matches** indicator for cross-channel identity detection
+   - User detail modal with activity stats
+   - **Merge users** dialog for identity linking
+   - Delete user action
+
+8. **Contacts View**
    - `/contacts` page with filter bar (Instance, Search, Status)
    - Contact cards grid with avatars
-   - Person detail with cross-channel identities
-   - Link/unlink identities UI
 
-8. **Settings & Instance Management**
+9. **Settings & Instance Management**
    - Instance settings toggles (Auto-read, Always online, etc.)
    - API key display (masked with reveal)
    - Restart/Logout actions
    - System settings with history
 
-9. **Visual Polish**
+10. **Visual Polish**
    - v1-style cards, spacing, typography
    - Status indicators (green/yellow/red dots)
    - Progress bars for metrics
@@ -545,6 +554,10 @@ Screenshots captured during analysis:
 - `v1-instance-behavior.png` - Instance behavior toggles
 - `v1-instance-messages.png` - Instance message handling
 - `v1-instance-webhooks.png` - Instance webhooks info
+- `v1-chat-agent-paused.png` - Pause/Resume agent feature
+- `v1-chat-audio-message.png` - Audio message with waveform player
+- `v1-user-detail-modal.png` - User detail with activity stats
+- `v1-merge-users-modal.png` - Identity linking interface
 
 ---
 
