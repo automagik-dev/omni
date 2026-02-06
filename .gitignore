@@ -27,6 +27,7 @@ logs/
 
 # Local services data
 .pgserve-data/
+data/
 bin/nats-server
 
 # PM2
