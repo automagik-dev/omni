@@ -161,7 +161,7 @@ dev-ui:
 # Quality Checks
 # ============================================================================
 
-typecheck:
+typecheck: _build-dist
 	bun run typecheck
 
 lint:
