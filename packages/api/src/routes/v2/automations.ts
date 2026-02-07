@@ -196,16 +196,9 @@ automationsRoutes.get('/automation-logs', zValidator('query', logsQuerySchema), 
 automationsRoutes.get('/automation-metrics', async (c) => {
   const services = c.get('services');
 
-  const metrics = services.automations.getMetrics();
+  const metrics = await services.automations.getMetrics();
 
-  if (!metrics) {
-    return c.json({ running: false, message: 'Automation engine not running' });
-  }
-
-  return c.json({
-    running: true,
-    ...metrics,
-  });
+  return c.json(metrics);
 });
 
 /**
