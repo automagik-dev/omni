@@ -23,11 +23,19 @@ export function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+      {/* Atmospheric background blobs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-1/4 -top-1/4 h-[600px] w-[600px] rounded-full bg-primary/10 blur-[128px]" />
+        <div className="absolute -bottom-1/4 -right-1/4 h-[500px] w-[500px] rounded-full bg-info/8 blur-[128px]" />
+      </div>
+
+      <Card className="relative w-full max-w-md border-white/10 bg-card/60 backdrop-blur-xl">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">
-            <span className="text-primary">Omni</span> Dashboard
+            <span className="bg-gradient-to-r from-primary to-info bg-clip-text font-display font-bold text-transparent">
+              OMNI
+            </span>
           </CardTitle>
           <CardDescription>Enter your API key to continue</CardDescription>
         </CardHeader>
@@ -48,7 +56,7 @@ export function Login() {
                 </p>
               )}
             </div>
-            <Button type="submit" className="w-full" disabled={isLoggingIn || !apiKey.trim()}>
+            <Button type="submit" variant="glow" className="w-full" disabled={isLoggingIn || !apiKey.trim()}>
               {isLoggingIn ? 'Validating...' : 'Login'}
             </Button>
           </form>

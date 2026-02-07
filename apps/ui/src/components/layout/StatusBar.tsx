@@ -4,9 +4,6 @@ import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { ServiceStatus } from './ServiceStatus';
 
-/**
- * Status bar footer showing service health and system info
- */
 function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -28,9 +25,9 @@ function getServiceStatus(
 }
 
 function getStatusBadgeClass(status: string | undefined): string {
-  if (status === 'healthy') return 'bg-green-500/10 text-green-500';
-  if (status === 'degraded') return 'bg-yellow-500/10 text-yellow-500';
-  if (status === 'unhealthy') return 'bg-red-500/10 text-red-500';
+  if (status === 'healthy') return 'bg-success/10 text-success';
+  if (status === 'degraded') return 'bg-warning/10 text-warning';
+  if (status === 'unhealthy') return 'bg-destructive/10 text-destructive';
   return 'bg-muted text-muted-foreground';
 }
 
@@ -49,13 +46,13 @@ export function StatusBar() {
   const natsStatus = getServiceStatus(isLoading, isError, health?.checks?.nats?.status);
 
   return (
-    <footer className="flex h-8 items-center justify-between border-t bg-card px-4">
+    <footer className="flex h-8 items-center justify-between border-t border-border/20 bg-card/30 px-4 backdrop-blur-md">
       <div className="flex items-center gap-4">
         <ServiceStatus name="Database" status={dbStatus} latency={health?.checks?.database?.latency} />
         <ServiceStatus name="NATS" status={natsStatus} latency={health?.checks?.nats?.latency} />
       </div>
 
-      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+      <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
         {health?.instances && (
           <span>
             {health.instances.connected}/{health.instances.total} instances
@@ -65,7 +62,7 @@ export function StatusBar() {
         <span className={cn('rounded px-1.5 py-0.5', getStatusBadgeClass(health?.status))}>
           {health?.status ?? 'loading'}
         </span>
-        {health?.version && <span>v{health.version}</span>}
+        {health?.version && <span className="text-muted-foreground/60">v{health.version}</span>}
       </div>
     </footer>
   );
