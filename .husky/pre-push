@@ -1,1 +1,7 @@
+# Build SDK dist if missing (CLI typecheck depends on SDK type declarations)
+if [ ! -d packages/sdk/dist ]; then
+  echo "Building SDK (dist/ missing)..."
+  cd packages/sdk && bun run build && cd ../..
+fi
+
 make typecheck
