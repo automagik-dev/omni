@@ -26,6 +26,7 @@ import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle
 
 export interface ListMessagesOptions {
   chatId?: string;
+  instanceIds?: string[];
   source?: MessageSource[];
   messageType?: MessageType[];
   status?: MessageStatus[];
@@ -91,6 +92,7 @@ export class MessageService {
   }> {
     const {
       chatId,
+      instanceIds,
       source,
       messageType,
       status,
@@ -104,9 +106,14 @@ export class MessageService {
     } = options;
 
     const conditions = [];
+    const needsJoin = !!instanceIds?.length;
 
     if (chatId) {
       conditions.push(eq(messages.chatId, chatId));
+    }
+
+    if (instanceIds?.length) {
+      conditions.push(inArray(chats.instanceId, instanceIds));
     }
 
     if (source?.length) {
@@ -156,12 +163,15 @@ export class MessageService {
       conditions.push(sql`${messages.platformTimestamp} < ${cursor}`);
     }
 
-    const items = await this.db
-      .select()
-      .from(messages)
+    const baseQuery = this.db.select({ messages }).from(messages);
+    const query = needsJoin ? baseQuery.innerJoin(chats, eq(messages.chatId, chats.id)) : baseQuery;
+
+    const rows = await query
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(messages.platformTimestamp))
       .limit(limit + 1);
+
+    const items = rows.map((row) => row.messages);
 
     const hasMore = items.length > limit;
     if (hasMore) {
@@ -180,12 +190,18 @@ export class MessageService {
    * Count total messages matching filters
    */
   async count(options: Omit<ListMessagesOptions, 'limit' | 'cursor'> = {}): Promise<number> {
-    const { chatId, source, messageType, status, hasMedia, senderPersonId, since, until, search } = options;
+    const { chatId, instanceIds, source, messageType, status, hasMedia, senderPersonId, since, until, search } =
+      options;
 
     const conditions = [];
+    const needsJoin = !!instanceIds?.length;
 
     if (chatId) {
       conditions.push(eq(messages.chatId, chatId));
+    }
+
+    if (instanceIds?.length) {
+      conditions.push(inArray(chats.instanceId, instanceIds));
     }
 
     if (source?.length) {
@@ -231,10 +247,10 @@ export class MessageService {
     // Exclude deleted messages by default
     conditions.push(sql`${messages.deletedAt} IS NULL`);
 
-    const result = await this.db
-      .select({ count: count() })
-      .from(messages)
-      .where(conditions.length ? and(...conditions) : undefined);
+    const baseQuery = this.db.select({ count: count() }).from(messages);
+    const query = needsJoin ? baseQuery.innerJoin(chats, eq(messages.chatId, chats.id)) : baseQuery;
+
+    const result = await query.where(conditions.length ? and(...conditions) : undefined);
 
     return result[0]?.count ?? 0;
   }

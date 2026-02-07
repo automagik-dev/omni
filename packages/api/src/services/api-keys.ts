@@ -114,7 +114,7 @@ export class ApiKeyService {
    * Validate an API key and return its data if valid
    * Uses caching to avoid database lookup on every request.
    */
-  async validate(key: string): Promise<ValidatedApiKey | null> {
+  async validate(key: string, ip?: string): Promise<ValidatedApiKey | null> {
     // Basic format check
     if (!key.startsWith(API_KEY_PREFIX)) {
       log.debug('Invalid key format');
@@ -139,7 +139,7 @@ export class ApiKeyService {
       }
 
       // Update usage asynchronously (fire and forget)
-      this.updateUsageAsync(cached.id);
+      this.updateUsageAsync(cached.id, ip);
 
       return {
         id: cached.id,
@@ -180,7 +180,7 @@ export class ApiKeyService {
     await apiKeyCache.set(cacheKey, cachedData, CacheTTL.API_KEY);
 
     // Update usage asynchronously
-    this.updateUsageAsync(apiKey.id);
+    this.updateUsageAsync(apiKey.id, ip);
 
     return {
       id: apiKey.id,
@@ -194,14 +194,19 @@ export class ApiKeyService {
   /**
    * Update API key usage (fire and forget)
    */
-  private updateUsageAsync(keyId: string): void {
+  private updateUsageAsync(keyId: string, ip?: string): void {
+    const updates: Record<string, unknown> = {
+      lastUsedAt: new Date(),
+      usageCount: sql`${apiKeys.usageCount} + 1`,
+      updatedAt: new Date(),
+    };
+    if (ip) {
+      updates.lastUsedIp = ip;
+    }
+
     this.db
       .update(apiKeys)
-      .set({
-        lastUsedAt: new Date(),
-        usageCount: sql`${apiKeys.usageCount} + 1`,
-        updatedAt: new Date(),
-      })
+      .set(updates)
       .where(eq(apiKeys.id, keyId))
       .then(() => {})
       .catch((err) => log.error('Failed to update key usage', { error: String(err) }));

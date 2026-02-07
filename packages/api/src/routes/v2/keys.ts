@@ -45,6 +45,25 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'),
 });
 
+const auditQuerySchema = z.object({
+  since: z
+    .string()
+    .datetime()
+    .optional()
+    .transform((v) => (v ? new Date(v) : undefined))
+    .describe('Filter logs from this timestamp'),
+  until: z
+    .string()
+    .datetime()
+    .optional()
+    .transform((v) => (v ? new Date(v) : undefined))
+    .describe('Filter logs until this timestamp'),
+  path: z.string().optional().describe('Filter by request path (partial match)'),
+  statusCode: z.coerce.number().int().optional().describe('Filter by HTTP status code'),
+  limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'),
+  cursor: z.string().optional().describe('Pagination cursor'),
+});
+
 // ============================================================================
 // ROUTES
 // ============================================================================
@@ -181,4 +200,37 @@ keysRoutes.delete('/:id', requireScope('keys:write'), async (c) => {
     }
     throw error;
   }
+});
+
+/**
+ * GET /keys/:id/audit - Get audit logs for an API key
+ */
+keysRoutes.get('/:id/audit', requireScope('keys:read'), zValidator('query', auditQuerySchema), async (c) => {
+  const id = c.req.param('id');
+  const { since, until, path, statusCode, limit, cursor } = c.req.valid('query');
+  const services = c.get('services');
+
+  // Verify key exists
+  const key = await services.apiKeys.getById(id);
+  if (!key) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
+  }
+
+  const result = await services.audit.listByKeyId(id, {
+    since,
+    until,
+    path,
+    statusCode,
+    limit,
+    cursor,
+  });
+
+  return c.json({
+    items: result.items,
+    meta: {
+      total: result.total,
+      hasMore: result.hasMore,
+      cursor: result.cursor,
+    },
+  });
 });

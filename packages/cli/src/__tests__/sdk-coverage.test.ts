@@ -190,6 +190,16 @@ const CLI_COMMANDS: Record<string, string> = {
   'batchJobs.estimate': 'batch estimate',
 
   // ============================================================================
+  // API KEYS
+  // ============================================================================
+  'keys.create': 'keys create',
+  'keys.list': 'keys list',
+  'keys.get': 'keys get',
+  'keys.update': 'keys update',
+  'keys.revoke': 'keys revoke',
+  'keys.delete': 'keys delete',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',

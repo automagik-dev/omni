@@ -38,7 +38,8 @@ import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Services } from '../../services';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -162,6 +163,21 @@ async function getReplyContext(
     replyToRawPayload: originalMessage.rawPayload as Record<string, unknown> | undefined,
     replyToText: originalMessage.textContent ?? undefined,
   };
+}
+
+/**
+ * Check if an API key has access to a specific instance.
+ * Throws FORBIDDEN error if access is denied.
+ */
+function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
+  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
+    throw new OmniError({
+      code: ERROR_CODES.FORBIDDEN,
+      message: 'API key does not have access to this instance',
+      context: { instanceId },
+      recoverable: false,
+    });
+  }
 }
 
 /**
@@ -409,9 +425,16 @@ const sendLocationSchema = z.object({
 messagesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const query = c.req.valid('query');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // If API key has instance restrictions, pass them to the query
+  const queryWithAccess = apiKey?.instanceIds ? { ...query, instanceIds: apiKey.instanceIds } : query;
 
   // Run list and count in parallel for efficiency
-  const [result, total] = await Promise.all([services.messages.list(query), services.messages.count(query)]);
+  const [result, total] = await Promise.all([
+    services.messages.list(queryWithAccess),
+    services.messages.count(queryWithAccess),
+  ]);
 
   return c.json({
     items: result.items,
@@ -620,6 +643,7 @@ messagesRoutes.patch(
 messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
   const { instanceId, to, text, replyTo, mentions } = c.req.valid('json');
   const services = c.get('services');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -664,6 +688,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const data = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -762,6 +787,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   const { instanceId, to, messageId, emoji } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(instanceId);
@@ -842,6 +868,7 @@ messagesRoutes.post('/send/sticker', zValidator('json', sendStickerSchema), asyn
   const data = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -932,6 +959,7 @@ messagesRoutes.post('/send/contact', zValidator('json', sendContactSchema), asyn
   const data = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -1014,6 +1042,7 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
   const data = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -1140,6 +1169,7 @@ const sendTtsSchema = z.object({
 messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -1246,6 +1276,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
   const { instanceId, to, messageId, fromChatId } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(instanceId);
@@ -1387,6 +1418,7 @@ const sendPresenceSchema = z.object({
 messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), async (c) => {
   const { instanceId, to, type, duration } = c.req.valid('json');
   const services = c.get('services');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -1457,6 +1489,7 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   const { instanceId } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Get message from our database
   const message = await services.messages.getById(messageId);
@@ -1513,6 +1546,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   const { instanceId, chatId, messageIds } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -1638,6 +1672,7 @@ const deleteMessageChannelSchema = z.object({
 messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -1678,6 +1713,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
   const data = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -1792,6 +1828,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
   const { instanceId, channelId, messageId, text } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(instanceId);
@@ -1853,6 +1890,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
   const { instanceId, channelId, messageId } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Verify instance exists
   const instance = await services.instances.getById(instanceId);
