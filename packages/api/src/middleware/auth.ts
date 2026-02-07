@@ -2,6 +2,7 @@
  * Authentication middleware - validates API keys against database
  */
 
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
@@ -42,8 +43,13 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     );
   }
 
+  // Capture request metadata for audit
+  const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+  const userAgent = c.req.header('user-agent');
+  const startTime = Date.now();
+
   // Validate the API key against database
-  const validatedKey = await services.apiKeys.validate(apiKey);
+  const validatedKey = await services.apiKeys.validate(apiKey, ip);
 
   if (!validatedKey) {
     return c.json(
@@ -67,7 +73,20 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
   };
 
   c.set('apiKey', keyData);
-  return next();
+  await next();
+
+  // Fire-and-forget audit log after response
+  if (services.audit) {
+    services.audit.log({
+      apiKeyId: validatedKey.id,
+      method: c.req.method,
+      path: c.req.path,
+      statusCode: c.res.status,
+      ipAddress: ip,
+      userAgent,
+      responseTimeMs: Date.now() - startTime,
+    });
+  }
 });
 
 /**
@@ -106,9 +125,10 @@ export function requireScope(scope: string) {
 }
 
 /**
- * Check if API key has access to a specific instance
+ * Check if API key has access to a specific instance.
+ * Use on routes with :id param for instance-scoped access control.
  */
-export function requireInstanceAccess(instanceIdGetter: (c: unknown) => string) {
+export function requireInstanceAccess(instanceIdGetter: (c: Context<{ Variables: AppVariables }>) => string) {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     const apiKey = c.get('apiKey');
 
@@ -139,4 +159,13 @@ export function requireInstanceAccess(instanceIdGetter: (c: unknown) => string) 
 
     return next();
   });
+}
+
+/**
+ * Filter a list of items by instance access.
+ * For list endpoints where we filter results rather than returning 403.
+ */
+export function filterByInstanceAccess<T>(items: T[], getInstanceId: (item: T) => string, apiKey: ApiKeyData): T[] {
+  if (!apiKey.instanceIds) return items; // null = all instances
+  return items.filter((item) => apiKey.instanceIds?.includes(getInstanceId(item)));
 }
