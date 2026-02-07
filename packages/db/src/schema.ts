@@ -345,6 +345,50 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
 
 // ============================================================================
+// API KEY AUDIT LOGS
+// ============================================================================
+
+/**
+ * Audit trail for API key usage.
+ * Logs every authenticated API request for security monitoring.
+ */
+export const apiKeyAuditLogs = pgTable(
+  'api_key_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    apiKeyId: uuid('api_key_id')
+      .notNull()
+      .references(() => apiKeys.id, { onDelete: 'cascade' }),
+    method: varchar('method', { length: 10 }).notNull(),
+    path: varchar('path', { length: 500 }).notNull(),
+    statusCode: integer('status_code').notNull(),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    userAgent: text('user_agent'),
+    responseTimeMs: integer('response_time_ms'),
+    timestamp: timestamp('timestamp').notNull().defaultNow(),
+  },
+  (table) => ({
+    apiKeyIdx: index('api_key_audit_logs_api_key_idx').on(table.apiKeyId),
+    timestampIdx: index('api_key_audit_logs_timestamp_idx').on(table.timestamp),
+    pathIdx: index('api_key_audit_logs_path_idx').on(table.path),
+  }),
+);
+
+export type ApiKeyAuditLog = typeof apiKeyAuditLogs.$inferSelect;
+export type NewApiKeyAuditLog = typeof apiKeyAuditLogs.$inferInsert;
+
+export const apiKeysRelations = relations(apiKeys, ({ many }) => ({
+  auditLogs: many(apiKeyAuditLogs),
+}));
+
+export const apiKeyAuditLogsRelations = relations(apiKeyAuditLogs, ({ one }) => ({
+  apiKey: one(apiKeys, {
+    fields: [apiKeyAuditLogs.apiKeyId],
+    references: [apiKeys.id],
+  }),
+}));
+
+// ============================================================================
 // INSTANCES
 // ============================================================================
 

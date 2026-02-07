@@ -10,6 +10,7 @@ import type { Database } from '@omni/db';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { ApiKeyService } from './api-keys';
+import { AuditService } from './audit';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
@@ -31,6 +32,7 @@ import { WebhookService } from './webhooks';
  */
 export interface Services {
   apiKeys: ApiKeyService;
+  audit: AuditService;
   instances: InstanceService;
   persons: PersonService;
   events: EventService;
@@ -62,6 +64,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 
   return {
     apiKeys,
+    audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),
     events: new EventService(db),
@@ -84,6 +87,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 
 // Re-export service classes
 export { ApiKeyService, type ValidatedApiKey, type CreateApiKeyOptions, type CreateApiKeyResult } from './api-keys';
+export { AuditService } from './audit';
 export { InstanceService } from './instances';
 export { PersonService } from './persons';
 export { EventService } from './events';

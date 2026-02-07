@@ -7,12 +7,16 @@ import type { ChannelPlugin } from '@omni/channel-sdk';
 import { ChannelTypeSchema, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
 
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
+
+// Instance access middleware for :id routes
+const instanceAccess = requireInstanceAccess((c) => c.req.param('id'));
 
 // Query params schema for list
 const listQuerySchema = z.object({
@@ -75,11 +79,15 @@ const updateInstanceSchema = createInstanceSchema.partial();
 instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const { channel, status, limit, cursor } = c.req.valid('query');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
   const result = await services.instances.list({ channel, status, limit, cursor });
 
+  // Filter by API key's allowed instanceIds
+  const items = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+
   return c.json({
-    items: result.items,
+    items,
     meta: {
       hasMore: result.hasMore,
       cursor: result.cursor,
@@ -132,7 +140,7 @@ instancesRoutes.get('/supported-channels', async (c) => {
 /**
  * GET /instances/:id - Get instance by ID
  */
-instancesRoutes.get('/:id', async (c) => {
+instancesRoutes.get('/:id', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -185,7 +193,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 /**
  * PATCH /instances/:id - Update instance
  */
-instancesRoutes.patch('/:id', zValidator('json', updateInstanceSchema), async (c) => {
+instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
@@ -198,7 +206,7 @@ instancesRoutes.patch('/:id', zValidator('json', updateInstanceSchema), async (c
 /**
  * DELETE /instances/:id - Delete instance
  */
-instancesRoutes.delete('/:id', async (c) => {
+instancesRoutes.delete('/:id', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
@@ -226,7 +234,7 @@ instancesRoutes.delete('/:id', async (c) => {
 /**
  * GET /instances/:id/status - Get instance connection status
  */
-instancesRoutes.get('/:id/status', async (c) => {
+instancesRoutes.get('/:id/status', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
@@ -268,7 +276,7 @@ instancesRoutes.get('/:id/status', async (c) => {
 /**
  * GET /instances/:id/qr - Get QR code for WhatsApp connection
  */
-instancesRoutes.get('/:id/qr', async (c) => {
+instancesRoutes.get('/:id/qr', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -314,7 +322,7 @@ const pairingCodeSchema = z.object({
  * Alternative to QR code scanning. The instance must be connected (in connecting state)
  * before requesting a pairing code.
  */
-instancesRoutes.post('/:id/pair', zValidator('json', pairingCodeSchema), async (c) => {
+instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCodeSchema), async (c) => {
   const id = c.req.param('id');
   const { phoneNumber } = c.req.valid('json');
   const services = c.get('services');
@@ -382,68 +390,73 @@ const connectInstanceSchema = z.object({
  * Query params (deprecated, use body):
  * - forceNewQr: true - Clear auth state and force fresh QR code
  */
-instancesRoutes.post('/:id/connect', zValidator('json', connectInstanceSchema.optional()), async (c) => {
-  const id = c.req.param('id');
-  const body = c.req.valid('json') ?? {};
-  const forceNewQr = body.forceNewQr ?? c.req.query('forceNewQr') === 'true';
-  const services = c.get('services');
-  const channelRegistry = c.get('channelRegistry');
+instancesRoutes.post(
+  '/:id/connect',
+  instanceAccess,
+  zValidator('json', connectInstanceSchema.optional()),
+  async (c) => {
+    const id = c.req.param('id');
+    const body = c.req.valid('json') ?? {};
+    const forceNewQr = body.forceNewQr ?? c.req.query('forceNewQr') === 'true';
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
 
-  const instance = await services.instances.getById(id);
+    const instance = await services.instances.getById(id);
 
-  // Build connection options
-  const connectionOptions: Record<string, unknown> = { forceNewQr };
-  if (body.token) {
-    connectionOptions.token = body.token;
-  }
+    // Build connection options
+    const connectionOptions: Record<string, unknown> = { forceNewQr };
+    if (body.token) {
+      connectionOptions.token = body.token;
+    }
 
-  // Trigger connection via channel plugin
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        await plugin.connect(id, {
-          instanceId: id,
-          credentials: {},
-          options: connectionOptions,
-        });
-      } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: 'CONNECTION_FAILED',
-              message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    // Trigger connection via channel plugin
+    if (channelRegistry) {
+      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+      if (plugin) {
+        try {
+          await plugin.connect(id, {
+            instanceId: id,
+            credentials: {},
+            options: connectionOptions,
+          });
+        } catch (error) {
+          return c.json(
+            {
+              error: {
+                code: 'CONNECTION_FAILED',
+                message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              },
             },
-          },
-          500,
+            500,
+          );
+        }
+      } else {
+        return c.json(
+          { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+          400,
         );
       }
     } else {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-        400,
-      );
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
-  } else {
-    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-  }
 
-  // Update database
-  const updated = await services.instances.update(id, { isActive: true });
+    // Update database
+    const updated = await services.instances.update(id, { isActive: true });
 
-  return c.json({
-    data: {
-      instanceId: updated.id,
-      status: 'connecting',
-      message: 'Connection initiated',
-    },
-  });
-});
+    return c.json({
+      data: {
+        instanceId: updated.id,
+        status: 'connecting',
+        message: 'Connection initiated',
+      },
+    });
+  },
+);
 
 /**
  * POST /instances/:id/disconnect - Disconnect instance
  */
-instancesRoutes.post('/:id/disconnect', async (c) => {
+instancesRoutes.post('/:id/disconnect', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
@@ -475,7 +488,7 @@ instancesRoutes.post('/:id/disconnect', async (c) => {
  * Query params:
  * - forceNewQr: true - Clear auth state and force fresh QR code (for re-authentication)
  */
-instancesRoutes.post('/:id/restart', async (c) => {
+instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const forceNewQr = c.req.query('forceNewQr') === 'true';
   const services = c.get('services');
@@ -531,7 +544,7 @@ instancesRoutes.post('/:id/restart', async (c) => {
 /**
  * POST /instances/:id/logout - Logout instance (clear session)
  */
-instancesRoutes.post('/:id/logout', async (c) => {
+instancesRoutes.post('/:id/logout', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
@@ -592,7 +605,7 @@ interface ProfileSyncResult {
 /**
  * POST /instances/:id/sync/profile - Sync profile immediately
  */
-instancesRoutes.post('/:id/sync/profile', async (c) => {
+instancesRoutes.post('/:id/sync/profile', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
@@ -663,7 +676,7 @@ instancesRoutes.post('/:id/sync/profile', async (c) => {
  * - groups: Sync groups/guilds
  * - all: Sync everything
  */
-instancesRoutes.post('/:id/sync', zValidator('json', syncRequestSchema), async (c) => {
+instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequestSchema), async (c) => {
   const id = c.req.param('id');
   const { type, depth, channelId, downloadMedia } = c.req.valid('json');
   const services = c.get('services');
@@ -747,7 +760,7 @@ instancesRoutes.post('/:id/sync', zValidator('json', syncRequestSchema), async (
 /**
  * GET /instances/:id/sync/:jobId - Get sync job status
  */
-instancesRoutes.get('/:id/sync/:jobId', async (c) => {
+instancesRoutes.get('/:id/sync/:jobId', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const jobId = c.req.param('jobId');
   const services = c.get('services');
@@ -782,7 +795,7 @@ instancesRoutes.get('/:id/sync/:jobId', async (c) => {
 /**
  * GET /instances/:id/sync - List sync jobs for instance
  */
-instancesRoutes.get('/:id/sync', async (c) => {
+instancesRoutes.get('/:id/sync', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const status = c.req.query('status')?.split(',') as
     | ('pending' | 'running' | 'completed' | 'failed' | 'cancelled')[]
@@ -825,7 +838,7 @@ instancesRoutes.get('/:id/sync', async (c) => {
  * Fetches profile information for a specific user on this channel.
  * Useful for getting profile pics, bios, business info etc.
  */
-instancesRoutes.get('/:id/users/:userId/profile', async (c) => {
+instancesRoutes.get('/:id/users/:userId/profile', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const userId = c.req.param('userId');
   const services = c.get('services');
@@ -895,7 +908,7 @@ const listContactsQuerySchema = z.object({
  * Returns cached contacts from the channel plugin.
  * For Discord, requires guildId query parameter.
  */
-instancesRoutes.get('/:id/contacts', zValidator('query', listContactsQuerySchema), async (c) => {
+instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listContactsQuerySchema), async (c) => {
   const id = c.req.param('id');
   const { limit, guildId } = c.req.valid('query');
   const services = c.get('services');
@@ -1014,7 +1027,7 @@ const listGroupsQuerySchema = z.object({
  *
  * Returns groups the instance is participating in.
  */
-instancesRoutes.get('/:id/groups', zValidator('query', listGroupsQuerySchema), async (c) => {
+instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroupsQuerySchema), async (c) => {
   const id = c.req.param('id');
   const { limit } = c.req.valid('query');
   const services = c.get('services');
