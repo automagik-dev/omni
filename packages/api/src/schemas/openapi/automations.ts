@@ -147,11 +147,21 @@ export const TestAutomationSchema = z.object({
 // Automation metrics
 export const AutomationMetricsSchema = z.object({
   running: z.boolean().openapi({ description: 'Engine running' }),
-  totalAutomations: z.number().int().openapi({ description: 'Total automations' }),
-  enabledAutomations: z.number().int().openapi({ description: 'Enabled automations' }),
-  eventsProcessed: z.number().int().openapi({ description: 'Events processed' }),
-  actionsExecuted: z.number().int().openapi({ description: 'Actions executed' }),
-  failedActions: z.number().int().openapi({ description: 'Failed actions' }),
+  instanceQueues: z
+    .array(
+      z.object({
+        instanceId: z.string().openapi({ description: 'Instance ID' }),
+        activeCount: z.number().int().openapi({ description: 'Active jobs' }),
+        pendingCount: z.number().int().openapi({ description: 'Pending jobs' }),
+      }),
+    )
+    .optional()
+    .openapi({ description: 'Instance queue stats' }),
+  totalExecutions: z.number().int().openapi({ description: 'Total executions' }),
+  totalActions: z.number().int().openapi({ description: 'Total actions executed' }),
+  successRate: z.number().openapi({ description: 'Success rate (%)' }),
+  avgExecutionTimeMs: z.number().openapi({ description: 'Average execution time (ms)' }),
+  recentFailures: z.number().int().openapi({ description: 'Failures in last 24h' }),
 });
 
 export function registerAutomationSchemas(registry: OpenAPIRegistry): void {

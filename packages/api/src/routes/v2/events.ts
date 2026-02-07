@@ -74,6 +74,7 @@ const analyticsQuerySchema = z.object({
     .optional()
     .transform((v) => (v ? new Date(v) : undefined)),
   instanceId: z.string().uuid().optional(),
+  granularity: z.enum(['hourly', 'daily']).optional(),
   allTime: z.coerce.boolean().optional(),
 });
 
@@ -120,7 +121,7 @@ eventsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
  * GET /events/analytics - Get analytics summary
  */
 eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
-  const { since, until, instanceId, allTime } = c.req.valid('query');
+  const { since, until, instanceId, granularity, allTime } = c.req.valid('query');
   const services = c.get('services');
 
   // Default to last 24 hours if no date filter and not allTime
@@ -131,6 +132,7 @@ eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async 
     since: effectiveSince,
     until: effectiveUntil,
     instanceId,
+    granularity,
   });
 
   return c.json(analytics);

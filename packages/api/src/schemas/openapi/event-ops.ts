@@ -34,11 +34,30 @@ export const ReplaySessionSchema = z.object({
 
 // Event metrics schema
 export const EventMetricsSchema = z.object({
-  total: z.number().int().openapi({ description: 'Total events' }),
-  today: z.number().int().openapi({ description: 'Events today' }),
-  byType: z.record(z.string(), z.number()).openapi({ description: 'Count by type' }),
-  byChannel: z.record(z.string(), z.number()).openapi({ description: 'Count by channel' }),
-  avgProcessingTime: z.number().openapi({ description: 'Avg processing time (ms)' }),
+  totalEvents: z.number().int().openapi({ description: 'Total events' }),
+  eventsLast24h: z.number().int().openapi({ description: 'Events in last 24 hours' }),
+  eventsLast7d: z.number().int().openapi({ description: 'Events in last 7 days' }),
+  eventsLastHour: z.number().int().openapi({ description: 'Events in last hour' }),
+
+  eventsPerHour: z.number().openapi({ description: 'Average events per hour (last 24h / 24)' }),
+  eventsPerMinute: z.number().openapi({ description: 'Average events per minute (last hour / 60)' }),
+
+  completed: z.number().int().openapi({ description: 'Completed events' }),
+  failed: z.number().int().openapi({ description: 'Failed events' }),
+  pending: z.number().int().openapi({ description: 'Pending events' }),
+
+  avgProcessingTimeMs: z.number().nullable().openapi({ description: 'Average processing time (ms)' }),
+  avgAgentLatencyMs: z.number().nullable().openapi({ description: 'Average agent latency (ms)' }),
+  p95ProcessingTimeMs: z.number().nullable().openapi({ description: 'P95 processing time (ms)' }),
+
+  failureRate: z.number().openapi({ description: 'Failure rate (%)' }),
+  errorsByStage: z.record(z.string(), z.number()).openapi({ description: 'Error count by stage' }),
+
+  deadLettersPending: z.number().int().openapi({ description: 'Pending dead letters' }),
+  deadLettersResolved: z.number().int().openapi({ description: 'Resolved dead letters' }),
+
+  payloadsStored: z.number().int().openapi({ description: 'Total stored payloads' }),
+  storageSizeBytes: z.number().int().openapi({ description: 'Storage size (bytes)' }),
 });
 
 // Scheduled ops result
