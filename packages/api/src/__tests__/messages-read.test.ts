@@ -156,6 +156,7 @@ describeWithDb('Read Receipt Endpoints', () => {
     app.use('*', async (c, next) => {
       c.set('services', services);
       c.set('channelRegistry', mockRegistry as unknown as AppVariables['channelRegistry']);
+      c.set('apiKey', { id: 'test-key', name: 'test', scopes: ['*'], instanceIds: null, expiresAt: null });
       await next();
     });
 
