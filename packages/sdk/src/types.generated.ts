@@ -625,7 +625,7 @@ export interface paths {
         };
         /**
          * Get event analytics
-         * @description Get analytics summary for events.
+         * @description Get analytics summary for events with optional timeline data.
          */
         get: operations["getEventAnalytics"];
         put?: never;
@@ -2441,20 +2441,48 @@ export interface components {
             textPreview: string | null;
         };
         EventAnalytics: {
-            /** @description Total event count */
-            totalEvents: number;
-            /** @description Count by event type */
-            byEventType: {
+            /** @description Total message count */
+            totalMessages: number;
+            /** @description Successful messages */
+            successfulMessages: number;
+            /** @description Failed messages */
+            failedMessages: number;
+            /** @description Success rate (%) */
+            successRate: number;
+            /** @description Average processing time (ms) */
+            avgProcessingTimeMs: number | null;
+            /** @description Average agent time (ms) */
+            avgAgentTimeMs: number | null;
+            /** @description Count by content type */
+            messageTypes: {
                 [key: string]: number;
             };
-            /** @description Count by channel */
+            /** @description Count by error stage */
+            errorStages: {
+                [key: string]: number;
+            };
+            /** @description Count by instance */
+            instances: {
+                [key: string]: number;
+            };
+            /** @description Count by channel type */
             byChannel: {
                 [key: string]: number;
             };
+            /** @description Message direction breakdown */
             byDirection: {
+                /** @description Inbound messages */
                 inbound: number;
+                /** @description Outbound messages */
                 outbound: number;
             };
+            /** @description Timeline data (hourly or daily buckets) */
+            timeline?: {
+                /** @description Time bucket (ISO timestamp) */
+                bucket: string;
+                /** @description Event count in bucket */
+                count: number;
+            }[];
         };
         EventSearch: {
             /** @description Full-text search query */
@@ -3246,19 +3274,43 @@ export interface components {
         };
         EventMetrics: {
             /** @description Total events */
-            total: number;
-            /** @description Events today */
-            today: number;
-            /** @description Count by type */
-            byType: {
+            totalEvents: number;
+            /** @description Events in last 24 hours */
+            eventsLast24h: number;
+            /** @description Events in last 7 days */
+            eventsLast7d: number;
+            /** @description Events in last hour */
+            eventsLastHour: number;
+            /** @description Average events per hour (last 24h / 24) */
+            eventsPerHour: number;
+            /** @description Average events per minute (last hour / 60) */
+            eventsPerMinute: number;
+            /** @description Completed events */
+            completed: number;
+            /** @description Failed events */
+            failed: number;
+            /** @description Pending events */
+            pending: number;
+            /** @description Average processing time (ms) */
+            avgProcessingTimeMs: number | null;
+            /** @description Average agent latency (ms) */
+            avgAgentLatencyMs: number | null;
+            /** @description P95 processing time (ms) */
+            p95ProcessingTimeMs: number | null;
+            /** @description Failure rate (%) */
+            failureRate: number;
+            /** @description Error count by stage */
+            errorsByStage: {
                 [key: string]: number;
             };
-            /** @description Count by channel */
-            byChannel: {
-                [key: string]: number;
-            };
-            /** @description Avg processing time (ms) */
-            avgProcessingTime: number;
+            /** @description Pending dead letters */
+            deadLettersPending: number;
+            /** @description Resolved dead letters */
+            deadLettersResolved: number;
+            /** @description Total stored payloads */
+            payloadsStored: number;
+            /** @description Storage size (bytes) */
+            storageSizeBytes: number;
         };
         ScheduledOpsResult: {
             deadLetterRetry: {
@@ -3564,16 +3616,25 @@ export interface components {
         AutomationMetrics: {
             /** @description Engine running */
             running: boolean;
-            /** @description Total automations */
-            totalAutomations: number;
-            /** @description Enabled automations */
-            enabledAutomations: number;
-            /** @description Events processed */
-            eventsProcessed: number;
-            /** @description Actions executed */
-            actionsExecuted: number;
-            /** @description Failed actions */
-            failedActions: number;
+            /** @description Instance queue stats */
+            instanceQueues?: {
+                /** @description Instance ID */
+                instanceId: string;
+                /** @description Active jobs */
+                activeCount: number;
+                /** @description Pending jobs */
+                pendingCount: number;
+            }[];
+            /** @description Total executions */
+            totalExecutions: number;
+            /** @description Total actions executed */
+            totalActions: number;
+            /** @description Success rate (%) */
+            successRate: number;
+            /** @description Average execution time (ms) */
+            avgExecutionTimeMs: number;
+            /** @description Failures in last 24h */
+            recentFailures: number;
         };
         PayloadMetadata: {
             /**
@@ -6512,6 +6573,7 @@ export interface operations {
                 since?: string;
                 until?: string;
                 instanceId?: string;
+                granularity?: "hourly" | "daily";
                 allTime?: boolean;
             };
             header?: never;
@@ -6527,20 +6589,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        /** @description Total event count */
-                        totalEvents: number;
-                        /** @description Count by event type */
-                        byEventType: {
+                        /** @description Total message count */
+                        totalMessages: number;
+                        /** @description Successful messages */
+                        successfulMessages: number;
+                        /** @description Failed messages */
+                        failedMessages: number;
+                        /** @description Success rate (%) */
+                        successRate: number;
+                        /** @description Average processing time (ms) */
+                        avgProcessingTimeMs: number | null;
+                        /** @description Average agent time (ms) */
+                        avgAgentTimeMs: number | null;
+                        /** @description Count by content type */
+                        messageTypes: {
                             [key: string]: number;
                         };
-                        /** @description Count by channel */
+                        /** @description Count by error stage */
+                        errorStages: {
+                            [key: string]: number;
+                        };
+                        /** @description Count by instance */
+                        instances: {
+                            [key: string]: number;
+                        };
+                        /** @description Count by channel type */
                         byChannel: {
                             [key: string]: number;
                         };
+                        /** @description Message direction breakdown */
                         byDirection: {
+                            /** @description Inbound messages */
                             inbound: number;
+                            /** @description Outbound messages */
                             outbound: number;
                         };
+                        /** @description Timeline data (hourly or daily buckets) */
+                        timeline?: {
+                            /** @description Time bucket (ISO timestamp) */
+                            bucket: string;
+                            /** @description Event count in bucket */
+                            count: number;
+                        }[];
                     };
                 };
             };
@@ -9989,19 +10079,43 @@ export interface operations {
                     "application/json": {
                         data: {
                             /** @description Total events */
-                            total: number;
-                            /** @description Events today */
-                            today: number;
-                            /** @description Count by type */
-                            byType: {
+                            totalEvents: number;
+                            /** @description Events in last 24 hours */
+                            eventsLast24h: number;
+                            /** @description Events in last 7 days */
+                            eventsLast7d: number;
+                            /** @description Events in last hour */
+                            eventsLastHour: number;
+                            /** @description Average events per hour (last 24h / 24) */
+                            eventsPerHour: number;
+                            /** @description Average events per minute (last hour / 60) */
+                            eventsPerMinute: number;
+                            /** @description Completed events */
+                            completed: number;
+                            /** @description Failed events */
+                            failed: number;
+                            /** @description Pending events */
+                            pending: number;
+                            /** @description Average processing time (ms) */
+                            avgProcessingTimeMs: number | null;
+                            /** @description Average agent latency (ms) */
+                            avgAgentLatencyMs: number | null;
+                            /** @description P95 processing time (ms) */
+                            p95ProcessingTimeMs: number | null;
+                            /** @description Failure rate (%) */
+                            failureRate: number;
+                            /** @description Error count by stage */
+                            errorsByStage: {
                                 [key: string]: number;
                             };
-                            /** @description Count by channel */
-                            byChannel: {
-                                [key: string]: number;
-                            };
-                            /** @description Avg processing time (ms) */
-                            avgProcessingTime: number;
+                            /** @description Pending dead letters */
+                            deadLettersPending: number;
+                            /** @description Resolved dead letters */
+                            deadLettersResolved: number;
+                            /** @description Total stored payloads */
+                            payloadsStored: number;
+                            /** @description Storage size (bytes) */
+                            storageSizeBytes: number;
                         };
                     };
                 };
@@ -12065,16 +12179,25 @@ export interface operations {
                     "application/json": {
                         /** @description Engine running */
                         running: boolean;
-                        /** @description Total automations */
-                        totalAutomations: number;
-                        /** @description Enabled automations */
-                        enabledAutomations: number;
-                        /** @description Events processed */
-                        eventsProcessed: number;
-                        /** @description Actions executed */
-                        actionsExecuted: number;
-                        /** @description Failed actions */
-                        failedActions: number;
+                        /** @description Instance queue stats */
+                        instanceQueues?: {
+                            /** @description Instance ID */
+                            instanceId: string;
+                            /** @description Active jobs */
+                            activeCount: number;
+                            /** @description Pending jobs */
+                            pendingCount: number;
+                        }[];
+                        /** @description Total executions */
+                        totalExecutions: number;
+                        /** @description Total actions executed */
+                        totalActions: number;
+                        /** @description Success rate (%) */
+                        successRate: number;
+                        /** @description Average execution time (ms) */
+                        avgExecutionTimeMs: number;
+                        /** @description Failures in last 24h */
+                        recentFailures: number;
                     };
                 };
             };
