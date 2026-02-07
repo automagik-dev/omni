@@ -1,62 +1,128 @@
 @import "tailwindcss";
 
 @theme {
-  /* Colors - Light mode (default) */
-  --color-background: oklch(1 0 0);
-  --color-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.546 0.245 262.881);
-  --color-primary-foreground: oklch(0.985 0.001 106.423);
-  --color-secondary: oklch(0.97 0.001 106.424);
-  --color-secondary-foreground: oklch(0.205 0.015 285.823);
-  --color-muted: oklch(0.97 0.001 106.424);
-  --color-muted-foreground: oklch(0.556 0.014 285.938);
-  --color-accent: oklch(0.97 0.001 106.424);
-  --color-accent-foreground: oklch(0.205 0.015 285.823);
-  --color-destructive: oklch(0.577 0.245 27.325);
-  --color-destructive-foreground: oklch(0.985 0.001 106.423);
-  --color-border: oklch(0.922 0.004 286.067);
-  --color-input: oklch(0.922 0.004 286.067);
-  --color-ring: oklch(0.546 0.245 262.881);
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0 0);
-  --color-popover: oklch(1 0 0);
-  --color-popover-foreground: oklch(0.145 0 0);
+  /* ===== Typography ===== */
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", "Menlo", "Monaco", "Consolas", monospace;
+  --font-display: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
 
-  /* Radius */
+  /* ===== Colors - Light mode ===== */
+  --color-background: oklch(0.97 0.005 260);
+  --color-foreground: oklch(0.18 0.02 260);
+  --color-primary: oklch(0.5 0.17 195);
+  --color-primary-foreground: oklch(0.98 0.005 195);
+  --color-secondary: oklch(0.92 0.01 260);
+  --color-secondary-foreground: oklch(0.22 0.02 260);
+  --color-muted: oklch(0.94 0.008 260);
+  --color-muted-foreground: oklch(0.48 0.02 260);
+  --color-accent: oklch(0.94 0.008 260);
+  --color-accent-foreground: oklch(0.22 0.02 260);
+  --color-destructive: oklch(0.55 0.22 25);
+  --color-destructive-foreground: oklch(0.98 0.005 25);
+  --color-border: oklch(0.88 0.01 260);
+  --color-input: oklch(0.92 0.008 260);
+  --color-ring: oklch(0.5 0.17 195);
+  --color-card: oklch(0.99 0.003 260);
+  --color-card-foreground: oklch(0.18 0.02 260);
+  --color-popover: oklch(0.99 0.003 260);
+  --color-popover-foreground: oklch(0.18 0.02 260);
+
+  /* Semantic colors */
+  --color-success: oklch(0.6 0.18 155);
+  --color-success-foreground: oklch(0.98 0.005 155);
+  --color-warning: oklch(0.7 0.15 75);
+  --color-warning-foreground: oklch(0.2 0.04 75);
+  --color-info: oklch(0.55 0.12 230);
+  --color-info-foreground: oklch(0.98 0.005 230);
+
+  /* Surface layers (light) */
+  --color-surface-1: oklch(0.97 0.005 260 / 0.8);
+  --color-surface-2: oklch(0.95 0.005 260 / 0.85);
+  --color-surface-3: oklch(0.92 0.008 260 / 0.9);
+
+  /* ===== Radius ===== */
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
 
-  /* Fonts */
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", monospace;
+  /* ===== Easing ===== */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-smooth: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* ===== Animations ===== */
+  --animate-shimmer: shimmer 2s linear infinite;
+  --animate-pulse-slow: pulse-slow 3s ease-in-out infinite;
+  --animate-glow: glow 2s ease-in-out infinite alternate;
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  @keyframes pulse-slow {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.6;
+    }
+  }
+
+  @keyframes glow {
+    0% {
+      box-shadow: 0 0 5px oklch(0.72 0.17 195 / 0.3);
+    }
+    100% {
+      box-shadow: 0 0 20px oklch(0.72 0.17 195 / 0.15);
+    }
+  }
 }
 
-/* Dark mode (class-based for manual toggle) */
+/* ===== Dark mode - Midnight Command Center ===== */
 .dark {
-  --color-background: oklch(0.145 0 0);
-  --color-foreground: oklch(0.985 0 0);
-  --color-primary: oklch(0.707 0.165 254.624);
-  --color-primary-foreground: oklch(0.205 0.015 285.823);
-  --color-secondary: oklch(0.269 0.015 285.786);
-  --color-secondary-foreground: oklch(0.985 0.001 106.423);
-  --color-muted: oklch(0.269 0.015 285.786);
-  --color-muted-foreground: oklch(0.711 0.014 285.938);
-  --color-accent: oklch(0.269 0.015 285.786);
-  --color-accent-foreground: oklch(0.985 0.001 106.423);
-  --color-destructive: oklch(0.704 0.191 22.216);
-  --color-destructive-foreground: oklch(0.985 0.001 106.423);
-  --color-border: oklch(0.269 0.015 285.786);
-  --color-input: oklch(0.269 0.015 285.786);
-  --color-ring: oklch(0.707 0.165 254.624);
-  --color-card: oklch(0.145 0 0);
-  --color-card-foreground: oklch(0.985 0 0);
-  --color-popover: oklch(0.145 0 0);
-  --color-popover-foreground: oklch(0.985 0 0);
+  --color-background: oklch(0.13 0.015 260);
+  --color-foreground: oklch(0.93 0.01 250);
+  --color-primary: oklch(0.72 0.17 195);
+  --color-primary-foreground: oklch(0.13 0.015 260);
+  --color-secondary: oklch(0.22 0.02 260);
+  --color-secondary-foreground: oklch(0.93 0.01 250);
+  --color-muted: oklch(0.18 0.015 260);
+  --color-muted-foreground: oklch(0.6 0.02 260);
+  --color-accent: oklch(0.22 0.02 260);
+  --color-accent-foreground: oklch(0.93 0.01 250);
+  --color-destructive: oklch(0.65 0.22 25);
+  --color-destructive-foreground: oklch(0.98 0.005 25);
+  --color-border: oklch(0.25 0.015 260);
+  --color-input: oklch(0.22 0.015 260);
+  --color-ring: oklch(0.72 0.17 195);
+  --color-card: oklch(0.16 0.015 260);
+  --color-card-foreground: oklch(0.93 0.01 250);
+  --color-popover: oklch(0.16 0.015 260);
+  --color-popover-foreground: oklch(0.93 0.01 250);
+
+  /* Semantic colors (dark) */
+  --color-success: oklch(0.7 0.18 155);
+  --color-success-foreground: oklch(0.13 0.015 155);
+  --color-warning: oklch(0.78 0.15 75);
+  --color-warning-foreground: oklch(0.13 0.015 75);
+  --color-info: oklch(0.65 0.12 230);
+  --color-info-foreground: oklch(0.13 0.015 230);
+
+  /* Surface layers (glass) */
+  --color-surface-1: oklch(0.16 0.015 260 / 0.6);
+  --color-surface-2: oklch(0.19 0.015 260 / 0.7);
+  --color-surface-3: oklch(0.22 0.015 260 / 0.8);
 }
 
-/* Base styles */
+/* ===== Base styles ===== */
 * {
   border-color: var(--color-border);
 }
@@ -65,4 +131,57 @@ body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== Atmosphere - Noise texture overlay ===== */
+.dark body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ===== Atmosphere - Gradient mesh (dark mode) ===== */
+.dark body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 20% 0%, oklch(0.2 0.04 230 / 0.5), transparent 50%),
+    radial-gradient(ellipse at 80% 100%, oklch(0.18 0.03 280 / 0.3), transparent 50%),
+    radial-gradient(ellipse at 50% 50%, oklch(0.15 0.02 195 / 0.15), transparent 70%);
+}
+
+/* ===== Skeleton shimmer ===== */
+.skeleton-shimmer {
+  background: linear-gradient(90deg, var(--color-muted) 0%, oklch(0.25 0.015 260 / 0.5) 50%, var(--color-muted) 100%);
+  background-size: 400% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* ===== Scrollbar styling (dark mode) ===== */
+.dark ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.3 0.015 260);
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.35 0.015 260);
 }
