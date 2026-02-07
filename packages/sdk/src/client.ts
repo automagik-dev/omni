@@ -1006,10 +1006,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/auth/validate`, {
           method: 'POST',
         });
-        if (!resp.ok) {
-          throw OmniApiError.from(await resp.json(), resp.status);
-        }
         const json = (await resp.json()) as { data?: AuthValidateResponse };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { valid: false, keyPrefix: '', keyName: '', scopes: [] };
       },
     },
@@ -1167,8 +1165,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync/profile`, {
           method: 'POST',
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SyncProfileResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { type: 'profile', status: 'unknown', profile: null };
       },
 
@@ -1181,8 +1179,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SyncJobCreated };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { jobId: '', instanceId: id, type: body.type, status: 'pending', config: {}, message: '' };
       },
 
@@ -1194,8 +1192,8 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.status) query.set('status', params.status);
         if (params?.limit) query.set('limit', String(params.limit));
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: SyncJobSummary[]; meta?: PaginationMeta };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
       },
 
@@ -1204,8 +1202,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async getSyncStatus(id: string, jobId: string): Promise<SyncJobStatus> {
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync/${jobId}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SyncJobStatus };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Sync job not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -1222,11 +1220,11 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.cursor) query.set('cursor', params.cursor);
         if (params?.guildId) query.set('guildId', params.guildId);
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/contacts?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           items?: Contact[];
           meta?: { totalFetched: number; hasMore: boolean; cursor?: string };
         };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { totalFetched: 0, hasMore: false } };
       },
 
@@ -1241,11 +1239,11 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/groups?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           items?: Group[];
           meta?: { totalFetched: number; hasMore: boolean; cursor?: string };
         };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { totalFetched: 0, hasMore: false } };
       },
 
@@ -1254,8 +1252,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async getUserProfile(id: string, userId: string): Promise<UserProfile> {
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/users/${userId}/profile`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: UserProfile };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('User profile not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -1286,8 +1284,8 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('limit', params?.limit);
         setIfDefined('cursor', params?.cursor);
         const resp = await apiFetch(`${baseUrl}/api/v2/chats?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: Chat[]; meta?: PaginationMeta };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
       },
 
@@ -1296,8 +1294,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async get(id: string): Promise<Chat> {
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Chat not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -1311,8 +1309,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to create chat', 'CREATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1326,8 +1324,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to update chat', 'UPDATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1349,8 +1347,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
           method: 'POST',
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to archive chat', 'ARCHIVE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1362,8 +1360,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
           method: 'POST',
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to unarchive chat', 'UNARCHIVE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1377,8 +1375,8 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.before) query.set('before', params.before);
         if (params?.after) query.set('after', params.after);
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/messages?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: Message[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.items ?? [];
       },
 
@@ -1387,8 +1385,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async listParticipants(id: string): Promise<ChatParticipant[]> {
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/participants`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: ChatParticipant[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.items ?? [];
       },
 
@@ -1401,8 +1399,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: ChatParticipant };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to add participant', 'ADD_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1426,8 +1424,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: MarkReadResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { chatId: id, instanceId: body.instanceId };
       },
     },
@@ -1449,8 +1447,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1463,8 +1461,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1477,8 +1475,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { success?: boolean; data?: { messageId?: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { success: json?.success ?? true, messageId: json?.data?.messageId };
       },
 
@@ -1491,8 +1489,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1505,8 +1503,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1519,8 +1517,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1533,8 +1531,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1547,8 +1545,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
       },
 
@@ -1561,8 +1559,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: SendPresenceResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return (
           json?.data ?? {
             instanceId: body.instanceId,
@@ -1582,8 +1580,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: MarkReadResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId };
       },
 
@@ -1596,8 +1594,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: MarkReadResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { chatId: body.chatId, instanceId: body.instanceId, messageCount: body.messageIds.length };
       },
     },
@@ -1666,7 +1664,6 @@ export function createOmniClient(config: OmniClientConfig) {
         byChannel: Record<string, unknown>;
       }> {
         const resp = await apiFetch(`${baseUrl}/api/v2/persons/${id}/presence`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as {
           data?: {
             person: Person;
@@ -1675,6 +1672,7 @@ export function createOmniClient(config: OmniClientConfig) {
             byChannel: Record<string, unknown>;
           };
         };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -1935,8 +1933,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Automation };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to create automation', 'CREATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -1951,8 +1949,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: Automation };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to update automation', 'UPDATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2359,8 +2357,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJob };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to create batch job', 'CREATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2370,8 +2368,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async get(id: string): Promise<BatchJob> {
         const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJob };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -2381,8 +2379,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async getStatus(id: string): Promise<BatchJobStatusResponse> {
         const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}/status`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJobStatusResponse };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Batch job not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -2398,8 +2396,8 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
         const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: BatchJob[]; meta?: PaginationMeta };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
       },
 
@@ -2410,8 +2408,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/batch-jobs/${id}/cancel`, {
           method: 'POST',
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: BatchJob };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to cancel batch job', 'CANCEL_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2425,8 +2423,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: CostEstimate };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to estimate', 'ESTIMATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2450,8 +2448,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: CreateApiKeyResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to create API key', 'CREATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2464,8 +2462,8 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.status) query.set('status', params.status);
         if (params?.limit) query.set('limit', String(params.limit));
         const resp = await apiFetch(`${baseUrl}/api/v2/keys?${query}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { items?: ApiKeyRecord[]; meta?: { total: number } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { total: 0 } };
       },
 
@@ -2474,8 +2472,8 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async get(id: string): Promise<ApiKeyRecord> {
         const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}`, {});
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('API key not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
@@ -2489,8 +2487,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to update API key', 'UPDATE_FAILED', undefined, resp.status);
         return json.data;
       },
@@ -2504,8 +2502,8 @@ export function createOmniClient(config: OmniClientConfig) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body ?? {}),
         });
-        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
         const json = (await resp.json()) as { data?: ApiKeyRecord };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Failed to revoke API key', 'REVOKE_FAILED', undefined, resp.status);
         return json.data;
       },

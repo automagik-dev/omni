@@ -14,6 +14,17 @@ type ContentBuilder = (message: OutgoingMessage, buildVCard: VCardBuilder) => An
 type VCardBuilder = (contact: { name: string; phone?: string; email?: string }) => string;
 
 /**
+ * Extract media source from an outgoing message.
+ *
+ * Priority: base64 metadata > URL.
+ * Shared across image, video, document, and sticker builders.
+ */
+const getMediaSource = (message: OutgoingMessage): Buffer | { url: string } => {
+  const base64 = message.metadata?.base64 as string | undefined;
+  return base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
+};
+
+/**
  * Convert a phone number or partial JID to full WhatsApp JID
  */
 function toMentionJid(phoneOrJid: string): string {
@@ -97,11 +108,8 @@ const buildText: ContentBuilder = (message) => {
  * Supports URL and base64. Priority: base64 > URL
  */
 const buildImage: ContentBuilder = (message) => {
-  const base64 = message.metadata?.base64 as string | undefined;
-  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
-
   return {
-    image: source,
+    image: getMediaSource(message),
     caption: message.content.caption,
     mimetype: message.content.mimeType,
   };
@@ -141,11 +149,8 @@ const buildAudio: ContentBuilder = (message) => {
  * Supports URL and base64. Priority: base64 > URL
  */
 const buildVideo: ContentBuilder = (message) => {
-  const base64 = message.metadata?.base64 as string | undefined;
-  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
-
   return {
-    video: source,
+    video: getMediaSource(message),
     caption: message.content.caption,
     mimetype: message.content.mimeType,
   };
@@ -157,11 +162,8 @@ const buildVideo: ContentBuilder = (message) => {
  * Supports URL and base64. Priority: base64 > URL
  */
 const buildDocument: ContentBuilder = (message) => {
-  const base64 = message.metadata?.base64 as string | undefined;
-  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
-
   return {
-    document: source,
+    document: getMediaSource(message),
     mimetype: message.content.mimeType || 'application/octet-stream',
     fileName: message.content.filename || 'document',
   };
@@ -173,11 +175,8 @@ const buildDocument: ContentBuilder = (message) => {
  * Supports URL and base64. Priority: base64 > URL
  */
 const buildSticker: ContentBuilder = (message) => {
-  const base64 = message.metadata?.base64 as string | undefined;
-  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
-
   return {
-    sticker: source,
+    sticker: getMediaSource(message),
   };
 };
 
