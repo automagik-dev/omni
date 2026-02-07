@@ -93,12 +93,19 @@ const buildText: ContentBuilder = (message) => {
 
 /**
  * Build image message content
+ *
+ * Supports URL and base64. Priority: base64 > URL
  */
-const buildImage: ContentBuilder = (message) => ({
-  image: { url: message.content.mediaUrl || '' },
-  caption: message.content.caption,
-  mimetype: message.content.mimeType,
-});
+const buildImage: ContentBuilder = (message) => {
+  const base64 = message.metadata?.base64 as string | undefined;
+  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
+
+  return {
+    image: source,
+    caption: message.content.caption,
+    mimetype: message.content.mimeType,
+  };
+};
 
 /**
  * Build audio message content
@@ -130,28 +137,49 @@ const buildAudio: ContentBuilder = (message) => {
 
 /**
  * Build video message content
+ *
+ * Supports URL and base64. Priority: base64 > URL
  */
-const buildVideo: ContentBuilder = (message) => ({
-  video: { url: message.content.mediaUrl || '' },
-  caption: message.content.caption,
-  mimetype: message.content.mimeType,
-});
+const buildVideo: ContentBuilder = (message) => {
+  const base64 = message.metadata?.base64 as string | undefined;
+  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
+
+  return {
+    video: source,
+    caption: message.content.caption,
+    mimetype: message.content.mimeType,
+  };
+};
 
 /**
  * Build document message content
+ *
+ * Supports URL and base64. Priority: base64 > URL
  */
-const buildDocument: ContentBuilder = (message) => ({
-  document: { url: message.content.mediaUrl || '' },
-  mimetype: message.content.mimeType || 'application/octet-stream',
-  fileName: message.content.filename || 'document',
-});
+const buildDocument: ContentBuilder = (message) => {
+  const base64 = message.metadata?.base64 as string | undefined;
+  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
+
+  return {
+    document: source,
+    mimetype: message.content.mimeType || 'application/octet-stream',
+    fileName: message.content.filename || 'document',
+  };
+};
 
 /**
  * Build sticker message content
+ *
+ * Supports URL and base64. Priority: base64 > URL
  */
-const buildSticker: ContentBuilder = (message) => ({
-  sticker: { url: message.content.mediaUrl || '' },
-});
+const buildSticker: ContentBuilder = (message) => {
+  const base64 = message.metadata?.base64 as string | undefined;
+  const source = base64 ? Buffer.from(base64, 'base64') : { url: message.content.mediaUrl || '' };
+
+  return {
+    sticker: source,
+  };
+};
 
 /**
  * Build location message content
