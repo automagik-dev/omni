@@ -1,6 +1,11 @@
-# Dashboard API Enhancements
+# WISH: Dashboard API Enhancements
 
 > API improvements needed to power the Phase 2 "Midnight Command Center" dashboard
+
+**Status:** APPROVED
+**Created:** 2026-02-07
+**Author:** WISH Agent
+**Beads:** omni-kmw
 
 ## Context
 
@@ -82,6 +87,62 @@ The UI dashboard is being overhauled (Phase 2 of the Midnight Command Center red
   instances?: { total: number; connected: number; byChannel: Record<string, number> };
 }
 ```
+
+## Impact Analysis
+
+### Packages Affected
+
+| Package | Changes | Notes |
+|---------|---------|-------|
+| core | [ ] schemas | EventMetricsSchema, EventAnalyticsSchema updates |
+| api | [x] routes, [x] services | event-ops.ts, events.ts, automations.ts |
+| sdk | [x] regenerate | API surface changes - new fields in responses |
+| cli | [ ] commands | No CLI changes needed |
+
+### System Checklist
+
+- [ ] **Events**: No new event types needed (read-only API changes)
+- [ ] **Database**: No schema changes (uses existing omni_events + automation_logs)
+- [ ] **SDK**: Run `bun generate:sdk` after API changes
+- [ ] **Tests**: Update tests in `packages/api/src/__tests__/`
+- [ ] **OpenAPI**: Update schemas in `packages/api/src/schemas/openapi/`
+
+**DEC-1**: All changes are **additive only** - no breaking changes to existing API consumers.
+
+**DEC-2**: Use existing database tables (`omni_events`, `automation_logs`) - no migrations needed.
+
+**DEC-3**: Real-time SSE stream (Priority 6) is **OUT OF SCOPE** for this wish - defer to future work.
+
+**ASM-1**: Assumes dashboard is the primary consumer - no other clients depend on these new fields yet.
+
+**ASM-2**: Assumes hourly granularity is sufficient for timeline sparklines (no minute-level buckets needed).
+
+**RISK-1**: Additional aggregation queries may impact `/events/analytics` performance on large datasets.
+- **Mitigation**: Add database indexes on `channel`, `direction`, `received_at` if needed after load testing.
+
+**RISK-2**: Dashboard summary endpoint (`/api/v2/dashboard`) may create maintenance burden if requirements diverge.
+- **Mitigation**: Start with individual endpoint enhancements (Priorities 1-4), only add summary endpoint if polling becomes a bottleneck.
+
+## Scope
+
+### IN SCOPE
+
+1. Event rate metrics: `eventsLastHour`, `eventsPerHour`, `eventsPerMinute`
+2. Timeline/sparkline data: hourly buckets for last 24h
+3. Channel breakdown: `byChannel` field in analytics
+4. Direction breakdown: `byDirection` (inbound/outbound)
+5. Automation metrics: execution stats from `automation_logs`
+6. OpenAPI schema updates for all new fields
+7. SDK regeneration
+
+### OUT OF SCOPE
+
+- Real-time SSE event stream (defer to future wish)
+- Dashboard summary endpoint (nice-to-have, may add if time permits)
+- Minute-level granularity for timelines
+- Historical data beyond 24h for sparklines
+- Database schema changes or new tables
+- UI implementation (handled by Phase 2 dashboard wish)
 
 ## What's Missing for Dashboard
 
@@ -202,22 +263,113 @@ data: {"instanceId":"...","isConnected":true}
 | 5 | Dashboard summary endpoint | Medium | Medium — performance optimization |
 | 6 | Real-time SSE stream | Large | High — but can defer |
 
-## Files to Modify
+## Execution Plan
 
-- `packages/api/src/services/event-ops.ts` — Add `eventsLastHour`, `eventsPerHour`, `eventsPerMinute`, `timeline`
-- `packages/api/src/services/events.ts` — Add `byChannel`, `byDirection` to `getAnalytics()`
-- `packages/api/src/services/automations.ts` — Enhance `getMetrics()` with log aggregates
-- `packages/api/src/schemas/openapi/event-ops.ts` — Update `EventMetricsSchema`
-- `packages/api/src/schemas/openapi/events.ts` — Update `EventAnalyticsSchema`
-- `packages/sdk/src/client.ts` — Will auto-update with SDK regeneration
-- (Optional) New `packages/api/src/routes/v2/dashboard.ts` for summary endpoint
+### Group A: Core Metrics & Timeline (Priorities 1-2)
 
-## Acceptance Criteria
+**Goal:** Add event rate metrics and timeline data to existing endpoints
 
-- [ ] `GET /event-ops/metrics` returns `eventsLastHour`, `eventsPerHour`, `eventsPerMinute`
-- [ ] `GET /events/analytics?granularity=hourly` returns `timeline[]` with hourly buckets
-- [ ] `GET /events/analytics` returns `byChannel` and `byDirection`
-- [ ] `GET /automation-metrics` returns execution stats from automation_logs
-- [ ] All new fields have OpenAPI schema definitions
-- [ ] SDK regenerated with new types
-- [ ] Existing consumers unaffected (additive changes only)
+**Packages:** `api` (services, schemas)
+
+**Deliverables:**
+- [ ] Add `eventsLastHour`, `eventsPerHour`, `eventsPerMinute` to `EventMetricsSchema`
+- [ ] Implement queries in `packages/api/src/services/event-ops.ts`
+- [ ] Add `timeline` field to `EventAnalyticsSchema` with `?granularity=hourly` support
+- [ ] Implement hourly bucketing query in `packages/api/src/services/events.ts`
+- [ ] Update OpenAPI schemas in `packages/api/src/schemas/openapi/event-ops.ts`
+- [ ] Update OpenAPI schemas in `packages/api/src/schemas/openapi/events.ts`
+
+**Acceptance Criteria:**
+- [ ] `GET /event-ops/metrics` returns new rate fields (`eventsLastHour`, `eventsPerHour`, `eventsPerMinute`)
+- [ ] `GET /events/analytics?granularity=hourly` returns `timeline[]` with 24 hourly buckets
+- [ ] All new fields validated with Zod schemas
+- [ ] Existing tests pass (no breaking changes)
+
+**Validation:**
+```bash
+make typecheck
+bun test packages/api/src/__tests__/event-ops.test.ts
+bun test packages/api/src/__tests__/events.test.ts
+curl http://localhost:3000/api/v2/event-ops/metrics | jq
+curl 'http://localhost:3000/api/v2/events/analytics?granularity=hourly' | jq
+```
+
+---
+
+### Group B: Channel & Direction Breakdown (Priority 3)
+
+**Goal:** Add channel and direction analytics to events endpoint
+
+**Packages:** `api` (services, schemas)
+
+**Deliverables:**
+- [ ] Add `byChannel` field to `EventAnalyticsSchema`
+- [ ] Add `byDirection` field to `EventAnalyticsSchema`
+- [ ] Implement grouped queries in `packages/api/src/services/events.ts`
+- [ ] Update OpenAPI schema in `packages/api/src/schemas/openapi/events.ts`
+- [ ] Add database indexes on `channel` and `direction` if needed for performance
+
+**Acceptance Criteria:**
+- [ ] `GET /events/analytics` returns `byChannel: Record<string, number>`
+- [ ] `GET /events/analytics` returns `byDirection: { inbound: number; outbound: number }`
+- [ ] Query performance < 500ms on 100k+ events dataset
+
+**Validation:**
+```bash
+make typecheck
+bun test packages/api/src/__tests__/events.test.ts
+curl http://localhost:3000/api/v2/events/analytics | jq '.byChannel, .byDirection'
+```
+
+---
+
+### Group C: Automation Metrics Enhancement (Priority 4)
+
+**Goal:** Surface automation execution stats from logs
+
+**Packages:** `api` (services, schemas)
+
+**Deliverables:**
+- [ ] Enhance `AutomationMetricsSchema` with execution stats fields
+- [ ] Query `automation_logs` table for aggregates in `packages/api/src/services/automations.ts`
+- [ ] Add `totalExecutions`, `totalActions`, `successRate`, `avgExecutionTimeMs`, `recentFailures`
+- [ ] Update OpenAPI schema in `packages/api/src/schemas/openapi/automations.ts`
+
+**Acceptance Criteria:**
+- [ ] `GET /automation-metrics` returns execution history stats
+- [ ] Success rate calculated correctly (successful / total)
+- [ ] Recent failures limited to last 24h
+
+**Validation:**
+```bash
+make typecheck
+bun test packages/api/src/__tests__/automations.test.ts
+curl http://localhost:3000/api/v2/automation-metrics | jq
+```
+
+---
+
+### Final Steps (All Groups)
+
+After all groups complete:
+
+1. **Regenerate SDK:**
+   ```bash
+   bun generate:sdk
+   ```
+
+2. **Run full test suite:**
+   ```bash
+   make check
+   ```
+
+3. **Verify OpenAPI docs:**
+   ```bash
+   curl http://localhost:3000/api/v2/openapi | jq
+   ```
+
+4. **Manual smoke test with dashboard:**
+   - Load dashboard UI
+   - Verify metric tiles render with new data
+   - Check sparklines display timeline data
+   - Confirm channel breakdown chart populates
