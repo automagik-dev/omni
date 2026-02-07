@@ -1444,61 +1444,91 @@ export function createOmniClient(config: OmniClientConfig) {
        * Send a text message
        */
       async send(body: SendMessageBody): Promise<{ messageId: string; status: string }> {
-        const { data, error, response } = await client.POST('/messages', { body });
-        throwIfError(response, error);
-        return data?.data ?? { messageId: '', status: 'sent' };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        return json?.data ?? { messageId: '', status: 'sent' };
       },
 
       /**
        * Send a media message
        */
       async sendMedia(body: SendMediaBody): Promise<{ messageId: string; status: string }> {
-        const { data, error, response } = await client.POST('/messages/media', { body });
-        throwIfError(response, error);
-        return data?.data ?? { messageId: '', status: 'sent' };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        return json?.data ?? { messageId: '', status: 'sent' };
       },
 
       /**
        * Send a reaction
        */
       async sendReaction(body: SendReactionBody): Promise<{ messageId?: string; success: boolean }> {
-        const { data, error, response } = await client.POST('/messages/reaction', { body });
-        throwIfError(response, error);
-        return data ?? { success: true };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/reaction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { success?: boolean; data?: { messageId?: string } };
+        return { success: json?.success ?? true, messageId: json?.data?.messageId };
       },
 
       /**
        * Send a sticker
        */
       async sendSticker(body: SendStickerBody): Promise<{ messageId: string; status: string }> {
-        const { data, error, response } = await client.POST('/messages/sticker', { body });
-        throwIfError(response, error);
-        return data?.data ?? { messageId: '', status: 'sent' };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/sticker`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        return json?.data ?? { messageId: '', status: 'sent' };
       },
 
       /**
        * Send a contact card
        */
       async sendContact(body: SendContactBody): Promise<{ messageId: string; status: string }> {
-        const { data, error, response } = await client.POST('/messages/contact', { body });
-        throwIfError(response, error);
-        return data?.data ?? { messageId: '', status: 'sent' };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/contact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        return json?.data ?? { messageId: '', status: 'sent' };
       },
 
       /**
        * Send a location
        */
       async sendLocation(body: SendLocationBody): Promise<{ messageId: string; status: string }> {
-        const { data, error, response } = await client.POST('/messages/location', { body });
-        throwIfError(response, error);
-        return data?.data ?? { messageId: '', status: 'sent' };
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/location`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        return json?.data ?? { messageId: '', status: 'sent' };
       },
 
       /**
        * Send a poll (Discord only)
        */
       async sendPoll(body: SendPollBody): Promise<{ messageId: string; status: string }> {
-        const resp = await apiFetch(`${baseUrl}/api/v2/messages/poll`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/poll`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -1512,7 +1542,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Send an embed (Discord only)
        */
       async sendEmbed(body: SendEmbedBody): Promise<{ messageId: string; status: string }> {
-        const resp = await apiFetch(`${baseUrl}/api/v2/messages/embed`, {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/embed`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
