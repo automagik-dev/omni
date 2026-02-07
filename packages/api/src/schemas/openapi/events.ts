@@ -32,13 +32,31 @@ export const EventSummarySchema = z.object({
 
 // Analytics schema
 export const EventAnalyticsSchema = z.object({
-  totalEvents: z.number().int().openapi({ description: 'Total event count' }),
-  byEventType: z.record(z.string(), z.number()).openapi({ description: 'Count by event type' }),
-  byChannel: z.record(z.string(), z.number()).openapi({ description: 'Count by channel' }),
-  byDirection: z.object({
-    inbound: z.number().int(),
-    outbound: z.number().int(),
-  }),
+  totalMessages: z.number().int().openapi({ description: 'Total message count' }),
+  successfulMessages: z.number().int().openapi({ description: 'Successful messages' }),
+  failedMessages: z.number().int().openapi({ description: 'Failed messages' }),
+  successRate: z.number().openapi({ description: 'Success rate (%)' }),
+  avgProcessingTimeMs: z.number().nullable().openapi({ description: 'Average processing time (ms)' }),
+  avgAgentTimeMs: z.number().nullable().openapi({ description: 'Average agent time (ms)' }),
+  messageTypes: z.record(z.string(), z.number()).openapi({ description: 'Count by content type' }),
+  errorStages: z.record(z.string(), z.number()).openapi({ description: 'Count by error stage' }),
+  instances: z.record(z.string(), z.number()).openapi({ description: 'Count by instance' }),
+  byChannel: z.record(z.string(), z.number()).openapi({ description: 'Count by channel type' }),
+  byDirection: z
+    .object({
+      inbound: z.number().int().openapi({ description: 'Inbound messages' }),
+      outbound: z.number().int().openapi({ description: 'Outbound messages' }),
+    })
+    .openapi({ description: 'Message direction breakdown' }),
+  timeline: z
+    .array(
+      z.object({
+        bucket: z.string().openapi({ description: 'Time bucket (ISO timestamp)' }),
+        count: z.number().int().openapi({ description: 'Event count in bucket' }),
+      }),
+    )
+    .optional()
+    .openapi({ description: 'Timeline data (hourly or daily buckets)' }),
 });
 
 // Search body schema
@@ -109,12 +127,16 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
     operationId: 'getEventAnalytics',
     tags: ['Events'],
     summary: 'Get event analytics',
-    description: 'Get analytics summary for events.',
+    description: 'Get analytics summary for events with optional timeline data.',
     request: {
       query: z.object({
         since: z.string().datetime().optional().openapi({ description: 'Start date' }),
         until: z.string().datetime().optional().openapi({ description: 'End date' }),
         instanceId: z.string().uuid().optional().openapi({ description: 'Filter by instance' }),
+        granularity: z
+          .enum(['hourly', 'daily'])
+          .optional()
+          .openapi({ description: 'Timeline granularity (enables timeline field)' }),
         allTime: z.boolean().optional().openapi({ description: 'Include all time data' }),
       }),
     },

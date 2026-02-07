@@ -33,6 +33,11 @@ export interface EventMetrics {
   totalEvents: number;
   eventsLast24h: number;
   eventsLast7d: number;
+  eventsLastHour: number;
+
+  // Rate metrics
+  eventsPerHour: number;
+  eventsPerMinute: number;
 
   // Status breakdown
   completed: number;
@@ -187,6 +192,7 @@ export class EventOpsService {
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
 
     // Volume and status metrics
     const [volumeStats] = await this.db
@@ -213,6 +219,12 @@ export class EventOpsService {
       .from(omniEvents)
       .where(gte(omniEvents.receivedAt, last7d));
 
+    // 1h count
+    const [lastHourStats] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(omniEvents)
+      .where(gte(omniEvents.receivedAt, lastHour));
+
     // Error stages
     const errorStages = await this.db
       .select({
@@ -231,11 +243,17 @@ export class EventOpsService {
 
     const total = volumeStats?.total ?? 0;
     const failed = volumeStats?.failed ?? 0;
+    const eventsLast24hCount = last24hStats?.count ?? 0;
+    const eventsLastHourCount = lastHourStats?.count ?? 0;
 
     return {
       totalEvents: total,
-      eventsLast24h: last24hStats?.count ?? 0,
+      eventsLast24h: eventsLast24hCount,
       eventsLast7d: last7dStats?.count ?? 0,
+      eventsLastHour: eventsLastHourCount,
+
+      eventsPerHour: eventsLast24hCount / 24,
+      eventsPerMinute: eventsLastHourCount / 60,
 
       completed: volumeStats?.completed ?? 0,
       failed,

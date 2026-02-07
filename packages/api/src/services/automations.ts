@@ -26,7 +26,7 @@ import {
   automationLogs,
   automations,
 } from '@omni/db';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 
 export interface AutomationTestResult {
   matched: boolean;
@@ -361,9 +361,50 @@ export class AutomationService {
   }
 
   /**
-   * Get engine metrics
+   * Get engine metrics with execution stats
    */
-  getMetrics(): { instanceQueues: Array<{ instanceId: string; activeCount: number; pendingCount: number }> } | null {
-    return this.engine?.getMetrics() ?? null;
+  async getMetrics(): Promise<{
+    running: boolean;
+    instanceQueues?: Array<{ instanceId: string; activeCount: number; pendingCount: number }>;
+    totalExecutions: number;
+    totalActions: number;
+    successRate: number;
+    avgExecutionTimeMs: number;
+    recentFailures: number;
+  }> {
+    const running = this.engine !== null;
+    const engineMetrics = this.engine?.getMetrics();
+
+    // Get execution stats from logs
+    const [executionStats] = await this.db
+      .select({
+        total: sql<number>`count(*)::int`,
+        successful: sql<number>`count(*) filter (where ${automationLogs.status} = 'success')::int`,
+        totalActions: sql<number>`coalesce(sum(jsonb_array_length(${automationLogs.actionsExecuted}::jsonb)), 0)::int`,
+        avgExecutionTime: sql<number>`avg(${automationLogs.executionTimeMs})::int`,
+      })
+      .from(automationLogs);
+
+    // Get failures in last 24h
+    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [recentFailureStats] = await this.db
+      .select({
+        count: sql<number>`count(*)::int`,
+      })
+      .from(automationLogs)
+      .where(and(eq(automationLogs.status, 'failed'), gte(automationLogs.createdAt, last24h)));
+
+    const total = executionStats?.total ?? 0;
+    const successful = executionStats?.successful ?? 0;
+
+    return {
+      running,
+      instanceQueues: engineMetrics?.instanceQueues,
+      totalExecutions: total,
+      totalActions: executionStats?.totalActions ?? 0,
+      successRate: total > 0 ? (successful / total) * 100 : 0,
+      avgExecutionTimeMs: executionStats?.avgExecutionTime ?? 0,
+      recentFailures: recentFailureStats?.count ?? 0,
+    };
   }
 }
