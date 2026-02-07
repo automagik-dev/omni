@@ -31,6 +31,9 @@ export interface EventAnalytics {
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
+  byChannel: Record<string, number>;
+  byDirection: { inbound: number; outbound: number };
+  timeline?: Array<{ bucket: string; count: number }>;
 }
 
 export class EventService {
@@ -194,8 +197,15 @@ export class EventService {
   /**
    * Get analytics summary
    */
-  async getAnalytics(options: { since?: Date; until?: Date; instanceId?: string } = {}): Promise<EventAnalytics> {
-    const { since, until, instanceId } = options;
+  async getAnalytics(
+    options: {
+      since?: Date;
+      until?: Date;
+      instanceId?: string;
+      granularity?: 'hourly' | 'daily';
+    } = {},
+  ): Promise<EventAnalytics> {
+    const { since, until, instanceId, granularity } = options;
 
     const conditions = [];
 
@@ -257,9 +267,50 @@ export class EventService {
       .where(whereClause)
       .groupBy(omniEvents.instanceId);
 
+    // Get counts by channel
+    const channelCounts = await this.db
+      .select({
+        channel: omniEvents.channel,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(omniEvents)
+      .where(whereClause)
+      .groupBy(omniEvents.channel);
+
+    // Get counts by direction
+    const directionCounts = await this.db
+      .select({
+        direction: omniEvents.direction,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(omniEvents)
+      .where(whereClause)
+      .groupBy(omniEvents.direction);
+
     const total = counts?.total ?? 0;
     const successful = counts?.successful ?? 0;
     const failed = counts?.failed ?? 0;
+
+    // Get timeline data if granularity is specified
+    let timeline: Array<{ bucket: string; count: number }> | undefined;
+    if (granularity) {
+      const truncFunc = granularity === 'hourly' ? 'hour' : 'day';
+      const timelineCounts = await this.db
+        .select({
+          bucket: sql<string>`date_trunc('${sql.raw(truncFunc)}', ${omniEvents.receivedAt})::text`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(omniEvents)
+        .where(whereClause)
+        .groupBy(sql`date_trunc('${sql.raw(truncFunc)}', ${omniEvents.receivedAt})`)
+        .orderBy(sql`date_trunc('${sql.raw(truncFunc)}', ${omniEvents.receivedAt})`);
+
+      timeline = timelineCounts.map((t) => ({ bucket: t.bucket, count: t.count }));
+    }
+
+    // Calculate direction breakdown
+    const inboundCount = directionCounts.find((d) => d.direction === 'inbound')?.count ?? 0;
+    const outboundCount = directionCounts.find((d) => d.direction === 'outbound')?.count ?? 0;
 
     return {
       totalMessages: total,
@@ -283,6 +334,16 @@ export class EventService {
           .filter((c): c is typeof c & { instanceId: NonNullable<typeof c.instanceId> } => c.instanceId != null)
           .map((c) => [c.instanceId, c.count]),
       ),
+      byChannel: Object.fromEntries(
+        channelCounts
+          .filter((c): c is typeof c & { channel: NonNullable<typeof c.channel> } => c.channel != null)
+          .map((c) => [c.channel, c.count]),
+      ),
+      byDirection: {
+        inbound: inboundCount,
+        outbound: outboundCount,
+      },
+      timeline,
     };
   }
 }
