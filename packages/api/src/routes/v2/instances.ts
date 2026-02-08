@@ -690,7 +690,7 @@ instancesRoutes.put(
     }
 
     const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (!plugin || !('updateProfileName' in plugin)) {
+    if (!plugin || !('updateProfileName' in plugin) || typeof plugin.updateProfileName !== 'function') {
       return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support profile name update' } }, 400);
     }
 
