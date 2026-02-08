@@ -1100,4 +1100,318 @@ instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroup
   }
 });
 
+// ============================================================================
+// C2: Profile Picture
+// ============================================================================
+
+/**
+ * PUT /instances/:id/profile/picture - Update profile picture
+ */
+instancesRoutes.put(
+  '/:id/profile/picture',
+  instanceAccess,
+  zValidator('json', z.object({ base64: z.string().min(1), mimeType: z.string().optional() })),
+  async (c) => {
+    const id = c.req.param('id');
+    const { base64 } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('updateProfilePicture' in plugin)) {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support profile picture update' } },
+        400,
+      );
+    }
+
+    try {
+      const imageBuffer = Buffer.from(base64, 'base64');
+      await (
+        plugin as { updateProfilePicture: (instanceId: string, buffer: Buffer) => Promise<void> }
+      ).updateProfilePicture(id, imageBuffer);
+
+      return c.json({ success: true, data: { instanceId: id, action: 'profile_picture_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * DELETE /instances/:id/profile/picture - Remove profile picture
+ */
+instancesRoutes.delete('/:id/profile/picture', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin || !('removeProfilePicture' in plugin)) {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support profile picture removal' } },
+      400,
+    );
+  }
+
+  try {
+    await (plugin as { removeProfilePicture: (instanceId: string) => Promise<void> }).removeProfilePicture(id);
+    return c.json({ success: true, data: { instanceId: id, action: 'profile_picture_removed' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'REMOVE_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// C3: Group Invite Links
+// ============================================================================
+
+/**
+ * GET /instances/:id/groups/:groupJid/invite - Get group invite code
+ */
+instancesRoutes.get('/:id/groups/:groupJid/invite', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin || !('getGroupInviteCode' in plugin)) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group invites' } }, 400);
+  }
+
+  try {
+    const code = await (
+      plugin as { getGroupInviteCode: (instanceId: string, groupJid: string) => Promise<string> }
+    ).getGroupInviteCode(id, groupJid);
+
+    return c.json({
+      data: {
+        groupJid,
+        code,
+        inviteLink: `https://chat.whatsapp.com/${code}`,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'INVITE_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * POST /instances/:id/groups/:groupJid/invite/revoke - Revoke and regenerate invite link
+ */
+instancesRoutes.post('/:id/groups/:groupJid/invite/revoke', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin || !('revokeGroupInvite' in plugin)) {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group invite revocation' } },
+      400,
+    );
+  }
+
+  try {
+    const newCode = await (
+      plugin as { revokeGroupInvite: (instanceId: string, groupJid: string) => Promise<string> }
+    ).revokeGroupInvite(id, groupJid);
+
+    return c.json({
+      data: {
+        groupJid,
+        code: newCode,
+        inviteLink: `https://chat.whatsapp.com/${newCode}`,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'REVOKE_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * POST /instances/:id/groups/join - Join a group via invite code
+ */
+instancesRoutes.post(
+  '/:id/groups/join',
+  instanceAccess,
+  zValidator('json', z.object({ code: z.string().min(1).describe('Invite code from the invite link') })),
+  async (c) => {
+    const id = c.req.param('id');
+    const { code } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('joinGroup' in plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support joining groups' } }, 400);
+    }
+
+    try {
+      const groupJid = await (plugin as { joinGroup: (instanceId: string, code: string) => Promise<string> }).joinGroup(
+        id,
+        code,
+      );
+
+      return c.json({ data: { groupJid, joined: true } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'JOIN_FAILED', message } }, 500);
+    }
+  },
+);
+
+// ============================================================================
+// C4: Blocklist
+// ============================================================================
+
+/**
+ * GET /instances/:id/blocklist - Fetch blocked contacts
+ */
+instancesRoutes.get('/:id/blocklist', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin || !('fetchBlocklist' in plugin)) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support blocklist' } }, 400);
+  }
+
+  try {
+    const blocklist = await (plugin as { fetchBlocklist: (instanceId: string) => Promise<string[]> }).fetchBlocklist(
+      id,
+    );
+
+    return c.json({ data: { blocklist, count: blocklist.length } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'BLOCKLIST_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// C5: Privacy Settings
+// ============================================================================
+
+/**
+ * GET /instances/:id/privacy - Fetch privacy settings
+ */
+instancesRoutes.get('/:id/privacy', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin || !('fetchPrivacySettings' in plugin)) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support privacy settings' } }, 400);
+  }
+
+  try {
+    const settings = await (
+      plugin as { fetchPrivacySettings: (instanceId: string) => Promise<Record<string, unknown>> }
+    ).fetchPrivacySettings(id);
+
+    return c.json({ data: settings });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'PRIVACY_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// C6: Reject Incoming Calls
+// ============================================================================
+
+/**
+ * POST /instances/:id/calls/reject - Reject an incoming call
+ */
+instancesRoutes.post(
+  '/:id/calls/reject',
+  instanceAccess,
+  zValidator(
+    'json',
+    z.object({
+      callId: z.string().min(1).describe('Call ID from the incoming call event'),
+      callFrom: z.string().min(1).describe('Caller JID'),
+    }),
+  ),
+  async (c) => {
+    const id = c.req.param('id');
+    const { callId, callFrom } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('rejectCall' in plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support call rejection' } }, 400);
+    }
+
+    try {
+      await (
+        plugin as { rejectCall: (instanceId: string, callId: string, callFrom: string) => Promise<void> }
+      ).rejectCall(id, callId, callFrom);
+
+      return c.json({ success: true, data: { callId, callFrom, rejected: true } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'REJECT_FAILED', message } }, 500);
+    }
+  },
+);
+
 export { instancesRoutes };

@@ -409,13 +409,29 @@ export function createChatsCommand(): Command {
   // omni chats archive <id>
   chats
     .command('archive <id>')
-    .description('Archive a chat')
-    .action(async (id: string) => {
+    .description('Archive a chat (optionally on the channel too)')
+    .option('--instance <id>', 'Instance ID to also archive on WhatsApp')
+    .action(async (id: string, options: { instance?: string }) => {
       const client = getClient();
 
       try {
-        const chat = await client.chats.archive(id);
-        output.success(`Chat archived: ${chat.id}`);
+        if (options.instance) {
+          // Call API with instanceId to archive on channel
+          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+          const apiKey = process.env.OMNI_API_KEY ?? '';
+          const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+            body: JSON.stringify({ instanceId: options.instance }),
+          });
+          if (!resp.ok) {
+            const err = (await resp.json()) as { error?: { message?: string } };
+            throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+          }
+        } else {
+          await client.chats.archive(id);
+        }
+        output.success(`Chat archived: ${id}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to archive chat: ${message}`);
@@ -425,16 +441,134 @@ export function createChatsCommand(): Command {
   // omni chats unarchive <id>
   chats
     .command('unarchive <id>')
-    .description('Unarchive a chat')
-    .action(async (id: string) => {
+    .description('Unarchive a chat (optionally on the channel too)')
+    .option('--instance <id>', 'Instance ID to also unarchive on WhatsApp')
+    .action(async (id: string, options: { instance?: string }) => {
       const client = getClient();
 
       try {
-        const chat = await client.chats.unarchive(id);
-        output.success(`Chat unarchived: ${chat.id}`);
+        if (options.instance) {
+          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+          const apiKey = process.env.OMNI_API_KEY ?? '';
+          const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+            body: JSON.stringify({ instanceId: options.instance }),
+          });
+          if (!resp.ok) {
+            const err = (await resp.json()) as { error?: { message?: string } };
+            throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+          }
+        } else {
+          await client.chats.unarchive(id);
+        }
+        output.success(`Chat unarchived: ${id}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unarchive chat: ${message}`);
+      }
+    });
+
+  // omni chats pin <id>
+  chats
+    .command('pin <id>')
+    .description('Pin a chat on the channel')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (id: string, options: { instance: string }) => {
+      try {
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/pin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ instanceId: options.instance }),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+        output.success(`Chat pinned: ${id}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to pin chat: ${message}`);
+      }
+    });
+
+  // omni chats unpin <id>
+  chats
+    .command('unpin <id>')
+    .description('Unpin a chat on the channel')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (id: string, options: { instance: string }) => {
+      try {
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unpin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ instanceId: options.instance }),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+        output.success(`Chat unpinned: ${id}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unpin chat: ${message}`);
+      }
+    });
+
+  // omni chats mute <id>
+  chats
+    .command('mute <id>')
+    .description('Mute a chat on the channel')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .option('--duration <ms>', 'Mute duration in milliseconds (default: 8 hours)', (v) => Number.parseInt(v, 10))
+    .action(async (id: string, options: { instance: string; duration?: number }) => {
+      try {
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const body: Record<string, unknown> = { instanceId: options.instance };
+        if (options.duration) body.duration = options.duration;
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/mute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+        output.success(`Chat muted: ${id}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to mute chat: ${message}`);
+      }
+    });
+
+  // omni chats unmute <id>
+  chats
+    .command('unmute <id>')
+    .description('Unmute a chat on the channel')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (id: string, options: { instance: string }) => {
+      try {
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unmute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ instanceId: options.instance }),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+        output.success(`Chat unmuted: ${id}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unmute chat: ${message}`);
       }
     });
 

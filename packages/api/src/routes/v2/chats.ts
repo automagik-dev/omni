@@ -195,14 +195,58 @@ chatsRoutes.delete('/:id', async (c) => {
   return c.json({ success: true });
 });
 
+// Chat channel-level action body schema (optional instanceId to also apply on platform)
+const chatChannelActionSchema = z
+  .object({
+    instanceId: z.string().uuid().optional().describe('Instance ID to also apply action on the channel'),
+  })
+  .optional();
+
+// Mute action body schema
+const muteActionSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  duration: z.number().int().positive().optional().describe('Mute duration in milliseconds (default: 8 hours)'),
+});
+
+/**
+ * Apply a chat modification action on the channel plugin (if instanceId provided)
+ */
+async function applyChatModifyOnChannel(
+  services: Services,
+  channelRegistry: ChannelRegistry | null | undefined,
+  instanceId: string,
+  chatExternalId: string,
+  action: string,
+  value?: number,
+): Promise<void> {
+  if (!channelRegistry) return;
+  const instance = await services.instances.getById(instanceId);
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) return;
+  if ('chatModifyAction' in plugin && typeof plugin.chatModifyAction === 'function') {
+    await (
+      plugin as {
+        chatModifyAction: (instanceId: string, chatId: string, action: string, value?: number) => Promise<void>;
+      }
+    ).chatModifyAction(instanceId, chatExternalId, action, value);
+  }
+}
+
 /**
  * POST /chats/:id/archive - Archive a chat
  */
-chatsRoutes.post('/:id/archive', async (c) => {
+chatsRoutes.post('/:id/archive', zValidator('json', chatChannelActionSchema), async (c) => {
   const id = c.req.param('id');
+  const body = c.req.valid('json');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
   const chat = await services.chats.archive(id);
+
+  // Also apply on channel if instanceId provided
+  if (body?.instanceId) {
+    await applyChatModifyOnChannel(services, channelRegistry, body.instanceId, chat.externalId, 'archive');
+  }
 
   return c.json({ data: chat });
 });
@@ -210,13 +254,79 @@ chatsRoutes.post('/:id/archive', async (c) => {
 /**
  * POST /chats/:id/unarchive - Unarchive a chat
  */
-chatsRoutes.post('/:id/unarchive', async (c) => {
+chatsRoutes.post('/:id/unarchive', zValidator('json', chatChannelActionSchema), async (c) => {
   const id = c.req.param('id');
+  const body = c.req.valid('json');
   const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
 
   const chat = await services.chats.unarchive(id);
 
+  if (body?.instanceId) {
+    await applyChatModifyOnChannel(services, channelRegistry, body.instanceId, chat.externalId, 'unarchive');
+  }
+
   return c.json({ data: chat });
+});
+
+/**
+ * POST /chats/:id/pin - Pin a chat on the channel
+ */
+chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
+  const id = c.req.param('id');
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const chat = await services.chats.getById(id);
+  await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'pin');
+
+  return c.json({ success: true, data: { chatId: id, action: 'pin' } });
+});
+
+/**
+ * POST /chats/:id/unpin - Unpin a chat on the channel
+ */
+chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
+  const id = c.req.param('id');
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const chat = await services.chats.getById(id);
+  await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unpin');
+
+  return c.json({ success: true, data: { chatId: id, action: 'unpin' } });
+});
+
+/**
+ * POST /chats/:id/mute - Mute a chat on the channel
+ */
+chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) => {
+  const id = c.req.param('id');
+  const { instanceId, duration } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const chat = await services.chats.getById(id);
+  await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'mute', duration);
+
+  return c.json({ success: true, data: { chatId: id, action: 'mute', duration } });
+});
+
+/**
+ * POST /chats/:id/unmute - Unmute a chat on the channel
+ */
+chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
+  const id = c.req.param('id');
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const chat = await services.chats.getById(id);
+  await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unmute');
+
+  return c.json({ success: true, data: { chatId: id, action: 'unmute' } });
 });
 
 /**
