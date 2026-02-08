@@ -599,7 +599,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 - **Focus on what he CAN'T do** — cross-PR analysis, writing review prompts, background monitoring
 
 ### claudio Launch Rules
-- **Review/fix workflows**: ALWAYS `claudio --dangerously-skip-permissions`
+- **Review/fix workflows**: ALWAYS `claudio launch main -- --dangerously-skip-permissions`
 - **Feature work**: ALWAYS launch in worktree dir, NEVER in main repo
 - **Verify**: `git branch --show-current` before any edit
 
@@ -639,7 +639,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 - Leave uncommitted work
 - Stop without pushing
 - Bypass make commands for common tasks
-- Launch claudio without `--dangerously-skip-permissions` for review/fix workflows
+- Launch claudio without skip-permissions for review/fix (correct: `claudio launch main -- --dangerously-skip-permissions`)
 - Run Claude Code in main repo for feature work (use worktrees)
 - Send generic prompts to Codex or other review tools
 
