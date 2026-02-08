@@ -25,6 +25,34 @@ import * as output from '../output.js';
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
+/** Resolve base64 image data from either --base64 or --url option */
+async function resolveBase64Image(options: { base64?: string; url?: string }): Promise<string> {
+  if (options.base64) return options.base64;
+  if (!options.url) throw new Error('Either --base64 or --url is required');
+  const resp = await fetch(options.url);
+  if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status}`);
+  const buffer = await resp.arrayBuffer();
+  return Buffer.from(buffer).toString('base64');
+}
+
+/** Generic API call helper for direct fetch requests */
+async function apiCall(path: string, method = 'GET', body?: unknown): Promise<unknown> {
+  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+  const apiKey = process.env.OMNI_API_KEY ?? '';
+  const headers: Record<string, string> = { 'x-api-key': apiKey };
+  if (body) headers['Content-Type'] = 'application/json';
+  const resp = await fetch(`${baseUrl}/api/v2/${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!resp.ok) {
+    const err = (await resp.json()) as { error?: { message?: string } };
+    throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export function createInstancesCommand(): Command {
   const instances = new Command('instances').description('Manage channel instances');
 
@@ -518,25 +546,8 @@ export function createInstancesCommand(): Command {
       }
 
       try {
-        let base64Data = options.base64;
-        if (options.url) {
-          const resp = await fetch(options.url);
-          if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status}`);
-          const buffer = await resp.arrayBuffer();
-          base64Data = Buffer.from(buffer).toString('base64');
-        }
-
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/profile/picture`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ base64: base64Data }),
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
+        const base64Data = await resolveBase64Image(options);
+        await apiCall(`instances/${id}/profile/picture`, 'PUT', { base64: base64Data });
         output.success('Profile picture updated');
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -550,16 +561,7 @@ export function createInstancesCommand(): Command {
     .description('Remove instance profile picture')
     .action(async (id: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/profile/picture`, {
-          method: 'DELETE',
-          headers: { 'x-api-key': apiKey },
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
+        await apiCall(`instances/${id}/profile/picture`, 'DELETE');
         output.success('Profile picture removed');
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -577,16 +579,9 @@ export function createInstancesCommand(): Command {
     .description('Get group invite link')
     .action(async (id: string, groupJid: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/groups/${encodeURIComponent(groupJid)}/invite`, {
-          headers: { 'x-api-key': apiKey },
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-        const result = (await resp.json()) as { data: { code: string; inviteLink: string } };
+        const result = (await apiCall(`instances/${id}/groups/${encodeURIComponent(groupJid)}/invite`)) as {
+          data: { code: string; inviteLink: string };
+        };
         output.data(result.data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -600,20 +595,10 @@ export function createInstancesCommand(): Command {
     .description('Revoke group invite link and generate new one')
     .action(async (id: string, groupJid: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(
-          `${baseUrl}/api/v2/instances/${id}/groups/${encodeURIComponent(groupJid)}/invite/revoke`,
-          {
-            method: 'POST',
-            headers: { 'x-api-key': apiKey },
-          },
-        );
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-        const result = (await resp.json()) as { data: { code: string; inviteLink: string } };
+        const result = (await apiCall(
+          `instances/${id}/groups/${encodeURIComponent(groupJid)}/invite/revoke`,
+          'POST',
+        )) as { data: { code: string; inviteLink: string } };
         output.success('Invite link revoked', result.data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -627,18 +612,9 @@ export function createInstancesCommand(): Command {
     .description('Join a group via invite code')
     .action(async (id: string, code: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/groups/join`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ code }),
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-        const result = (await resp.json()) as { data: { groupJid: string; joined: boolean } };
+        const result = (await apiCall(`instances/${id}/groups/join`, 'POST', { code })) as {
+          data: { groupJid: string; joined: boolean };
+        };
         output.success(`Joined group: ${result.data.groupJid}`, result.data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -656,16 +632,9 @@ export function createInstancesCommand(): Command {
     .description('List blocked contacts')
     .action(async (id: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/blocklist`, {
-          headers: { 'x-api-key': apiKey },
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-        const result = (await resp.json()) as { data: { blocklist: string[]; count: number } };
+        const result = (await apiCall(`instances/${id}/blocklist`)) as {
+          data: { blocklist: string[]; count: number };
+        };
         if (result.data.blocklist.length === 0) {
           output.info('No blocked contacts.');
         } else {
@@ -688,16 +657,7 @@ export function createInstancesCommand(): Command {
     .description('Fetch privacy settings')
     .action(async (id: string) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/privacy`, {
-          headers: { 'x-api-key': apiKey },
-        });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-        const result = (await resp.json()) as { data: Record<string, unknown> };
+        const result = (await apiCall(`instances/${id}/privacy`)) as { data: Record<string, unknown> };
         output.data(result.data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -717,17 +677,10 @@ export function createInstancesCommand(): Command {
     .requiredOption('--from <jid>', 'Caller JID')
     .action(async (id: string, options: { callId: string; from: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/calls/reject`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ callId: options.callId, callFrom: options.from }),
+        await apiCall(`instances/${id}/calls/reject`, 'POST', {
+          callId: options.callId,
+          callFrom: options.from,
         });
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
         output.success(`Call rejected: ${options.callId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
