@@ -545,5 +545,50 @@ export function createChatsCommand(): Command {
       }
     });
 
+  // omni chats disappearing <id>
+  chats
+    .command('disappearing <id>')
+    .description('Toggle disappearing messages for a chat')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .option('--duration <duration>', 'Duration: off, 24h, 7d, 90d (default: 24h)', '24h')
+    .action(async (id: string, options: { instance: string; duration?: string }) => {
+      const validDurations = ['off', '24h', '7d', '90d'];
+      const duration = options.duration ?? '24h';
+
+      if (!validDurations.includes(duration)) {
+        output.error(`Invalid duration: ${duration}. Valid: ${validDurations.join(', ')}`);
+        return;
+      }
+
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/disappearing`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            duration,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        if (duration === 'off') {
+          output.success('Disappearing messages turned off');
+        } else {
+          output.success(`Disappearing messages set to ${duration}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to set disappearing messages: ${message}`);
+      }
+    });
+
   return chats;
 }

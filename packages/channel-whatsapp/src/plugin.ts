@@ -653,6 +653,101 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     await sock.sendPresenceUpdate(presence);
   }
 
+  // =========================================================================
+  // B1-B6: Baileys Quick Wins — Direct WhatsApp operations
+  // =========================================================================
+
+  /**
+   * B1: Delete a message for everyone.
+   * Sends a protocol message to delete a previously sent message.
+   */
+  async deleteMessage(instanceId: string, chatId: string, messageId: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+    await sock.sendMessage(jid, {
+      delete: { remoteJid: jid, id: messageId, fromMe: true },
+    });
+    this.logger.info('Message deleted for everyone', { instanceId, chatId, messageId });
+  }
+
+  /**
+   * B2: Check if phone numbers are registered on WhatsApp.
+   * Returns registration status and JID for each number.
+   */
+  async checkNumber(instanceId: string, phones: string[]): Promise<{ phone: string; exists: boolean; jid?: string }[]> {
+    const sock = this.getSocket(instanceId);
+    const results = await sock.onWhatsApp(...phones);
+    return phones.map((phone, i) => {
+      const r = results?.[i];
+      return {
+        phone,
+        exists: r?.exists ?? false,
+        jid: r?.jid ?? undefined,
+      };
+    });
+  }
+
+  /**
+   * B3: Update own profile bio/status text.
+   */
+  async updateBio(instanceId: string, status: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    await sock.updateProfileStatus(status);
+    this.logger.info('Profile bio updated', { instanceId });
+  }
+
+  /**
+   * B4: Block a contact.
+   */
+  async blockContact(instanceId: string, contactJid: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(contactJid);
+    await sock.updateBlockStatus(jid, 'block');
+    this.logger.info('Contact blocked', { instanceId, jid });
+  }
+
+  /**
+   * B4: Unblock a contact.
+   */
+  async unblockContact(instanceId: string, contactJid: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(contactJid);
+    await sock.updateBlockStatus(jid, 'unblock');
+    this.logger.info('Contact unblocked', { instanceId, jid });
+  }
+
+  /**
+   * B4: Fetch the list of blocked contacts.
+   */
+  async fetchBlocklist(instanceId: string): Promise<string[]> {
+    const sock = this.getSocket(instanceId);
+    const list = await sock.fetchBlocklist();
+    return list.filter((jid): jid is string => typeof jid === 'string');
+  }
+
+  /**
+   * B5: Toggle disappearing messages for a chat.
+   * @param duration - Seconds (86400=24h, 604800=7d, 7776000=90d) or false to disable
+   */
+  async setDisappearing(instanceId: string, chatId: string, duration: number | false): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+    await sock.sendMessage(jid, { disappearingMessagesInChat: duration });
+    this.logger.info('Disappearing messages toggled', { instanceId, chatId, duration });
+  }
+
+  /**
+   * B6: Star or unstar a message.
+   */
+  async starMessage(instanceId: string, chatId: string, messageId: string, star: boolean): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+    await sock.star(jid, [{ id: messageId, fromMe: true }], star);
+    this.logger.info('Message star toggled', { instanceId, chatId, messageId, star });
+  }
+
+  // =========================================================================
+
   /**
    * Get the profile of the connected WhatsApp account.
    * Returns profile info including name, avatar, bio, and platform-specific metadata.

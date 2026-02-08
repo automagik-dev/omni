@@ -388,4 +388,90 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
   });
 });
 
+// ============================================================================
+// B5: DISAPPEARING MESSAGES
+// ============================================================================
+
+const disappearingSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  duration: z.enum(['off', '24h', '7d', '90d']).describe('Disappearing timer: off, 24h, 7d, or 90d'),
+});
+
+/** Map duration strings to seconds */
+const DISAPPEARING_DURATIONS: Record<string, number | false> = {
+  off: 0,
+  '24h': 86400,
+  '7d': 604800,
+  '90d': 7776000,
+};
+
+/**
+ * POST /chats/:id/disappearing - Toggle disappearing messages
+ */
+chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), async (c) => {
+  const chatId = c.req.param('id');
+  const { instanceId, duration } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  // Get chat from database
+  const chat = await services.chats.getById(chatId);
+
+  // Verify instance matches
+  if (chat.instanceId !== instanceId) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: "Instance ID does not match the chat's instance",
+      context: { instanceId, chatInstanceId: chat.instanceId },
+      recoverable: false,
+    });
+  }
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const instance = await services.instances.getById(instanceId);
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  if (!('setDisappearing' in plugin) || typeof plugin.setDisappearing !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Plugin ${instance.channel} does not support disappearing messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  const durationSeconds = DISAPPEARING_DURATIONS[duration] ?? 0;
+
+  await (
+    plugin as { setDisappearing: (id: string, chatId: string, duration: number | false) => Promise<void> }
+  ).setDisappearing(instanceId, chat.externalId, durationSeconds);
+
+  return c.json({
+    success: true,
+    data: {
+      chatId,
+      externalChatId: chat.externalId,
+      instanceId,
+      duration,
+      durationSeconds,
+    },
+  });
+});
+
 export { chatsRoutes };

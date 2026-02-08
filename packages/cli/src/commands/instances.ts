@@ -501,5 +501,162 @@ export function createInstancesCommand(): Command {
       }
     });
 
+  // omni instances check <id> <phone>
+  instances
+    .command('check <id> <phone>')
+    .description('Check if phone number is registered on WhatsApp')
+    .action(async (id: string, phone: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/check-number`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ phones: [phone] }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        const data = (await resp.json()) as {
+          data: { results: Array<{ exists: boolean; jid: string; phone: string }> };
+        };
+        const result = data.data.results[0];
+
+        if (result?.exists) {
+          output.success(`${phone} is registered on WhatsApp`, { jid: result.jid });
+        } else {
+          output.warn(`${phone} is NOT registered on WhatsApp`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to check number: ${message}`);
+      }
+    });
+
+  // omni instances update-bio <id> <status>
+  instances
+    .command('update-bio <id> <status>')
+    .description('Update own profile bio/status on WhatsApp')
+    .action(async (id: string, status: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/profile/status`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ status }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Bio updated: "${status}"`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update bio: ${message}`);
+      }
+    });
+
+  // omni instances block <id> <contactId>
+  instances
+    .command('block <id> <contactId>')
+    .description('Block a contact on WhatsApp')
+    .action(async (id: string, contactId: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ contactId }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Contact blocked: ${contactId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to block contact: ${message}`);
+      }
+    });
+
+  // omni instances unblock <id> <contactId>
+  instances
+    .command('unblock <id> <contactId>')
+    .description('Unblock a contact on WhatsApp')
+    .action(async (id: string, contactId: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ contactId }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Contact unblocked: ${contactId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unblock contact: ${message}`);
+      }
+    });
+
+  // omni instances blocklist <id>
+  instances
+    .command('blocklist <id>')
+    .description('List blocked contacts on WhatsApp')
+    .action(async (id: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/blocklist`, {
+          headers: { 'x-api-key': apiKey },
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        const data = (await resp.json()) as { data: { blocklist: string[]; count: number } };
+        const { blocklist, count } = data.data;
+
+        if (count === 0) {
+          output.info('No blocked contacts.');
+          return;
+        }
+
+        const items = blocklist.map((jid) => ({ jid }));
+        output.list(items, { emptyMessage: 'No blocked contacts.' });
+        output.dim(`Total: ${count} blocked`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to fetch blocklist: ${message}`);
+      }
+    });
+
   return instances;
 }
