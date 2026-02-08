@@ -666,6 +666,51 @@ instancesRoutes.post('/:id/sync/profile', instanceAccess, async (c) => {
   }
 });
 
+// ============================================================================
+// Profile Name Update
+// ============================================================================
+
+/**
+ * PUT /instances/:id/profile/name - Update profile display name
+ */
+instancesRoutes.put(
+  '/:id/profile/name',
+  instanceAccess,
+  zValidator('json', z.object({ name: z.string().min(1).max(25) })),
+  async (c) => {
+    const id = c.req.param('id');
+    const { name } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('updateProfileName' in plugin) || typeof plugin.updateProfileName !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support profile name update' } }, 400);
+    }
+
+    try {
+      await (plugin as { updateProfileName: (instanceId: string, name: string) => Promise<void> }).updateProfileName(
+        id,
+        name,
+      );
+
+      // Update local DB too
+      await services.instances.update(id, { profileName: name });
+
+      return c.json({ success: true, data: { instanceId: id, action: 'profile_name_updated', name } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
 /**
  * POST /instances/:id/sync - Request a sync operation
  *

@@ -654,6 +654,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Update the profile display name (push name) on WhatsApp.
+   */
+  async updateProfileName(instanceId: string, name: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    await sock.updateProfileName(name);
+    this.logger.info('Profile name updated', { instanceId, name });
+  }
+
+  /**
    * Get the profile of the connected WhatsApp account.
    * Returns profile info including name, avatar, bio, and platform-specific metadata.
    *
