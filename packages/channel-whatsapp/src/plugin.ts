@@ -2068,6 +2068,190 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Medium Features (C1-C7)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * C1: Modify chat (archive/unarchive/pin/unpin/mute/unmute)
+   *
+   * @param instanceId - Instance ID
+   * @param chatId - Chat JID or phone number
+   * @param action - One of: archive, unarchive, pin, unpin, mute, unmute
+   * @param value - For mute: duration in ms (default 8h). Ignored for other actions.
+   */
+  async chatModifyAction(
+    instanceId: string,
+    chatId: string,
+    action: string,
+    value?: number,
+    lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+  ): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+
+    // Build lastMessages array for actions that require it (archive/unarchive)
+    const lastMessages = lastMessageKey
+      ? [
+          {
+            key: { remoteJid: jid, id: lastMessageKey.id, fromMe: lastMessageKey.fromMe ?? false },
+            messageTimestamp: lastMessageKey.timestamp ?? Math.floor(Date.now() / 1000),
+          },
+        ]
+      : [{ key: { remoteJid: jid, id: '0', fromMe: false }, messageTimestamp: 0 }];
+
+    let modification: Record<string, unknown>;
+    switch (action) {
+      case 'archive':
+        modification = { archive: true, lastMessages };
+        break;
+      case 'unarchive':
+        modification = { archive: false, lastMessages };
+        break;
+      case 'pin':
+        modification = { pin: true };
+        break;
+      case 'unpin':
+        modification = { pin: false };
+        break;
+      case 'mute':
+        modification = { mute: value ? Date.now() + value : Date.now() + 8 * 60 * 60 * 1000 };
+        break;
+      case 'unmute':
+        modification = { mute: null };
+        break;
+      default:
+        throw new WhatsAppError(ErrorCode.UNKNOWN, `Unknown chat action: ${action}`);
+    }
+
+    await (sock.chatModify as (mod: unknown, jid: string) => Promise<void>)(modification, jid);
+    this.logger.info('Chat modified', { instanceId, chatId: jid, action });
+  }
+
+  /**
+   * C2: Update profile picture for the connected account
+   *
+   * @param instanceId - Instance ID
+   * @param imageBuffer - Image data as Buffer
+   */
+  async updateProfilePicture(instanceId: string, imageBuffer: Buffer): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const user = sock.user;
+    if (!user) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not fully connected`);
+    }
+    await sock.updateProfilePicture(user.id, imageBuffer);
+    this.logger.info('Profile picture updated', { instanceId });
+  }
+
+  /**
+   * C2: Remove profile picture for the connected account
+   *
+   * @param instanceId - Instance ID
+   */
+  async removeProfilePicture(instanceId: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const user = sock.user;
+    if (!user) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not fully connected`);
+    }
+    await sock.removeProfilePicture(user.id);
+    this.logger.info('Profile picture removed', { instanceId });
+  }
+
+  /**
+   * C3: Get group invite code
+   *
+   * @param instanceId - Instance ID
+   * @param groupJid - Group JID
+   * @returns Invite code string
+   */
+  async getGroupInviteCode(instanceId: string, groupJid: string): Promise<string> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(groupJid);
+    const code = await sock.groupInviteCode(jid);
+    return code ?? '';
+  }
+
+  /**
+   * C3: Revoke group invite link and generate a new one
+   *
+   * @param instanceId - Instance ID
+   * @param groupJid - Group JID
+   * @returns New invite code string
+   */
+  async revokeGroupInvite(instanceId: string, groupJid: string): Promise<string> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(groupJid);
+    const newCode = await sock.groupRevokeInvite(jid);
+    return newCode ?? '';
+  }
+
+  /**
+   * C3: Join a group via invite code
+   *
+   * @param instanceId - Instance ID
+   * @param code - Invite code (the part after chat.whatsapp.com/)
+   * @returns The JID of the joined group
+   */
+  async joinGroup(instanceId: string, code: string): Promise<string> {
+    const sock = this.getSocket(instanceId);
+    const groupJid = await sock.groupAcceptInvite(code);
+    return groupJid ?? '';
+  }
+
+  /**
+   * C4: Fetch the blocklist for the connected account
+   *
+  /**
+   * C5: Fetch privacy settings for the connected account
+   *
+   * @param instanceId - Instance ID
+   * @returns Privacy settings object
+   */
+  async fetchPrivacySettings(instanceId: string): Promise<Record<string, unknown>> {
+    const sock = this.getSocket(instanceId);
+    const settings = await sock.fetchPrivacySettings(true);
+    return (settings as Record<string, unknown>) ?? {};
+  }
+
+  /**
+   * C6: Reject an incoming call
+   *
+   * @param instanceId - Instance ID
+   * @param callId - Call ID from the call event
+   * @param callFrom - JID of the caller
+   */
+  async rejectCall(instanceId: string, callId: string, callFrom: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    await sock.rejectCall(callId, callFrom);
+    this.logger.info('Call rejected', { instanceId, callId, callFrom });
+  }
+
+  /**
+   * C7: Edit a previously sent message
+   *
+   * @param instanceId - Instance ID
+   * @param chatJid - Chat JID where the message was sent
+   * @param messageId - External message ID to edit
+   * @param newText - New text content
+   */
+  async editMessage(
+    instanceId: string,
+    chatJid: string,
+    messageId: string,
+    newText: string,
+    fromMe = true,
+  ): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatJid);
+    await sock.sendMessage(jid, {
+      edit: { remoteJid: jid, id: messageId, fromMe } as unknown as proto.IMessageKey,
+      text: newText,
+    });
+    this.logger.info('Message edited', { instanceId, chatJid: jid, messageId, fromMe });
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────
 

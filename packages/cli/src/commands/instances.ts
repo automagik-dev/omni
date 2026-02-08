@@ -25,6 +25,33 @@ import * as output from '../output.js';
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
+async function resolveBase64Image(options: { base64?: string; url?: string }): Promise<string> {
+  if (options.base64) return options.base64;
+  if (!options.url) throw new Error('Either --base64 or --url is required');
+  const resp = await fetch(options.url);
+  if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status}`);
+  const buffer = await resp.arrayBuffer();
+  return Buffer.from(buffer).toString('base64');
+}
+
+/** Generic API call helper for direct fetch requests */
+async function apiCall(path: string, method = 'GET', body?: unknown): Promise<unknown> {
+  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+  const apiKey = process.env.OMNI_API_KEY ?? '';
+  const headers: Record<string, string> = { 'x-api-key': apiKey };
+  if (body) headers['Content-Type'] = 'application/json';
+  const resp = await fetch(`${baseUrl}/api/v2/${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!resp.ok) {
+    const err = (await resp.json()) as { error?: { message?: string } };
+    throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export function createInstancesCommand(): Command {
   const instances = new Command('instances').description('Manage channel instances');
 
@@ -774,6 +801,142 @@ export function createInstancesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to fetch blocklist: ${message}`);
+      }
+    });
+
+  // ============================================================================
+  // C2: Profile Picture
+  // ============================================================================
+
+  // omni instances update-picture <id>
+  instances
+    .command('update-picture <id>')
+    .description('Update instance profile picture')
+    .option('--base64 <data>', 'Base64-encoded image data')
+    .option('--url <url>', 'URL to fetch image from')
+    .action(async (id: string, options: { base64?: string; url?: string }) => {
+      if (!options.base64 && !options.url) {
+        output.error('Either --base64 or --url is required');
+        return;
+      }
+
+      try {
+        const base64Data = await resolveBase64Image(options);
+        await apiCall(`instances/${id}/profile/picture`, 'PUT', { base64: base64Data });
+        output.success('Profile picture updated');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update profile picture: ${message}`);
+      }
+    });
+
+  // omni instances remove-picture <id>
+  instances
+    .command('remove-picture <id>')
+    .description('Remove instance profile picture')
+    .action(async (id: string) => {
+      try {
+        await apiCall(`instances/${id}/profile/picture`, 'DELETE');
+        output.success('Profile picture removed');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to remove profile picture: ${message}`);
+      }
+    });
+
+  // ============================================================================
+  // C3: Group Invite Links
+  // ============================================================================
+
+  // omni instances group-invite <id> <groupJid>
+  instances
+    .command('group-invite <id> <groupJid>')
+    .description('Get group invite link')
+    .action(async (id: string, groupJid: string) => {
+      try {
+        const result = (await apiCall(`instances/${id}/groups/${encodeURIComponent(groupJid)}/invite`)) as {
+          data: { code: string; inviteLink: string };
+        };
+        output.data(result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get invite link: ${message}`);
+      }
+    });
+
+  // omni instances group-revoke-invite <id> <groupJid>
+  instances
+    .command('group-revoke-invite <id> <groupJid>')
+    .description('Revoke group invite link and generate new one')
+    .action(async (id: string, groupJid: string) => {
+      try {
+        const result = (await apiCall(
+          `instances/${id}/groups/${encodeURIComponent(groupJid)}/invite/revoke`,
+          'POST',
+        )) as { data: { code: string; inviteLink: string } };
+        output.success('Invite link revoked', result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to revoke invite link: ${message}`);
+      }
+    });
+
+  // omni instances group-join <id> <code>
+  instances
+    .command('group-join <id> <code>')
+    .description('Join a group via invite code')
+    .action(async (id: string, code: string) => {
+      try {
+        const result = (await apiCall(`instances/${id}/groups/join`, 'POST', { code })) as {
+          data: { groupJid: string; joined: boolean };
+        };
+        output.success(`Joined group: ${result.data.groupJid}`, result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to join group: ${message}`);
+      }
+    });
+
+  // ============================================================================
+
+  // ============================================================================
+  // C5: Privacy Settings
+  // ============================================================================
+
+  // omni instances privacy <id>
+  instances
+    .command('privacy <id>')
+    .description('Fetch privacy settings')
+    .action(async (id: string) => {
+      try {
+        const result = (await apiCall(`instances/${id}/privacy`)) as { data: Record<string, unknown> };
+        output.data(result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to fetch privacy settings: ${message}`);
+      }
+    });
+
+  // ============================================================================
+  // C6: Reject Incoming Calls
+  // ============================================================================
+
+  // omni instances reject-call <id>
+  instances
+    .command('reject-call <id>')
+    .description('Reject an incoming call')
+    .requiredOption('--call-id <callId>', 'Call ID from the call event')
+    .requiredOption('--from <jid>', 'Caller JID')
+    .action(async (id: string, options: { callId: string; from: string }) => {
+      try {
+        await apiCall(`instances/${id}/calls/reject`, 'POST', {
+          callId: options.callId,
+          callFrom: options.from,
+        });
+        output.success(`Call rejected: ${options.callId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to reject call: ${message}`);
       }
     });
 
