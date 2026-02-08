@@ -45,6 +45,23 @@ export function createInstancesCommand(): Command {
           limit: options.limit,
         });
 
+        // Fetch status for each instance to get phone/owner
+        const statusMap = new Map<string, string>();
+        await Promise.allSettled(
+          result.items.map(async (i) => {
+            try {
+              const st = (await client.instances.status(i.id)) as { ownerIdentifier?: string };
+              if (st.ownerIdentifier) {
+                // Parse phone from JID like "5512982298888:36@s.whatsapp.net"
+                const phone = st.ownerIdentifier.split(':')[0] ?? st.ownerIdentifier.split('@')[0];
+                statusMap.set(i.id, phone);
+              }
+            } catch {
+              /* skip if status unavailable */
+            }
+          }),
+        );
+
         // Simplify output for display
         const items = result.items.map((i) => ({
           id: i.id,
@@ -52,6 +69,7 @@ export function createInstancesCommand(): Command {
           channel: i.channel,
           active: i.isActive ? 'yes' : 'no',
           profileName: i.profileName ?? '-',
+          phone: statusMap.get(i.id) ?? '-',
         }));
 
         output.list(items, { emptyMessage: 'No instances found.' });
@@ -146,6 +164,39 @@ export function createInstancesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get status: ${message}`, undefined, 3);
+      }
+    });
+
+  // omni instances whoami <id>
+  instances
+    .command('whoami <id>')
+    .description('Show phone number and identity for an instance')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const status = (await client.instances.status(id)) as {
+          state: string;
+          isConnected: boolean;
+          profileName?: string | null;
+          profilePicUrl?: string | null;
+          ownerIdentifier?: string;
+        };
+
+        const owner = status.ownerIdentifier ?? '-';
+        const phone = owner !== '-' ? (owner.split(':')[0] ?? owner.split('@')[0]) : '-';
+
+        output.data({
+          instanceId: id,
+          phone,
+          profileName: status.profileName ?? '-',
+          ownerIdentifier: owner,
+          state: status.state,
+          isConnected: status.isConnected,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get identity: ${message}`);
       }
     });
 
@@ -423,34 +474,59 @@ export function createInstancesCommand(): Command {
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10))
     .option('--cursor <cursor>', 'Pagination cursor')
     .option('--guild <id>', 'Guild ID (required for Discord)')
-    .action(async (id: string, options: { limit?: number; cursor?: string; guild?: string }) => {
-      const client = getClient();
+    .option('--search <query>', 'Filter contacts by name or phone')
+    .option('--no-groups', 'Exclude group contacts')
+    .action(
+      async (
+        id: string,
+        options: { limit?: number; cursor?: string; guild?: string; search?: string; groups?: boolean },
+      ) => {
+        const client = getClient();
 
-      try {
-        const result = await client.instances.listContacts(id, {
-          limit: options.limit,
-          cursor: options.cursor,
-          guildId: options.guild,
-        });
+        try {
+          const result = await client.instances.listContacts(id, {
+            limit: options.limit,
+            cursor: options.cursor,
+            guildId: options.guild,
+          });
 
-        const items = result.items.map((c) => ({
-          id: c.platformUserId,
-          name: c.displayName ?? '-',
-          phone: c.phone ?? '-',
-          isGroup: c.isGroup ? 'yes' : 'no',
-          isBusiness: c.isBusiness ? 'yes' : 'no',
-        }));
+          let contacts = result.items;
 
-        output.list(items, { emptyMessage: 'No contacts found.' });
+          // Filter out groups if --no-groups
+          if (options.groups === false) {
+            contacts = contacts.filter((c) => !c.isGroup);
+          }
 
-        if (result.meta.hasMore) {
-          output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          // Search filter
+          if (options.search) {
+            const q = options.search.toLowerCase();
+            contacts = contacts.filter(
+              (c) =>
+                (c.displayName ?? '').toLowerCase().includes(q) ||
+                (c.phone ?? '').includes(q) ||
+                c.platformUserId.includes(q),
+            );
+          }
+
+          const items = contacts.map((c) => ({
+            jid: c.platformUserId,
+            name: c.displayName ?? '-',
+            phone: c.phone ?? '-',
+            isGroup: c.isGroup ? 'yes' : 'no',
+            isBusiness: c.isBusiness ? 'yes' : 'no',
+          }));
+
+          output.list(items, { emptyMessage: 'No contacts found.' });
+
+          if (result.meta.hasMore) {
+            output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to list contacts: ${message}`);
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to list contacts: ${message}`);
-      }
-    });
+      },
+    );
 
   // omni instances groups <id>
   instances
@@ -458,7 +534,8 @@ export function createInstancesCommand(): Command {
     .description('List groups for an instance')
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10))
     .option('--cursor <cursor>', 'Pagination cursor')
-    .action(async (id: string, options: { limit?: number; cursor?: string }) => {
+    .option('--search <query>', 'Filter groups by name')
+    .action(async (id: string, options: { limit?: number; cursor?: string; search?: string }) => {
       const client = getClient();
 
       try {
@@ -467,11 +544,23 @@ export function createInstancesCommand(): Command {
           cursor: options.cursor,
         });
 
-        const items = result.items.map((g) => ({
-          id: g.externalId,
+        let groups = result.items;
+
+        // Search filter
+        if (options.search) {
+          const q = options.search.toLowerCase();
+          groups = groups.filter((g) => (g.name ?? '').toLowerCase().includes(q) || (g.externalId ?? '').includes(q));
+        }
+
+        const items = groups.map((g) => ({
+          jid: g.externalId,
           name: g.name ?? '-',
           members: g.memberCount ?? '-',
-          description: g.description ? g.description.substring(0, 30) : '-',
+          description: g.description
+            ? g.description.length > 50
+              ? `${g.description.substring(0, 47)}...`
+              : g.description
+            : '-',
         }));
 
         output.list(items, { emptyMessage: 'No groups found.' });

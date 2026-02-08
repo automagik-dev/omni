@@ -95,11 +95,15 @@ function formatTime(date: Date | string | null | undefined): string {
   return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** Module-level truncation limit — set by --full flag or default */
+let _truncateMax = 200;
+
 /**
  * Truncate text with ellipsis
  */
 function truncate(text: string | null | undefined, maxLen: number): string {
   if (!text) return '-';
+  if (maxLen <= 0) return text; // 0 or negative = no truncation
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen - 3)}...`;
 }
@@ -159,7 +163,7 @@ function formatDuration(seconds: number): string {
 function buildRichContent(msg: ExtendedMessage): string {
   const isMedia = isMediaMessage(msg);
   if (!isMedia) {
-    return truncate(msg.textContent, 50) ?? '-';
+    return truncate(msg.textContent, _truncateMax) ?? '-';
   }
 
   const badge = getMediaBadge(msg.messageType);
@@ -171,11 +175,12 @@ function buildRichContent(msg: ExtendedMessage): string {
   const duration = msg.mediaMetadata?.duration;
   if (duration) parts.push(formatDuration(duration));
 
+  const descLimit = _truncateMax > 0 ? Math.min(_truncateMax, 80) : 0;
   const mediaDesc = getMediaDescription(msg);
   if (mediaDesc) {
-    parts.push(`- "${truncate(mediaDesc, 40)}"`);
+    parts.push(`- "${truncate(mediaDesc, descLimit)}"`);
   } else if (msg.textContent) {
-    parts.push(`- "${truncate(msg.textContent, 40)}"`);
+    parts.push(`- "${truncate(msg.textContent, descLimit)}"`);
   }
 
   return parts.join(' ');
@@ -204,7 +209,7 @@ function formatStandardMessages(
   return messages.map((m) => ({
     id: m.id,
     type: m.messageType,
-    content: m.textContent ?? '-',
+    content: _truncateMax > 0 ? truncate(m.textContent, _truncateMax) : (m.textContent ?? '-'),
     fromMe: m.isFromMe ? 'yes' : 'no',
     timestamp: m.platformTimestamp,
   }));
@@ -447,11 +452,23 @@ export function createChatsCommand(): Command {
     .option('--after <cursor>', 'Get messages after cursor')
     .option('--rich', 'Show rich format with transcriptions/descriptions')
     .option('--media-only', 'Only show media messages')
+    .option('--full', 'Show full text without truncation')
+    .option('--no-truncate', 'Alias for --full')
     .action(
       async (
         id: string,
-        options: { limit?: number; before?: string; after?: string; rich?: boolean; mediaOnly?: boolean },
+        options: {
+          limit?: number;
+          before?: string;
+          after?: string;
+          rich?: boolean;
+          mediaOnly?: boolean;
+          full?: boolean;
+          truncate?: boolean;
+        },
       ) => {
+        // Set module-level truncation: --full or --no-truncate disables it
+        _truncateMax = options.full || options.truncate === false ? 0 : 200;
         const client = getClient();
 
         try {
