@@ -11,9 +11,24 @@ import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Services } from '../../services';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Verify API key has access to the given instance.
+ */
+function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
+  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: 'API key does not have access to this instance',
+      context: { instanceId },
+      recoverable: false,
+    });
+  }
+}
 
 /**
  * Get validated plugin for an instance with capability check
@@ -209,6 +224,29 @@ const muteActionSchema = z.object({
 });
 
 /**
+ * Get the last message key for a chat (used by archive/unarchive which Baileys requires)
+ */
+async function getLastMessageKey(
+  services: Services,
+  chatId: string,
+): Promise<{ id: string; fromMe?: boolean; timestamp?: number } | undefined> {
+  try {
+    const result = await services.messages.list({ chatId, limit: 1 });
+    const msg = result.items[0];
+    if (msg) {
+      return {
+        id: msg.externalId,
+        fromMe: msg.isFromMe,
+        timestamp: Math.floor(new Date(msg.platformTimestamp).getTime() / 1000),
+      };
+    }
+  } catch {
+    // If we can't get the last message, let the plugin handle the fallback
+  }
+  return undefined;
+}
+
+/**
  * Apply a chat modification action on the channel plugin (if instanceId provided)
  */
 async function applyChatModifyOnChannel(
@@ -218,6 +256,7 @@ async function applyChatModifyOnChannel(
   chatExternalId: string,
   action: string,
   value?: number,
+  lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
 ): Promise<void> {
   if (!channelRegistry) return;
   const instance = await services.instances.getById(instanceId);
@@ -226,9 +265,15 @@ async function applyChatModifyOnChannel(
   if ('chatModifyAction' in plugin && typeof plugin.chatModifyAction === 'function') {
     await (
       plugin as {
-        chatModifyAction: (instanceId: string, chatId: string, action: string, value?: number) => Promise<void>;
+        chatModifyAction: (
+          instanceId: string,
+          chatId: string,
+          action: string,
+          value?: number,
+          lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+        ) => Promise<void>;
       }
-    ).chatModifyAction(instanceId, chatExternalId, action, value);
+    ).chatModifyAction(instanceId, chatExternalId, action, value, lastMessageKey);
   }
 }
 
@@ -241,11 +286,26 @@ chatsRoutes.post('/:id/archive', zValidator('json', chatChannelActionSchema), as
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  // Verify instance access if instanceId provided
+  if (body?.instanceId) {
+    checkInstanceAccess(c.get('apiKey'), body.instanceId);
+  }
+
   const chat = await services.chats.archive(id);
 
   // Also apply on channel if instanceId provided
   if (body?.instanceId) {
-    await applyChatModifyOnChannel(services, channelRegistry, body.instanceId, chat.externalId, 'archive');
+    // Fetch last message for archive (Baileys requires it)
+    const lastMsg = await getLastMessageKey(services, id);
+    await applyChatModifyOnChannel(
+      services,
+      channelRegistry,
+      body.instanceId,
+      chat.externalId,
+      'archive',
+      undefined,
+      lastMsg,
+    );
   }
 
   return c.json({ data: chat });
@@ -260,10 +320,25 @@ chatsRoutes.post('/:id/unarchive', zValidator('json', chatChannelActionSchema), 
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  // Verify instance access if instanceId provided
+  if (body?.instanceId) {
+    checkInstanceAccess(c.get('apiKey'), body.instanceId);
+  }
+
   const chat = await services.chats.unarchive(id);
 
   if (body?.instanceId) {
-    await applyChatModifyOnChannel(services, channelRegistry, body.instanceId, chat.externalId, 'unarchive');
+    // Fetch last message for unarchive (Baileys requires it)
+    const lastMsg = await getLastMessageKey(services, id);
+    await applyChatModifyOnChannel(
+      services,
+      channelRegistry,
+      body.instanceId,
+      chat.externalId,
+      'unarchive',
+      undefined,
+      lastMsg,
+    );
   }
 
   return c.json({ data: chat });
@@ -277,6 +352,8 @@ chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string(
   const { instanceId } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const chat = await services.chats.getById(id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'pin');
@@ -293,6 +370,8 @@ chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.strin
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
   const chat = await services.chats.getById(id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unpin');
 
@@ -308,6 +387,8 @@ chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
   const chat = await services.chats.getById(id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'mute', duration);
 
@@ -322,6 +403,8 @@ chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.stri
   const { instanceId } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const chat = await services.chats.getById(id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unmute');

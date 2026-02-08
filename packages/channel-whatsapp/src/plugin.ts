@@ -1967,17 +1967,33 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param action - One of: archive, unarchive, pin, unpin, mute, unmute
    * @param value - For mute: duration in ms (default 8h). Ignored for other actions.
    */
-  async chatModifyAction(instanceId: string, chatId: string, action: string, value?: number): Promise<void> {
+  async chatModifyAction(
+    instanceId: string,
+    chatId: string,
+    action: string,
+    value?: number,
+    lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+  ): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
+
+    // Build lastMessages array for actions that require it (archive/unarchive)
+    const lastMessages = lastMessageKey
+      ? [
+          {
+            key: { remoteJid: jid, id: lastMessageKey.id, fromMe: lastMessageKey.fromMe ?? false },
+            messageTimestamp: lastMessageKey.timestamp ?? Math.floor(Date.now() / 1000),
+          },
+        ]
+      : [{ key: { remoteJid: jid, id: '0', fromMe: false }, messageTimestamp: 0 }];
 
     let modification: Record<string, unknown>;
     switch (action) {
       case 'archive':
-        modification = { archive: true, lastMessages: [] };
+        modification = { archive: true, lastMessages };
         break;
       case 'unarchive':
-        modification = { archive: false, lastMessages: [] };
+        modification = { archive: false, lastMessages };
         break;
       case 'pin':
         modification = { pin: true };
@@ -1992,7 +2008,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         modification = { mute: null };
         break;
       default:
-        throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Unknown chat action: ${action}`);
+        throw new WhatsAppError(ErrorCode.UNKNOWN, `Unknown chat action: ${action}`);
     }
 
     await (sock.chatModify as (mod: unknown, jid: string) => Promise<void>)(modification, jid);
@@ -2116,14 +2132,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param messageId - External message ID to edit
    * @param newText - New text content
    */
-  async editMessage(instanceId: string, chatJid: string, messageId: string, newText: string): Promise<void> {
+  async editMessage(
+    instanceId: string,
+    chatJid: string,
+    messageId: string,
+    newText: string,
+    fromMe = true,
+  ): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatJid);
     await sock.sendMessage(jid, {
-      edit: { remoteJid: jid, id: messageId, fromMe: true } as unknown as proto.IMessageKey,
+      edit: { remoteJid: jid, id: messageId, fromMe } as unknown as proto.IMessageKey,
       text: newText,
     });
-    this.logger.info('Message edited', { instanceId, chatJid: jid, messageId });
+    this.logger.info('Message edited', { instanceId, chatJid: jid, messageId, fromMe });
   }
 
   // ─────────────────────────────────────────────────────────────
