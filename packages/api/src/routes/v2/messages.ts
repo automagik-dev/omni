@@ -1664,6 +1664,7 @@ const deleteMessageChannelSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
   channelId: z.string().min(1).describe('Channel/Chat ID'),
   messageId: z.string().min(1).describe('Message ID to delete'),
+  fromMe: z.boolean().default(true).describe('Whether the message was sent by this instance'),
 });
 
 /**
@@ -1887,7 +1888,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
  * POST /messages/delete-channel - Delete message via channel plugin
  */
 messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSchema), async (c) => {
-  const { instanceId, channelId, messageId } = c.req.valid('json');
+  const { instanceId, channelId, messageId, fromMe } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -1936,12 +1937,138 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
 
   // Delete via channel plugin
   await (
-    plugin as { deleteMessage: (instanceId: string, channelId: string, messageId: string) => Promise<void> }
-  ).deleteMessage(instanceId, channelId, messageId);
+    plugin as {
+      deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
+    }
+  ).deleteMessage(instanceId, channelId, messageId, fromMe);
 
   return c.json({
     success: true,
     data: { messageId, deleted: true },
+  });
+});
+
+// ============================================================================
+// B6: Star/Unstar Messages
+// ============================================================================
+
+const starMessageSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+  channelId: z.string().min(1).describe('Chat JID or channel ID'),
+  fromMe: z.boolean().default(true).describe('Whether the message was sent by this instance'),
+});
+
+/**
+ * POST /messages/:id/star - Star a message
+ */
+messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c) => {
+  const messageId = c.req.param('id');
+  const { instanceId, channelId, fromMe } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support starring messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  await (
+    plugin as {
+      starMessage: (
+        instanceId: string,
+        chatId: string,
+        messageId: string,
+        star: boolean,
+        fromMe?: boolean,
+      ) => Promise<void>;
+    }
+  ).starMessage(instanceId, channelId, messageId, true, fromMe);
+
+  return c.json({
+    success: true,
+    data: { messageId, starred: true },
+  });
+});
+
+/**
+ * DELETE /messages/:id/star - Unstar a message
+ */
+messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async (c) => {
+  const messageId = c.req.param('id');
+  const { instanceId, channelId, fromMe } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support starring messages`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  await (
+    plugin as {
+      starMessage: (
+        instanceId: string,
+        chatId: string,
+        messageId: string,
+        star: boolean,
+        fromMe?: boolean,
+      ) => Promise<void>;
+    }
+  ).starMessage(instanceId, channelId, messageId, false, fromMe);
+
+  return c.json({
+    success: true,
+    data: { messageId, starred: false },
   });
 });
 
