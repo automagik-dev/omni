@@ -591,6 +591,40 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 
 ---
 
+## Cowork Mode (How Felipe & Cezar Work)
+
+**Felipe is faster than you in the terminal.** When he says "set up splits", he's already doing it. Your job:
+- **Coordinate, don't control** — monitor, approve prompts, synthesize results
+- **Don't narrate obvious commands** — he can see the same screen
+- **Focus on what he CAN'T do** — cross-PR analysis, writing review prompts, background monitoring
+
+### claudio Launch Rules
+- **Review/fix workflows**: ALWAYS `claudio --dangerously-skip-permissions`
+- **Feature work**: ALWAYS launch in worktree dir, NEVER in main repo
+- **Verify**: `git branch --show-current` before any edit
+
+### PR Review Pipeline (Mandatory)
+1. Self-review: Claude Code `/review` in each worktree
+2. Fix & push: coordinate until clean
+3. **Codex review**: `@codex` on GitHub with **personalized, contextual prompts** — NEVER generic "review this"
+4. Human review: provide GitHub URLs only after steps 1-3
+
+### Writing Prompts for Tools/Agents
+**Generic = lazy. Always personalize:**
+- What files changed and why
+- Specific risk areas (type safety, API signatures, edge cases)
+- Known overlaps with other work
+- Library version specifics
+- This applies to Codex, Claude Code tasks, sub-agents — everything
+
+### Cross-PR Hygiene
+- Before merging multiple PRs: check for **feature overlaps** and **file conflicts**
+- Map which PRs touch the same files
+- Recommend merge order (least conflicts first)
+- After each merge: rebase remaining PRs
+
+---
+
 ## Never Do
 
 **Technical:**
@@ -605,6 +639,9 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 - Leave uncommitted work
 - Stop without pushing
 - Bypass make commands for common tasks
+- Launch claudio without `--dangerously-skip-permissions` for review/fix workflows
+- Run Claude Code in main repo for feature work (use worktrees)
+- Send generic prompts to Codex or other review tools
 
 **Behavioral:**
 - Exfiltrate private data
@@ -612,6 +649,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 - Send half-baked replies to messaging surfaces
 - Speak as the user's voice in group chats
 - Make "mental notes" instead of writing to files
+- Try to out-type Felipe in the terminal
 
 ---
 
