@@ -26,7 +26,7 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canReceiveDeliveryReceipts: true,
 
   // Message operations
-  canEditMessage: false, // WhatsApp doesn't support editing
+  canEditMessage: true, // WhatsApp supports editing own messages
   canDeleteMessage: true,
   canReplyToMessage: true,
   canForwardMessage: true,
