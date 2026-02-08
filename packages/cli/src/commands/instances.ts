@@ -25,7 +25,6 @@ import * as output from '../output.js';
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
-/** Resolve base64 image data from either --base64 or --url option */
 async function resolveBase64Image(options: { base64?: string; url?: string }): Promise<string> {
   if (options.base64) return options.base64;
   if (!options.url) throw new Error('Either --base64 or --url is required');
@@ -73,6 +72,25 @@ export function createInstancesCommand(): Command {
           limit: options.limit,
         });
 
+        // Fetch status for each instance to get phone/owner
+        const statusMap = new Map<string, string>();
+        await Promise.allSettled(
+          result.items.map(async (i) => {
+            try {
+              const st = (await client.instances.status(i.id)) as { ownerIdentifier?: string };
+              if (st.ownerIdentifier) {
+                // Parse phone from JID like "5512982298888:36@s.whatsapp.net" or "5512982298888@s.whatsapp.net"
+                const phone = st.ownerIdentifier.includes(':')
+                  ? st.ownerIdentifier.split(':')[0]
+                  : st.ownerIdentifier.split('@')[0];
+                statusMap.set(i.id, phone);
+              }
+            } catch {
+              /* skip if status unavailable */
+            }
+          }),
+        );
+
         // Simplify output for display
         const items = result.items.map((i) => ({
           id: i.id,
@@ -80,6 +98,7 @@ export function createInstancesCommand(): Command {
           channel: i.channel,
           active: i.isActive ? 'yes' : 'no',
           profileName: i.profileName ?? '-',
+          phone: statusMap.get(i.id) ?? '-',
         }));
 
         output.list(items, { emptyMessage: 'No instances found.' });
@@ -174,6 +193,39 @@ export function createInstancesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get status: ${message}`, undefined, 3);
+      }
+    });
+
+  // omni instances whoami <id>
+  instances
+    .command('whoami <id>')
+    .description('Show phone number and identity for an instance')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const status = (await client.instances.status(id)) as {
+          state: string;
+          isConnected: boolean;
+          profileName?: string | null;
+          profilePicUrl?: string | null;
+          ownerIdentifier?: string;
+        };
+
+        const owner = status.ownerIdentifier ?? '-';
+        const phone = owner !== '-' ? (owner.includes(':') ? owner.split(':')[0] : owner.split('@')[0]) : '-';
+
+        output.data({
+          instanceId: id,
+          phone,
+          profileName: status.profileName ?? '-',
+          ownerIdentifier: owner,
+          state: status.state,
+          isConnected: status.isConnected,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get identity: ${message}`);
       }
     });
 
@@ -420,6 +472,21 @@ export function createInstancesCommand(): Command {
       }
     });
 
+  // Helper: update profile name via API (calls WhatsApp directly)
+  async function updateProfileName(instanceId: string, name: string): Promise<void> {
+    const config = (await import('../config.js')).loadConfig();
+    const apiUrl = (config.apiUrl ?? 'http://localhost:8881').replace(/\/$/, '');
+    const response = await fetch(`${apiUrl}/api/v2/instances/${instanceId}/profile/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      const err = (await response.json()) as { error?: { message?: string } };
+      throw new Error(err?.error?.message ?? `HTTP ${response.status}`);
+    }
+  }
+
   // omni instances update <id>
   instances
     .command('update <id>')
@@ -427,22 +494,35 @@ export function createInstancesCommand(): Command {
     .option('--name <name>', 'New instance name')
     .option('--agent-provider <id>', 'New agent provider ID')
     .option('--agent <id>', 'New agent ID')
-    .action(async (id: string, options: { name?: string; agentProvider?: string; agent?: string }) => {
-      const client = getClient();
+    .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    .action(
+      async (id: string, options: { name?: string; agentProvider?: string; agent?: string; profileName?: string }) => {
+        const client = getClient();
 
-      try {
-        await client.instances.update(id, {
-          name: options.name,
-          agentProviderId: options.agentProvider,
-          agentId: options.agent,
-        });
+        try {
+          if (options.profileName) {
+            await updateProfileName(id, options.profileName);
+            output.success(`Profile name updated to "${options.profileName}"`);
+          }
 
-        output.success(`Instance updated: ${id}`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to update instance: ${message}`);
-      }
-    });
+          if (options.name || options.agentProvider || options.agent) {
+            await client.instances.update(id, {
+              name: options.name,
+              agentProviderId: options.agentProvider,
+              agentId: options.agent,
+            });
+            output.success(`Instance updated: ${id}`);
+          }
+
+          if (!options.profileName && !options.name && !options.agentProvider && !options.agent) {
+            output.error('No update options provided. Use --name, --profile-name, --agent-provider, or --agent.');
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to update instance: ${message}`);
+        }
+      },
+    );
 
   // omni instances contacts <id>
   instances
@@ -451,34 +531,59 @@ export function createInstancesCommand(): Command {
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10))
     .option('--cursor <cursor>', 'Pagination cursor')
     .option('--guild <id>', 'Guild ID (required for Discord)')
-    .action(async (id: string, options: { limit?: number; cursor?: string; guild?: string }) => {
-      const client = getClient();
+    .option('--search <query>', 'Filter contacts by name or phone')
+    .option('--no-groups', 'Exclude group contacts')
+    .action(
+      async (
+        id: string,
+        options: { limit?: number; cursor?: string; guild?: string; search?: string; groups?: boolean },
+      ) => {
+        const client = getClient();
 
-      try {
-        const result = await client.instances.listContacts(id, {
-          limit: options.limit,
-          cursor: options.cursor,
-          guildId: options.guild,
-        });
+        try {
+          const result = await client.instances.listContacts(id, {
+            limit: options.limit,
+            cursor: options.cursor,
+            guildId: options.guild,
+          });
 
-        const items = result.items.map((c) => ({
-          id: c.platformUserId,
-          name: c.displayName ?? '-',
-          phone: c.phone ?? '-',
-          isGroup: c.isGroup ? 'yes' : 'no',
-          isBusiness: c.isBusiness ? 'yes' : 'no',
-        }));
+          let contacts = result.items;
 
-        output.list(items, { emptyMessage: 'No contacts found.' });
+          // Filter out groups if --no-groups
+          if (options.groups === false) {
+            contacts = contacts.filter((c) => !c.isGroup);
+          }
 
-        if (result.meta.hasMore) {
-          output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          // Search filter
+          if (options.search) {
+            const q = options.search.toLowerCase();
+            contacts = contacts.filter(
+              (c) =>
+                (c.displayName ?? '').toLowerCase().includes(q) ||
+                (c.phone ?? '').includes(q) ||
+                c.platformUserId.includes(q),
+            );
+          }
+
+          const items = contacts.map((c) => ({
+            jid: c.platformUserId,
+            name: c.displayName ?? '-',
+            phone: c.phone ?? '-',
+            isGroup: c.isGroup ? 'yes' : 'no',
+            isBusiness: c.isBusiness ? 'yes' : 'no',
+          }));
+
+          output.list(items, { emptyMessage: 'No contacts found.' });
+
+          if (result.meta.hasMore) {
+            output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to list contacts: ${message}`);
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to list contacts: ${message}`);
-      }
-    });
+      },
+    );
 
   // omni instances groups <id>
   instances
@@ -486,7 +591,8 @@ export function createInstancesCommand(): Command {
     .description('List groups for an instance')
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10))
     .option('--cursor <cursor>', 'Pagination cursor')
-    .action(async (id: string, options: { limit?: number; cursor?: string }) => {
+    .option('--search <query>', 'Filter groups by name')
+    .action(async (id: string, options: { limit?: number; cursor?: string; search?: string }) => {
       const client = getClient();
 
       try {
@@ -495,11 +601,23 @@ export function createInstancesCommand(): Command {
           cursor: options.cursor,
         });
 
-        const items = result.items.map((g) => ({
-          id: g.externalId,
+        let groups = result.items;
+
+        // Search filter
+        if (options.search) {
+          const q = options.search.toLowerCase();
+          groups = groups.filter((g) => (g.name ?? '').toLowerCase().includes(q) || (g.externalId ?? '').includes(q));
+        }
+
+        const items = groups.map((g) => ({
+          jid: g.externalId,
           name: g.name ?? '-',
           members: g.memberCount ?? '-',
-          description: g.description ? g.description.substring(0, 30) : '-',
+          description: g.description
+            ? g.description.length > 50
+              ? `${g.description.substring(0, 47)}...`
+              : g.description
+            : '-',
         }));
 
         output.list(items, { emptyMessage: 'No groups found.' });
@@ -526,6 +644,163 @@ export function createInstancesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get user profile: ${message}`);
+      }
+    });
+
+  // omni instances check <id> <phone>
+  instances
+    .command('check <id> <phone>')
+    .description('Check if phone number is registered on WhatsApp')
+    .action(async (id: string, phone: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/check-number`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ phones: [phone] }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        const data = (await resp.json()) as {
+          data: { results: Array<{ exists: boolean; jid: string; phone: string }> };
+        };
+        const result = data.data.results[0];
+
+        if (result?.exists) {
+          output.success(`${phone} is registered on WhatsApp`, { jid: result.jid });
+        } else {
+          output.warn(`${phone} is NOT registered on WhatsApp`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to check number: ${message}`);
+      }
+    });
+
+  // omni instances update-bio <id> <status>
+  instances
+    .command('update-bio <id> <status>')
+    .description('Update own profile bio/status on WhatsApp')
+    .action(async (id: string, status: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/profile/status`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ status }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Bio updated: "${status}"`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update bio: ${message}`);
+      }
+    });
+
+  // omni instances block <id> <contactId>
+  instances
+    .command('block <id> <contactId>')
+    .description('Block a contact on WhatsApp')
+    .action(async (id: string, contactId: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ contactId }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Contact blocked: ${contactId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to block contact: ${message}`);
+      }
+    });
+
+  // omni instances unblock <id> <contactId>
+  instances
+    .command('unblock <id> <contactId>')
+    .description('Unblock a contact on WhatsApp')
+    .action(async (id: string, contactId: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ contactId }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Contact unblocked: ${contactId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unblock contact: ${message}`);
+      }
+    });
+
+  // omni instances blocklist <id>
+  instances
+    .command('blocklist <id>')
+    .description('List blocked contacts on WhatsApp')
+    .action(async (id: string) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/blocklist`, {
+          headers: { 'x-api-key': apiKey },
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        const data = (await resp.json()) as { data: { blocklist: string[]; count: number } };
+        const { blocklist, count } = data.data;
+
+        if (count === 0) {
+          output.info('No blocked contacts.');
+          return;
+        }
+
+        const items = blocklist.map((jid) => ({ jid }));
+        output.list(items, { emptyMessage: 'No blocked contacts.' });
+        output.dim(`Total: ${count} blocked`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to fetch blocklist: ${message}`);
       }
     });
 
@@ -623,29 +898,6 @@ export function createInstancesCommand(): Command {
     });
 
   // ============================================================================
-  // C4: Blocklist
-  // ============================================================================
-
-  // omni instances blocklist <id>
-  instances
-    .command('blocklist <id>')
-    .description('List blocked contacts')
-    .action(async (id: string) => {
-      try {
-        const result = (await apiCall(`instances/${id}/blocklist`)) as {
-          data: { blocklist: string[]; count: number };
-        };
-        if (result.data.blocklist.length === 0) {
-          output.info('No blocked contacts.');
-        } else {
-          const items = result.data.blocklist.map((jid) => ({ jid }));
-          output.list(items, { emptyMessage: 'No blocked contacts.' });
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to fetch blocklist: ${message}`);
-      }
-    });
 
   // ============================================================================
   // C5: Privacy Settings

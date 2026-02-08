@@ -666,6 +666,51 @@ instancesRoutes.post('/:id/sync/profile', instanceAccess, async (c) => {
   }
 });
 
+// ============================================================================
+// Profile Name Update
+// ============================================================================
+
+/**
+ * PUT /instances/:id/profile/name - Update profile display name
+ */
+instancesRoutes.put(
+  '/:id/profile/name',
+  instanceAccess,
+  zValidator('json', z.object({ name: z.string().min(1).max(25) })),
+  async (c) => {
+    const id = c.req.param('id');
+    const { name } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('updateProfileName' in plugin) || typeof plugin.updateProfileName !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support profile name update' } }, 400);
+    }
+
+    try {
+      await (plugin as { updateProfileName: (instanceId: string, name: string) => Promise<void> }).updateProfileName(
+        id,
+        name,
+      );
+
+      // Update local DB too
+      await services.instances.update(id, { profileName: name });
+
+      return c.json({ success: true, data: { instanceId: id, action: 'profile_name_updated', name } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
 /**
  * POST /instances/:id/sync - Request a sync operation
  *
@@ -1101,6 +1146,216 @@ instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroup
 });
 
 // ============================================================================
+// B2: CHECK NUMBER ON WHATSAPP
+// ============================================================================
+
+const checkNumberSchema = z.object({
+  phones: z.array(z.string().min(1)).min(1).max(100).describe('Phone numbers to check (e.g., ["+5511999999999"])'),
+});
+
+/**
+ * POST /instances/:id/check-number - Check if phone numbers are on WhatsApp
+ */
+instancesRoutes.post('/:id/check-number', instanceAccess, zValidator('json', checkNumberSchema), async (c) => {
+  const id = c.req.param('id');
+  const { phones } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('checkNumber' in plugin) || typeof plugin.checkNumber !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support number checking` } },
+      400,
+    );
+  }
+
+  try {
+    type CheckResult = { exists: boolean; jid: string; phone: string };
+    const results = await (
+      plugin as { checkNumber: (id: string, phones: string[]) => Promise<CheckResult[]> }
+    ).checkNumber(id, phones);
+
+    return c.json({ data: { results } });
+  } catch (error) {
+    const message = `Failed to check numbers: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'CHECK_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// B3: UPDATE OWN BIO/STATUS
+// ============================================================================
+
+const updateBioSchema = z.object({
+  status: z.string().min(1).max(500).describe('New profile bio/status text'),
+});
+
+/**
+ * PUT /instances/:id/profile/status - Update own bio/status
+ */
+instancesRoutes.put('/:id/profile/status', instanceAccess, zValidator('json', updateBioSchema), async (c) => {
+  const id = c.req.param('id');
+  const { status } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('updateBio' in plugin) || typeof plugin.updateBio !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support bio updates` } },
+      400,
+    );
+  }
+
+  try {
+    await (plugin as { updateBio: (id: string, status: string) => Promise<void> }).updateBio(id, status);
+    return c.json({ success: true, data: { status } });
+  } catch (error) {
+    const message = `Failed to update bio: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'UPDATE_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// B4: BLOCK / UNBLOCK / BLOCKLIST
+// ============================================================================
+
+const blockContactSchema = z.object({
+  contactId: z.string().min(1).describe('Contact JID or phone number to block'),
+});
+
+/**
+ * POST /instances/:id/block - Block a contact
+ */
+instancesRoutes.post('/:id/block', instanceAccess, zValidator('json', blockContactSchema), async (c) => {
+  const id = c.req.param('id');
+  const { contactId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('blockContact' in plugin) || typeof plugin.blockContact !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support blocking` } },
+      400,
+    );
+  }
+
+  try {
+    await (plugin as { blockContact: (id: string, contactId: string) => Promise<void> }).blockContact(id, contactId);
+    return c.json({ success: true, data: { contactId, action: 'blocked' } });
+  } catch (error) {
+    const message = `Failed to block contact: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'BLOCK_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * DELETE /instances/:id/block - Unblock a contact
+ */
+instancesRoutes.delete('/:id/block', instanceAccess, zValidator('json', blockContactSchema), async (c) => {
+  const id = c.req.param('id');
+  const { contactId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('unblockContact' in plugin) || typeof plugin.unblockContact !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support unblocking` } },
+      400,
+    );
+  }
+
+  try {
+    await (plugin as { unblockContact: (id: string, contactId: string) => Promise<void> }).unblockContact(
+      id,
+      contactId,
+    );
+    return c.json({ success: true, data: { contactId, action: 'unblocked' } });
+  } catch (error) {
+    const message = `Failed to unblock contact: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'UNBLOCK_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * GET /instances/:id/blocklist - Get blocked contacts list
+ */
+instancesRoutes.get('/:id/blocklist', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('fetchBlocklist' in plugin) || typeof plugin.fetchBlocklist !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support blocklist` } },
+      400,
+    );
+  }
+
+  try {
+    const blocklist = await (plugin as { fetchBlocklist: (id: string) => Promise<string[]> }).fetchBlocklist(id);
+    return c.json({ data: { blocklist, count: blocklist.length } });
+  } catch (error) {
+    const message = `Failed to fetch blocklist: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'BLOCKLIST_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
 // C2: Profile Picture
 // ============================================================================
 
@@ -1298,39 +1553,6 @@ instancesRoutes.post(
 );
 
 // ============================================================================
-// C4: Blocklist
-// ============================================================================
-
-/**
- * GET /instances/:id/blocklist - Fetch blocked contacts
- */
-instancesRoutes.get('/:id/blocklist', instanceAccess, async (c) => {
-  const id = c.req.param('id');
-  const services = c.get('services');
-  const channelRegistry = c.get('channelRegistry');
-
-  const instance = await services.instances.getById(id);
-
-  if (!channelRegistry) {
-    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-  }
-
-  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-  if (!plugin || !('fetchBlocklist' in plugin)) {
-    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support blocklist' } }, 400);
-  }
-
-  try {
-    const blocklist = await (plugin as { fetchBlocklist: (instanceId: string) => Promise<string[]> }).fetchBlocklist(
-      id,
-    );
-
-    return c.json({ data: { blocklist, count: blocklist.length } });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return c.json({ error: { code: 'BLOCKLIST_FAILED', message } }, 500);
-  }
-});
 
 // ============================================================================
 // C5: Privacy Settings

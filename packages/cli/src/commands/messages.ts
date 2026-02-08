@@ -272,6 +272,106 @@ export function createMessagesCommand(): Command {
       }
     });
 
+  // omni messages delete <messageId>
+  messages
+    .command('delete <messageId>')
+    .description('Delete a message for everyone (WhatsApp)')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--channel-id <id>', 'Chat JID (e.g., 5511999999999@s.whatsapp.net)')
+    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/messages/delete-channel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            channelId: options.channelId,
+            messageId,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Message deleted: ${messageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to delete message: ${message}`);
+      }
+    });
+
+  // omni messages star <messageId>
+  messages
+    .command('star <messageId>')
+    .description('Star a message')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--channel-id <id>', 'Chat JID')
+    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            channelId: options.channelId,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Message starred: ${messageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to star message: ${message}`);
+      }
+    });
+
+  // omni messages unstar <messageId>
+  messages
+    .command('unstar <messageId>')
+    .description('Unstar a message')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--channel-id <id>', 'Chat JID')
+    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            channelId: options.channelId,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Message unstarred: ${messageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unstar message: ${message}`);
+      }
+    });
+
   // omni messages edit <messageId>
   messages
     .command('edit <messageId>')

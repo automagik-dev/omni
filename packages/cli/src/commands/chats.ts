@@ -95,11 +95,15 @@ function formatTime(date: Date | string | null | undefined): string {
   return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** Module-level truncation limit — set by --full flag or default */
+let _truncateMax = 200;
+
 /**
  * Truncate text with ellipsis
  */
 function truncate(text: string | null | undefined, maxLen: number): string {
   if (!text) return '-';
+  if (maxLen <= 0) return text; // 0 or negative = no truncation
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen - 3)}...`;
 }
@@ -159,7 +163,7 @@ function formatDuration(seconds: number): string {
 function buildRichContent(msg: ExtendedMessage): string {
   const isMedia = isMediaMessage(msg);
   if (!isMedia) {
-    return truncate(msg.textContent, 50) ?? '-';
+    return truncate(msg.textContent, _truncateMax) ?? '-';
   }
 
   const badge = getMediaBadge(msg.messageType);
@@ -171,11 +175,12 @@ function buildRichContent(msg: ExtendedMessage): string {
   const duration = msg.mediaMetadata?.duration;
   if (duration) parts.push(formatDuration(duration));
 
+  const descLimit = _truncateMax > 0 ? Math.min(_truncateMax, 80) : 0;
   const mediaDesc = getMediaDescription(msg);
   if (mediaDesc) {
-    parts.push(`- "${truncate(mediaDesc, 40)}"`);
+    parts.push(`- "${truncate(mediaDesc, descLimit)}"`);
   } else if (msg.textContent) {
-    parts.push(`- "${truncate(msg.textContent, 40)}"`);
+    parts.push(`- "${truncate(msg.textContent, descLimit)}"`);
   }
 
   return parts.join(' ');
@@ -204,7 +209,7 @@ function formatStandardMessages(
   return messages.map((m) => ({
     id: m.id,
     type: m.messageType,
-    content: m.textContent ?? '-',
+    content: _truncateMax > 0 ? truncate(m.textContent, _truncateMax) : (m.textContent ?? '-'),
     fromMe: m.isFromMe ? 'yes' : 'no',
     timestamp: m.platformTimestamp,
   }));
@@ -581,11 +586,23 @@ export function createChatsCommand(): Command {
     .option('--after <cursor>', 'Get messages after cursor')
     .option('--rich', 'Show rich format with transcriptions/descriptions')
     .option('--media-only', 'Only show media messages')
+    .option('--full', 'Show full text without truncation')
+    .option('--no-truncate', 'Alias for --full')
     .action(
       async (
         id: string,
-        options: { limit?: number; before?: string; after?: string; rich?: boolean; mediaOnly?: boolean },
+        options: {
+          limit?: number;
+          before?: string;
+          after?: string;
+          rich?: boolean;
+          mediaOnly?: boolean;
+          full?: boolean;
+          truncate?: boolean;
+        },
       ) => {
+        // Set module-level truncation: --full or --no-truncate disables it
+        _truncateMax = options.full || options.truncate === false ? 0 : 200;
         const client = getClient();
 
         try {
@@ -676,6 +693,51 @@ export function createChatsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to mark chat as read: ${message}`);
+      }
+    });
+
+  // omni chats disappearing <id>
+  chats
+    .command('disappearing <id>')
+    .description('Toggle disappearing messages for a chat')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .option('--duration <duration>', 'Duration: off, 24h, 7d, 90d (default: 24h)', '24h')
+    .action(async (id: string, options: { instance: string; duration?: string }) => {
+      const validDurations = ['off', '24h', '7d', '90d'];
+      const duration = options.duration ?? '24h';
+
+      if (!validDurations.includes(duration)) {
+        output.error(`Invalid duration: ${duration}. Valid: ${validDurations.join(', ')}`);
+        return;
+      }
+
+      try {
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/disappearing`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            duration,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        if (duration === 'off') {
+          output.success('Disappearing messages turned off');
+        } else {
+          output.success(`Disappearing messages set to ${duration}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to set disappearing messages: ${message}`);
       }
     });
 

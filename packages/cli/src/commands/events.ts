@@ -9,6 +9,7 @@
 import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
+import { loadConfig } from '../config.js';
 import * as output from '../output.js';
 
 /** Replay command options */
@@ -107,6 +108,70 @@ async function listReplays(client: OmniClient): Promise<void> {
   }));
 
   output.list(items, { emptyMessage: 'No replay sessions found.' });
+}
+
+/** Analytics response shape */
+interface AnalyticsData {
+  totalMessages: number;
+  successfulMessages: number;
+  failedMessages: number;
+  successRate: number;
+  avgProcessingTimeMs: number | null;
+  avgAgentTimeMs: number | null;
+  messageTypes: Record<string, number>;
+  errorStages: Record<string, number>;
+  instances: Record<string, number>;
+}
+
+/** Fetch analytics from the API */
+async function fetchAnalytics(options: {
+  instance?: string;
+  since?: string;
+  allTime?: boolean;
+}): Promise<AnalyticsData> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+
+  const params = new URLSearchParams();
+  if (options.instance) params.set('instanceId', options.instance);
+  if (options.allTime) params.set('allTime', 'true');
+  if (options.since) params.set('since', parseSinceTime(options.since));
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/analytics?${params}`, {
+    headers: { 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return (await resp.json()) as AnalyticsData;
+}
+
+/** Display analytics data */
+function displayAnalytics(data: AnalyticsData): void {
+  output.data({
+    totalMessages: data.totalMessages,
+    successful: data.successfulMessages,
+    failed: data.failedMessages,
+    successRate: `${(data.successRate * 100).toFixed(1)}%`,
+    avgProcessingMs: data.avgProcessingTimeMs ?? '-',
+    avgAgentMs: data.avgAgentTimeMs ?? '-',
+  });
+
+  displayRecordBreakdown('Message Types', data.messageTypes, 'type');
+  displayRecordBreakdown('Per Instance', data.instances, 'instanceId');
+  displayRecordBreakdown('Error Stages', data.errorStages, 'stage');
+}
+
+/** Display a record as a sorted list */
+function displayRecordBreakdown(title: string, record: Record<string, number>, keyName: string): void {
+  if (!record || Object.keys(record).length === 0) return;
+  output.raw(`\n${title}:`);
+  const items = Object.entries(record)
+    .sort(([, a], [, b]) => b - a)
+    .map(([key, count]) => ({ [keyName]: key, count }));
+  output.list(items);
 }
 
 export function createEventsCommand(): Command {
@@ -235,6 +300,23 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get metrics: ${message}`);
+      }
+    });
+
+  // omni events analytics
+  events
+    .command('analytics')
+    .description('Show event analytics summary')
+    .option('--instance <id>', 'Filter by instance ID')
+    .option('--since <time>', 'Events since (e.g., 24h, 7d, or ISO timestamp)')
+    .option('--all-time', 'Show all-time stats (default: last 24h)')
+    .action(async (options: { instance?: string; since?: string; allTime?: boolean }) => {
+      try {
+        const data = await fetchAnalytics(options);
+        displayAnalytics(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get analytics: ${message}`);
       }
     });
 
