@@ -52,8 +52,10 @@ export function createInstancesCommand(): Command {
             try {
               const st = (await client.instances.status(i.id)) as { ownerIdentifier?: string };
               if (st.ownerIdentifier) {
-                // Parse phone from JID like "5512982298888:36@s.whatsapp.net"
-                const phone = st.ownerIdentifier.split(':')[0] ?? st.ownerIdentifier.split('@')[0];
+                // Parse phone from JID like "5512982298888:36@s.whatsapp.net" or "5512982298888@s.whatsapp.net"
+                const phone = st.ownerIdentifier.includes(':')
+                  ? st.ownerIdentifier.split(':')[0]
+                  : st.ownerIdentifier.split('@')[0];
                 statusMap.set(i.id, phone);
               }
             } catch {
@@ -184,7 +186,7 @@ export function createInstancesCommand(): Command {
         };
 
         const owner = status.ownerIdentifier ?? '-';
-        const phone = owner !== '-' ? (owner.split(':')[0] ?? owner.split('@')[0]) : '-';
+        const phone = owner !== '-' ? (owner.includes(':') ? owner.split(':')[0] : owner.split('@')[0]) : '-';
 
         output.data({
           instanceId: id,
