@@ -392,6 +392,21 @@ export function createInstancesCommand(): Command {
       }
     });
 
+  // Helper: update profile name via API (calls WhatsApp directly)
+  async function updateProfileName(instanceId: string, name: string): Promise<void> {
+    const config = (await import('../config.js')).loadConfig();
+    const apiUrl = (config.apiUrl ?? 'http://localhost:8881').replace(/\/$/, '');
+    const response = await fetch(`${apiUrl}/api/v2/instances/${instanceId}/profile/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      const err = (await response.json()) as { error?: { message?: string } };
+      throw new Error(err?.error?.message ?? `HTTP ${response.status}`);
+    }
+  }
+
   // omni instances update <id>
   instances
     .command('update <id>')
@@ -399,22 +414,35 @@ export function createInstancesCommand(): Command {
     .option('--name <name>', 'New instance name')
     .option('--agent-provider <id>', 'New agent provider ID')
     .option('--agent <id>', 'New agent ID')
-    .action(async (id: string, options: { name?: string; agentProvider?: string; agent?: string }) => {
-      const client = getClient();
+    .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    .action(
+      async (id: string, options: { name?: string; agentProvider?: string; agent?: string; profileName?: string }) => {
+        const client = getClient();
 
-      try {
-        await client.instances.update(id, {
-          name: options.name,
-          agentProviderId: options.agentProvider,
-          agentId: options.agent,
-        });
+        try {
+          if (options.profileName) {
+            await updateProfileName(id, options.profileName);
+            output.success(`Profile name updated to "${options.profileName}"`);
+          }
 
-        output.success(`Instance updated: ${id}`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to update instance: ${message}`);
-      }
-    });
+          if (options.name || options.agentProvider || options.agent) {
+            await client.instances.update(id, {
+              name: options.name,
+              agentProviderId: options.agentProvider,
+              agentId: options.agent,
+            });
+            output.success(`Instance updated: ${id}`);
+          }
+
+          if (!options.profileName && !options.name && !options.agentProvider && !options.agent) {
+            output.error('No update options provided. Use --name, --profile-name, --agent-provider, or --agent.');
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to update instance: ${message}`);
+        }
+      },
+    );
 
   // omni instances contacts <id>
   instances
