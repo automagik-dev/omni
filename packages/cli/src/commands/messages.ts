@@ -372,5 +372,37 @@ export function createMessagesCommand(): Command {
       }
     });
 
+  // omni messages edit <messageId>
+  messages
+    .command('edit <messageId>')
+    .description('Edit a previously sent message')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--chat <chatJid>', 'Chat JID where the message was sent')
+    .requiredOption('--text <text>', 'New text content')
+    .action(async (messageId: string, options: { instance: string; chat: string; text: string }) => {
+      try {
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const resp = await fetch(`${baseUrl}/api/v2/messages/edit-channel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId: options.instance,
+            channelId: options.chat,
+            messageId,
+            text: options.text,
+          }),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+        output.success(`Message edited: ${messageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to edit message: ${message}`);
+      }
+    });
+
   return messages;
 }
