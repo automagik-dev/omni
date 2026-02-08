@@ -2,9 +2,18 @@
 
 ## Urgent
 
-- PRs #3, #4, #5 all merged — Felipe needs to git pull on MacBook + rebuild SDK/CLI
+- **ALL PRs MERGED** (#6, #7, #9, #10) — 22 WhatsApp features shipped to main
+- Production deploy needed — SSH access to `10.114.1.118` still blocked
+- Helena profile rename pending deploy: `omni instances update 910ab957 --profile-name "Helena"`
+- Helena wants `groupCreate` feature — not yet implemented
 - Gemini security suggestion (SSRF on mediaUrl) — file as issue later
-- QA pending after Felipe updates backend
+
+## Next Actions
+
+- [ ] Deploy to production (needs SSH access)
+- [ ] Implement `groupCreate` (plugin + API + CLI)
+- [ ] Fix @ mentions (currently prepends, should be natural placement)
+- [ ] Study Baileys LID addressing mode
 
 ## Periodic Checks
 
