@@ -1664,6 +1664,7 @@ const deleteMessageChannelSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
   channelId: z.string().min(1).describe('Channel/Chat ID'),
   messageId: z.string().min(1).describe('Message ID to delete'),
+  fromMe: z.boolean().default(true).describe('Whether the message was sent by this instance'),
 });
 
 /**
@@ -1887,7 +1888,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
  * POST /messages/delete-channel - Delete message via channel plugin
  */
 messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSchema), async (c) => {
-  const { instanceId, channelId, messageId } = c.req.valid('json');
+  const { instanceId, channelId, messageId, fromMe } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -1936,8 +1937,10 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
 
   // Delete via channel plugin
   await (
-    plugin as { deleteMessage: (instanceId: string, channelId: string, messageId: string) => Promise<void> }
-  ).deleteMessage(instanceId, channelId, messageId);
+    plugin as {
+      deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
+    }
+  ).deleteMessage(instanceId, channelId, messageId, fromMe);
 
   return c.json({
     success: true,
@@ -1952,6 +1955,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
 const starMessageSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
   channelId: z.string().min(1).describe('Chat JID or channel ID'),
+  fromMe: z.boolean().default(true).describe('Whether the message was sent by this instance'),
 });
 
 /**
@@ -1959,7 +1963,7 @@ const starMessageSchema = z.object({
  */
 messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c) => {
   const messageId = c.req.param('id');
-  const { instanceId, channelId } = c.req.valid('json');
+  const { instanceId, channelId, fromMe } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -1995,9 +1999,15 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
 
   await (
     plugin as {
-      starMessage: (instanceId: string, chatId: string, messageId: string, star: boolean) => Promise<void>;
+      starMessage: (
+        instanceId: string,
+        chatId: string,
+        messageId: string,
+        star: boolean,
+        fromMe?: boolean,
+      ) => Promise<void>;
     }
-  ).starMessage(instanceId, channelId, messageId, true);
+  ).starMessage(instanceId, channelId, messageId, true, fromMe);
 
   return c.json({
     success: true,
@@ -2010,7 +2020,7 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
  */
 messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async (c) => {
   const messageId = c.req.param('id');
-  const { instanceId, channelId } = c.req.valid('json');
+  const { instanceId, channelId, fromMe } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -2046,9 +2056,15 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
 
   await (
     plugin as {
-      starMessage: (instanceId: string, chatId: string, messageId: string, star: boolean) => Promise<void>;
+      starMessage: (
+        instanceId: string,
+        chatId: string,
+        messageId: string,
+        star: boolean,
+        fromMe?: boolean,
+      ) => Promise<void>;
     }
-  ).starMessage(instanceId, channelId, messageId, false);
+  ).starMessage(instanceId, channelId, messageId, false, fromMe);
 
   return c.json({
     success: true,

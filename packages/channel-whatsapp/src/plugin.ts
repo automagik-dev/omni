@@ -660,14 +660,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * B1: Delete a message for everyone.
    * Sends a protocol message to delete a previously sent message.
+   * @param fromMe - Whether the message was sent by us (required for correct key construction)
    */
-  async deleteMessage(instanceId: string, chatId: string, messageId: string): Promise<void> {
+  async deleteMessage(instanceId: string, chatId: string, messageId: string, fromMe = true): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
     await sock.sendMessage(jid, {
-      delete: { remoteJid: jid, id: messageId, fromMe: true },
+      delete: { remoteJid: jid, id: messageId, fromMe },
     });
-    this.logger.info('Message deleted for everyone', { instanceId, chatId, messageId });
+    this.logger.info('Message deleted for everyone', { instanceId, chatId, messageId, fromMe });
   }
 
   /**
@@ -738,12 +739,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * B6: Star or unstar a message.
+   * @param fromMe - Whether the message was sent by us (required for correct key construction)
    */
-  async starMessage(instanceId: string, chatId: string, messageId: string, star: boolean): Promise<void> {
+  async starMessage(
+    instanceId: string,
+    chatId: string,
+    messageId: string,
+    star: boolean,
+    fromMe = true,
+  ): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
-    await sock.star(jid, [{ id: messageId, fromMe: true }], star);
-    this.logger.info('Message star toggled', { instanceId, chatId, messageId, star });
+    await sock.star(jid, [{ id: messageId, fromMe }], star);
+    this.logger.info('Message star toggled', { instanceId, chatId, messageId, star, fromMe });
   }
 
   // =========================================================================

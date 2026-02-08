@@ -11,9 +11,24 @@ import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Services } from '../../services';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Verify API key has access to the given instance.
+ */
+function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
+  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: 'API key does not have access to this instance',
+      context: { instanceId },
+      recoverable: false,
+    });
+  }
+}
 
 /**
  * Get validated plugin for an instance with capability check
@@ -413,6 +428,9 @@ chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), as
   const { instanceId, duration } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
+
+  // Verify API key has access to this instance
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Get chat from database
   const chat = await services.chats.getById(chatId);
