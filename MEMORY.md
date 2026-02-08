@@ -56,8 +56,12 @@ I was activated by Felipe with Eva (his AI midwife/orchestrator) guiding the pro
 - When spawning tmux for worktrees: `tmux split-window -c /path/to/worktree`
 
 ### 🔴 MANDATORY: --dangerously-skip-permissions
-- When launching claudio for automated review/fix workflows: `claudio --dangerously-skip-permissions`
-- Without it, I spend more time approving prompts than doing actual work
+- **Correct syntax:** `claudio launch main -- --dangerously-skip-permissions`
+- ⚠️ `claudio --dangerously-skip-permissions` does NOT work (unknown option error)
+- ⚠️ `claudio -- --dangerously-skip-permissions` does NOT work either
+- ⚠️ Raw `claude` binary is NOT hooked up to Juice — always use `claudio` to route through our LLM router
+- The `--` separator after the profile name tells claudio to pass remaining args to Claude Code
+- Without skip-permissions, I spend more time approving prompts than doing actual work
 - Only skip permissions when we're watching together (cowork mode) or for trusted review tasks
 
 ### tmux Split Management
