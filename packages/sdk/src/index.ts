@@ -101,6 +101,8 @@ export type {
   // Event ops types
   ReplaySession,
   StartReplayBody,
+  EventMetrics,
+  EventAnalytics,
   // Log types
   LogEntry,
   ListLogsParams,
