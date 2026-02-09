@@ -38,12 +38,61 @@ Omni v2 is an event-driven messaging platform with WhatsApp (Baileys) and Discor
 
 ## Out of Scope
 
-- Claude SDK Agent Provider (Phase 2 — separate wish: `omni-native-agent`)
-- Cross-channel identity unification (user X on Telegram = user X on WhatsApp)
-- Conversation threading across channels
-- Replacing OpenClaw's existing channel implementations
-- UI dashboard for trigger management
-- CLI changes beyond testing
+- **Provider naming refactor** — Renaming `IAgnoClient` → `IProviderClient` and schema cleanup tracked in beads `omni-q01` (should be done AFTER this PR merges)
+- **Claude SDK Agent Provider** — Phase 2, separate wish: `omni-native-agent`, blocked by `omni-q01` refactor
+- **Cross-channel identity unification** — User X on Telegram = user X on WhatsApp
+- **Conversation threading across channels** — Multi-channel conversation continuity
+- **Replacing OpenClaw's existing channel implementations** — OpenClaw keeps its own channels, Omni adds ours
+- **UI dashboard for trigger management** — Future enhancement
+- **CLI changes beyond testing** — No new CLI commands in this PR
+
+---
+
+## Related Issues & Provider System Timeline
+
+This wish builds on the existing provider infrastructure and is part of a larger provider evolution:
+
+### Phase 1: Initial Agno Integration ✅ SHIPPED
+**Wish:** `.wishes/agent-providers-impl/agent-providers-impl-wish.md`
+**Beads:** `omni-r76` (closed, 2026-02-03)
+
+Created the foundational provider system:
+- `IAgnoClient` interface (low-level Agno API client)
+- `AgnoClient` implementation
+- `agent-responder` plugin (message → agent flow)
+- Provider schemas: `'agnoos' | 'agno' | 'a2a' | 'openai' | 'anthropic' | 'custom'`
+
+### Phase 2: Omnichannel Agent Platform 🔄 THIS WISH
+**Branch:** `feat/omnichannel-agent-platform`
+
+Adds a NEW high-level abstraction layer on top of existing provider system:
+- `IAgentProvider` interface (multi-provider dispatch abstraction)
+- `AgnoAgentProvider` — **wraps existing `IAgnoClient`** (maintains backward compatibility)
+- `WebhookAgentProvider` — for OpenClaw webhook integration
+- `agent-dispatcher` — evolved from `agent-responder`, handles reactions + messages
+- Reaction events as first-class types
+- Telegram channel plugin
+
+**Key architectural decision:** This wish does NOT rename or refactor `IAgnoClient` — it adds a new layer (`IAgentProvider`) that wraps the existing low-level clients. This keeps the PR focused on multi-provider dispatch while maintaining backward compatibility.
+
+### Phase 3: Provider System Refactor ⏳ PLANNED
+**Beads:** `omni-q01` (OPEN, P2) — "Refactor provider system: rename IAgnoClient to IProviderClient, merge agnoos/agno schemas, remove openai/anthropic/custom stubs"
+
+**Blocks:**
+- `omni-s8k` — ag-ui-protocol: Universal AI agent gateway via AG-UI protocol (P1)
+- `omni-v10` — Add Claude Code agent provider using @anthropic-ai/claude-agent-sdk (P2)
+
+After this wish merges, `omni-q01` will clean up naming and schemas:
+- Rename `IAgnoClient` → `IProviderClient` (more generic, not Agno-specific)
+- Merge redundant `agnoos`/`agno` schemas → single `agno` schema
+- Remove unused stub schemas (`openai`, `anthropic`, `custom`)
+- Add `webhook` as official schema (currently implicit in this PR)
+- Clean foundation for Claude SDK provider
+
+**Recommended merge order:**
+1. This PR (feat/omnichannel-agent-platform) — adds multi-provider abstraction
+2. `omni-q01` — refactors naming and schemas
+3. `omni-v10` — adds Claude SDK provider on clean foundation
 
 ---
 
@@ -57,7 +106,7 @@ Omni v2 is an event-driven messaging platform with WhatsApp (Baileys) and Discor
 
 ### Decisions
 - **DEC-1**: `reaction.received` + `reaction.removed` become core events with REACTION NATS stream
-- **DEC-2**: `AgentProvider` interface in `packages/core/src/providers/` replaces direct `IAgnoClient` coupling
+- **DEC-2**: `IAgentProvider` interface in `packages/core/src/providers/` adds abstraction layer above existing `IAgnoClient` (wraps, doesn't replace — maintains backward compatibility)
 - **DEC-3**: `agent-dispatcher` replaces `agent-responder` (same location, in-process)
 - **DEC-4**: OpenClaw uses fire-and-forget by default (round-trip optional)
 - **DEC-5**: Trigger config lives in DB (instances table columns), not YAML
