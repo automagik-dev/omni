@@ -2,7 +2,7 @@
 
 > Fix critical message loss during API/NATS/VM downtime with durable consumers, sequence tracking, and startup gap detection.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-09
 **Author:** WISH Agent
 **Beads:** omni-2q2
@@ -433,3 +433,66 @@ Wish Group C mentions wiring up existing replay endpoint. Not done. Pre-existing
 1. Run `make sdk-generate` to sync SDK with new API routes
 2. Add at minimum: ConsumerOffsetService unit test + resync endpoint test
 3. Then re-review → SHIP
+
+---
+
+## Review Verdict (Re-Review)
+
+**Verdict:** SHIP
+**Date:** 2026-02-09
+**Reviewer:** REVIEW Agent
+
+### FIX-FIRST Items Resolution
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| T1 — Unit tests for consumer config | **FIXED** | `consumer-config.test.ts` — 8 tests, all pass |
+| T2 — Integration tests | **FIXED** | `consumer-offsets.test.ts` (6 tests) + `resync.test.ts` (5 tests), all pass |
+| S1 — SDK regenerated | **FIXED** | `make sdk-generate` run — no diff (resync uses raw Hono, not OpenAPI-decorated) |
+
+### Fresh Verification Evidence
+
+**Typecheck:** 10/10 packages pass (FULL TURBO cache)
+**Lint:** 486 files checked, 0 issues
+**Tests:** 19 new tests across 3 files, all pass (50 expect() calls)
+**Full test suite:** 2175 pass, 137 fail (all worktree artifacts: omni-4l0, omni-93g, omni-jp2), 0 failures in main packages
+
+### Acceptance Criteria (Final)
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| A1 | All critical consumers use `startFrom: 'first'` | **PASS** | 9 consumers at 'first' across 4 plugin files |
+| A2 | `sync-worker` remains `startFrom: 'new'` | **PASS** | sync-worker.ts:165 |
+| A3 | `agent-responder-typing` remains `startFrom: 'last'` | **PASS** | agent-responder.ts:651 |
+| A4 | `make check` passes | **PASS** | 10/10 typecheck, 0 lint, 0 main-package failures |
+| B1 | `consumer_offsets` table created | **PASS** | schema.ts:1906, db-push applied |
+| B2 | Sequences recorded after processing | **PASS** | message-persistence.ts offset tracking |
+| B3 | Startup gap detection | **PASS** | detectStartupGaps() with log warnings |
+| B4 | `/health/consumers` returns lag | **PASS** | health.ts:158 |
+| C1 | `last_message_at` updated | **PASS** | instances.ts:212 GREATEST upsert |
+| C2 | Auto-backfill on reconnect >5min gap | **PASS** | message-persistence.ts:575, 5*60*1000 threshold |
+| C3 | `POST /v2/instances/:id/resync` | **PASS** | instances.ts:1794, Zod validated |
+| C4 | `omni resync` CLI command | **PASS** | resync.ts with 5 options, registered in index.ts |
+| T1 | Consumer config tests | **PASS** | consumer-config.test.ts: 8 tests |
+| T2 | ConsumerOffsetService + resync tests | **PASS** | consumer-offsets.test.ts: 6 tests, resync.test.ts: 5 tests |
+| S1 | SDK in sync | **PASS** | `make sdk-generate` produces no diff |
+
+### Quality Assessment
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Security | **GOOD** | Auth middleware, Zod validation, no injection vectors |
+| Correctness | **GOOD** | Consumer policy fix correct, idempotent via findOrCreate |
+| Code Quality | **GOOD** | No `any` types, Drizzle-only, clean architecture |
+| Tests | **GOOD** | 19 new tests covering config, service, and endpoint |
+| Integration | **GOOD** | Event-first maintained, no channel logic in core |
+
+### Remaining LOW-Priority Items (Non-Blocking)
+
+- Startup log per consumer ("Consumer X resuming, deliver_policy=All") — nice-to-have
+- Idempotency confirmation log (processed vs skipped count) — nice-to-have
+- `POST /event-ops/replay` wiring — pre-existing infrastructure, separate scope
+
+### Recommendation
+
+**SHIP.** All acceptance criteria pass. FIX-FIRST items resolved. Quality gates green.
