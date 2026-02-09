@@ -1117,21 +1117,46 @@ export class DiscordPlugin extends BaseChannelPlugin {
     emoji: string,
     action: 'add' | 'remove',
   ): Promise<void> {
-    await this.emitMessageReceived({
-      instanceId,
-      externalId: `${messageId}-reaction-${Date.now()}`,
-      chatId,
-      from: userId,
-      content: {
-        type: 'reaction',
-        text: emoji,
-      },
-      rawPayload: {
-        targetMessageId: messageId,
-        action,
+    // Emit first-class reaction event
+    if (action === 'add') {
+      await this.emitReactionReceived({
+        instanceId,
+        messageId,
+        chatId,
+        from: userId,
         emoji,
-      },
-    });
+        isCustomEmoji: false,
+      });
+    } else {
+      await this.emitReactionRemoved({
+        instanceId,
+        messageId,
+        chatId,
+        from: userId,
+        emoji,
+        isCustomEmoji: false,
+      });
+    }
+
+    // Dual-emit as message.received for backward compatibility
+    // Remove this once all consumers migrate to reaction.* events
+    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false') {
+      await this.emitMessageReceived({
+        instanceId,
+        externalId: `${messageId}-reaction-${Date.now()}`,
+        chatId,
+        from: userId,
+        content: {
+          type: 'reaction',
+          text: emoji,
+        },
+        rawPayload: {
+          targetMessageId: messageId,
+          action,
+          emoji,
+        },
+      });
+    }
   }
 
   /**

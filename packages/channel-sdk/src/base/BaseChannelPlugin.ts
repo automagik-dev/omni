@@ -19,6 +19,8 @@ import type {
   EmitMessageReadParams,
   EmitMessageReceivedParams,
   EmitMessageSentParams,
+  EmitReactionReceivedParams,
+  EmitReactionRemovedParams,
   InstanceConnectedMetadata,
 } from '../helpers/events';
 import type { ChannelCapabilities } from '../types/capabilities';
@@ -365,6 +367,76 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     );
 
     this.instances.recordActivity(params.instanceId);
+  }
+
+  /**
+   * Emit reaction.received event
+   *
+   * @example
+   * await this.emitReactionReceived({
+   *   instanceId: 'discord-001',
+   *   messageId: 'msg_123',
+   *   chatId: 'channel_456',
+   *   from: 'user_789',
+   *   emoji: '🐙',
+   * });
+   */
+  protected async emitReactionReceived(params: EmitReactionReceivedParams): Promise<void> {
+    await this.eventBus.publish(
+      'reaction.received',
+      {
+        messageId: params.messageId,
+        chatId: params.chatId,
+        from: params.from,
+        emoji: params.emoji,
+        emojiName: params.emojiName,
+        isCustomEmoji: params.isCustomEmoji,
+        rawPayload: params.rawPayload,
+      },
+      {
+        correlationId: generateCorrelationId('evt'),
+        instanceId: params.instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+      },
+    );
+
+    this.instances.recordActivity(params.instanceId);
+    this.logger.debug('Emitted reaction.received', {
+      instanceId: params.instanceId,
+      messageId: params.messageId,
+      emoji: params.emoji,
+    });
+  }
+
+  /**
+   * Emit reaction.removed event
+   */
+  protected async emitReactionRemoved(params: EmitReactionRemovedParams): Promise<void> {
+    await this.eventBus.publish(
+      'reaction.removed',
+      {
+        messageId: params.messageId,
+        chatId: params.chatId,
+        from: params.from,
+        emoji: params.emoji,
+        emojiName: params.emojiName,
+        isCustomEmoji: params.isCustomEmoji,
+      },
+      {
+        correlationId: generateCorrelationId('evt'),
+        instanceId: params.instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+      },
+    );
+
+    this.instances.recordActivity(params.instanceId);
+    this.logger.debug('Emitted reaction.removed', {
+      instanceId: params.instanceId,
+      messageId: params.messageId,
+      emoji: params.emoji,
+    });
   }
 
   /**

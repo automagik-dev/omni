@@ -1474,18 +1474,42 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     isFromMe: boolean,
   ): Promise<void> {
     // Note: We process fromMe reactions to capture reactions made from the phone
+    // In WhatsApp, empty emoji string = reaction removed
 
-    await this.emitMessageReceived({
-      instanceId,
-      externalId,
-      chatId,
-      from,
-      content: {
-        type: 'reaction',
-        text: emoji,
-      },
-      rawPayload: { targetMessageId, isFromMe },
-    });
+    if (emoji) {
+      await this.emitReactionReceived({
+        instanceId,
+        messageId: targetMessageId,
+        chatId,
+        from,
+        emoji,
+        rawPayload: { externalId, isFromMe },
+      });
+    } else {
+      await this.emitReactionRemoved({
+        instanceId,
+        messageId: targetMessageId,
+        chatId,
+        from,
+        emoji: '', // WhatsApp doesn't tell us which emoji was removed
+      });
+    }
+
+    // Dual-emit as message.received for backward compatibility
+    // Remove this once all consumers migrate to reaction.* events
+    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false') {
+      await this.emitMessageReceived({
+        instanceId,
+        externalId,
+        chatId,
+        from,
+        content: {
+          type: 'reaction',
+          text: emoji,
+        },
+        rawPayload: { targetMessageId, isFromMe },
+      });
+    }
   }
 
   /**
