@@ -2,16 +2,16 @@
 
 ## Urgent
 
-- **ALL PRs MERGED** (#6, #7, #9, #10, #11) — 23 WhatsApp features shipped to main
-- Production deploy needed — SSH access to `10.114.1.118` still blocked
-- Helena profile rename pending deploy: `omni instances update 910ab957 --profile-name "Helena"`
-- Gemini security suggestion (SSRF on mediaUrl) — file as issue later
+- **Genie + Helena instances DOWN** — need QR re-scan (see HANDOFF.md)
+- Anti-bot fix deployed (PR #12) — humanized delays on all actions
+- 3/5 instances connected (felipe-pessoal, namastex, charlinho OK)
 
 ## Next Actions
 
-- [ ] Deploy to production (needs SSH access to 10.114.1.118)
-- [ ] Helena rename: `omni instances update 910ab957 --profile-name "Helena"`
+- [ ] Re-scan QR for Genie + Helena (HANDOFF.md steps)
+- [ ] Run `bun run db:push` on prod (audit_logs table missing)
 - [ ] Helena group: `omni instances group-create 910ab957... --subject "C-Level Namastex" --participants ...`
+- [ ] Fix CI/CD Jenkins auto-deploy (didn't trigger on PR #12)
 - [ ] Study Baileys LID addressing mode
 
 ## Periodic Checks

@@ -128,13 +128,33 @@ I was activated by Felipe with Eva (his AI midwife/orchestrator) guiding the pro
 - Tech stack locked: Bun, Hono, tRPC, Drizzle, PostgreSQL, NATS JetStream, Zod, Turborepo
 - PR review pipeline: self-review (Claude Code) → Codex (contextual prompts) → human review → merge
 
+## Anti-Bot Protection (Day 3 — Burned In)
+
+WhatsApp has anti-bot detection that monitors action timing. Burst API calls (10+ in seconds) trigger force logout / device removal. Two instances were killed during QA.
+
+**Fix shipped (PR #12):** `humanDelay()` in WhatsApp plugin — 1.5-3.5s random delay between all outgoing actions + typing presence before messages. Applied to all 17 outgoing methods.
+
+**Rules for all future API interactions:**
+1. NEVER burst calls — minimum 1.5s between actions
+2. ALWAYS stream PM2 logs during production operations
+3. "Behave humanly probable" — simulate natural timing
+4. Test on staging first when possible
+
+## Production Access (Day 3)
+
+- SSH: `ssh omni@10.114.1.140` (CT 140, Omni production)
+- PM2 path: `$HOME/.bun/bin:$HOME/.bun/install/global/node_modules/.bin`
+- CI/CD: Jenkins job `omni-v2-deploy` on push to main (via Cegonha)
+- Cegonha's law: **The Omni NEVER dies.** Only `pm2 restart`, never delete/kill.
+
 ## Open Items
 
 - Avatar still needed (deep-sea octopus, bioluminescent, dark water)
-- Production deploy: 20+ commits behind, SSH access needed
-- Helena instance rename: waiting for PR #9 merge + deploy → `omni instances update 910ab957 --profile-name "Helena"`
+- Re-scan QR for Genie + Helena instances (HANDOFF.md)
+- `api_key_audit_logs` table missing on prod — needs db:push
+- Omni Native Agent (Option A) — backlog, terms TBD with Felipe
 - `omni` CLI not yet globally installed on production
 
 ---
 
-_Last updated: 2026-02-08_
+_Last updated: 2026-02-09_
