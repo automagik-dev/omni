@@ -2,7 +2,7 @@
 
 > Fix critical message loss during API/NATS/VM downtime with durable consumers, sequence tracking, and startup gap detection.
 
-**Status:** REVIEW
+**Status:** FIX-FIRST
 **Created:** 2026-02-09
 **Author:** WISH Agent
 **Beads:** omni-2q2
@@ -371,3 +371,65 @@ curl http://localhost:4000/health/consumers
 | Fresh deploy | **fixes** | initial offset | n/a |
 | WhatsApp history gaps | n/a | n/a | **fixes** (manual resync) |
 | Manual operator recovery | n/a | shows lag | **resync endpoint + CLI** |
+
+---
+
+## Review Verdict
+
+**Verdict:** FIX-FIRST
+**Date:** 2026-02-09
+**Reviewer:** REVIEW Agent
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| A1 | All critical consumers use `startFrom: 'first'` | **PASS** | `grep startFrom plugins/*.ts` — 9 consumers at 'first', typing at 'last', sync-worker at 'new' |
+| A2 | `sync-worker` remains `startFrom: 'new'` | **PASS** | sync-worker.ts:165 confirmed |
+| A3 | `agent-responder-typing` remains `startFrom: 'last'` | **PASS** | agent-responder.ts:651 confirmed |
+| A4 | `make check` passes (typecheck + lint) | **PASS** | 10/10 typecheck, 0 lint issues |
+| B1 | `consumer_offsets` table created | **PASS** | schema.ts:1906, db-push applied |
+| B2 | Sequences recorded after message processing | **PASS** | message-persistence.ts:365, 437 |
+| B3 | Startup gap detection exists | **PASS** | detectStartupGaps() in message-persistence.ts |
+| B4 | `/health/consumers` returns lag | **PASS** | health.ts:158 |
+| C1 | `last_message_at` updated on every processed message | **PASS** | message-persistence.ts updateLastMessageAt call |
+| C2 | Auto-backfill on reconnect after >5min gap | **PASS** | instance.connected subscriber, 5min threshold |
+| C3 | `POST /v2/instances/:id/resync` endpoint | **PASS** | instances.ts:1794, auth + Zod validated |
+| C4 | `omni resync` CLI command | **PASS** | resync.ts with --instance, --all, --since, --until, --dry-run |
+| T1 | Unit tests for consumer config | **FAIL** | No new tests written |
+| T2 | Integration tests | **FAIL** | No new tests written |
+| S1 | SDK regenerated | **FAIL** | SDK not regenerated after new API routes |
+
+### Findings
+
+**HIGH — No tests written (T1, T2)**
+The wish scope explicitly includes "Tests for all changes" (item 8). No test files were created. At minimum need:
+- ConsumerOffsetService unit tests
+- Consumer startFrom config verification test
+- Resync endpoint integration test
+
+**MEDIUM — SDK not regenerated (S1)**
+New API routes added (`/health/consumers`, `POST /:id/resync`) but `make sdk-generate` was not run. SDK types are out of sync.
+
+**LOW — Missing startup/idempotency logs (A-scope nice-to-haves)**
+Wish deliverables A3 and A4 mention startup log per consumer and idempotency confirmation log. Not implemented. Non-blocking.
+
+**LOW — `POST /event-ops/replay` not wired up**
+Wish Group C mentions wiring up existing replay endpoint. Not done. Pre-existing infrastructure, non-blocking.
+
+### Quality Assessment
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Security | **GOOD** | Auth middleware on all endpoints, Zod validation, no injection vectors |
+| Correctness | **GOOD** | Consumer policy change is correct, idempotent via findOrCreate |
+| Code Quality | **GOOD** | No `any` types, proper Drizzle usage, clean architecture |
+| Tests | **NEEDS WORK** | Zero new tests for significant infrastructure changes |
+| Integration | **GOOD** | Event-first architecture maintained, no channel logic in core |
+
+### Recommendation
+
+**FIX-FIRST before SHIP:**
+1. Run `make sdk-generate` to sync SDK with new API routes
+2. Add at minimum: ConsumerOffsetService unit test + resync endpoint test
+3. Then re-review → SHIP
