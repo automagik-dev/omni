@@ -845,6 +845,37 @@ export function createInstancesCommand(): Command {
     });
 
   // ============================================================================
+  // Group Create
+  // ============================================================================
+
+  // omni instances group-create <id> --subject "Name" --participants "+55..." "+55..."
+  instances
+    .command('group-create <id>')
+    .description('Create a new WhatsApp group')
+    .requiredOption('--subject <name>', 'Group name/subject')
+    .requiredOption('--participants <phones...>', 'Phone numbers or JIDs to add (space-separated)')
+    .action(async (id: string, opts: { subject: string; participants: string[] }) => {
+      try {
+        const result = (await apiCall(`instances/${id}/groups`, 'POST', {
+          subject: opts.subject,
+          participants: opts.participants,
+        })) as {
+          data: {
+            id: string;
+            subject: string;
+            owner: string | undefined;
+            creation: number | undefined;
+            participants: Array<{ id: string; admin: string | null }>;
+          };
+        };
+        output.success(`Group created: ${result.data.id}`, result.data);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        output.error(`Failed to create group: ${msg}`);
+      }
+    });
+
+  // ============================================================================
   // C3: Group Invite Links
   // ============================================================================
 

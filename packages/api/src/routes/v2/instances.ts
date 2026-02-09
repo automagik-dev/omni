@@ -1432,6 +1432,60 @@ instancesRoutes.delete('/:id/profile/picture', instanceAccess, async (c) => {
 });
 
 // ============================================================================
+// Group Create
+// ============================================================================
+
+/**
+ * POST /instances/:id/groups - Create a new WhatsApp group
+ */
+instancesRoutes.post(
+  '/:id/groups',
+  instanceAccess,
+  zValidator(
+    'json',
+    z.object({
+      subject: z.string().min(1).max(100).describe('Group name/subject'),
+      participants: z.array(z.string().min(1)).min(1).describe('Phone numbers or JIDs to add'),
+    }),
+  ),
+  async (c) => {
+    const id = c.req.param('id');
+    const { subject, participants } = c.req.valid('json');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('groupCreate' in plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group creation' } }, 400);
+    }
+
+    const result = await (
+      plugin as {
+        groupCreate: (
+          instanceId: string,
+          subject: string,
+          participants: string[],
+        ) => Promise<{
+          id: string;
+          subject: string;
+          owner: string | undefined;
+          creation: number | undefined;
+          participants: Array<{ id: string; admin: string | null }>;
+        }>;
+      }
+    ).groupCreate(id, subject, participants);
+
+    return c.json({ data: result }, 201);
+  },
+);
+
+// ============================================================================
 // C3: Group Invite Links
 // ============================================================================
 
