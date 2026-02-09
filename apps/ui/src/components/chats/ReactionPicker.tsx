@@ -57,8 +57,8 @@ export function ReactionPicker({ messageId, instanceId, to, position, onClose }:
         emoji,
       });
       onClose();
-    } catch (error) {
-      console.error('Failed to send reaction:', error);
+    } catch {
+      // Error handled by mutation
     }
   };
 

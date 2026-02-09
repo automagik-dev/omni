@@ -78,6 +78,7 @@ export function MessageSearch({ chatId, instanceId, onClose, onResultClick }: Me
           <div className="divide-y">
             {results.map((event) => (
               <button
+                type="button"
                 key={event.id}
                 onClick={(e) => handleResultClick(e, event.id)}
                 className="w-full p-3 text-left hover:bg-muted/50 transition-colors"
@@ -112,7 +113,8 @@ function highlightQuery(text: string, query: string): React.ReactNode {
 
   return parts.map((part: string, i: number) =>
     regex.test(part) ? (
-      <mark key={i} className="bg-yellow-200/50 dark:bg-yellow-500/30">
+      // biome-ignore lint/suspicious/noArrayIndexKey: Text split parts have no better identifier
+      <mark key={`mark-${i}`} className="bg-yellow-200/50 dark:bg-yellow-500/30">
         {part}
       </mark>
     ) : (
