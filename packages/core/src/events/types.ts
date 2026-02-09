@@ -123,6 +123,8 @@ export interface EventMetadata {
   platformIdentityId?: string;
   traceId?: string;
   source?: string;
+  /** NATS stream sequence number (set by subscription handler, not by publisher) */
+  streamSequence?: number;
 }
 
 /**

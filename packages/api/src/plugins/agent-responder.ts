@@ -617,7 +617,7 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
         queue: 'agent-responder',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        startFrom: 'first',
         concurrency: 5,
       },
     );

@@ -110,6 +110,9 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
         throw new Error(`Validation failed: ${validation.error}`);
       }
 
+      // Inject NATS stream sequence into event metadata for offset tracking
+      event.metadata.streamSequence = msg.info.streamSequence;
+
       // Call handler
       await handler(event);
 

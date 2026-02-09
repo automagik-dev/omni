@@ -200,4 +200,28 @@ export class InstanceService {
 
     return result?.count ?? 0;
   }
+
+  /**
+   * Update the last message timestamp for an instance.
+   * Used for reconnect gap detection — only updates if new timestamp is later.
+   */
+  async updateLastMessageAt(instanceId: string, timestamp: Date): Promise<void> {
+    await this.db
+      .update(instances)
+      .set({
+        lastMessageAt: sql`GREATEST(${instances.lastMessageAt}, ${timestamp})`,
+      })
+      .where(eq(instances.id, instanceId));
+  }
+
+  /**
+   * Get the last message timestamp for an instance.
+   */
+  async getLastMessageAt(instanceId: string): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ lastMessageAt: instances.lastMessageAt })
+      .from(instances)
+      .where(eq(instances.id, instanceId));
+    return row?.lastMessageAt ?? null;
+  }
 }

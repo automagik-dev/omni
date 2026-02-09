@@ -26,6 +26,7 @@ import { createMessagesCommand } from './commands/messages.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
@@ -135,6 +136,12 @@ const COMMANDS: CommandDef[] = [
   { create: createAuthCommand, category: 'core', helpGroup: 'System', helpDescription: 'Authentication management' },
   { create: createSettingsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Server settings' },
   { create: createBatchCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Batch operations' },
+  {
+    create: createResyncCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Trigger history backfill for instances',
+  },
 
   // Debug commands (not shown in grouped help)
   { create: createLogsCommand, category: 'debug', helpGroup: 'System' },
