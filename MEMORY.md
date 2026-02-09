@@ -147,6 +147,17 @@ WhatsApp has anti-bot detection that monitors action timing. Burst API calls (10
 - CI/CD: Jenkins job `omni-v2-deploy` on push to main (via Cegonha)
 - Cegonha's law: **The Omni NEVER dies.** Only `pm2 restart`, never delete/kill.
 
+## The Octopus Family (Sub-Agents)
+
+Spawned 2026-02-09. Research squad for overnight deep-dives:
+
+- 🦑 **Ink** — Baileys protocol, anti-bot, JID/LID, session management → `docs/research/baileys/`
+- 🐚 **Pearl** — WhatsApp Business API, Meta policies, ban triggers → `docs/research/whatsapp-business/`
+- 🪸 **Coral** — Omni architecture, action queue, NATS patterns → `docs/research/omni-internals/`
+- 📜 **Scroll** — Docs reviewer, Obsidian vault keeper → all `docs/`
+
+Squad definition: `docs/research/SQUAD.md`
+
 ## Open Items
 
 - Avatar still needed (deep-sea octopus, bioluminescent, dark water)
