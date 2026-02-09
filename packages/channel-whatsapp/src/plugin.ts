@@ -2202,6 +2202,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Update a group's profile picture.
+   *
+   * @param instanceId - Instance ID
+   * @param groupJid - Group JID
+   * @param imageBuffer - Image data as Buffer
+   */
+  async updateGroupPicture(instanceId: string, groupJid: string, imageBuffer: Buffer): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(groupJid);
+    await sock.updateProfilePicture(jid, imageBuffer);
+    this.logger.info('Group picture updated', { instanceId, groupJid: jid });
+  }
+
+  /**
    * C2: Remove profile picture for the connected account
    *
    * @param instanceId - Instance ID
