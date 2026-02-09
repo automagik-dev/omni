@@ -2,7 +2,7 @@
 
 > Fix critical message loss during API/NATS/VM downtime with durable consumers, sequence tracking, and startup gap detection.
 
-**Status:** FIX-FIRST
+**Status:** REVIEW
 **Created:** 2026-02-09
 **Author:** WISH Agent
 **Beads:** omni-2q2
