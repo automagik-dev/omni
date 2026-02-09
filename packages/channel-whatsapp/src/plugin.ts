@@ -2200,6 +2200,42 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Create a new WhatsApp group
+   *
+   * @param instanceId - Instance ID
+   * @param subject - Group name/subject (max 100 chars)
+   * @param participants - Array of phone numbers or JIDs to add
+   * @returns Group metadata including JID, subject, participants
+   */
+  async groupCreate(
+    instanceId: string,
+    subject: string,
+    participants: string[],
+  ): Promise<{
+    id: string;
+    subject: string;
+    owner: string | undefined;
+    creation: number | undefined;
+    participants: Array<{ id: string; admin: string | null }>;
+  }> {
+    const sock = this.getSocket(instanceId);
+    const participantJids = participants.map((p) => toJid(p));
+    this.logger.info('Creating group', { instanceId, subject, participantCount: participantJids.length });
+    const metadata = await sock.groupCreate(subject, participantJids);
+    this.logger.info('Group created', { instanceId, groupId: metadata.id, subject: metadata.subject });
+    return {
+      id: metadata.id,
+      subject: metadata.subject,
+      owner: metadata.owner,
+      creation: metadata.creation,
+      participants: metadata.participants.map((p) => ({
+        id: p.id,
+        admin: p.admin ?? null,
+      })),
+    };
+  }
+
+  /**
    * C4: Fetch the blocklist for the connected account
    *
   /**
