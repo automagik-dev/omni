@@ -15,6 +15,7 @@ const log = createLogger('nats:streams');
  */
 export const STREAM_NAMES = {
   MESSAGE: 'MESSAGE',
+  REACTION: 'REACTION',
   INSTANCE: 'INSTANCE',
   IDENTITY: 'IDENTITY',
   MEDIA: 'MEDIA',
@@ -41,6 +42,14 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
     storage: StorageType.File,
     retention: RetentionPolicy.Limits,
     description: 'All message lifecycle events (received, sent, delivered, read, failed)',
+  },
+  [STREAM_NAMES.REACTION]: {
+    name: STREAM_NAMES.REACTION,
+    subjects: ['reaction.>'],
+    max_age: daysToNs(7),
+    storage: StorageType.File,
+    retention: RetentionPolicy.Limits,
+    description: 'Reaction events (received, removed)',
   },
   [STREAM_NAMES.INSTANCE]: {
     name: STREAM_NAMES.INSTANCE,
@@ -100,6 +109,7 @@ export function getStreamForEventType(eventType: string): StreamName {
 
   const prefixToStream: Record<string, StreamName> = {
     message: STREAM_NAMES.MESSAGE,
+    reaction: STREAM_NAMES.REACTION,
     instance: STREAM_NAMES.INSTANCE,
     identity: STREAM_NAMES.IDENTITY,
     media: STREAM_NAMES.MEDIA,
