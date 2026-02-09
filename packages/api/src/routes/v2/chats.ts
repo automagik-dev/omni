@@ -229,16 +229,24 @@ const muteActionSchema = z.object({
 async function getLastMessageKey(
   services: Services,
   chatId: string,
-): Promise<{ id: string; fromMe?: boolean; timestamp?: number } | undefined> {
+): Promise<{ id: string; fromMe?: boolean; timestamp?: number; participant?: string } | undefined> {
   try {
     const result = await services.messages.list({ chatId, limit: 1 });
     const msg = result.items[0];
     if (msg) {
-      return {
+      const key: { id: string; fromMe?: boolean; timestamp?: number; participant?: string } = {
         id: msg.externalId,
         fromMe: msg.isFromMe,
         timestamp: Math.floor(new Date(msg.platformTimestamp).getTime() / 1000),
       };
+      // Baileys requires 'participant' for group messages not sent by us.
+      // senderPlatformUserId stores the raw id (e.g. "54958418317348");
+      // append @lid or @s.whatsapp.net so Baileys gets a valid JID.
+      if (!msg.isFromMe && msg.senderPlatformUserId) {
+        const raw = msg.senderPlatformUserId;
+        key.participant = raw.includes('@') ? raw : raw.includes(':') ? raw : `${raw}@lid`;
+      }
+      return key;
     }
   } catch {
     // If we can't get the last message, let the plugin handle the fallback
@@ -256,7 +264,7 @@ async function applyChatModifyOnChannel(
   chatExternalId: string,
   action: string,
   value?: number,
-  lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+  lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number; participant?: string },
 ): Promise<void> {
   if (!channelRegistry) return;
   const instance = await services.instances.getById(instanceId);
@@ -270,7 +278,7 @@ async function applyChatModifyOnChannel(
           chatId: string,
           action: string,
           value?: number,
-          lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+          lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number; participant?: string },
         ) => Promise<void>;
       }
     ).chatModifyAction(instanceId, chatExternalId, action, value, lastMessageKey);

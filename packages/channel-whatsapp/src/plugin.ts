@@ -2140,17 +2140,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     chatId: string,
     action: string,
     value?: number,
-    lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
+    lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number; participant?: string },
   ): Promise<void> {
     await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
     // Build lastMessages array for actions that require it (archive/unarchive)
+    // Baileys requires `participant` in the key for group messages not sent by us
     const lastMessages = lastMessageKey
       ? [
           {
-            key: { remoteJid: jid, id: lastMessageKey.id, fromMe: lastMessageKey.fromMe ?? false },
+            key: {
+              remoteJid: jid,
+              id: lastMessageKey.id,
+              fromMe: lastMessageKey.fromMe ?? false,
+              ...(lastMessageKey.participant ? { participant: lastMessageKey.participant } : {}),
+            },
             messageTimestamp: lastMessageKey.timestamp ?? Math.floor(Date.now() / 1000),
           },
         ]
