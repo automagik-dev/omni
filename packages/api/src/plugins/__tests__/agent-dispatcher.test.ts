@@ -266,18 +266,19 @@ describe('agent-dispatcher', () => {
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
   describe('setupAgentDispatcher', () => {
-    it('subscribes to message.received, reaction.received, and presence.typing', async () => {
+    it('subscribes to message.received, reaction.received, reaction.removed, and presence.typing', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
       const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(3);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
       expect(subscribedTypes).toContain('message.received');
       expect(subscribedTypes).toContain('reaction.received');
+      expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
 
       cleanup();
@@ -313,6 +314,14 @@ describe('agent-dispatcher', () => {
       expect(rxnCall).toBeDefined();
       expect(rxnCall?.[2]).toMatchObject({
         durable: 'agent-dispatcher-reaction',
+        queue: 'agent-dispatcher',
+      });
+
+      // Check options for reaction.removed
+      const rxnRemovedCall = eventBus.subscribe.mock.calls.find((call: unknown[]) => call[0] === 'reaction.removed');
+      expect(rxnRemovedCall).toBeDefined();
+      expect(rxnRemovedCall?.[2]).toMatchObject({
+        durable: 'agent-dispatcher-reaction-removed',
         queue: 'agent-dispatcher',
       });
 
