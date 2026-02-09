@@ -39,7 +39,7 @@ export { setupMessagePersistence } from './message-persistence';
 export { setupMediaProcessor } from './media-processor';
 
 // Agent dispatcher (evolved from agent-responder — multi-event, multi-provider)
-export { setupAgentDispatcher, setupAgentResponder } from './agent-dispatcher';
+export { setupAgentDispatcher, setupAgentResponder, type DispatcherCleanup } from './agent-dispatcher';
 
 // Sync worker (processes sync jobs)
 export { setupSyncWorker } from './sync-worker';

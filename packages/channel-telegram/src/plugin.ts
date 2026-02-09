@@ -135,6 +135,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // Create and initialize bot
     const bot = createBot(instanceId, telegramConfig.token);
 
+    // Global error handler — prevents unhandled errors from crashing the process
+    bot.catch((err) => {
+      this.logger.error('Bot error', {
+        instanceId,
+        error: err.message ?? String(err),
+        ctx: err.ctx?.update?.update_id,
+      });
+    });
+
     // Set up handlers before starting
     setupMessageHandlers(bot, this, instanceId);
     setupReactionHandlers(bot, this, instanceId);
@@ -398,21 +407,22 @@ export class TelegramPlugin extends BaseChannelPlugin {
         this.logger.info('Polling started', { instanceId });
       },
     });
+
+    // grammy emits 'error' on polling failures — the bot.catch() handler will
+    // catch these, and grammy will automatically retry polling with backoff.
+    // If polling stops entirely (e.g. bot revoked), the health check will
+    // surface the failure via getHealthChecks().
   }
 
-  private async startWebhook(bot: Bot, instanceId: string, config: TelegramConfig): Promise<void> {
-    if (!config.webhookUrl) {
-      throw new Error('webhookUrl is required for webhook mode');
-    }
-
-    this.logger.info('Setting up webhook', { instanceId, webhookUrl: config.webhookUrl });
-
-    await bot.api.setWebhook(config.webhookUrl, {
-      allowed_updates: ['message', 'message_reaction', 'callback_query', 'my_chat_member'],
-      secret_token: config.webhookSecret,
-    });
-
-    this.logger.info('Webhook set', { instanceId });
+  private async startWebhook(_bot: Bot, instanceId: string, _config: TelegramConfig): Promise<void> {
+    // TODO: Webhook mode requires an HTTP handler (e.g. Hono route) to receive
+    // incoming updates from Telegram. This is not yet implemented.
+    // See: https://grammy.dev/guide/deployment-types#webhooks
+    //
+    // For now, use polling mode (mode: 'polling' or omit mode entirely).
+    throw new Error(
+      `Webhook mode is not yet supported for Telegram instance ${instanceId}. Use polling mode instead (set mode: "polling" in instance config). Webhook support requires an HTTP endpoint to receive Telegram updates.`,
+    );
   }
 
   /**

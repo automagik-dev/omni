@@ -219,7 +219,7 @@ export type JobStatus = (typeof jobStatuses)[number];
 // AGENT PROVIDERS
 // ============================================================================
 
-export const providerSchemas = ['agnoos', 'a2a', 'openai', 'anthropic', 'custom'] as const;
+export const providerSchemas = ['agnoos', 'agno', 'a2a', 'openai', 'anthropic', 'webhook', 'custom'] as const;
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**

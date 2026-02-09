@@ -50,6 +50,7 @@ const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 let globalEventBus: EventBus | null = null;
 let globalChannelRegistry: ChannelRegistry | null = null;
 let globalInstanceMonitor: InstanceMonitor | null = null;
+let globalDispatcherCleanup: (() => void) | null = null;
 
 /**
  * Get the global channel registry
@@ -218,6 +219,11 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
 
       server.close(() => shutdownLog.info('HTTP server closed'));
 
+      if (globalDispatcherCleanup) {
+        shutdownLog.info('Stopping agent dispatcher');
+        globalDispatcherCleanup();
+      }
+
       if (globalInstanceMonitor) {
         shutdownLog.info('Stopping instance monitor');
         globalInstanceMonitor.stop();
@@ -274,11 +280,11 @@ async function setupEventBusServices(
     log.error('Failed to set up media processor', { error: String(error) });
   }
 
-  // Agent responder (AI agent responses)
+  // Agent dispatcher (AI agent responses — multi-event, multi-provider)
   try {
-    await setupAgentResponder(eventBus, services);
+    globalDispatcherCleanup = await setupAgentResponder(eventBus, services);
   } catch (error) {
-    log.error('Failed to set up agent responder', { error: String(error) });
+    log.error('Failed to set up agent dispatcher', { error: String(error) });
   }
 
   // Sync worker
