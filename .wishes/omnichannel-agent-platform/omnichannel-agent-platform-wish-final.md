@@ -2,7 +2,7 @@
 
 > Transform Omni from a messaging platform into a truly omnichannel AI agent platform. Same agent identity, same memory, same personality — across WhatsApp, Telegram, Discord, and any future channel.
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-02-09
 **Author:** Omni + Genie (council-reviewed 10/0, brainstorm-validated)
 **Priority:** STRATEGIC
