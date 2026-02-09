@@ -54,8 +54,8 @@ describe('WhatsAppPlugin', () => {
       expect(WHATSAPP_CAPABILITIES.canReceiveDeliveryReceipts).toBe(true);
     });
 
-    it('does not support message editing', () => {
-      expect(WHATSAPP_CAPABILITIES.canEditMessage).toBe(false);
+    it('supports message editing', () => {
+      expect(WHATSAPP_CAPABILITIES.canEditMessage).toBe(true);
     });
 
     it('supports message deletion', () => {
