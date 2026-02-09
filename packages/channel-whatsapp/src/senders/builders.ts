@@ -75,43 +75,45 @@ const buildText: ContentBuilder = (message) => {
     } as unknown as AnyMessageContent;
   }
 
-  let text = message.content.text || '';
+  const text = message.content.text || '';
 
-  // Check for mentions in metadata
-  const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
-
-  if (mentions && mentions.length > 0) {
-    // Convert mention IDs to WhatsApp JIDs (only user mentions for WhatsApp)
-    const userMentions = mentions.filter((m) => !m.type || m.type === 'user');
-    const mentionJids = userMentions.map((m) => toMentionJid(m.id));
-
-    if (mentionJids.length > 0) {
-      // Check if text already contains @mentions, if not prepend them
-      // WhatsApp needs @number in text to know where to render the mention
-      for (const mention of userMentions) {
-        const phoneNumber = mention.id.replace(/\D/g, '');
-        if (!text.includes(`@${phoneNumber}`)) {
-          text = `@${phoneNumber} ${text}`;
-        }
-      }
-
-      return { text, mentions: mentionJids };
-    }
+  // Extract mentions from metadata (if any)
+  const mentionJids = extractMentionJids(message);
+  if (mentionJids) {
+    // WhatsApp renders mentions where @{phone} appears in text.
+    // The caller should place @phone in text for proper rendering.
+    // We pass the mentions array as-is — no text modification.
+    return { text, mentions: mentionJids };
   }
 
   return { text };
 };
 
 /**
+ * Extract mention JIDs from message metadata (if any).
+ * Reusable across text, image, and video builders.
+ */
+function extractMentionJids(message: OutgoingMessage): string[] | undefined {
+  const mentions = message.metadata?.mentions as Array<{ id: string; type?: string }> | undefined;
+  if (!mentions || mentions.length === 0) return undefined;
+  const userMentions = mentions.filter((m) => !m.type || m.type === 'user');
+  if (userMentions.length === 0) return undefined;
+  return userMentions.map((m) => toMentionJid(m.id));
+}
+
+/**
  * Build image message content
  *
  * Supports URL and base64. Priority: base64 > URL
+ * Supports mentions in captions.
  */
 const buildImage: ContentBuilder = (message) => {
+  const mentionJids = extractMentionJids(message);
   return {
     image: getMediaSource(message),
     caption: message.content.caption,
     mimetype: message.content.mimeType,
+    ...(mentionJids ? { mentions: mentionJids } : {}),
   };
 };
 
@@ -147,11 +149,14 @@ const buildAudio: ContentBuilder = (message) => {
  * Build video message content
  *
  * Supports URL and base64. Priority: base64 > URL
+ * Supports mentions in captions.
  */
 const buildVideo: ContentBuilder = (message) => {
+  const mentionJids = extractMentionJids(message);
   return {
     video: getMediaSource(message),
     caption: message.content.caption,
+    ...(mentionJids ? { mentions: mentionJids } : {}),
     mimetype: message.content.mimeType,
   };
 };
