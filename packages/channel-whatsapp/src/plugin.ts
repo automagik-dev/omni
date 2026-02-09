@@ -228,6 +228,47 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached group metadata (subject/name) per instance */
   private groupsCache = new Map<string, Map<string, { subject: string; desc?: string }>>();
 
+  /** Last outgoing action timestamp per instance — for humanized delay */
+  private lastActionTime = new Map<string, number>();
+
+  /**
+   * Enforce a randomized delay between outgoing actions to avoid
+   * WhatsApp anti-bot detection. Simulates human-probable timing.
+   *
+   * Actions arriving faster than the random window are held until
+   * enough time has passed since the previous action.
+   */
+  private async humanDelay(instanceId: string): Promise<void> {
+    const now = Date.now();
+    const last = this.lastActionTime.get(instanceId) || 0;
+    const minDelay = 1500;
+    const maxDelay = 3500;
+    const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
+    const elapsed = now - last;
+
+    if (elapsed < randomDelay) {
+      await new Promise<void>((r) => setTimeout(r, randomDelay - elapsed));
+    }
+
+    this.lastActionTime.set(instanceId, Date.now());
+  }
+
+  /**
+   * Send typing indicator (composing → pause) before a text message.
+   * Duration scales with text length to look natural.
+   */
+  private async simulateTyping(instanceId: string, jid: string, text: string): Promise<void> {
+    try {
+      const sock = this.getSocket(instanceId);
+      const typingMs = Math.min(800 + text.length * 30, 4000);
+      await sock.sendPresenceUpdate('composing', jid);
+      await new Promise<void>((r) => setTimeout(r, typingMs));
+      await sock.sendPresenceUpdate('paused', jid);
+    } catch {
+      // Non-critical — don't fail the send if presence update fails
+    }
+  }
+
   /** Cached chat display names per instance (for DMs from chats.upsert) */
   private chatNamesCache = new Map<string, Map<string, string>>();
 
@@ -415,6 +456,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
+      // Humanized delay — prevent anti-bot detection
+      await this.humanDelay(instanceId);
+
+      // Simulate typing for text/caption messages
+      const textContent = message.content.text || message.content.caption || '';
+      if (textContent.length > 0) {
+        await this.simulateTyping(instanceId, jid, textContent);
+      }
+
       // Handle audio conversion for voice notes (PTT)
       let processedMessage = message;
       if (message.content.type === 'audio' && message.metadata?.ptt === true) {
@@ -663,6 +713,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param fromMe - Whether the message was sent by us (required for correct key construction)
    */
   async deleteMessage(instanceId: string, chatId: string, messageId: string, fromMe = true): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
     await sock.sendMessage(jid, {
@@ -701,6 +752,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * B4: Block a contact.
    */
   async blockContact(instanceId: string, contactJid: string): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(contactJid);
     await sock.updateBlockStatus(jid, 'block');
@@ -711,6 +763,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * B4: Unblock a contact.
    */
   async unblockContact(instanceId: string, contactJid: string): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(contactJid);
     await sock.updateBlockStatus(jid, 'unblock');
@@ -731,6 +784,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param duration - Seconds (86400=24h, 604800=7d, 7776000=90d) or false to disable
    */
   async setDisappearing(instanceId: string, chatId: string, duration: number | false): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
     await sock.sendMessage(jid, { disappearingMessagesInChat: duration });
@@ -748,6 +802,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     star: boolean,
     fromMe = true,
   ): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
     await sock.star(jid, [{ id: messageId, fromMe }], star);
@@ -760,6 +815,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Update the profile display name (push name) on WhatsApp.
    */
   async updateProfileName(instanceId: string, name: string): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     await sock.updateProfileName(name);
     this.logger.info('Profile name updated', { instanceId, name });
@@ -2086,6 +2142,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     value?: number,
     lastMessageKey?: { id: string; fromMe?: boolean; timestamp?: number },
   ): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
@@ -2134,6 +2191,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param imageBuffer - Image data as Buffer
    */
   async updateProfilePicture(instanceId: string, imageBuffer: Buffer): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const user = sock.user;
     if (!user) {
@@ -2149,6 +2207,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance ID
    */
   async removeProfilePicture(instanceId: string): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const user = sock.user;
     if (!user) {
@@ -2166,6 +2225,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @returns Invite code string
    */
   async getGroupInviteCode(instanceId: string, groupJid: string): Promise<string> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(groupJid);
     const code = await sock.groupInviteCode(jid);
@@ -2180,6 +2240,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @returns New invite code string
    */
   async revokeGroupInvite(instanceId: string, groupJid: string): Promise<string> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(groupJid);
     const newCode = await sock.groupRevokeInvite(jid);
@@ -2194,6 +2255,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @returns The JID of the joined group
    */
   async joinGroup(instanceId: string, code: string): Promise<string> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const groupJid = await sock.groupAcceptInvite(code);
     return groupJid ?? '';
@@ -2218,6 +2280,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     creation: number | undefined;
     participants: Array<{ id: string; admin: string | null }>;
   }> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const participantJids = participants.map((p) => toJid(p));
     this.logger.info('Creating group', { instanceId, subject, participantCount: participantJids.length });
@@ -2245,6 +2308,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @returns Privacy settings object
    */
   async fetchPrivacySettings(instanceId: string): Promise<Record<string, unknown>> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const settings = await sock.fetchPrivacySettings(true);
     return (settings as Record<string, unknown>) ?? {};
@@ -2258,6 +2322,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param callFrom - JID of the caller
    */
   async rejectCall(instanceId: string, callId: string, callFrom: string): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     await sock.rejectCall(callId, callFrom);
     this.logger.info('Call rejected', { instanceId, callId, callFrom });
@@ -2278,6 +2343,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     newText: string,
     fromMe = true,
   ): Promise<void> {
+    await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatJid);
     await sock.sendMessage(jid, {
