@@ -1,6 +1,16 @@
+---
+title: "V1 Features Analysis"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [migration, features, analysis]
+status: current
+---
+
 # V1 Features Analysis
 
 > A comprehensive analysis of v1 features: what's being carried forward, what's being changed, and what's being intentionally left behind.
+
+> Related: [[plan|Migration Plan]], [[ui-reuse|UI Reuse Strategy]]
 
 ## Features Being Carried Forward (Enhanced)
 

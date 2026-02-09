@@ -1,6 +1,16 @@
+---
+title: "Plugin System"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [architecture, plugins, channels]
+status: current
+---
+
 # Plugin System
 
 > The plugin system enables true plug-and-play channel integration. Adding a new messaging platform requires zero changes to core code.
+
+> Related: [[overview|Architecture Overview]], [[event-system|Event System]], [[provider-system|Provider System]]
 
 ## Design Goals
 

@@ -1,6 +1,16 @@
+---
+title: "SDK Auto-Generation"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [sdk, generation, openapi]
+status: current
+---
+
 # SDK Auto-Generation
 
 > Define schemas once, generate everything else. Zero maintenance overhead for SDKs.
+
+> Related: [[typescript-sdk|TypeScript SDK]], [[endpoints|API Endpoints]]
 
 ## Philosophy
 

@@ -3,6 +3,7 @@ title: "Omni Research Squad"
 created: 2026-02-09
 updated: 2026-02-09
 tags: [meta, squad, agents]
+status: current
 ---
 
 # Omni Research Squad 🐙

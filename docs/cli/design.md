@@ -1,23 +1,25 @@
+---
+title: "CLI Design"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [cli, reference]
+status: current
+---
+
 # CLI Design
 
-> The Omni CLI is designed to be LLM-friendly - structured output, clear commands, and predictable behavior for AI agents.
+> The Omni CLI is designed to be LLM-friendly — structured output, clear commands, and predictable behavior for AI agents.
 
-## Design Principles
-
-1. **LLM-First** - Output is structured, parseable, and predictable
-2. **Human-Friendly** - Also works well for humans with color and formatting
-3. **Consistent** - Same patterns across all commands
-4. **Scriptable** - Exit codes, JSON output, piping support
-5. **Discoverable** - Built-in help and examples
+> Related: [[endpoints|API Endpoints]], [[overview|Architecture Overview]]
 
 ## Installation
 
 ```bash
-# npm
-npm install -g @omni/cli
+# Build and link globally
+make cli-link
 
-# Or run directly
-npx @omni/cli --help
+# Binary location
+~/.omni/bin/omni
 ```
 
 ## Configuration
@@ -29,17 +31,251 @@ omni config set apiKey sk-omni-...
 # Set base URL
 omni config set baseUrl https://api.example.com
 
+# Set default instance
+omni config set instance <instance-id>
+
 # View config
 omni config list
 
-# Use environment variables (takes precedence)
+# Environment variables (take precedence)
 export OMNI_API_KEY=sk-omni-...
 export OMNI_BASE_URL=https://api.example.com
 ```
 
-## Output Formats
+## Command Structure
 
-Every command supports multiple output formats:
+Commands are grouped into three categories:
+
+### Core
+
+| Command | Description |
+|---------|-------------|
+| `send` | Send message (text, media, location, poll, embed, reaction, presence) |
+| `chats` | List and manage conversations |
+| `messages` | Message actions (search, read receipts) |
+
+### Management
+
+| Command | Description |
+|---------|-------------|
+| `instances` | Channel connections (WhatsApp, Discord) |
+| `persons` | Contact directory |
+| `automations` | Event-driven workflows |
+| `providers` | AI/LLM providers configuration |
+| `access` | Access control and permissions |
+| `webhooks` | Webhook management |
+
+### System
+
+| Command | Description |
+|---------|-------------|
+| `status` | API health and connection info |
+| `config` | CLI settings (default instance, format) |
+| `events` | Query message history |
+| `auth` | Authentication management |
+| `settings` | Server settings |
+| `batch` | Batch operations |
+| `keys` | API key management (hidden) |
+| `logs` | System log viewer (hidden) |
+| `dead-letters` | Failed event management (hidden) |
+| `payloads` | Event payload inspection (hidden) |
+| `completions` | Shell completions (hidden) |
+
+> Hidden commands are shown with `omni --all`
+
+---
+
+## Send
+
+The unified `send` command uses flags (not positional args):
+
+```bash
+# Text message
+omni send --to +5511999 --text "Hello!"
+
+# Media message
+omni send --to +5511999 --media ./photo.jpg --caption "Check this"
+
+# Voice note
+omni send --to +5511999 --media ./audio.ogg --voice
+
+# Reaction
+omni send --to +5511999 --reaction "👍" --message msg_abc
+
+# Sticker
+omni send --to +5511999 --sticker https://example.com/sticker.webp
+
+# Contact card
+omni send --to +5511999 --contact --name "John" --phone "+1234" --email "j@x.com"
+
+# Location
+omni send --to +5511999 --location --lat -23.55 --lng -46.63 --address "São Paulo"
+
+# Poll (Discord)
+omni send --to #channel --poll "Lunch?" --options "Pizza,Sushi,Tacos" --multi-select
+
+# Embed (Discord)
+omni send --to #channel --embed --title "Update" --description "v2.0 released" --color 0x00ff00
+
+# Presence indicator
+omni send --to +5511999 --presence typing
+
+# Override default instance
+omni send --instance <id> --to +5511999 --text "Hi"
+
+# Reply to a message
+omni send --to +5511999 --text "Reply" --reply-to <message-id>
+```
+
+## Chats
+
+```bash
+omni chats list                             # List all chats
+omni chats list --instance <id>             # Filter by instance
+omni chats list --search "Group"            # Search by name
+omni chats get <chat-id>                    # Get chat details
+omni chats create --instance <id> ...       # Create chat record
+omni chats update <id> --name "New Name"    # Update chat
+omni chats delete <id>                      # Soft-delete chat
+omni chats archive <id>                     # Archive chat
+omni chats unarchive <id>                   # Unarchive chat
+omni chats messages <chat-id>              # Get chat messages
+omni chats messages <id> --limit 50         # With limit
+omni chats participants <id>               # List participants
+omni chats participants <id> --add <user>  # Add participant
+omni chats read <id>                       # Mark chat as read
+```
+
+## Messages
+
+```bash
+omni messages search "meeting"              # Search across chats
+omni messages search "meeting" --chat <id>  # Search within chat
+omni messages read <message-id>            # Mark as read
+omni messages read --batch --chat <id> --ids id1,id2  # Batch read
+```
+
+## Instances
+
+```bash
+omni instances list                         # List all instances
+omni instances list --channel whatsapp-baileys  # Filter by channel
+omni instances get <id>                     # Get instance details
+omni instances create --name my-wa --channel whatsapp-baileys  # Create
+omni instances update <id> --agent-timeout 90  # Update
+omni instances delete <id>                  # Delete
+omni instances status <id>                  # Connection status
+omni instances qr <id>                     # Show QR code
+omni instances qr <id> --terminal          # Display in terminal
+omni instances pair <id> --phone +5511999  # Pairing code auth
+omni instances connect <id>                # Connect
+omni instances disconnect <id>             # Disconnect
+omni instances restart <id>                # Restart connection
+omni instances logout <id>                 # Logout (clear session)
+omni instances sync <id> --type messages   # Start sync
+omni instances syncs <id>                  # List sync jobs
+omni instances syncs <id> <job-id>        # Get sync job status
+omni instances contacts <id>              # List contacts
+omni instances groups <id>                # List groups
+omni instances profile <id> <userId>      # Get user profile
+```
+
+## Persons
+
+```bash
+omni persons search "Felipe"               # Search by name
+omni persons search "+5511"                # Search by phone
+omni persons get <id>                      # Get person details
+omni persons presence <id>                # Cross-channel presence
+```
+
+## Events
+
+```bash
+omni events list                           # List recent events
+omni events list --instance <id>           # Filter by instance
+omni events list --since 2025-01-01        # Date range
+omni events list --limit 100               # Limit results
+omni events search "meeting"              # Search by content
+omni events timeline <person-id>          # Cross-channel timeline
+omni events metrics                       # Processing metrics
+omni events replay                        # Manage replay sessions
+```
+
+## Automations
+
+```bash
+omni automations list                      # List automations
+omni automations get <id>                  # Get details
+omni automations create ...               # Create automation
+omni automations update <id> ...          # Update
+omni automations delete <id>              # Delete
+omni automations enable <id>              # Enable
+omni automations disable <id>             # Disable
+omni automations test <id>               # Test with mock event
+omni automations execute <id>            # Execute with real event
+omni automations logs <id>               # Execution logs
+```
+
+## Providers
+
+```bash
+omni providers list                        # List AI providers
+omni providers get <id>                    # Get details
+omni providers create ...                 # Create provider
+omni providers update <id> ...            # Update
+omni providers delete <id>               # Delete
+omni providers health <id>              # Health check
+```
+
+## Webhooks
+
+```bash
+omni webhooks list                         # List webhook sources
+omni webhooks get <id>                     # Get details
+omni webhooks create ...                  # Create source
+omni webhooks update <id> ...             # Update
+omni webhooks delete <id>                # Delete
+omni webhooks trigger ...                # Trigger custom event
+```
+
+## Access
+
+```bash
+omni access list                           # List rules
+omni access list --instance <id>           # Filter by instance
+omni access create deny ...               # Create deny rule
+omni access create allow ...              # Create allow rule
+omni access delete <id>                   # Delete rule
+omni access check <instance> <user>       # Check access
+```
+
+## Settings
+
+```bash
+omni settings list                         # List all settings
+omni settings list --category media        # Filter by category
+omni settings get GROQ_API_KEY             # Get setting
+omni settings set GROQ_API_KEY gsk_...    # Set setting
+```
+
+## System
+
+```bash
+omni status                                # API health check
+omni auth validate                        # Validate API key
+omni logs                                 # View recent logs
+omni logs error                           # Filter by level
+omni logs --modules api,whatsapp          # Filter by module
+omni batch list                           # List batch jobs
+omni dead-letters list                    # List failed events
+omni dead-letters stats                   # Dead letter statistics
+omni dead-letters retry <id>             # Retry failed event
+```
+
+---
+
+## Output Formats
 
 ```bash
 # Default: human-readable with colors
@@ -48,309 +284,18 @@ omni instances list
 # JSON (for parsing)
 omni instances list --format json
 
-# JSON Lines (for streaming)
-omni events list --format jsonl
-
-# Table (compact)
-omni instances list --format table
-
-# Minimal (just IDs or values)
-omni instances list --format minimal
+# Use OMNI_FORMAT env var for default
+export OMNI_FORMAT=json
 ```
 
 ## Global Options
 
 ```
 Options:
-  --format, -f    Output format (json|jsonl|table|minimal)
-  --quiet, -q     Suppress non-essential output
-  --verbose, -v   Show detailed output
-  --help, -h      Show help
-  --version       Show version
-```
-
-## Commands
-
-### Instances
-
-```bash
-# List instances
-omni instances list
-omni instances list --channel whatsapp-baileys
-omni instances list --status active
-omni instances list --format json
-
-# Get instance details
-omni instances get <id>
-omni instances get my-whatsapp --format json
-
-# Create instance
-omni instances create \
-  --name my-whatsapp \
-  --channel whatsapp-baileys \
-  --agent-url https://my-agent.example.com/api \
-  --agent-timeout 60
-
-# Update instance
-omni instances update <id> --agent-timeout 90
-
-# Delete instance
-omni instances delete <id>
-omni instances delete <id> --force  # Skip confirmation
-
-# Get status
-omni instances status <id>
-
-# Get QR code
-omni instances qr <id>
-omni instances qr <id> --terminal  # Display in terminal
-omni instances qr <id> --save qr.png
-
-# Restart
-omni instances restart <id>
-
-# Logout
-omni instances logout <id>
-```
-
-### Messages
-
-```bash
-# Send text message
-omni send <instance> <to> "Hello from CLI!"
-omni send my-whatsapp +1234567890 "Hello!"
-
-# Send with reply
-omni send my-whatsapp +1234567890 "Replying to you" --reply-to <message-id>
-
-# Send media
-omni send my-whatsapp +1234567890 --image ./photo.jpg
-omni send my-whatsapp +1234567890 --image ./photo.jpg --caption "Check this out"
-omni send my-whatsapp +1234567890 --document ./report.pdf
-omni send my-whatsapp +1234567890 --audio ./voice.ogg --voice-note
-
-# Send from URL
-omni send my-whatsapp +1234567890 --image-url https://example.com/image.jpg
-
-# Send reaction
-omni react my-whatsapp +1234567890 <message-id> 👍
-```
-
-### Events
-
-```bash
-# List events
-omni events list
-omni events list --channel whatsapp-baileys,discord
-omni events list --since 2025-01-01
-omni events list --until 2025-01-31
-omni events list --content-type text,audio
-omni events list --person <person-id>
-omni events list --instance <instance-id>
-omni events list --limit 100
-
-# Get event
-omni events get <id>
-
-# Search events
-omni events search "meeting tomorrow"
-omni events search "meeting" --person <person-id>
-
-# Timeline for a person (cross-channel)
-omni events timeline <person-id>
-omni events timeline <person-id> --channels whatsapp-baileys,discord
-omni events timeline <person-id> --since 2025-01-01 --limit 50
-
-# Export events
-omni events export --since 2025-01-01 --format jsonl > events.jsonl
-```
-
-### Persons (Identity)
-
-```bash
-# Search persons
-omni persons search "John"
-omni persons search "+1234"  # By phone
-
-# Get person
-omni persons get <id>
-
-# Get presence
-omni persons presence <id>
-
-# Get timeline
-omni persons timeline <id>
-omni persons timeline <id> --channels whatsapp-baileys,discord
-
-# Link identities
-omni persons link <identity-a> <identity-b>
-
-# Unlink identity
-omni persons unlink <identity-id> --reason "Wrong person"
-```
-
-### Access Rules
-
-```bash
-# List rules
-omni access list
-omni access list --instance <id>
-omni access list --type deny
-
-# Create rule
-omni access create deny \
-  --instance my-whatsapp \
-  --phone-pattern "+1555*" \
-  --message "Not allowed"
-
-omni access create allow \
-  --instance my-whatsapp \
-  --person <person-id>
-
-# Delete rule
-omni access delete <rule-id>
-
-# Check access
-omni access check my-whatsapp +15551234567
-```
-
-### Settings
-
-```bash
-# List settings
-omni settings list
-
-# Get setting
-omni settings get GROQ_API_KEY
-
-# Set setting
-omni settings set GROQ_API_KEY gsk_...
-
-# Set multiple
-omni settings set GROQ_API_KEY=gsk_... GEMINI_API_KEY=AIza...
-```
-
-### Channels
-
-```bash
-# List available channels
-omni channels list
-
-# Get channel info
-omni channels info whatsapp-baileys
-```
-
-## LLM-Optimized Output
-
-### JSON Format for Parsing
-
-```bash
-$ omni instances list --format json
-{
-  "items": [
-    {
-      "id": "abc123",
-      "name": "my-whatsapp",
-      "channel": "whatsapp-baileys",
-      "status": "connected"
-    }
-  ],
-  "meta": {
-    "total": 1
-  }
-}
-```
-
-### Minimal Format for Simple Extraction
-
-```bash
-# Just IDs
-$ omni instances list --format minimal
-abc123
-def456
-ghi789
-
-# Use in scripts
-$ for id in $(omni instances list --format minimal); do
-    omni instances restart $id
-  done
-```
-
-### Agent-Friendly Search Results
-
-```bash
-$ omni events search "meeting" --person abc123 --format agent
-
-Found 3 events about "meeting":
-
-[2025-01-15 10:30] (whatsapp) User: Can we schedule a meeting tomorrow?
-[2025-01-15 10:31] (whatsapp) Assistant: Sure! How about 2pm?
-[2025-01-15 14:00] (discord) User: Joining the meeting now
-
----
-Context for LLM:
-[2025-01-15T10:30:00Z] (whatsapp) User: Can we schedule a meeting tomorrow?
-[2025-01-15T10:31:00Z] (whatsapp) Assistant: Sure! How about 2pm?
-[2025-01-15T14:00:00Z] (discord) User: Joining the meeting now
-```
-
-## Interactive Mode
-
-For complex operations:
-
-```bash
-$ omni interactive
-
-omni> instances list
-NAME          CHANNEL           STATUS
-my-whatsapp   whatsapp-baileys  connected
-my-discord    discord           connected
-
-omni> send my-whatsapp +1234567890
-Enter message (Ctrl+D to send):
-Hello! This is a multi-line
-message from the CLI.
-^D
-✓ Message sent (id: xyz789)
-
-omni> exit
-```
-
-## Piping and Scripting
-
-```bash
-# Pipe events to jq
-omni events list --format json | jq '.items[].textContent'
-
-# Send to multiple recipients
-cat numbers.txt | xargs -I {} omni send my-whatsapp {} "Broadcast message"
-
-# Export and transform
-omni events export --since 2025-01-01 --format jsonl | \
-  jq -r 'select(.contentType == "text") | .textContent' > texts.txt
-
-# Monitor instance status
-watch -n 60 'omni instances status my-whatsapp --format json | jq .status'
-```
-
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Invalid arguments |
-| 3 | Authentication error |
-| 4 | Resource not found |
-| 5 | Validation error |
-| 6 | Rate limited |
-| 7 | Network error |
-
-```bash
-$ omni send invalid-instance +1234567890 "Hello"
-Error: Instance not found: invalid-instance
-$ echo $?
-4
+  -V, --version     Show version
+  --no-color        Disable colored output
+  --all             Show all commands (including hidden)
+  -h, --help        Show help
 ```
 
 ## Environment Variables
@@ -361,52 +306,6 @@ $ echo $?
 | `OMNI_BASE_URL` | Base URL of Omni server |
 | `OMNI_FORMAT` | Default output format |
 | `OMNI_NO_COLOR` | Disable colored output |
-| `OMNI_TIMEOUT` | Request timeout in ms |
-
-## Shell Completion
-
-```bash
-# Bash
-omni completion bash >> ~/.bashrc
-
-# Zsh
-omni completion zsh >> ~/.zshrc
-
-# Fish
-omni completion fish > ~/.config/fish/completions/omni.fish
-```
-
-## Examples for LLM Agents
-
-### Get Context for a User
-
-```bash
-# Find the person
-PERSON_ID=$(omni persons search "+1234567890" --format json | jq -r '.items[0].id')
-
-# Get cross-channel timeline
-omni events timeline $PERSON_ID --limit 20 --format agent
-```
-
-### Monitor and React
-
-```bash
-# Watch for new messages
-omni events list --since "5 minutes ago" --instance my-whatsapp --format jsonl | \
-  while read event; do
-    CONTENT=$(echo $event | jq -r '.textContent')
-    # Process with LLM...
-  done
-```
-
-### Batch Operations
-
-```bash
-# Restart all disconnected instances
-omni instances list --status disconnected --format json | \
-  jq -r '.items[].id' | \
-  xargs -I {} omni instances restart {}
-```
 
 ## Configuration File
 
@@ -414,19 +313,9 @@ Located at `~/.omni/config.json`:
 
 ```json
 {
-  "apiKey": "sk-omni-...",
-  "baseUrl": "https://api.example.com",
-  "defaultFormat": "table",
-  "timeout": 30000,
-  "aliases": {
-    "wa": "my-whatsapp",
-    "dc": "my-discord"
-  }
+  "apiKey": "omni_sk_...",
+  "baseUrl": "http://localhost:8881",
+  "instance": "07a5178e-...",
+  "format": "human"
 }
-```
-
-Use aliases:
-
-```bash
-omni send wa +1234567890 "Hello!"  # Expands to my-whatsapp
 ```

@@ -1,6 +1,16 @@
+---
+title: "Media Processing Pipeline"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [media, processing, transcription, vision]
+status: current
+---
+
 # Media Processing Pipeline
 
 > Omni v2 processes media (audio, images, video, documents) to extract text content for LLM consumption. This enables AI agents to understand voice messages, images, and documents.
+
+> Related: [[overview|Architecture Overview]], [[event-system|Event System]]
 
 ## Overview
 

@@ -1,6 +1,16 @@
+---
+title: "Internal API Reference"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [api, internal]
+status: current
+---
+
 # Internal API Reference
 
 > Localhost-only endpoints for service-to-service communication. These endpoints have **no authentication** and are restricted to localhost access only.
+
+> Related: [[endpoints|API Endpoints]], [[design|API Design]]
 
 ## Security Model
 

@@ -1,1671 +1,674 @@
+---
+title: "API Endpoints Reference"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [api, endpoints, reference]
+status: current
+---
+
 # API Endpoints Reference
 
-> v2 is the primary API. v1 endpoints exist only for backward compatibility with the current UI during migration.
+> v2 is the primary API. All routes are mounted under `/api/v2/`.
 
-## API Versioning Strategy
+> Related: [[design|API Design]], [[internal|Internal API]], [[overview|Architecture Overview]]
 
-```
-/api/v2/*           ← PRIMARY - All new development
-/api/v1/*           ← COMPATIBILITY LAYER - Maps to v2, for current UI
-```
+## Route Modules
 
-**Key Point:** We're building v2 from scratch. The v1 endpoints are thin wrappers that translate requests to v2 format, allowing the current React UI to work during migration.
+All v2 routes are defined in `packages/api/src/routes/v2/` and mounted in `index.ts`:
 
-```typescript
-// v1 compatibility layer example
-// packages/api/src/routes/v1/instances.ts
+| Module | Mount Point | Description |
+|--------|-------------|-------------|
+| `auth` | `/auth` | API key validation |
+| `instances` | `/instances` | Instance CRUD, connection, sync, profile, groups |
+| `logs` | `/logs` | System log streaming |
+| `messages` | `/messages` | Message CRUD, send operations, TTS, presence |
+| `events` | `/events` | Event queries, analytics, timeline |
+| `persons` | `/persons` | Identity search, presence, linking |
+| `access` | `/access` | Access control rules |
+| `settings` | `/settings` | Server settings management |
+| `providers` | `/providers` | AI agent provider management |
+| `dead-letters` | `/dead-letters` | Failed event management |
+| `event-ops` | `/event-ops` | Event replay, metrics |
+| `metrics` | `/metrics` | System metrics |
+| `chats` | `/chats` | Chat CRUD, participants, archive/pin/mute |
+| `media` | `/media` | Media file serving |
+| `batch-jobs` | `/batch-jobs` | Batch operations |
+| `keys` | `/keys` | API key management |
+| `payloads` | `/` | Event payload storage and config |
+| `webhooks` | `/` | Webhook sources and event triggers |
+| `automations` | `/automations` | Event-driven automation workflows |
 
-import { Hono } from 'hono';
-import { v2 } from '../v2';
+---
 
-const v1Instances = new Hono();
+## Authentication
 
-// v1 endpoint maps to v2
-v1Instances.get('/', async (c) => {
-  // Current UI calls: GET /api/v1/instances
-  // We translate and call v2
-  const result = await v2.instances.list(c);
+### Auth
 
-  // Transform response to v1 format if needed
-  return c.json({
-    items: result.items.map(transformToV1Format),
-  });
-});
-
-// v1 uses instance name, v2 uses ID
-v1Instances.get('/:name', async (c) => {
-  const name = c.req.param('name');
-  // Look up by name, return v1 format
-  const instance = await v2.instances.getByName(name);
-  return c.json(transformToV1Format(instance));
-});
+```yaml
+POST /api/v2/auth/validate
+  # Validates the current API key
+  Response: { valid: true, key: { id, name, scopes, instanceIds } }
 ```
 
 ---
 
-## Operations & Service Management
+## Instances
 
-These are critical features for the UI - managing backend services and viewing logs.
+Source: `packages/api/src/routes/v2/instances.ts`
 
-### Service Management
+### CRUD
 
 ```yaml
-# List all services and their status
-GET /api/v2/services
-Response:
-  items:
-    - name: "omni-api"
-      status: "running" | "stopped" | "error"
-      pid: 12345
-      uptime: 3600
-      memory: 128000000
-      cpu: 2.5
-    - name: "nats"
-      status: "running"
-      ...
+GET    /api/v2/instances                      # List instances
+  Query: channel, status, limit (1-100), cursor
 
-# Get single service status
-GET /api/v2/services/:name
-Response:
-  name: "omni-api"
-  status: "running"
-  pid: 12345
-  uptime: 3600
-  memory: 128000000
-  cpu: 2.5
-  logs: [...]  # Last 100 lines
+GET    /api/v2/instances/supported-channels    # List available channel types
 
-# Start a service
-POST /api/v2/services/:name/start
-Response:
-  success: true
-  status: "running"
-  pid: 12345
+GET    /api/v2/instances/:id                   # Get instance by ID
 
-# Stop a service
-POST /api/v2/services/:name/stop
-Response:
-  success: true
-  status: "stopped"
+POST   /api/v2/instances                      # Create instance
+  Body: name, channel, agentProviderId?, agentId?, agentType?,
+        agentTimeout?, agentStreamMode?, agentReplyFilter?,
+        agentSessionStrategy?, agentPrefixSenderName?,
+        enableAutoSplit?, isDefault?, token?, ttsVoiceId?, ttsModelId?
 
-# Restart a service
-POST /api/v2/services/:name/restart
-Response:
-  success: true
-  status: "running"
-  pid: 12346
+PATCH  /api/v2/instances/:id                  # Update instance
+  Body: (same as create, all optional)
 
-# Restart all services
-POST /api/v2/services/restart-all
-Response:
-  results:
-    - name: "omni-api"
-      success: true
-    - name: "nats"
-      success: true
+DELETE /api/v2/instances/:id                  # Delete instance
 ```
 
-### Real-Time Logs (WebSocket)
+### Connection Management
 
 ```yaml
-# WebSocket endpoint for real-time logs
-WS /api/v2/logs
-
-# On connect, send subscription message:
-{
-  "type": "subscribe",
-  "services": ["omni-api", "nats"],  # or ["*"] for all
-  "level": "info",                    # "debug" | "info" | "warn" | "error"
-  "tail": 100                         # Initial lines to send
-}
-
-# Server sends log entries:
-{
-  "type": "log",
-  "service": "omni-api",
-  "level": "info",
-  "timestamp": "2025-01-29T12:00:00Z",
-  "message": "Instance my-whatsapp connected",
-  "metadata": {
-    "instanceId": "abc123",
-    "channel": "whatsapp-baileys"
-  }
-}
-
-# Filter logs dynamically:
-{
-  "type": "filter",
-  "services": ["omni-api"],
-  "level": "error",
-  "search": "connection"
-}
-
-# Unsubscribe:
-{
-  "type": "unsubscribe"
-}
+GET    /api/v2/instances/:id/status           # Get connection status
+GET    /api/v2/instances/:id/qr               # Get QR code (WhatsApp only)
+POST   /api/v2/instances/:id/pair             # Request pairing code (WhatsApp)
+  Body: { phoneNumber: string }
+POST   /api/v2/instances/:id/connect          # Connect instance
+  Body: { token?, forceNewQr? }
+POST   /api/v2/instances/:id/disconnect       # Disconnect instance
+POST   /api/v2/instances/:id/restart          # Restart instance
+  Query: forceNewQr?
+POST   /api/v2/instances/:id/logout           # Logout (clear session)
 ```
 
-### REST Logs Endpoint (for non-WebSocket)
+### Sync
 
 ```yaml
-# Get recent logs
-GET /api/v2/logs
-Query:
-  - services: string[]   # Filter by service
-  - level: string        # Minimum level
-  - since: datetime      # Start time
-  - until: datetime      # End time
-  - search: string       # Text search
-  - limit: number        # Max entries (default 500)
-Response:
-  items:
-    - service: "omni-api"
-      level: "info"
-      timestamp: "2025-01-29T12:00:00Z"
-      message: "Instance connected"
-      metadata: {...}
-
-# Get logs for specific service
-GET /api/v2/services/:name/logs
-Query:
-  - level: string
-  - since: datetime
-  - limit: number
-Response:
-  items: [...]
-```
-
----
-
-## Onboarding Flow
-
-The UI has an onboarding wizard for new setups.
-
-### Onboarding Status
-
-```yaml
-# Get onboarding status
-GET /api/v2/onboarding/status
-Response:
-  completed: false
-  currentStep: "api_keys"
-  steps:
-    - id: "welcome"
-      status: "completed"
-    - id: "api_keys"
-      status: "in_progress"
-      data:
-        groqConfigured: true
-        geminiConfigured: false
-        openaiConfigured: false
-    - id: "first_instance"
-      status: "pending"
-    - id: "test_message"
-      status: "pending"
-
-# Complete a step
-POST /api/v2/onboarding/steps/:stepId/complete
-Body:
-  data: {...}  # Step-specific data
-Response:
-  success: true
-  nextStep: "first_instance"
-
-# Skip onboarding
-POST /api/v2/onboarding/skip
-Response:
-  success: true
-```
-
-### Onboarding Steps
-
-1. **Welcome** - Introduction screen
-2. **API Keys** - Configure media processing keys
-3. **First Instance** - Create WhatsApp/Discord instance
-4. **Connect** - QR code scan or OAuth
-5. **Test Message** - Send a test message
-6. **Complete** - Done!
-
----
-
-## v2 Primary Endpoints
-
-### Health & Info
-
-```yaml
-# Health check
-GET /api/v2/health
-Response:
-  status: "healthy" | "degraded" | "unhealthy"
-  version: "2.0.0"
-  uptime: 86400
-  timestamp: "2025-01-29T12:00:00Z"
-  checks:
-    database:
-      status: "ok" | "error"
-      latency: 5
-    nats:
-      status: "ok" | "error"
-      streams: 6
-    channels:
-      whatsapp-baileys: "ok"
-      discord: "ok"
-  instances:
-    total: 10
-    connected: 8
-    byChannel:
-      whatsapp-baileys: 5
-      discord: 3
-
-# System info
-GET /api/v2/info
-Response:
-  version: "2.0.0"
-  environment: "production"
-  uptime: 86400
-  instances:
-    total: 10
-    connected: 8
-  events:
-    today: 1234
-    total: 567890
-```
-
-### API Keys Management
-
-Multiple API keys with scoped permissions and full audit trail.
-
-```yaml
-# List API keys
-GET /api/v2/api-keys
-Response:
-  items:
-    - id: "key-uuid"
-      name: "Dashboard UI"
-      prefix: "omni_sk_"     # First 8 chars shown
-      suffix: "...a1b2"      # Last 4 chars shown
-      scopes: ["*"]          # Full access
-      instanceIds: null      # All instances
-      createdAt: datetime
-      lastUsedAt: datetime
-      lastUsedIp: "192.168.1.1"
-      expiresAt: datetime | null
-      usageCount: 1234
-    - id: "key-uuid-2"
-      name: "Discord Bot"
-      prefix: "omni_sk_"
-      suffix: "...c3d4"
-      scopes: ["messages:send", "instances:read"]
-      instanceIds: ["discord-instance-1"]
-      createdAt: datetime
-      lastUsedAt: datetime
-      expiresAt: "2025-12-31T23:59:59Z"
-
-# Create API key
-POST /api/v2/api-keys
-Body:
-  name: string              # Human-readable name
-  scopes: string[]          # Permissions: "*", "instances:*", "messages:send", etc.
-  instanceIds?: string[]    # Restrict to specific instances (null = all)
-  expiresAt?: datetime      # Optional expiration
-Response:
-  id: string
-  name: string
-  key: string               # ONLY shown once on creation!
-  scopes: string[]
-  instanceIds: string[] | null
-  createdAt: datetime
-  expiresAt: datetime | null
-
-# Get API key details
-GET /api/v2/api-keys/:id
-Response:
-  id: string
-  name: string
-  prefix: string
-  suffix: string
-  scopes: string[]
-  instanceIds: string[] | null
-  createdAt: datetime
-  lastUsedAt: datetime
-  lastUsedIp: string
-  expiresAt: datetime | null
-  usageCount: number
-
-# Update API key
-PATCH /api/v2/api-keys/:id
-Body:
-  name?: string
-  scopes?: string[]
-  instanceIds?: string[]
-  expiresAt?: datetime | null
-Response: ApiKey
-
-# Revoke API key
-DELETE /api/v2/api-keys/:id
-Response:
-  success: true
-  revokedAt: datetime
-
-# Regenerate API key (creates new key, invalidates old)
-POST /api/v2/api-keys/:id/regenerate
-Response:
-  id: string
-  key: string              # New key value
-  regeneratedAt: datetime
-
-# Get API key audit log
-GET /api/v2/api-keys/:id/audit
-Query:
-  - since: datetime
-  - until: datetime
-  - action: string[]       # "create", "use", "update", "regenerate"
-  - limit: number
-Response:
-  items:
-    - timestamp: datetime
-      action: "use" | "create" | "update" | "regenerate" | "revoke"
-      ip: string
-      userAgent: string
-      endpoint: string     # For "use" actions
-      statusCode: number   # Response status
-      metadata?: object
-```
-
-**Available Scopes:**
-- `*` - Full access (admin)
-- `instances:*` - All instance operations
-- `instances:read` - Read instance info
-- `instances:write` - Create/update instances
-- `instances:delete` - Delete instances
-- `messages:*` - All message operations
-- `messages:send` - Send messages
-- `messages:read` - Read message history
-- `events:read` - Read events/traces
-- `persons:*` - All identity operations
-- `access:*` - Manage access rules
-- `settings:*` - Manage settings
-- `admin:*` - Admin operations (keys, services)
-
-### Instances
-
-```yaml
-# List instances
-GET /api/v2/instances
-Query:
-  - channel: string[]
-  - status: string[]
-  - limit: number
-  - cursor: string
-Response:
-  items: Instance[]
-  meta: { cursor, hasMore }
-
-# Get instance
-GET /api/v2/instances/:id
-Response: Instance
-
-# Create instance
-POST /api/v2/instances
-Body:
-  name: string
-  channel: ChannelType
-  channelConfig?: object       # Channel-specific (see below)
-
-  # Agent configuration
-  agent?:
-    providerId?: string        # Reference to shared provider
-    apiUrl?: string            # Or inline config
-    apiKey?: string
-    agentId?: string
-    timeout: number            # Default 60000
-    streaming: boolean         # Default false
-
-  # Messaging configuration
-  messaging?:
-    debounceMode: "disabled" | "fixed" | "randomized"  # Default "disabled"
-    debounceMs?: number        # For "fixed" mode (default 1000)
-    debounceMinMs?: number     # For "randomized" mode (default 500)
-    debounceMaxMs?: number     # For "randomized" mode (default 2000)
-    enableAutoSplit: boolean   # Split on \n\n (default true)
-    splitDelayMinMs?: number   # Min delay between splits (default 300)
-    splitDelayMaxMs?: number   # Max delay between splits (default 1000)
-    usernamePrefix: boolean    # Prepend username to messages (default false)
-
-  # Media processing configuration
-  media?:
-    processAudio: boolean      # Transcribe audio (default true)
-    processImages: boolean     # Describe images (default true)
-    processVideo: boolean      # Describe video (default false)
-    processDocuments: boolean  # Extract documents (default true)
-    processOnBlocked: boolean  # Process media even if sender blocked (default false)
-
-Response: Instance
-
-# Update instance
-PATCH /api/v2/instances/:id
-Body: Partial<InstanceConfig>
-Response: Instance
-
-# Delete instance
-DELETE /api/v2/instances/:id
-Response: { success: true }
-
-# Get connection status
-GET /api/v2/instances/:id/status
-Response: ConnectionStatus
-
-# Get QR code (WhatsApp)
-GET /api/v2/instances/:id/qr
-Response: { qr: string, expiresAt: datetime }
-
-# Connect instance
-POST /api/v2/instances/:id/connect
-Response: ConnectionStatus
-
-# Disconnect instance
-POST /api/v2/instances/:id/disconnect
-Response: { success: true }
-
-# Restart instance
-POST /api/v2/instances/:id/restart
-Response: ConnectionStatus
-
-# Logout instance (clear session, require re-auth)
-POST /api/v2/instances/:id/logout
-Response:
-  success: true
-  message: "Session cleared, re-authentication required"
-
-# Update instance profile (name, picture, status)
-PUT /api/v2/instances/:id/profile
-Body:
-  # WhatsApp profile fields
-  name?: string           # Display name
-  status?: string         # Status message/about
-  picture?: string        # Base64 or URL
-
-  # Discord bot profile fields
-  username?: string       # Bot username
-  avatar?: string         # Avatar URL or base64
-  activity?:
-    type: "playing" | "watching" | "listening" | "competing"
-    text: string
-Response:
-  success: true
-  profile:
-    name: string
-    picture?: string
-    status?: string
-
-# List supported channel types
-GET /api/v2/instances/supported-channels
-Response:
-  items:
-    - id: "whatsapp-baileys"
-      name: "WhatsApp (Baileys)"
-      description: "Unofficial WhatsApp via Baileys library"
-      requiresQr: true
-      supportsOAuth: false
-      capabilities: [...]
-    - id: "whatsapp-cloud"
-      name: "WhatsApp Business Cloud"
-      description: "Official WhatsApp Business API"
-      requiresQr: false
-      supportsOAuth: true
-    - id: "discord"
-      name: "Discord"
-      description: "Discord bot integration"
-      requiresQr: false
-      supportsOAuth: true
-```
-
-### Messages
-
-```yaml
-# Send message
-POST /api/v2/messages
-Body:
-  instanceId: string
-  to: string
-  text: string
-  replyTo?: string
-Response:
-  messageId: string
-  externalMessageId: string
-  status: "sent"
-
-# Send media
-POST /api/v2/messages/media
-Body:
-  instanceId: string
-  to: string
-  type: "image" | "audio" | "video" | "document"
-  url?: string
-  base64?: string
-  filename?: string
-  caption?: string
-  voiceNote?: boolean
-Response: MessageResult
-
-# Send reaction
-POST /api/v2/messages/reaction
-Body:
-  instanceId: string
-  to: string
-  messageId: string
-  emoji: string
-Response: { success: true }
-
-# Send sticker
-POST /api/v2/messages/sticker
-Body:
-  instanceId: string
-  to: string
-  url?: string
-  base64?: string
-Response: MessageResult
-
-# Send contact card
-POST /api/v2/messages/contact
-Body:
-  instanceId: string
-  to: string
-  contact:
-    name: string
-    phone?: string
-    email?: string
-    organization?: string
-Response: MessageResult
-
-# Send location
-POST /api/v2/messages/location
-Body:
-  instanceId: string
-  to: string
-  latitude: number
-  longitude: number
-  name?: string
-  address?: string
-Response: MessageResult
-```
-
-### Events
-
-```yaml
-# List events
-GET /api/v2/events
-Query:
-  - channel: string[]
-  - instanceId: string
-  - personId: string
-  - eventType: string[]
-  - contentType: string[]
-  - direction: "inbound" | "outbound"
-  - since: datetime
-  - until: datetime
-  - search: string
-  - limit: number
-  - cursor: string
-Response:
-  items: Event[]
-  meta: { cursor, hasMore, total }
-
-# Get event
-GET /api/v2/events/:id
-Response: Event
-
-# Timeline for person (cross-channel)
-GET /api/v2/events/timeline/:personId
-Query:
-  - channels: string[]
-  - since: datetime
-  - until: datetime
-  - limit: number
-  - cursor: string
-Response:
-  personId: string
-  items: TimelineEvent[]
-  meta: { cursor, hasMore }
-
-# Search events
-POST /api/v2/events/search
-Body:
-  query?: string
-  filters?: EventFilters
-  format?: "full" | "summary" | "agent"
-  limit?: number
-Response:
-  items: Event[]
-  summary?: string
-  asContext?: string
-
-# Get events analytics summary
-GET /api/v2/events/analytics
-Query:
-  - since: datetime        # Default: last 24 hours
-  - until: datetime
-  - instanceId: string
-  - allTime: boolean       # Override date filter
-Response:
-  totalMessages: number
-  successfulMessages: number
-  failedMessages: number
-  successRate: number      # Percentage
-  avgProcessingTimeMs: number
-  avgAgentTimeMs: number
-  messageTypes:
-    text: 500
-    audio: 100
-    image: 50
-  errorStages:
-    agent_request: 5
-    channel_send: 2
-  instances:
-    my-whatsapp: 400
-    my-discord: 250
-  byHour:                  # For charts
-    - hour: "2025-01-29T10:00:00Z"
-      count: 45
-      successRate: 98.2
-
-# Get events by phone/platform user ID
-GET /api/v2/events/by-sender/:senderId
-Query:
-  - limit: number
-  - instanceId: string
-Response:
-  items: Event[]
-  meta: { total, hasMore }
-
-# Cleanup old events
-DELETE /api/v2/events/cleanup
-Query:
-  - olderThanDays: number  # Required
-  - dryRun: boolean        # Default true
-Response:
-  dryRun: boolean
-  eventsToDelete: number
-  cutoffDate: datetime
-  deleted?: number         # Only if dryRun=false
-```
-
-### Persons (Identity)
-
-```yaml
-# Search persons
-GET /api/v2/persons
-Query:
-  - search: string
-  - limit: number
-Response:
-  items: Person[]
-
-# Get person
-GET /api/v2/persons/:id
-Response: Person
-
-# Get person presence
-GET /api/v2/persons/:id/presence
-Response:
-  person: Person
-  identities: PlatformIdentity[]
-  summary:
-    totalIdentities: number
-    activeChannels: string[]
-    totalMessages: number
-    lastSeenAt: datetime
-    firstSeenAt: datetime
-  byChannel: Record<channel, ChannelPresence>
-
-# Get person timeline
-GET /api/v2/persons/:id/timeline
-Query:
-  - channels: string[]
-  - since: datetime
-  - until: datetime
-  - limit: number
-Response:
-  items: TimelineEvent[]
-  meta: { cursor, hasMore }
-
-# Link identities
-POST /api/v2/persons/link
-Body:
-  identityA: string
-  identityB: string
-Response: Person
-
-# Unlink identity
-POST /api/v2/persons/unlink
-Body:
-  identityId: string
-  reason: string
-Response:
-  person: Person
-  identity: PlatformIdentity
-
-# Merge two persons into one
-# All identities from source are transferred to target
-# Source person is deleted, target person metadata is merged
-POST /api/v2/persons/merge
-Body:
-  sourcePersonId: string    # Person to merge FROM (will be deleted)
-  targetPersonId: string    # Person to merge INTO (will be kept)
-  reason?: string           # Audit reason
-Response:
-  person: Person            # The merged target person
-  mergedIdentityIds: string[]  # Identities that were transferred
-  deletedPersonId: string   # The source person that was deleted
-```
-
-### Access Rules
-
-```yaml
-# List rules
-GET /api/v2/access/rules
-Query:
-  - instanceId: string
-  - type: "allow" | "deny"
-Response:
-  items: AccessRule[]
-
-# Create rule
-POST /api/v2/access/rules
-Body:
-  instanceId?: string
-  type: "allow" | "deny"
-  criteria: RuleCriteria
-  priority: number
-  action: RuleAction
-Response: AccessRule
-
-# Update rule
-PATCH /api/v2/access/rules/:id
-Body: Partial<AccessRule>
-Response: AccessRule
-
-# Delete rule
-DELETE /api/v2/access/rules/:id
-Response: { success: true }
-
-# Check access
-POST /api/v2/access/check
-Body:
-  instanceId: string
-  platformUserId: string
-  channel: string
-Response:
-  allowed: boolean
-  rule?: AccessRule
-  reason: string
-```
-
-### Settings
-
-```yaml
-# List settings
-GET /api/v2/settings
-Query:
-  - category: string       # Filter by category
-Response:
-  items:
-    - key: string
-      value: any
-      valueType: "string" | "integer" | "boolean" | "json" | "secret"
-      category: string
-      description?: string
-      isSecret: boolean
-      isRequired: boolean
-      updatedAt: datetime
-
-# Get setting
-GET /api/v2/settings/:key
-Response: Setting
-
-# Set setting
-PUT /api/v2/settings/:key
-Body:
-  value: any
-  reason?: string          # Optional audit reason
-Response: Setting
-
-# Bulk update
-PATCH /api/v2/settings
-Body:
-  settings: Record<string, any>
-  reason?: string
-Response:
-  items: Setting[]
-
-# Delete setting
-DELETE /api/v2/settings/:key
-Response:
-  success: true
-
-# Get setting change history
-GET /api/v2/settings/:key/history
-Query:
-  - limit: number
-  - since: datetime
-Response:
-  items:
-    - oldValue: any
-      newValue: any
-      changedBy: string
-      changedAt: datetime
-      reason?: string
-      ip?: string
-```
-
-### Channels
-
-```yaml
-# List available channels
-GET /api/v2/channels
-Response:
-  items:
-    - id: string
-      name: string
-      version: string
-      capabilities: ChannelCapabilities
-
-# Get channel info
-GET /api/v2/channels/:id
-Response: ChannelInfo
-```
-
-### Agent Providers
-
-Reusable agent API configurations that can be shared across instances.
-
-```yaml
-# List providers
-GET /api/v2/providers
-Response:
-  items: Provider[]
-
-# Get provider
-GET /api/v2/providers/:id
-Response: Provider
-
-# Create provider
-POST /api/v2/providers
-Body:
-  name: string
-  type: "agent_api" | "agno" | "custom"
-  apiUrl: string
-  apiKey?: string
-  defaultTimeout: number
-  defaultStreaming: boolean
-  metadata?: object
-Response: Provider
-
-# Update provider
-PATCH /api/v2/providers/:id
-Body: Partial<Provider>
-Response: Provider
-
-# Delete provider
-DELETE /api/v2/providers/:id
-Response: { success: true }
-
-# Health check provider
-POST /api/v2/providers/:id/health
-Response:
-  healthy: boolean
-  latency: number
-  error?: string
-
-# List agents from provider
-GET /api/v2/providers/:id/agents
-Response:
-  items:
-    - id: string
-      name: string
-      description?: string
-```
-
-### Chat & Contact Sync
-
-Sync contacts and chat history from connected instances.
-
-```yaml
-# Trigger sync for instance
-POST /api/v2/instances/:id/sync
-Body:
-  syncContacts: boolean
-  syncChats: boolean
-  syncMessages: boolean         # Sync message history
-  since?: datetime              # For incremental sync (import from this date)
-  until?: datetime              # For bounded sync (import until this date)
-
-  # Discord-specific options
-  discord?:
-    guildIds?: string[]         # Sync specific guilds only (default: all guilds bot is in)
-    channelIds?: string[]       # Sync specific channels only (default: all text channels)
-    includeThreads?: boolean    # Include thread messages (default: false)
-    includeForums?: boolean     # Include forum posts (default: false)
-    maxMessagesPerChannel?: number  # Limit per channel (default: 1000)
-
-  # WhatsApp-specific options
-  whatsapp?:
-    chatIds?: string[]          # Sync specific chats only (default: all chats)
-    includeGroups?: boolean     # Include group chats (default: true)
-    includeBroadcasts?: boolean # Include broadcast lists (default: false)
-    maxMessagesPerChat?: number # Limit per chat (default: 500)
-
-  # Processing options
-  processMedia?: boolean        # Process media during sync (default: false - faster)
-  batchSize?: number            # Messages per batch (default: 100)
-
-Response:
-  jobId: string
-  status: "started"
-  estimatedChats?: number
-  estimatedMessages?: number
-
-# Get sync status
-GET /api/v2/instances/:id/sync/status
-Response:
-  lastSync: datetime
-  contactsCount: number
-  chatsCount: number
-  messagesCount: number
-  inProgress: boolean
-  progress?: {
-    current: number
-    total: number
-    stage: "contacts" | "chats" | "messages"
-  }
-
-# Start continuous sync job
-POST /api/v2/instances/:id/sync/continuous
-Body:
-  intervalMs: number    # Sync interval (default 60000)
-Response:
-  jobId: string
-  status: "running"
-
-# Stop continuous sync
-DELETE /api/v2/instances/:id/sync/continuous
-Response: { success: true }
-
-# List contacts for instance
-GET /api/v2/instances/:id/contacts
-Query:
-  - search: string
-  - limit: number
-  - cursor: string
-Response:
-  items: Contact[]
-  meta: { cursor, hasMore }
-
-# List chats for instance
-GET /api/v2/instances/:id/chats
-Query:
-  - search: string
-  - limit: number
-  - cursor: string
-Response:
-  items: Chat[]
-  meta: { cursor, hasMore }
-
-# Get chat messages
-GET /api/v2/instances/:id/chats/:chatId/messages
-Query:
-  - limit: number
-  - before: string      # Message ID cursor
-  - after: string
-Response:
-  items: Message[]
-  meta: { hasMore }
-
-# Mark chat as read
-PATCH /api/v2/instances/:id/chats/:chatId/mark-read
-Response:
-  success: true
-  markedAt: datetime
-
-# Mark specific message as read
-PATCH /api/v2/instances/:id/messages/:messageId/mark-read
-Response:
-  success: true
-
-# Get message media (download/decrypt if needed)
-GET /api/v2/instances/:id/messages/:messageId/media
-Response:
-  base64: string           # Base64-encoded media content
-  mimetype: string
-  fileName?: string
-  mediaStatus: "downloaded" | "pending" | "expired" | "error"
-  source: "local" | "channel"  # Where it was fetched from
-
-# Toggle media processing for a chat
-PATCH /api/v2/instances/:id/chats/:chatId/processing
-Query:
-  - enabled: boolean       # true = process, false = skip
-  - note?: string          # Reason (e.g., "Promotions group")
-Response:
-  chatId: string
-  instanceId: string
-  mediaProcessingEnabled: boolean
-  note?: string
-  name: string
-  chatType: string
-
-# Bulk toggle media processing for multiple chats
-PATCH /api/v2/instances/:id/chats/processing/bulk
-Body:
-  chatIds: string[]
-  enabled: boolean
-  note?: string
-Response:
-  updatedCount: number
-  updatedChatIds: string[]
-  notFoundCount: number
-  notFoundChatIds: string[]
-```
-
-### Recipient Validation
-
-```yaml
-# Validate if a recipient ID is valid on the platform
-POST /api/v2/instances/:id/validate-recipient
-Body:
-  recipient: string     # Phone number, Discord user ID, etc.
-Response:
-  valid: boolean
-  exists: boolean       # User exists on platform
-  normalized: string    # Normalized recipient ID
-  profile?:
-    name?: string
-    avatar?: string
-```
-
-### Instance Discovery
-
-```yaml
-# Discover existing sessions (WhatsApp Baileys)
-POST /api/v2/instances/discover
-Body:
-  channel: "whatsapp-baileys"
-  authPath?: string     # Custom auth path (default: ./data/auth/whatsapp)
-Response:
-  items:
-    - sessionId: string
-      phone: string
-      name?: string
-      connected: boolean
-      lastSeen?: datetime
+POST   /api/v2/instances/:id/sync             # Start sync job
+  Body: { type: profile|messages|contacts|groups|all, depth?, channelId?, downloadMedia? }
+POST   /api/v2/instances/:id/sync/profile     # Sync profile immediately
+GET    /api/v2/instances/:id/sync             # List sync jobs for instance
+  Query: status?, limit?
+GET    /api/v2/instances/:id/sync/:jobId      # Get sync job status
 ```
 
 ### Profile Management
 
 ```yaml
-# Get profile picture
-GET /api/v2/instances/:id/profile-picture/:platformUserId
-Response:
-  url: string
-  cachedAt: datetime
-
-# Update instance profile picture
-POST /api/v2/instances/:id/profile-picture
-Body:
-  image: string         # Base64 or URL
-Response:
-  success: true
-  url: string
-
-# Fetch user profile
-GET /api/v2/instances/:id/profile/:platformUserId
-Response:
-  platformUserId: string
-  name: string
-  about?: string
-  profilePictureUrl?: string
-  lastSeenAt?: datetime
+PUT    /api/v2/instances/:id/profile/name     # Update display name
+  Body: { name: string }
+PUT    /api/v2/instances/:id/profile/status   # Update bio/status
+  Body: { status: string }
+PUT    /api/v2/instances/:id/profile/picture  # Update profile picture
+  Body: { base64: string, mimeType? }
+DELETE /api/v2/instances/:id/profile/picture  # Remove profile picture
 ```
 
-### Batch Jobs
+### Contacts & Groups
 
 ```yaml
-# List batch jobs
-GET /api/v2/batch-jobs
-Query:
-  - status: string[]
-  - type: string[]
-Response:
-  items: BatchJob[]
+GET    /api/v2/instances/:id/contacts         # List contacts
+  Query: limit?, cursor?, guildId? (required for Discord)
+GET    /api/v2/instances/:id/groups           # List groups
+  Query: limit?, cursor?
+POST   /api/v2/instances/:id/groups           # Create group (WhatsApp)
+  Body: { subject, participants[] }
+GET    /api/v2/instances/:id/users/:userId/profile  # Fetch user profile
+```
 
-# Get batch job
-GET /api/v2/batch-jobs/:id
-Response: BatchJob
+### Group Operations
 
-# Create batch job (media reprocessing)
-POST /api/v2/batch-jobs
-Body:
-  type: "media_reprocess"
-  config:
-    instanceId?: string
-    since?: datetime
-    until?: datetime
-    mediaTypes: string[]
-    overwrite: boolean
-Response: BatchJob
+```yaml
+GET    /api/v2/instances/:id/groups/:groupJid/invite         # Get invite code
+POST   /api/v2/instances/:id/groups/:groupJid/invite/revoke  # Revoke invite
+POST   /api/v2/instances/:id/groups/join                     # Join group
+  Body: { code: string }
+PUT    /api/v2/instances/:id/groups/:groupJid/picture        # Update group picture
+  Body: { base64, mimeType? }
+```
 
-# Cancel batch job
-POST /api/v2/batch-jobs/:id/cancel
-Response: BatchJob
+### WhatsApp-Specific
+
+```yaml
+POST   /api/v2/instances/:id/check-number    # Check if phones are on WhatsApp
+  Body: { phones: string[] }
+POST   /api/v2/instances/:id/block           # Block a contact
+  Body: { contactId }
+DELETE /api/v2/instances/:id/block           # Unblock a contact
+  Body: { contactId }
+GET    /api/v2/instances/:id/blocklist       # Get blocked contacts
+GET    /api/v2/instances/:id/privacy         # Get privacy settings
+POST   /api/v2/instances/:id/calls/reject    # Reject incoming call
+  Body: { callId, callFrom }
 ```
 
 ---
 
-## v1 Compatibility Layer
+## Messages
 
-These endpoints exist **only** to support the current React UI during migration.
+Source: `packages/api/src/routes/v2/messages.ts`
 
+### Message CRUD
+
+```yaml
+GET    /api/v2/messages                       # List messages
+  Query: chatId?, source?, messageType?, status?, hasMedia?,
+         senderPersonId?, since?, until?, search?, limit (1-100), cursor?
+
+GET    /api/v2/messages/by-external           # Find by external ID
+  Query: chatId, externalId
+
+GET    /api/v2/messages/:id                   # Get message by ID
+
+POST   /api/v2/messages                       # Create message record
+  Body: chatId, externalId, source, messageType, textContent?,
+        platformTimestamp, sender fields, media fields, reply fields, rawPayload?
+
+PATCH  /api/v2/messages/:id                   # Update message
+  Body: textContent?, transcription?, imageDescription?,
+        videoDescription?, documentExtraction?, mediaUrl?, mediaLocalPath?, mediaMetadata?
+
+DELETE /api/v2/messages/:id                   # Mark as deleted
+  Query: latestEventId?
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Current UI                                                  │
-│  (React)                                                     │
-│       │                                                      │
-│       ▼                                                      │
-│  /api/v1/* ───────► Compatibility Layer ───────► /api/v2/*  │
-│                     (thin wrapper)                           │
-└─────────────────────────────────────────────────────────────┘
+
+### Message Operations
+
+```yaml
+POST   /api/v2/messages/:id/edit              # Record edit
+  Body: { newText, editedAt, editedBy?, latestEventId? }
+
+POST   /api/v2/messages/:id/reactions         # Add reaction
+  Body: { emoji, platformUserId, personId?, displayName?, isCustomEmoji?, customEmojiId? }
+
+DELETE /api/v2/messages/:id/reactions         # Remove reaction
+  Body: { platformUserId, emoji }
+
+PATCH  /api/v2/messages/:id/delivery-status   # Update delivery status
+  Body: { status: pending|sent|delivered|read|failed }
+
+PATCH  /api/v2/messages/:id/transcription     # Update transcription
+PATCH  /api/v2/messages/:id/image-description # Update image description
+PATCH  /api/v2/messages/:id/video-description # Update video description
+PATCH  /api/v2/messages/:id/document-extraction # Update document extraction
 ```
 
-### v1 → v2 Mapping
+### Send Operations
 
-| v1 Endpoint | v2 Endpoint | Notes |
-|-------------|-------------|-------|
-| `GET /api/v1/instances` | `GET /api/v2/instances` | Direct mapping |
-| `GET /api/v1/instances/:name` | `GET /api/v2/instances/:id` | Lookup by name → ID |
-| `GET /api/v1/instances/:name/qr` | `GET /api/v2/instances/:id/qr` | Lookup by name |
-| `POST /api/v1/instances/:name/send-text` | `POST /api/v2/messages` | Transform body |
-| `GET /api/v1/traces` | `GET /api/v2/events` | Transform response |
-| `GET /api/v1/users` | `GET /api/v2/persons` | Transform response |
-| `GET /api/v1/settings` | `GET /api/v2/settings` | Direct mapping |
+```yaml
+POST   /api/v2/messages/send                  # Send text message
+  Body: { instanceId, to, text, replyTo?, mentions?[] }
 
-### Implementation Example
+POST   /api/v2/messages/send/media            # Send media
+  Body: { instanceId, to, type: image|audio|video|document,
+          url?, base64?, filename?, caption?, voiceNote? }
 
-```typescript
-// packages/api/src/routes/v1/compat.ts
+POST   /api/v2/messages/send/reaction         # Send reaction
+  Body: { instanceId, to, messageId, emoji }
 
-import { Hono } from 'hono';
-import { v2Router } from '../v2';
+POST   /api/v2/messages/send/sticker          # Send sticker
+  Body: { instanceId, to, url?, base64? }
 
-export const v1Compat = new Hono();
+POST   /api/v2/messages/send/contact          # Send contact card
+  Body: { instanceId, to, contact: { name, phone?, email?, organization? } }
 
-// Instance list - direct pass-through
-v1Compat.get('/instances', async (c) => {
-  return v2Router.request(new Request(`${c.req.url.replace('/v1/', '/v2/')}`));
-});
+POST   /api/v2/messages/send/location         # Send location
+  Body: { instanceId, to, latitude, longitude, name?, address? }
 
-// Instance by name - lookup required
-v1Compat.get('/instances/:name', async (c) => {
-  const name = c.req.param('name');
-  const db = c.get('db');
+POST   /api/v2/messages/send/tts              # Send TTS voice note (ElevenLabs)
+  Body: { instanceId, to, text, voiceId?, modelId?, stability?,
+          similarityBoost?, presenceDelay? }
+  Note: Also available GET /api/v2/messages/tts/voices for voice listing
 
-  // Find instance by name
-  const instance = await db.query.instances.findFirst({
-    where: eq(instances.name, name),
-  });
+POST   /api/v2/messages/send/forward          # Forward a message (WhatsApp)
+  Body: { instanceId, to, messageId, fromChatId }
 
-  if (!instance) {
-    return c.json({ error: 'Not found' }, 404);
-  }
+POST   /api/v2/messages/send/presence         # Send typing/recording indicator
+  Body: { instanceId, to, type: typing|recording|paused, duration? }
 
-  // Return v1 format
-  return c.json(toV1InstanceFormat(instance));
-});
+POST   /api/v2/messages/send/poll             # Send poll (Discord)
+  Body: { instanceId, to, question, answers[], durationHours?, multiSelect?, replyTo? }
 
-// Send message - transform request
-v1Compat.post('/instances/:name/send-text', async (c) => {
-  const name = c.req.param('name');
-  const body = await c.req.json();
+POST   /api/v2/messages/send/embed            # Send embed (Discord)
+  Body: { instanceId, to, title?, description?, color?, url?, timestamp?,
+          footer?, author?, thumbnail?, image?, fields[], replyTo? }
+```
 
-  // Find instance
-  const instance = await findInstanceByName(name);
+### Edit/Delete via Channel
 
-  // Call v2 with transformed body
-  const result = await v2.messages.send({
-    instanceId: instance.id,
-    to: body.number,
-    text: body.text,
-  });
+```yaml
+POST   /api/v2/messages/edit-channel          # Edit message on platform
+  Body: { instanceId, channelId, messageId, text }
 
-  // Return v1 format
-  return c.json({
-    key: { id: result.externalMessageId },
-    status: result.status,
-  });
-});
+POST   /api/v2/messages/delete-channel        # Delete message on platform
+  Body: { instanceId, channelId, messageId, fromMe? }
+```
 
-// Traces → Events
-v1Compat.get('/traces', async (c) => {
-  const result = await v2.events.list(c.req.query());
+### Read Receipts
 
-  // Transform to v1 trace format
-  return c.json({
-    items: result.items.map(toV1TraceFormat),
-    meta: result.meta,
-  });
-});
+```yaml
+POST   /api/v2/messages/:id/read             # Mark single message as read
+  Body: { instanceId }
 
-// Users → Persons
-v1Compat.get('/users', async (c) => {
-  const result = await v2.persons.search(c.req.query('search') ?? '');
+POST   /api/v2/messages/read                 # Batch mark as read
+  Body: { instanceId, chatId, messageIds[] }
+```
 
-  // Transform to v1 user format
-  return c.json({
-    items: result.map(toV1UserFormat),
-  });
-});
+### Star/Unstar (WhatsApp)
 
-// Transform functions
-function toV1InstanceFormat(instance: Instance) {
-  return {
-    ...instance,
-    instance_name: instance.name,  // v1 used snake_case
-    channel_type: instance.channel,
-  };
-}
+```yaml
+POST   /api/v2/messages/:id/star             # Star a message
+  Body: { instanceId, channelId, fromMe? }
 
-function toV1TraceFormat(event: Event) {
-  return {
-    id: event.id,
-    instance_name: event.instance?.name,
-    sender_phone: event.sender?.platformUserId,
-    message_type: event.contentType,
-    message_text: event.textContent,
-    audio_transcription: event.transcription,
-    image_description: event.imageDescription,
-    created_at: event.receivedAt,
-    // ... more mappings
-  };
-}
-
-function toV1UserFormat(person: Person) {
-  return {
-    id: person.id,
-    name: person.displayName,
-    phone_number: person.primaryPhone,
-    email: person.primaryEmail,
-    // ... more mappings
-  };
-}
+DELETE /api/v2/messages/:id/star             # Unstar a message
+  Body: { instanceId, channelId, fromMe? }
 ```
 
 ---
 
-## WebSocket Endpoints
+## Chats
 
-### Event Stream
+Source: `packages/api/src/routes/v2/chats.ts`
+
+### Chat CRUD
 
 ```yaml
-WS /api/v2/ws/events
+GET    /api/v2/chats                          # List chats
+  Query: instanceId?, channel?, chatType?, search?, includeArchived?, limit?, cursor?
 
-# Subscribe
-{
-  "type": "subscribe",
-  "channels": ["message.received", "message.sent"],
-  "filters": {
-    "instanceId": "abc123"
-  }
-}
+GET    /api/v2/chats/by-external              # Find by external ID
+  Query: instanceId, externalId
 
-# Event received
-{
-  "type": "event",
-  "event": {
-    "type": "message.received",
-    "payload": {...}
-  }
-}
+GET    /api/v2/chats/:id                      # Get chat by ID
+
+POST   /api/v2/chats                          # Create chat record
+  Body: { instanceId, externalId, chatType, channel, name?, description?,
+          avatarUrl?, canonicalId?, parentChatId?, settings?, platformMetadata? }
+
+PATCH  /api/v2/chats/:id                      # Update chat
+DELETE /api/v2/chats/:id                      # Delete chat (soft)
 ```
 
-### Instance Status Stream
+### Chat Actions
 
 ```yaml
-WS /api/v2/ws/instances
+POST   /api/v2/chats/:id/archive             # Archive chat
+  Body: { instanceId? }   # If provided, also archives on platform
 
-# Subscribe
-{
-  "type": "subscribe",
-  "instances": ["abc123", "def456"]  # or ["*"] for all
-}
+POST   /api/v2/chats/:id/unarchive           # Unarchive chat
+  Body: { instanceId? }
 
-# Status update
-{
-  "type": "status",
-  "instanceId": "abc123",
-  "status": "connected",
-  "qr": "..."  # If waiting for QR
-}
+POST   /api/v2/chats/:id/pin                 # Pin chat
+  Body: { instanceId }
+
+POST   /api/v2/chats/:id/unpin              # Unpin chat
+  Body: { instanceId }
+
+POST   /api/v2/chats/:id/mute               # Mute chat
+  Body: { instanceId, duration? }
+
+POST   /api/v2/chats/:id/unmute             # Unmute chat
+  Body: { instanceId }
+
+POST   /api/v2/chats/:id/read               # Mark entire chat as read
+  Body: { instanceId }
+
+POST   /api/v2/chats/:id/disappearing       # Set disappearing messages
+  Body: { instanceId, duration: off|24h|7d|90d }
 ```
 
-### Logs Stream
+### Participants
 
 ```yaml
-WS /api/v2/ws/logs
-
-# Subscribe (see above for full format)
-{
-  "type": "subscribe",
-  "services": ["*"],
-  "level": "info"
-}
+GET    /api/v2/chats/:id/participants        # List participants
+POST   /api/v2/chats/:id/participants        # Add participant
+  Body: { platformUserId, displayName?, avatarUrl?, role?, personId?, platformIdentityId? }
+DELETE /api/v2/chats/:id/participants/:platformUserId  # Remove participant
+PATCH  /api/v2/chats/:id/participants/:platformUserId/role  # Update role
+  Body: { role }
 ```
 
-### Real-Time Chats Stream
-
-This is a key feature for the UI - live updates in the chats view.
+### Chat Messages
 
 ```yaml
-WS /api/v2/ws/chats/:instanceId
-
-# Subscribe to chat updates
-{
-  "type": "subscribe",
-  "chatId": "123456@s.whatsapp.net",  # Optional: specific chat, or omit for all
-  "includeTyping": true,
-  "includePresence": true,
-  "includeReadReceipts": true
-}
-
-# New message received
-{
-  "type": "message.new",
-  "chatId": "123456@s.whatsapp.net",
-  "message": {
-    "id": "msg-uuid",
-    "externalId": "ABCD1234",
-    "sender": {
-      "platformUserId": "123456@s.whatsapp.net",
-      "displayName": "John Doe",
-      "profilePicture": "https://..."
-    },
-    "content": {
-      "type": "text",
-      "text": "Hello!"
-    },
-    "timestamp": "2025-01-29T12:00:00Z",
-    "status": "received"
-  }
-}
-
-# Message status update (sent → delivered → read)
-{
-  "type": "message.status",
-  "chatId": "123456@s.whatsapp.net",
-  "messageId": "msg-uuid",
-  "externalId": "ABCD1234",
-  "status": "delivered",  # "sent" | "delivered" | "read" | "failed"
-  "timestamp": "2025-01-29T12:00:01Z"
-}
-
-# Typing indicator
-{
-  "type": "chat.typing",
-  "chatId": "123456@s.whatsapp.net",
-  "isTyping": true,
-  "user": {
-    "platformUserId": "123456@s.whatsapp.net",
-    "displayName": "John Doe"
-  }
-}
-
-# Presence update (online/offline/last seen)
-{
-  "type": "chat.presence",
-  "chatId": "123456@s.whatsapp.net",
-  "presence": "online",  # "online" | "offline" | "composing" | "recording"
-  "lastSeen": "2025-01-29T12:00:00Z"
-}
-
-# Read receipts (they read your message)
-{
-  "type": "chat.read",
-  "chatId": "123456@s.whatsapp.net",
-  "readUpTo": "msg-uuid",  # All messages up to this ID are read
-  "timestamp": "2025-01-29T12:00:02Z"
-}
-
-# Message deleted/revoked
-{
-  "type": "message.deleted",
-  "chatId": "123456@s.whatsapp.net",
-  "messageId": "msg-uuid",
-  "deletedFor": "everyone"  # "everyone" | "me"
-}
-
-# Message edited
-{
-  "type": "message.edited",
-  "chatId": "123456@s.whatsapp.net",
-  "messageId": "msg-uuid",
-  "newContent": {
-    "type": "text",
-    "text": "Hello! (edited)"
-  },
-  "editedAt": "2025-01-29T12:01:00Z"
-}
-
-# Media processing complete (transcription ready)
-{
-  "type": "media.processed",
-  "chatId": "123456@s.whatsapp.net",
-  "messageId": "msg-uuid",
-  "mediaId": "media-uuid",
-  "result": {
-    "type": "transcription",
-    "content": "This is what they said in the audio...",
-    "language": "en"
-  }
-}
-
-# Unsubscribe from chat updates
-{
-  "type": "unsubscribe"
-}
+GET    /api/v2/chats/:id/messages            # Get messages for chat
+  Query: limit?, before?, after?
 ```
 
 ---
 
-## MCP Server
+## Events
 
-Model Context Protocol server for Claude Code, Cursor, and other MCP clients.
+Source: `packages/api/src/routes/v2/events.ts`
 
 ```yaml
-# Get MCP server status
-GET /api/v2/mcp/status
-Response:
-  running: boolean
-  port: number | null
-  httpUrl?: string         # If running
-  stdioAvailable: boolean
-  clients:                 # Connected/configured clients
-    - name: "claude-code"
-      configured: true
-      lastSeen?: datetime
+GET    /api/v2/events                         # List events
+  Query: channel[], instanceId?, personId?, eventType[], contentType[],
+         direction?, since?, until?, search?, limit?, cursor?
 
-# Start MCP server
-POST /api/v2/mcp/start
-Body:
-  port?: number            # Default 8080
-  host?: string            # Default 0.0.0.0
-Response:
-  success: true
-  port: number
-  httpUrl: string
+GET    /api/v2/events/analytics               # Get analytics summary
+  Query: since?, until?, instanceId?, allTime?
 
-# Stop MCP server
-POST /api/v2/mcp/stop
-Response:
-  success: true
-  stoppedAt: datetime
+GET    /api/v2/events/timeline/:personId      # Person timeline
+  Query: channels[]?, since?, until?, limit?, cursor?
 
-# Install MCP configuration for client
-POST /api/v2/mcp/install
-Body:
-  client: "claude-code" | "cursor" | "custom"
-  method: "http" | "stdio"
-  configPath?: string      # For custom clients
-Response:
-  success: true
-  configPath: string       # Where config was written
-  instructions: string     # Human-readable next steps
+POST   /api/v2/events/search                  # Search events
+  Body: { query?, filters?, format?, limit? }
+
+GET    /api/v2/events/:id                     # Get event by ID
+
+GET    /api/v2/events/by-sender/:senderId     # Events by sender
+  Query: limit?, instanceId?
+```
+
+---
+
+## Event Operations
+
+Source: `packages/api/src/routes/v2/event-ops.ts`
+
+```yaml
+GET    /api/v2/event-ops/metrics              # Event processing metrics
+POST   /api/v2/event-ops/replay               # Start replay job
+GET    /api/v2/event-ops/replay               # List replay jobs
+GET    /api/v2/event-ops/replay/:id           # Get replay status
+DELETE /api/v2/event-ops/replay/:id           # Cancel replay
+POST   /api/v2/event-ops/scheduled            # Trigger scheduled processing
+```
+
+---
+
+## Event Payloads
+
+Source: `packages/api/src/routes/v2/payloads.ts`
+
+```yaml
+GET    /api/v2/events/:eventId/payloads       # Get all payloads for event
+GET    /api/v2/events/:eventId/payloads/:stage # Get payload by stage
+DELETE /api/v2/events/:eventId/payloads       # Delete payloads
+  Body: { stages?: string[] }
+
+GET    /api/v2/payload-config                 # Get payload capture config
+PUT    /api/v2/payload-config/:eventType      # Update capture config
+GET    /api/v2/payload-stats                  # Get payload storage stats
+```
+
+---
+
+## Persons
+
+Source: `packages/api/src/routes/v2/persons.ts`
+
+```yaml
+GET    /api/v2/persons                        # Search persons
+  Query: search?, limit?
+
+GET    /api/v2/persons/:id                    # Get person
+
+GET    /api/v2/persons/:id/presence           # Get cross-channel presence
+
+GET    /api/v2/persons/:id/timeline           # Get person timeline
+  Query: channels[]?, since?, until?, limit?
+
+POST   /api/v2/persons/link                   # Link identities
+  Body: { identityA, identityB }
+
+POST   /api/v2/persons/unlink                # Unlink identity
+  Body: { identityId, reason }
+
+POST   /api/v2/persons/merge                 # Merge two persons
+  Body: { sourcePersonId, targetPersonId, reason? }
+```
+
+---
+
+## Access Rules
+
+Source: `packages/api/src/routes/v2/access.ts`
+
+```yaml
+GET    /api/v2/access/rules                   # List rules
+  Query: instanceId?, type?
+
+GET    /api/v2/access/rules/:id               # Get rule
+
+POST   /api/v2/access/rules                   # Create rule
+  Body: { instanceId?, type, criteria, priority, action }
+
+PATCH  /api/v2/access/rules/:id               # Update rule
+
+DELETE /api/v2/access/rules/:id               # Delete rule
+
+POST   /api/v2/access/check                   # Check access
+  Body: { instanceId, platformUserId, channel }
+```
+
+---
+
+## API Keys
+
+Source: `packages/api/src/routes/v2/keys.ts`
+
+Requires `keys:read` or `keys:write` scope.
+
+```yaml
+GET    /api/v2/keys                           # List API keys
+  Query: limit?, cursor?
+
+GET    /api/v2/keys/:id                       # Get key details
+
+POST   /api/v2/keys                           # Create API key
+  Body: { name, scopes?, instanceIds?, expiresAt? }
+  Response: includes `key` field (shown only once!)
+
+PATCH  /api/v2/keys/:id                       # Update key
+  Body: { name?, scopes?, instanceIds?, expiresAt? }
+
+POST   /api/v2/keys/:id/revoke               # Revoke key
+  Body: { reason? }
+
+DELETE /api/v2/keys/:id                       # Delete key
+
+GET    /api/v2/keys/:id/audit                 # Get key audit log
+  Query: since?, until?, limit?
+```
+
+---
+
+## Settings
+
+Source: `packages/api/src/routes/v2/settings.ts`
+
+```yaml
+GET    /api/v2/settings                       # List settings
+  Query: category?
+
+GET    /api/v2/settings/:key                  # Get setting
+
+PUT    /api/v2/settings/:key                  # Set setting
+  Body: { value, reason? }
+
+PATCH  /api/v2/settings                       # Bulk update
+  Body: { settings: Record<string, any>, reason? }
+
+DELETE /api/v2/settings/:key                  # Delete setting
+
+GET    /api/v2/settings/:key/history          # Get change history
+  Query: limit?, since?
+```
+
+---
+
+## Providers
+
+Source: `packages/api/src/routes/v2/providers.ts`
+
+```yaml
+GET    /api/v2/providers                      # List providers
+  Query: limit?, cursor?
+
+GET    /api/v2/providers/:id                  # Get provider
+
+POST   /api/v2/providers                      # Create provider
+
+PATCH  /api/v2/providers/:id                  # Update provider
+
+DELETE /api/v2/providers/:id                  # Delete provider
+
+POST   /api/v2/providers/:id/health           # Health check
+
+GET    /api/v2/providers/:id/agents           # List agents
+GET    /api/v2/providers/:id/teams            # List teams
+GET    /api/v2/providers/:id/workflows        # List workflows
+```
+
+---
+
+## Automations
+
+Source: `packages/api/src/routes/v2/automations.ts`
+
+```yaml
+GET    /api/v2/automations                    # List automations
+  Query: instanceId?, enabled?, limit?, cursor?
+
+GET    /api/v2/automations/:id                # Get automation
+
+POST   /api/v2/automations                    # Create automation
+
+PATCH  /api/v2/automations/:id                # Update automation
+
+DELETE /api/v2/automations/:id                # Delete automation
+
+POST   /api/v2/automations/:id/enable         # Enable automation
+POST   /api/v2/automations/:id/disable        # Disable automation
+POST   /api/v2/automations/:id/test           # Test with mock event
+POST   /api/v2/automations/:id/execute        # Execute with real event
+
+GET    /api/v2/automation-logs                 # Get automation execution logs
+  Query: automationId?, limit?
+
+GET    /api/v2/automation-metrics              # Get automation metrics
 ```
 
 ---
 
 ## Webhooks
 
-Inbound webhook handlers for channel events.
+Source: `packages/api/src/routes/v2/webhooks.ts`
+
+### Webhook Sources (Inbound)
 
 ```yaml
-# WhatsApp Baileys webhook
-POST /api/v2/webhooks/whatsapp/:instanceId
-Headers:
-  x-webhook-secret: string   # Verify webhook authenticity
-Body:
-  event: string              # Event type from Baileys
-  data: object               # Event payload
-Response:
-  received: true
+GET    /api/v2/webhook-sources                # List webhook sources
+  Query: limit?, cursor?
 
-# Discord webhook (alternative to gateway)
-POST /api/v2/webhooks/discord/:instanceId
-Headers:
-  x-webhook-secret: string
-Body:
-  # Discord webhook payload
-Response:
-  received: true
+GET    /api/v2/webhook-sources/:id            # Get source details
 
-# Generic channel webhook
-POST /api/v2/webhooks/:channel/:instanceId
-Headers:
-  x-webhook-secret: string
-Body:
-  event: string
-  data: object
-Response:
-  received: true
+POST   /api/v2/webhook-sources                # Create webhook source
+
+PATCH  /api/v2/webhook-sources/:id            # Update source
+
+DELETE /api/v2/webhook-sources/:id            # Delete source
+```
+
+### Inbound Webhooks
+
+```yaml
+POST   /api/v2/webhooks/:source               # Receive webhook event
+```
+
+### Event Triggering
+
+```yaml
+POST   /api/v2/events/trigger                 # Trigger a custom event
 ```
 
 ---
 
-## Internal Endpoints
+## Dead Letters
 
-Localhost-only endpoints for service-to-service communication.
+Source: `packages/api/src/routes/v2/dead-letters.ts`
 
 ```yaml
-# Get subprocess configuration (called by gateway)
-GET /api/v2/_internal/subprocess-config
-Restriction: localhost only
-Response:
-  databaseConnectionUri: string
-  databaseProvider: "postgresql"
-  authenticationApiKey: string
+GET    /api/v2/dead-letters                   # List dead letters
+  Query: eventType?, status?, limit?
 
-# Get channel startup info
-GET /api/v2/_internal/channel-startup-info
-Restriction: localhost only
-Response:
-  evolutionNeeded: boolean
-  evolutionReason?: string
-  discordNeeded: boolean
-  discordReason?: string
-  whatsappInstances: string[]
-  discordInstances: string[]
+GET    /api/v2/dead-letters/stats             # Get statistics
 
-# Internal health check
-GET /api/v2/_internal/health
-Restriction: localhost only
-Response:
-  status: "healthy"
-  service: "omni-api"
+GET    /api/v2/dead-letters/:id               # Get dead letter details
+
+POST   /api/v2/dead-letters/:id/retry         # Retry processing
+
+POST   /api/v2/dead-letters/:id/resolve       # Mark as resolved
+  Body: { resolution? }
+
+POST   /api/v2/dead-letters/:id/abandon       # Abandon (stop retrying)
 ```
 
 ---
 
-### React Hook for Real-Time Chats
+## Batch Jobs
 
-```typescript
-// hooks/useRealtimeChat.ts
+Source: `packages/api/src/routes/v2/batch-jobs.ts`
 
-export function useRealtimeChat(instanceId: string, chatId?: string) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [typing, setTyping] = useState<Record<string, boolean>>({});
-  const [presence, setPresence] = useState<Record<string, PresenceInfo>>({});
-  const [connected, setConnected] = useState(false);
+```yaml
+GET    /api/v2/batch-jobs                     # List batch jobs
+  Query: status?, type?, limit?
 
-  useEffect(() => {
-    const ws = new WebSocket(`${WS_BASE_URL}/chats/${instanceId}`);
+GET    /api/v2/batch-jobs/:id                 # Get batch job
 
-    ws.onopen = () => {
-      setConnected(true);
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        chatId,
-        includeTyping: true,
-        includePresence: true,
-        includeReadReceipts: true,
-      }));
-    };
+GET    /api/v2/batch-jobs/:id/status          # Get job status
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+POST   /api/v2/batch-jobs                     # Create batch job
 
-      switch (data.type) {
-        case 'message.new':
-          setMessages(prev => [...prev, data.message]);
-          break;
+POST   /api/v2/batch-jobs/estimate            # Estimate job scope
 
-        case 'message.status':
-          setMessages(prev => prev.map(m =>
-            m.id === data.messageId
-              ? { ...m, status: data.status }
-              : m
-          ));
-          break;
+POST   /api/v2/batch-jobs/:id/cancel          # Cancel job
+```
 
-        case 'chat.typing':
-          setTyping(prev => ({
-            ...prev,
-            [data.user.platformUserId]: data.isTyping
-          }));
-          break;
+---
 
-        case 'chat.presence':
-          setPresence(prev => ({
-            ...prev,
-            [data.chatId]: {
-              status: data.presence,
-              lastSeen: data.lastSeen
-            }
-          }));
-          break;
+## Logs
 
-        case 'media.processed':
-          setMessages(prev => prev.map(m =>
-            m.id === data.messageId
-              ? { ...m, processedMedia: data.result }
-              : m
-          ));
-          break;
-      }
-    };
+Source: `packages/api/src/routes/v2/logs.ts`
 
-    ws.onclose = () => setConnected(false);
+```yaml
+GET    /api/v2/logs/stream                    # SSE log stream
+  Query: level?, modules?
 
-    return () => ws.close();
-  }, [instanceId, chatId]);
+GET    /api/v2/logs/recent                    # Get recent logs
+  Query: level?, modules?, limit?
+```
 
-  return { messages, typing, presence, connected };
-}
+---
+
+## Media
+
+Source: `packages/api/src/routes/v2/media.ts`
+
+```yaml
+GET    /api/v2/media/:instanceId/*            # Serve media file
+```
+
+---
+
+## Metrics
+
+Source: `packages/api/src/routes/v2/metrics.ts`
+
+```yaml
+GET    /api/v2/metrics                        # System metrics (Prometheus format)
 ```

@@ -1,6 +1,16 @@
+---
+title: "V1 API Compatibility Layer"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [api, v1, migration, compatibility]
+status: current
+---
+
 # V1 API Compatibility Layer
 
 > Complete mapping of v1 API endpoints to v2 implementation for seamless UI migration.
+
+> Related: [[endpoints|API Endpoints]], [[design|API Design]], [[plan|Migration Plan]]
 
 ## Overview
 

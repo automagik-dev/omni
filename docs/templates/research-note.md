@@ -5,6 +5,7 @@ updated: {{date}}
 author: "{{author}}"
 source: ""
 tags: [research]
+status: draft
 ---
 
 # {{title}}
