@@ -38,9 +38,33 @@ All 7 durable consumers in `packages/api/src/plugins/` use `startFrom: 'last'`, 
 ### Loss Scenarios
 
 1. **API restart** (deploy, crash, OOM): ~15-60 seconds of messages lost
+   - NATS still running → messages in stream but consumer skips them
+   - **Fix**: Group A (consumer policy)
 2. **API extended downtime** (dependency failure): minutes to hours of messages lost
+   - Same as above but larger window
+   - **Fix**: Group A (consumer policy)
 3. **VM restart** (reboot, migration): everything between shutdown and reconnect lost
+   - NATS, API, Baileys ALL down → nothing published to NATS
+   - WhatsApp keeps working platform-side → messages accumulate there
+   - On restart: Baileys reconnects → gets `messaging-history.set` with missed messages
+   - BUT: no guarantee WhatsApp delivers ALL missed messages (platform limits apply)
+   - **Fix**: Group A + Group C (post-reconnect backfill)
 4. **NATS restart without persistent storage**: entire stream history lost (mitigated by file storage)
+
+### Architecture Context (Critical)
+
+**Everything runs in-process**: API + NATS + Baileys + consumers = same VM.
+When the VM is down, Baileys is disconnected from WhatsApp. Messages keep flowing
+on the WhatsApp platform, but nothing reaches our system.
+
+On reconnect, Baileys gets a `messaging-history.set` event from WhatsApp with
+historical messages (`syncFullHistory: true` is enabled). The plugin processes
+these and publishes to NATS. **However**:
+- WhatsApp controls what it sends — no explicit "give me messages since timestamp X"
+- Short downtime (minutes-hours): likely delivers everything
+- Long downtime (days): may only sync recent subset
+- Very long (14+ days): WhatsApp may unlink the device entirely
+- **There is currently NO explicit "fetch missed messages since last disconnect" logic**
 
 ### Existing Safeguards
 
@@ -66,13 +90,18 @@ All 7 durable consumers in `packages/api/src/plugins/` use `startFrom: 'last'`, 
   - Prevents silent data loss going unnoticed
 - **DEC-4**: Keep `sync-worker` at `startFrom: 'new'` (sync jobs are ephemeral triggers)
 - **DEC-5**: Keep `agent-responder-typing` at `startFrom: 'last'` (ephemeral presence data)
+- **DEC-6**: Add post-reconnect backfill: track `lastMessageTimestamp` per instance, trigger `fetchHistory(since)` after reconnection if gap detected
+  - Uses existing sync-worker infrastructure (`sync.started` events)
+  - Covers the VM-down scenario where NATS had nothing to replay
+  - Also adds `POST /v2/instances/:id/resync` for manual operator trigger
+  - CLI command: `omni resync --instance <id> --since 2h`
 
 ## Assumptions
 
 - **ASM-1**: NATS file storage survives VM restarts (standard JetStream behavior)
 - **ASM-2**: The `findOrCreate` pattern with unique constraints makes all message persistence idempotent
 - **ASM-3**: Processing old messages on first startup is acceptable (better than losing them)
-- **ASM-4**: WhatsApp/Discord channels will reconnect and re-publish missed messages after VM restart (channel-specific reconnect logic already exists)
+- **ASM-4**: ~~WhatsApp/Discord channels will reconnect and re-publish missed messages after VM restart~~ **INVALIDATED** — Baileys gets `messaging-history.set` on reconnect but there's no guarantee WhatsApp delivers ALL missed messages. We need explicit backfill logic (Group C).
 
 ## Risks
 
@@ -83,6 +112,11 @@ All 7 durable consumers in `packages/api/src/plugins/` use `startFrom: 'last'`, 
   - **Mitigation**: Existing `concurrency: 10` limit on consumers; add configurable backpressure
 - **RISK-3**: Consumer name change would reset consumer state
   - **Mitigation**: We are NOT changing consumer names, only the deliver_policy
+- **RISK-4**: WhatsApp `messaging-history.set` may not include all messages from downtime period
+  - **Mitigation**: Group C adds explicit `fetchHistory(since: lastDisconnectTime)` after reconnect
+  - **Mitigation**: Manual `resync` endpoint as operator escape hatch
+- **RISK-5**: Duplicate messages from overlapping history sync + NATS replay
+  - **Mitigation**: `findOrCreate` with unique constraint = fully idempotent, duplicates are harmless
 
 ---
 
@@ -95,15 +129,17 @@ All 7 durable consumers in `packages/api/src/plugins/` use `startFrom: 'last'`, 
 3. Update subscription handler to record sequence after each ack
 4. Add startup gap detection (log warnings)
 5. Add health endpoint for consumer lag monitoring
-6. Tests for all changes
+6. Post-reconnect backfill: track last message timestamp, auto-resync on gap detection
+7. Manual resync endpoint (`POST /v2/instances/:id/resync`) + CLI command
+8. Tests for all changes
 
 ### OUT OF SCOPE
 
-- Automatic replay mechanism (future work, infra exists in `replay.ts`)
-- Channel-side message buffering (channels already reconnect and re-fetch)
+- Automatic scheduled replay (cron-based)
 - NATS cluster/HA configuration (ops concern)
 - Dead letter queue processing UI
 - Consumer lag alerting (monitoring tool concern)
+- Discord-specific backfill (Discord gateway handles reconnection well)
 
 ---
 
@@ -114,17 +150,20 @@ All 7 durable consumers in `packages/api/src/plugins/` use `startFrom: 'last'`, 
 | Package | Changes | Notes |
 |---------|---------|-------|
 | core | [x] events/bus interface | Add sequence to handler context |
-| db | [x] schema, [x] migrations | New `consumer_offsets` table |
-| api | [x] plugins, [x] services, [x] routes | Fix consumers, add tracking, health endpoint |
-| sdk | [x] regenerate | Health endpoint added |
+| db | [x] schema, [x] migrations | New `consumer_offsets` table, `last_message_at` on instances |
+| api | [x] plugins, [x] services, [x] routes | Fix consumers, tracking, health, resync endpoint |
+| channel-whatsapp | [x] reconnect logic | Post-reconnect backfill trigger |
+| channel-sdk | [x] interface | Add `lastMessageTimestamp` tracking hook |
+| cli | [x] commands | `omni resync` command |
+| sdk | [x] regenerate | Health + resync endpoints added |
 
 ### System Checklist
 
-- [ ] **Events**: No new event types (uses existing sequence from PublishResult)
-- [x] **Database**: New `consumer_offsets` table via `make db-push`
-- [x] **SDK**: Regenerate after health endpoint added
-- [ ] **CLI**: No changes needed
-- [x] **Tests**: Core consumer tests, API integration tests
+- [ ] **Events**: No new event types (uses existing `sync.started`)
+- [x] **Database**: New `consumer_offsets` table + `last_message_at` column via `make db-push`
+- [x] **SDK**: Regenerate after health + resync endpoints added
+- [x] **CLI**: Add `resync` command
+- [x] **Tests**: Core consumer tests, API integration tests, channel reconnect tests
 
 ---
 
@@ -212,6 +251,63 @@ make sdk-generate
 
 ---
 
+## Execution Group C: Post-Reconnect Backfill & Manual Resync
+
+**Goal:** When the entire VM was down (NATS empty, Baileys disconnected), ensure missed messages are recovered from the channel platform after reconnection. Also provide a manual operator trigger.
+
+**Packages:** db, api, channel-whatsapp, channel-sdk, cli
+
+**Problem this solves:**
+Groups A & B handle the case where NATS has messages but consumers skipped them.
+Group C handles the case where **NATS has nothing** because the entire system was down
+and messages only exist on the WhatsApp/Discord platform.
+
+**Deliverables:**
+
+- [ ] Add `last_message_at` column to `instances` table (timestamp of last processed message)
+  - Updated by message-persistence handler on each successful message
+  - Used to detect gap on reconnection
+- [ ] Add post-reconnect backfill logic to WhatsApp plugin:
+  - On `instance.connected` event, compare `last_message_at` with `now()`
+  - If gap > 5 minutes, automatically trigger `fetchHistory(since: last_message_at)`
+  - Uses existing sync-worker infrastructure (emits `sync.started` event)
+  - Log: "Instance X reconnected after {gap}. Backfilling messages since {timestamp}"
+- [ ] Add `POST /v2/instances/:id/resync` API endpoint:
+  - Accepts `{ since?: string, until?: string }` (defaults: since=2h ago, until=now)
+  - Triggers `fetchHistory()` via sync-worker for the given instance and time range
+  - Returns sync job ID for tracking
+  - Uses existing `event-ops/replay` infrastructure for event re-processing
+- [ ] Add `omni resync` CLI command:
+  - `omni resync --instance <id> --since 2h` (human-friendly duration)
+  - `omni resync --instance <id> --since 2026-02-09T10:00:00Z` (absolute timestamp)
+  - `omni resync --all --since 1h` (all connected instances)
+  - Shows progress with sync job tracking
+- [ ] Wire up existing `POST /event-ops/replay` for re-processing events already in DB
+  - Covers case where events were stored but consumers failed to process them
+
+**Acceptance Criteria:**
+
+- [ ] `last_message_at` updated on every processed message
+- [ ] Auto-backfill triggers on reconnection after >5 min gap
+- [ ] `POST /v2/instances/:id/resync` triggers fetchHistory and returns job ID
+- [ ] `omni resync` works from CLI with duration and absolute time formats
+- [ ] Manual test: stop VM, wait 5 min, start VM -> auto-backfill kicks in and recovers messages
+- [ ] `make check` passes
+
+**Validation:**
+
+```bash
+make db-push
+make check
+bun test packages/api
+bun test packages/channel-whatsapp
+make cli-build && make cli-link
+omni resync --instance wa-test --since 1h --dry-run
+make sdk-generate
+```
+
+---
+
 ## Testing Strategy
 
 ### Unit Tests
@@ -256,8 +352,22 @@ curl http://localhost:4000/health/consumers
 
 ## Notes
 
-- The fix in Group A is a one-line change per consumer but has massive impact
-- Group B adds observability so we can prove messages are never lost
-- The existing `findOrCreate` + unique constraint is our safety net for idempotency
+- **Group A** is a one-line change per consumer but eliminates the entire "API restart" data loss class
+- **Group B** adds observability so we can prove messages are never lost
+- **Group C** handles the "VM was completely down" scenario that Groups A & B can't cover
+- The existing `findOrCreate` + unique constraint is our safety net for idempotency across all groups
 - NATS durable consumers handle the hard part: resuming from last ack on reconnect
 - The real danger was `DeliverPolicy.Last` on **first creation** of a consumer (fresh deploy or consumer name change)
+- The replay system (`POST /event-ops/replay`) already exists for re-processing stored events
+- The sync-worker already handles `fetchHistory()` calls — Group C just triggers it automatically
+
+### Coverage Matrix
+
+| Scenario | Group A | Group B | Group C |
+|----------|---------|---------|---------|
+| API restart (NATS up) | **fixes** | detects | n/a |
+| API crash + restart | **fixes** | detects | n/a |
+| VM reboot (everything down) | partial | detects gap | **fixes** (backfill from platform) |
+| Fresh deploy | **fixes** | initial offset | n/a |
+| WhatsApp history gaps | n/a | n/a | **fixes** (manual resync) |
+| Manual operator recovery | n/a | shows lag | **resync endpoint + CLI** |
