@@ -72,6 +72,9 @@ export function MessageBubble({
     toast.info('Forward feature coming soon');
   };
 
+  // Generate accessible label for screen readers
+  const messageLabel = `Message from ${isFromMe ? 'you' : message.senderDisplayName || 'contact'} at ${formatDateTime(message.platformTimestamp)}${message.isForwarded ? ', forwarded' : ''}${message.status === 'edited' ? ', edited' : ''}`;
+
   return (
     <div className={cn('group flex flex-col', isFromMe ? 'items-end' : 'items-start')}>
       {/* Sender name for group chats */}
@@ -80,7 +83,13 @@ export function MessageBubble({
       )}
 
       {/* Message container with hover actions */}
-      <div className="relative" onMouseEnter={() => setIsHovering(true)} onMouseLeave={() => setIsHovering(false)}>
+      <div
+        className="relative"
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => setIsHovering(false)}
+        role="article"
+        aria-label={messageLabel}
+      >
         {/* Hover action bar */}
         {(isHovering || showReactionPicker) && (
           <div
@@ -105,8 +114,12 @@ export function MessageBubble({
             isFromMe
               ? 'bg-primary/10 border-l-2 border-primary/30 text-foreground'
               : 'bg-muted/50 border-l-2 border-muted-foreground/20',
-            // Less padding for stickers
-            message.messageType === 'sticker' ? 'p-1' : 'px-4 py-2',
+            // Conditional padding based on content type
+            message.messageType === 'sticker'
+              ? 'p-2' // Better padding for stickers (8px vs 4px)
+              : isMediaType(message.messageType) || message.hasMedia
+                ? 'p-0' // No padding for media - handled internally
+                : 'px-4 py-2', // Normal text messages
             'group-hover:shadow-md',
           )}
         >
@@ -165,8 +178,15 @@ function ActionButton({
   label: string;
 }) {
   return (
-    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-accent" onClick={onClick} title={label}>
-      <Icon className="h-4 w-4" />
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 hover:bg-accent"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
     </Button>
   );
 }

@@ -24,6 +24,12 @@ export function ReactionPicker({ messageId, instanceId, to, position, onClose }:
   const { sendReaction } = useReactions();
   const pickerRef = useRef<HTMLDivElement>(null);
 
+  // Focus first button on mount
+  useEffect(() => {
+    const firstButton = pickerRef.current?.querySelector('button');
+    firstButton?.focus();
+  }, []);
+
   // Close on outside click
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -73,8 +79,10 @@ export function ReactionPicker({ messageId, instanceId, to, position, onClose }:
         top: position.y,
         left: position.x,
       }}
+      role="dialog"
+      aria-label="Reaction picker"
     >
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" role="group" aria-label="Quick reactions">
         {QUICK_REACTIONS.map((emoji) => (
           <Button
             key={emoji}
@@ -83,14 +91,22 @@ export function ReactionPicker({ messageId, instanceId, to, position, onClose }:
             className="h-10 w-10 p-0 text-xl hover:scale-110 transition-transform"
             onClick={() => handleReactionClick(emoji)}
             disabled={sendReaction.isPending}
+            aria-label={`React with ${emoji}`}
           >
             {emoji}
           </Button>
         ))}
 
         {/* More emojis button - TODO: integrate with full emoji picker */}
-        <Button variant="ghost" size="sm" className="h-10 w-10 p-0" onClick={onClose} title="More emojis (coming soon)">
-          <Smile className="h-5 w-5" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-10 w-10 p-0"
+          onClick={onClose}
+          title="More emojis (coming soon)"
+          aria-label="More emojis (coming soon)"
+        >
+          <Smile className="h-5 w-5" aria-hidden="true" />
         </Button>
       </div>
     </div>
