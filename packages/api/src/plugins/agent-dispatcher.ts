@@ -163,7 +163,19 @@ class ReactionDedup {
     // Evict oldest if over limit
     if (this.seen.size > this.maxEntries) {
       const firstKey = this.seen.keys().next().value;
-      if (firstKey) this.seen.delete(firstKey);
+      if (firstKey) {
+        this.seen.delete(firstKey);
+        // Clean up messageCounters to prevent unbounded growth
+        const evictedMessageId = firstKey.split(':')[0];
+        if (evictedMessageId) {
+          const count = this.messageCounters.get(evictedMessageId) ?? 0;
+          if (count <= 1) {
+            this.messageCounters.delete(evictedMessageId);
+          } else {
+            this.messageCounters.set(evictedMessageId, count - 1);
+          }
+        }
+      }
     }
 
     return false;
@@ -269,7 +281,8 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
 
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
   const ownerJid = instance.ownerIdentifier ?? '';
-  const mentionsBot = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
+  const mentionsBot =
+    mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid)) || rawPayload.isMention === true;
 
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
   const isReplyToBot = quotedParticipant === ownerJid;
@@ -768,13 +781,14 @@ async function shouldProcessReaction(
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
+  eventType: 'reaction.received' | 'reaction.removed' = 'reaction.received',
 ): Promise<Instance | null> {
   if (!metadata.instanceId) return null;
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentProviderId) return null;
 
-  if (!instanceTriggersOnEvent(instance, 'reaction.received')) return null;
+  if (!instanceTriggersOnEvent(instance, eventType)) return null;
 
   if (!isReactionTrigger(instance, payload.emoji)) {
     log.debug('Reaction emoji not in trigger list', { instanceId: instance.id, emoji: payload.emoji });
@@ -931,6 +945,58 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     );
 
     // ========================================
+    // Subscribe to reaction.removed
+    // ========================================
+    await eventBus.subscribe(
+      'reaction.removed',
+      async (event) => {
+        const payload = event.payload as ReactionReceivedPayload;
+        const metadata = event.metadata;
+
+        try {
+          const instance = await shouldProcessReaction(
+            agentRunner,
+            rateLimiter,
+            reactionDedup,
+            payload,
+            metadata,
+            'reaction.removed',
+          );
+          if (!instance) return;
+
+          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+
+          await processReactionTrigger(
+            services,
+            instance,
+            payload,
+            {
+              instanceId: instance.id,
+              channelType: metadata.channelType,
+              personId: metadata.personId,
+              platformIdentityId: metadata.platformIdentityId,
+              traceId,
+            },
+            event,
+          );
+        } catch (error) {
+          log.error('Error processing reaction removal for dispatch', {
+            instanceId: metadata.instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'agent-dispatcher-reaction-removed',
+        queue: 'agent-dispatcher',
+        maxRetries: 2,
+        retryDelayMs: 1000,
+        startFrom: 'last',
+        concurrency: 5,
+      },
+    );
+
+    // ========================================
     // Subscribe to presence.typing (for debounce)
     // ========================================
     await eventBus.subscribe(
@@ -962,7 +1028,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
       },
     );
 
-    log.info('Agent dispatcher initialized (message + reaction triggers)');
+    log.info('Agent dispatcher initialized (message + reaction + reaction-removed triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(cleanupInterval);
