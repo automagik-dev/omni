@@ -38,8 +38,8 @@ export { setupMessagePersistence } from './message-persistence';
 // Media processor (transcribes/describes media content)
 export { setupMediaProcessor } from './media-processor';
 
-// Agent responder (triggers AI agent responses)
-export { setupAgentResponder } from './agent-responder';
+// Agent dispatcher (evolved from agent-responder — multi-event, multi-provider)
+export { setupAgentDispatcher, setupAgentResponder, type DispatcherCleanup } from './agent-dispatcher';
 
 // Sync worker (processes sync jobs)
 export { setupSyncWorker } from './sync-worker';

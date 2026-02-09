@@ -44,6 +44,9 @@ export const CORE_EVENT_TYPES = [
   'sync.completed',
   'sync.failed',
   'profile.synced',
+  // Reaction lifecycle
+  'reaction.received',
+  'reaction.removed',
   // Batch job operations
   'batch-job.created',
   'batch-job.started',
@@ -403,6 +406,41 @@ export interface PresenceOfflinePayload {
 }
 
 /**
+ * Reaction event payloads
+ */
+export interface ReactionReceivedPayload {
+  /** The message being reacted to */
+  messageId: string;
+  /** Chat where reaction happened */
+  chatId: string;
+  /** User who reacted (platform user ID) */
+  from: string;
+  /** Emoji used (unicode char or custom ID) */
+  emoji: string;
+  /** Custom emoji name (e.g., Discord custom emojis) */
+  emojiName?: string;
+  /** Whether emoji is platform-custom (not unicode) */
+  isCustomEmoji?: boolean;
+  /** Raw platform payload for channel-specific data */
+  rawPayload?: Record<string, unknown>;
+}
+
+export interface ReactionRemovedPayload {
+  /** The message the reaction was removed from */
+  messageId: string;
+  /** Chat where reaction was removed */
+  chatId: string;
+  /** User who removed the reaction */
+  from: string;
+  /** Emoji that was removed */
+  emoji: string;
+  /** Custom emoji name */
+  emojiName?: string;
+  /** Whether emoji is platform-custom */
+  isCustomEmoji?: boolean;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -427,6 +465,8 @@ export interface EventPayloadMap {
   'sync.completed': SyncCompletedPayload;
   'sync.failed': SyncFailedPayload;
   'profile.synced': ProfileSyncedPayload;
+  'reaction.received': ReactionReceivedPayload;
+  'reaction.removed': ReactionRemovedPayload;
   'presence.typing': PresenceTypingPayload;
   'presence.online': PresenceOnlinePayload;
   'presence.offline': PresenceOfflinePayload;

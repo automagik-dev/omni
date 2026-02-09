@@ -1,0 +1,29 @@
+{
+  "name": "@omni/channel-telegram",
+  "version": "1.0.0",
+  "description": "Telegram channel plugin for Omni v2 using grammy",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:watch": "bun test --watch"
+  },
+  "dependencies": {
+    "@omni/channel-sdk": "workspace:*",
+    "@omni/core": "workspace:*",
+    "grammy": "^1.35.0",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

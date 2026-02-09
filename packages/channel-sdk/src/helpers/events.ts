@@ -150,6 +150,61 @@ export interface EmitMediaReceivedParams {
 }
 
 /**
+ * Parameters for emitReactionReceived
+ */
+export interface EmitReactionReceivedParams {
+  /** Instance that received the reaction */
+  instanceId: string;
+
+  /** The message being reacted to */
+  messageId: string;
+
+  /** Chat where reaction happened */
+  chatId: string;
+
+  /** User who reacted */
+  from: string;
+
+  /** Emoji used (unicode char or custom ID) */
+  emoji: string;
+
+  /** Custom emoji name (e.g., Discord custom emojis) */
+  emojiName?: string;
+
+  /** Whether emoji is platform-custom */
+  isCustomEmoji?: boolean;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitReactionRemoved
+ */
+export interface EmitReactionRemovedParams {
+  /** Instance that received the reaction removal */
+  instanceId: string;
+
+  /** The message the reaction was removed from */
+  messageId: string;
+
+  /** Chat where reaction was removed */
+  chatId: string;
+
+  /** User who removed the reaction */
+  from: string;
+
+  /** Emoji that was removed */
+  emoji: string;
+
+  /** Custom emoji name */
+  emojiName?: string;
+
+  /** Whether emoji is platform-custom */
+  isCustomEmoji?: boolean;
+}
+
+/**
  * Metadata for instance connected event
  */
 export interface InstanceConnectedMetadata {
