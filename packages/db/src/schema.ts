@@ -449,6 +449,18 @@ export const instances = pgTable(
     /** Prefix messages with sender name: [Name]: message */
     agentPrefixSenderName: boolean('agent_prefix_sender_name').notNull().default(true),
 
+    // ---- Trigger Configuration (what events activate the agent) ----
+    /** Which event types trigger the agent (default: message.received only) */
+    triggerEvents: jsonb('trigger_events').$type<string[]>().default(['message.received']),
+    /** Which reaction emojis trigger the agent (null = all emojis when reaction.received is in triggerEvents) */
+    triggerReactions: jsonb('trigger_reactions').$type<string[]>(),
+    /** Custom mention patterns for trigger matching */
+    triggerMentionPatterns: jsonb('trigger_mention_patterns').$type<string[]>(),
+    /** Agent trigger mode: round-trip (wait for response) or fire-and-forget */
+    triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
+    /** Max triggers per user per channel per minute (rate limiting) */
+    triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
+
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
     profilePicUrl: text('profile_pic_url'),
@@ -1900,5 +1912,79 @@ export const automationLogsRelations = relations(automationLogs, ({ one }) => ({
   automation: one(automations, {
     fields: [automationLogs.automationId],
     references: [automations.id],
+  }),
+}));
+
+// ============================================================================
+// TRIGGER LOGS (agent dispatch observability)
+// ============================================================================
+
+/**
+ * Trigger logs track every agent dispatch for observability and cost tracking.
+ * Each time the agent-dispatcher triggers an agent provider, a log entry is created.
+ */
+export const triggerLogs = pgTable(
+  'trigger_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** End-to-end trace ID linking incoming event → dispatch → response */
+    traceId: varchar('trace_id', { length: 255 }),
+    /** Instance that triggered the agent */
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    /** Provider that handled the trigger */
+    providerId: uuid('provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    /** Event type that triggered dispatch (e.g., message.received, reaction.received) */
+    eventType: varchar('event_type', { length: 100 }).notNull(),
+    /** Original event ID */
+    eventId: varchar('event_id', { length: 255 }).notNull(),
+    /** Classification of what triggered the agent */
+    triggerType: varchar('trigger_type', { length: 50 }).notNull(), // mention, reaction, dm, reply, name_match, command
+    /** Channel type */
+    channelType: varchar('channel_type', { length: 50 }),
+    /** Chat where trigger occurred */
+    chatId: varchar('chat_id', { length: 255 }).notNull(),
+    /** User who triggered the agent */
+    senderId: varchar('sender_id', { length: 255 }),
+    /** Provider mode: round-trip or fire-and-forget */
+    mode: varchar('mode', { length: 20 }),
+    /** When the trigger was dispatched */
+    firedAt: timestamp('fired_at', { withTimezone: true }).notNull().defaultNow(),
+    /** When the response was received (null for fire-and-forget) */
+    respondedAt: timestamp('responded_at', { withTimezone: true }),
+    /** Whether a response was received */
+    responded: boolean('responded').notNull().default(false),
+    /** Total dispatch duration in milliseconds */
+    durationMs: integer('duration_ms'),
+    /** Input tokens used (if available from provider) */
+    inputTokens: integer('input_tokens'),
+    /** Output tokens used (if available from provider) */
+    outputTokens: integer('output_tokens'),
+    /** Error message if dispatch failed */
+    error: text('error'),
+    /** Additional metadata */
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    instanceIdx: index('trigger_logs_instance_idx').on(table.instanceId),
+    traceIdx: index('trigger_logs_trace_idx').on(table.traceId),
+    firedAtIdx: index('trigger_logs_fired_at_idx').on(table.firedAt),
+    eventTypeIdx: index('trigger_logs_event_type_idx').on(table.eventType),
+  }),
+);
+
+export type TriggerLog = typeof triggerLogs.$inferSelect;
+export type NewTriggerLog = typeof triggerLogs.$inferInsert;
+
+export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
+  instance: one(instances, {
+    fields: [triggerLogs.instanceId],
+    references: [instances.id],
+  }),
+  provider: one(agentProviders, {
+    fields: [triggerLogs.providerId],
+    references: [agentProviders.id],
   }),
 }));

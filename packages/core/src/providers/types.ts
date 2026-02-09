@@ -2,7 +2,12 @@
  * Provider types for agent execution
  *
  * These types define the interface for executing AI agents (Agno, OpenAI, etc.)
+ * and the unified AgentProvider abstraction for multi-provider dispatch.
  */
+
+import type { OmniEvent } from '../events/types';
+import type { ProviderSchema } from '../types/agent';
+import type { ChannelType } from '../types/channel';
 
 /**
  * Request to run an agent/team/workflow
@@ -176,3 +181,143 @@ export type ProviderErrorCode =
   | 'NETWORK_ERROR'
   | 'INVALID_RESPONSE'
   | 'STREAM_ERROR';
+
+// ============================================================================
+// AgentProvider — unified provider abstraction for multi-provider dispatch
+// ============================================================================
+
+/** The type of trigger that activated the agent */
+export type AgentTriggerType = 'mention' | 'reaction' | 'dm' | 'reply' | 'name_match' | 'command';
+
+/**
+ * Unified agent provider interface
+ *
+ * All agent providers (Agno, OpenClaw webhook, Claude SDK, etc.)
+ * implement this interface for the agent dispatcher.
+ */
+export interface IAgentProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly schema: ProviderSchema;
+  readonly mode: 'round-trip' | 'fire-and-forget';
+
+  /** Check if this provider can handle a given trigger */
+  canHandle(trigger: AgentTrigger): boolean;
+
+  /** Process a trigger and return response (null = fire-and-forget, no response) */
+  trigger(context: AgentTrigger): Promise<AgentTriggerResult | null>;
+
+  /** Health check */
+  checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }>;
+}
+
+/**
+ * Trigger context passed to an agent provider
+ */
+export interface AgentTrigger {
+  /** End-to-end trace ID */
+  traceId: string;
+  /** What type of trigger activated this */
+  type: AgentTriggerType;
+  /** The original event */
+  event: OmniEvent;
+  /** Source channel information */
+  source: {
+    channelType: ChannelType;
+    instanceId: string;
+    chatId: string;
+    messageId: string;
+  };
+  /** Sender information */
+  sender: {
+    platformUserId: string;
+    personId?: string;
+    displayName?: string;
+  };
+  /** Trigger content */
+  content: {
+    /** Message text (for message triggers) */
+    text?: string;
+    /** Emoji (for reaction triggers) */
+    emoji?: string;
+    /** Referenced message ID (for reply triggers) */
+    referencedMessageId?: string;
+  };
+  /** Session ID computed from instance's session strategy */
+  sessionId: string;
+}
+
+/**
+ * Result from an agent provider trigger
+ */
+export interface AgentTriggerResult {
+  /** Response parts to send back (empty array = no response needed) */
+  parts: string[];
+  /** Provider metadata */
+  metadata: {
+    runId: string;
+    providerId: string;
+    durationMs: number;
+    cost?: {
+      inputTokens?: number;
+      outputTokens?: number;
+    };
+  };
+}
+
+/**
+ * Configuration for a webhook-based agent provider
+ */
+export interface WebhookProviderConfig {
+  /** URL to POST trigger events to */
+  webhookUrl: string;
+  /** API key for webhook authentication */
+  apiKey?: string;
+  /** Mode: round-trip waits for response, fire-and-forget returns immediately */
+  mode: 'round-trip' | 'fire-and-forget';
+  /** Timeout for round-trip mode in milliseconds (default: 30000) */
+  timeoutMs?: number;
+  /** Number of retries on 5xx errors (default: 1) */
+  retries?: number;
+}
+
+/**
+ * Payload sent to webhook providers
+ */
+export interface WebhookPayload {
+  event: {
+    id: string;
+    type: string;
+    timestamp: number;
+  };
+  instance: {
+    id: string;
+    channelType: string;
+    name?: string;
+  };
+  chat: { id: string };
+  sender: {
+    id: string;
+    name?: string;
+    personId?: string;
+  };
+  content: {
+    text?: string;
+    emoji?: string;
+  };
+  traceId: string;
+  /** The endpoint to call back for sending responses */
+  replyEndpoint: string;
+}
+
+/**
+ * Response format from webhook providers (round-trip mode)
+ */
+export interface WebhookResponse {
+  /** Single text reply */
+  reply?: string;
+  /** Pre-split response parts */
+  parts?: string[];
+  /** Provider metadata */
+  metadata?: Record<string, unknown>;
+}

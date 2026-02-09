@@ -53,6 +53,17 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
     case 'anthropic':
       throw new ProviderError('Anthropic provider not yet implemented', 'NOT_FOUND', 501, { schema: 'anthropic' });
 
+    case 'webhook':
+      // Webhook providers are created via WebhookAgentProvider directly,
+      // not through the legacy createProviderClient factory.
+      // This entry exists to prevent "unknown schema" errors.
+      throw new ProviderError(
+        'Webhook providers should be created via WebhookAgentProvider, not createProviderClient',
+        'NOT_FOUND',
+        400,
+        { schema: 'webhook', hint: 'Use new WebhookAgentProvider(id, name, config) instead' },
+      );
+
     case 'custom':
       throw new ProviderError('Custom provider not yet implemented', 'NOT_FOUND', 501, { schema: 'custom' });
 
@@ -65,12 +76,12 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
  * Check if a provider schema is currently supported
  */
 export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
-  return schema === 'agnoos' || schema === 'agno';
+  return schema === 'agnoos' || schema === 'agno' || schema === 'webhook';
 }
 
 /**
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agnoos'];
+  return ['agnoos', 'webhook'];
 }

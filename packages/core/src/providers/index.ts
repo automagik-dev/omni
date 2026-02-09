@@ -1,10 +1,11 @@
 /**
  * Provider module exports
  *
- * Provides clients for executing AI agents (Agno, and future OpenAI/Anthropic/Custom)
+ * Provides clients for executing AI agents (Agno, Webhook, and future OpenAI/Anthropic/Custom)
+ * and the unified AgentProvider abstraction for multi-provider dispatch.
  */
 
-// Types
+// Types — legacy client types
 export {
   type ProviderRequest,
   type ProviderFile,
@@ -20,8 +21,23 @@ export {
   type ProviderErrorCode,
 } from './types';
 
-// Agno Client
+// Types — unified AgentProvider abstraction
+export type {
+  IAgentProvider,
+  AgentTrigger,
+  AgentTriggerType,
+  AgentTriggerResult,
+  WebhookProviderConfig,
+  WebhookPayload,
+  WebhookResponse,
+} from './types';
+
+// Agno Client (legacy direct client)
 export { AgnoClient, createAgnoClient } from './agno-client';
+
+// AgentProvider implementations
+export { AgnoAgentProvider } from './agno-provider';
+export { WebhookAgentProvider } from './webhook-provider';
 
 // Factory
 export {
