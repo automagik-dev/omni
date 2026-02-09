@@ -1,6 +1,16 @@
+---
+title: "API Design"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [api, design]
+status: current
+---
+
 # API Design
 
 > The Omni v2 API is designed to be familiar to v1 users while adding new capabilities. It provides both REST endpoints for external use and tRPC for type-safe internal/SDK use.
+
+> Related: [[endpoints|API Endpoints]], [[internal|Internal API]], [[v1-compatibility-layer|V1 Compatibility]]
 
 ## Design Principles
 

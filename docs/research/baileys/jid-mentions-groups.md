@@ -1,6 +1,17 @@
+---
+title: "Baileys Deep Dive: JIDs, Mentions, and Groups"
+created: 2026-02-09
+updated: 2026-02-09
+tags: [baileys, whatsapp, jid, mentions, groups, research]
+status: current
+source: "packages/channel-whatsapp/src/plugin.ts"
+---
+
 # Baileys Deep Dive: JIDs, Mentions, and Groups
 
 _Omni's reference guide for WhatsApp identity and messaging via Baileys 7.0.0-rc.9_
+
+> Related: [[overview|Architecture Overview]], [[plugin-system|Plugin System]]
 
 ---
 

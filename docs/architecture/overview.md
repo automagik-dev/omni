@@ -1,6 +1,16 @@
+---
+title: "Architecture Overview"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [architecture, overview]
+status: current
+---
+
 # Architecture Overview
 
 > Omni v2 is built on event-driven, plugin-based architecture designed for extensibility, reliability, and AI-native consumption.
+
+> Related: [[event-system|Event System]], [[plugin-system|Plugin System]], [[identity-graph|Identity Graph]], [[provider-system|Provider System]]
 
 ## Design Principles
 
@@ -273,47 +283,28 @@ packages/
 │   │
 │   └── package.json
 │
-├── channel-whatsapp-baileys/      # WhatsApp (unofficial)
-├── channel-whatsapp-cloud/        # WhatsApp (official)
+├── channel-whatsapp/               # WhatsApp (Baileys)
 ├── channel-discord/               # Discord
-├── channel-slack/                 # Slack
-├── channel-telegram/              # Telegram
 │
-├── sdk/                           # TypeScript SDK
-│   ├── src/
-│   │   ├── client.ts             # OmniClient
-│   │   ├── resources/            # Resource classes
-│   │   └── types.ts              # Public types
-│   │
+├── db/                            # Database package (Drizzle schema + migrations)
 │   └── package.json
 │
-├── cli/                           # LLM CLI
-│   ├── src/
-│   │   ├── commands/             # Command implementations
-│   │   ├── output/               # Output formatters
-│   │   └── index.ts              # CLI entry point
-│   │
+├── media-processing/              # Media handling (transcription, vision, extraction)
 │   └── package.json
 │
-├── mcp/                           # MCP Server (Model Context Protocol)
-│   ├── src/
-│   │   ├── tools/                # MCP tool definitions
-│   │   │   ├── discovery.ts      # List instances, channels, status
-│   │   │   ├── messaging.ts      # Send messages, read history
-│   │   │   ├── identity.ts       # Search persons, get presence
-│   │   │   ├── admin.ts          # Instance management
-│   │   │   └── multimodal.ts     # Media operations
-│   │   ├── server.ts             # HTTP/stdio server
-│   │   └── index.ts              # Entry point
-│   │
+├── sdk/                           # Auto-generated TypeScript SDK
 │   └── package.json
 │
-└── ui/                            # React dashboard (migrated)
+├── sdk-go/                        # Go SDK
+│   └── go.mod
+│
+├── sdk-python/                    # Python SDK
+│   └── pyproject.toml
+│
+└── cli/                           # LLM-optimized CLI
     ├── src/
-    │   ├── pages/                # Page components
-    │   ├── components/           # Shared components
-    │   ├── lib/                  # API client, utilities
-    │   └── contexts/             # React contexts
+    │   ├── commands/             # Command implementations
+    │   └── index.ts              # CLI entry point
     │
     └── package.json
 ```

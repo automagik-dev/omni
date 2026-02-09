@@ -1,7 +1,8 @@
 ---
 title: "OpenClaw Telegram Integration — Deep Analysis"
+created: 2026-02-09
+updated: 2026-02-09
 author: "🐚 Pearl (Omni Research Squad)"
-date: 2026-02-09
 tags:
   - research
   - openclaw
@@ -9,6 +10,7 @@ tags:
   - channel-plugin
   - architecture
   - integration-patterns
+status: current
 aliases:
   - OpenClaw Telegram
   - Channel Plugin Architecture

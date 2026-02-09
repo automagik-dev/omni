@@ -1,6 +1,16 @@
+---
+title: "Event System"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [architecture, events, nats]
+status: current
+---
+
 # Event System
 
 > The event system is the nervous system of Omni v2. Every action produces events, events trigger reactions, and events are persisted for audit and replay.
+
+> Related: [[overview|Architecture Overview]], [[plugin-system|Plugin System]]
 
 ## Why Event-Driven?
 

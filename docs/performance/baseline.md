@@ -1,3 +1,11 @@
+---
+title: "Performance Baseline"
+created: 2026-02-05
+updated: 2026-02-09
+tags: [performance, testing, baseline]
+status: current
+---
+
 # Performance Baseline
 
 > Measured: 2026-02-05

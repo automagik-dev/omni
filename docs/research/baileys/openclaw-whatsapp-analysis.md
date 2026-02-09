@@ -1,8 +1,10 @@
 ---
 title: "OpenClaw WhatsApp Integration Analysis"
 created: 2026-02-09
+updated: 2026-02-09
 author: "Ink 🦑"
 tags: [research, baileys, openclaw, whatsapp]
+status: current
 ---
 
 # OpenClaw WhatsApp Integration Analysis

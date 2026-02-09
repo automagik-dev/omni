@@ -1,6 +1,16 @@
+---
+title: "Migration Plan: v1 to v2"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [migration, planning]
+status: current
+---
+
 # Migration Plan: v1 to v2
 
 > A phased approach to migrating from Omni v1 (Python/Evolution) to v2 (TypeScript/Baileys) with zero downtime.
+
+> Related: [[v1-features-analysis|V1 Features Analysis]], [[ui-reuse|UI Reuse Strategy]], [[v1-compatibility-layer|V1 Compatibility Layer]]
 
 ## Migration Strategy: Strangler Fig Pattern
 

@@ -1,6 +1,16 @@
+---
+title: "UI Component Specifications"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [ui, components, react]
+status: draft
+---
+
 # UI Component Specifications
 
 > Detailed specifications for UI components that don't exist in v1 or need significant changes for v2.
+
+> Related: [[overview|Architecture Overview]], [[ui-reuse|UI Reuse Strategy]]
 
 ## Component Library
 

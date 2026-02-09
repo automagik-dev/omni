@@ -1,6 +1,16 @@
+---
+title: "UI Reuse Strategy"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [migration, ui, react]
+status: current
+---
+
 # UI Reuse Strategy
 
 > The Omni v1 React dashboard is mature and well-tested. We'll reuse it with minimal changes by adapting the API client layer.
+
+> Related: [[plan|Migration Plan]], [[components|UI Components]], [[v1-compatibility-layer|V1 Compatibility Layer]]
 
 ## Important UI Features to Preserve
 

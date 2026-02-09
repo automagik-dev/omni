@@ -1,6 +1,16 @@
+---
+title: "TypeScript SDK"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [sdk, typescript]
+status: current
+---
+
 # TypeScript SDK
 
 > The official TypeScript SDK for Omni v2 - type-safe, modern, and designed for both Node.js and edge runtimes.
+
+> Related: [[auto-generation|SDK Auto-Generation]], [[endpoints|API Endpoints]]
 
 ## Installation
 

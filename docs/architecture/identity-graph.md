@@ -1,6 +1,16 @@
+---
+title: "Identity Graph (Omnipresence)"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [architecture, identity, persons]
+status: current
+---
+
 # Identity Graph (Omnipresence)
 
 > The Identity Graph is the foundation of Omni's omnipresence vision - one unified identity for a person across all messaging platforms.
+
+> Related: [[overview|Architecture Overview]], [[event-system|Event System]]
 
 ## The Problem
 

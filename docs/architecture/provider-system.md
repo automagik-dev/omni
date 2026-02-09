@@ -1,6 +1,16 @@
+---
+title: "Agent Provider System"
+created: 2025-01-29
+updated: 2026-02-09
+tags: [architecture, providers, agents]
+status: current
+---
+
 # Agent Provider System
 
 > A flexible, multi-schema provider system that enables Omni to communicate with any AI agent backend.
+
+> Related: [[overview|Architecture Overview]], [[plugin-system|Plugin System]]
 
 ## Overview
 
