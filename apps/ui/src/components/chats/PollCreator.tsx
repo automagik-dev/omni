@@ -109,6 +109,7 @@ export function PollCreator({ open, onClose, onSend }: PollCreatorProps) {
             <Label>Options * (2-10)</Label>
             <div className="space-y-2">
               {options.map((option, index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: Options are simple strings without unique IDs
                 <div key={`option-${index}`} className="flex gap-2">
                   <Input
                     placeholder={`Option ${index + 1}`}

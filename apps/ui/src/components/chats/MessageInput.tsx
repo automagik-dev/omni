@@ -152,7 +152,7 @@ export function MessageInput({
         to,
       });
       toast.success('Contact sent');
-    } catch (error) {
+    } catch {
       toast.error('Failed to send contact');
     }
   };
@@ -165,7 +165,7 @@ export function MessageInput({
         to,
       });
       toast.success('Location sent');
-    } catch (error) {
+    } catch {
       toast.error('Failed to send location');
     }
   };
@@ -178,7 +178,7 @@ export function MessageInput({
         to,
       });
       toast.success('Poll created');
-    } catch (error) {
+    } catch {
       toast.error('Failed to create poll');
     }
   };
