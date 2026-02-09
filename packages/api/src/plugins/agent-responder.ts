@@ -1,15 +1,16 @@
 /**
  * Agent Responder Plugin
  *
- * Subscribes to message.received events and triggers agent responses when:
- * 1. Instance has an agent provider configured
- * 2. Message passes the reply filter
- * 3. Debounce period has elapsed
+ * @deprecated This file is superseded by agent-dispatcher.ts which adds:
+ * - Multi-event triggering (message + reaction)
+ * - IAgentProvider abstraction for multi-provider dispatch
+ * - Rate limiting and reaction dedup
+ * - traceId propagation
  *
- * Flow:
- * - message.received → check reply filter → buffer (debounce) → call agent → split → send with delays
+ * This file is kept for reference only and will be removed in a future PR.
+ * All imports should come from agent-dispatcher.ts via plugins/index.ts.
  *
- * Features:
+ * Original features (now in agent-dispatcher.ts):
  * - Reply filtering (DM, mention, reply, name match)
  * - Message debouncing with typing-aware restart
  * - Response splitting on \n\n

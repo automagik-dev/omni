@@ -18,19 +18,26 @@
  */
 
 import {
+  type AgentTrigger,
   type AgentTriggerType,
+  AgnoAgentProvider,
   type EventBus,
+  type IAgentProvider,
   type MessageReceivedPayload,
   type ReactionReceivedPayload,
+  WebhookAgentProvider,
   createLogger,
+  createProviderClient,
   generateCorrelationId,
 } from '@omni/core';
+import type { AgentProvider } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import type { Services } from '../services';
 import {
   type MessageContext,
   type SplitDelayConfig,
   calculateSplitDelay,
+  computeSessionId,
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
@@ -67,10 +74,18 @@ interface DebounceConfig {
 // Rate Limiter
 // ============================================================================
 
+/** Default rate limit: 5 triggers per 60-second window */
+const DEFAULT_RATE_LIMIT = 5;
+const DEFAULT_RATE_WINDOW_MS = 60_000;
+
 class RateLimiter {
   /** Map of "userId:channelType:instanceId" → timestamps[] */
   private counters: Map<string, number[]> = new Map();
-  private readonly windowMs = 60_000; // 1 minute sliding window
+  private readonly windowMs: number;
+
+  constructor(windowMs = DEFAULT_RATE_WINDOW_MS) {
+    this.windowMs = windowMs;
+  }
 
   /**
    * Check if a trigger is allowed (under rate limit)
@@ -459,6 +474,106 @@ async function processAgentResponse(
 }
 
 // ============================================================================
+// Provider Resolution
+// ============================================================================
+
+/** Cache of IAgentProvider instances by provider DB ID */
+const providerCache = new Map<string, IAgentProvider>();
+
+/** Create an Agno-based agent provider */
+function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+  if (!provider.apiKey) {
+    log.warn('Provider has no API key, falling back to legacy path', { providerId: provider.id });
+    return null;
+  }
+
+  const client = createProviderClient({
+    schema: provider.schema,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+
+  return new AgnoAgentProvider(provider.id, provider.name, client, {
+    agentId: (instance.agentId ?? schemaConfig.agentId ?? 'default') as string,
+    agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    enableAutoSplit: instance.enableAutoSplit ?? true,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
+/** Create a webhook-based agent provider */
+function createWebhookProvider(provider: AgentProvider): IAgentProvider {
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+
+  return new WebhookAgentProvider(provider.id, provider.name, {
+    webhookUrl: provider.baseUrl,
+    apiKey: provider.apiKey ?? undefined,
+    mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
+    timeoutMs: (provider.defaultTimeout ?? 30) * 1000,
+    retries: (schemaConfig.retries as number) ?? 1,
+  });
+}
+
+/**
+ * Resolve an IAgentProvider from a DB provider record + instance config.
+ * Returns null if the schema is not supported for the new provider abstraction.
+ */
+function resolveProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+  const cacheKey = `${provider.id}:${instance.id}`;
+  const cached = providerCache.get(cacheKey);
+  if (cached) return cached;
+
+  let agentProvider: IAgentProvider | null = null;
+
+  switch (provider.schema) {
+    case 'agnoos':
+    case 'agno':
+      agentProvider = createAgnoProvider(provider, instance);
+      break;
+    case 'webhook':
+      agentProvider = createWebhookProvider(provider);
+      break;
+    default:
+      log.debug('Provider schema not supported for IAgentProvider dispatch', {
+        schema: provider.schema,
+        providerId: provider.id,
+      });
+      return null;
+  }
+
+  if (!agentProvider) return null;
+
+  providerCache.set(cacheKey, agentProvider);
+  return agentProvider;
+}
+
+/**
+ * Look up provider from DB and resolve to IAgentProvider
+ */
+async function getAgentProvider(services: Services, instance: Instance): Promise<IAgentProvider | null> {
+  if (!instance.agentProviderId) return null;
+
+  try {
+    const provider = await services.providers.getById(instance.agentProviderId);
+
+    if (!provider?.isActive) return null;
+
+    return resolveProvider(provider, instance);
+  } catch (error) {
+    log.warn('Failed to resolve agent provider, falling back to legacy', {
+      instanceId: instance.id,
+      providerId: instance.agentProviderId,
+      error: String(error),
+    });
+    return null;
+  }
+}
+
+// ============================================================================
 // Reaction Trigger Handler
 // ============================================================================
 
@@ -467,6 +582,7 @@ async function processReactionTrigger(
   instance: Instance,
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
+  rawEvent: AgentTrigger['event'],
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const chatId = payload.chatId;
@@ -482,9 +598,61 @@ async function processReactionTrigger(
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
   try {
-    // For reaction triggers, send the emoji as the message content
-    const reactionMessage = `[Reacted with ${payload.emoji} to a message]`;
+    // Try new IAgentProvider path first
+    const provider = await getAgentProvider(services, instance);
 
+    if (provider) {
+      // Build AgentTrigger for the provider
+      const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
+      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', payload.from, chatId);
+
+      const trigger: AgentTrigger = {
+        traceId: metadata.traceId,
+        type: 'reaction',
+        event: rawEvent,
+        source: {
+          channelType: channel,
+          instanceId: instance.id,
+          chatId,
+          messageId: payload.messageId,
+        },
+        sender: {
+          platformUserId: payload.from,
+          personId: metadata.personId,
+          displayName: senderName,
+        },
+        content: {
+          emoji: payload.emoji,
+          referencedMessageId: payload.messageId,
+        },
+        sessionId,
+      };
+
+      const result = await provider.trigger(trigger);
+
+      if (result && result.parts.length > 0) {
+        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+      }
+
+      log.info('Reaction trigger response via provider', {
+        instanceId: instance.id,
+        chatId,
+        emoji: payload.emoji,
+        parts: result?.parts.length ?? 0,
+        providerId: result?.metadata.providerId,
+        durationMs: result?.metadata.durationMs,
+        traceId: metadata.traceId,
+      });
+
+      return;
+    }
+
+    // Fallback: legacy agentRunner.run() path
+    log.debug('No IAgentProvider resolved, using legacy agentRunner path', {
+      instanceId: instance.id,
+    });
+
+    const reactionMessage = `[Reacted with ${payload.emoji} to a message]`;
     const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
 
     const result = await services.agentRunner.run({
@@ -499,7 +667,7 @@ async function processReactionTrigger(
       await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
     }
 
-    log.info('Reaction trigger response sent', {
+    log.info('Reaction trigger response via legacy runner', {
       instanceId: instance.id,
       chatId,
       emoji: payload.emoji,
@@ -572,7 +740,7 @@ async function shouldProcessMessage(
 
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? 5)) {
+  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
     return null;
   }
@@ -615,7 +783,7 @@ async function shouldProcessReaction(
 
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? 5)) {
+  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
     return null;
   }
@@ -633,9 +801,15 @@ async function shouldProcessReaction(
 }
 
 /**
- * Set up agent dispatcher - subscribes to message AND reaction events
+ * Cleanup function returned by setupAgentDispatcher for graceful shutdown
  */
-export async function setupAgentDispatcher(eventBus: EventBus, services: Services): Promise<void> {
+export type DispatcherCleanup = () => void;
+
+/**
+ * Set up agent dispatcher - subscribes to message AND reaction events
+ * Returns a cleanup function that should be called on shutdown.
+ */
+export async function setupAgentDispatcher(eventBus: EventBus, services: Services): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
   const rateLimiter = new RateLimiter();
@@ -726,13 +900,19 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(services, instance, payload, {
-            instanceId: instance.id,
-            channelType: metadata.channelType,
-            personId: metadata.personId,
-            platformIdentityId: metadata.platformIdentityId,
-            traceId,
-          });
+          await processReactionTrigger(
+            services,
+            instance,
+            payload,
+            {
+              instanceId: instance.id,
+              channelType: metadata.channelType,
+              personId: metadata.personId,
+              platformIdentityId: metadata.platformIdentityId,
+              traceId,
+            },
+            event,
+          );
         } catch (error) {
           log.error('Error processing reaction for dispatch', {
             instanceId: metadata.instanceId,
@@ -786,8 +966,16 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(cleanupInterval);
+    debouncer.clear();
     throw error;
   }
+
+  // Return cleanup function for graceful shutdown
+  return () => {
+    log.info('Shutting down agent dispatcher');
+    clearInterval(cleanupInterval);
+    debouncer.clear();
+  };
 }
 
 /**
