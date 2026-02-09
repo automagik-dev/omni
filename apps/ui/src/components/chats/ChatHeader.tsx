@@ -3,7 +3,9 @@ import { Button } from '@/components/ui/button';
 import { getChatDisplayName } from '@/lib/chat-utils';
 import { cn } from '@/lib/utils';
 import type { Chat, Instance } from '@omni/sdk';
-import { ArrowLeft, Bot, BotOff, Hash, Megaphone, MessageCircle, Mic, Radio, User, Users } from 'lucide-react';
+import { ArrowLeft, Bot, BotOff, Hash, Megaphone, MessageCircle, Mic, Radio, Search, User, Users } from 'lucide-react';
+import { useState } from 'react';
+import { MessageSearch } from './MessageSearch';
 
 interface ChatHeaderProps {
   chat: Chat;
@@ -46,9 +48,10 @@ export function ChatHeader({
   const config = CHAT_TYPE_CONFIG[chat.chatType] || DEFAULT_CONFIG;
   const ChatTypeIcon = config.icon;
   const isGroupType = ['group', 'channel', 'community', 'broadcast', 'forum'].includes(chat.chatType);
+  const [showSearch, setShowSearch] = useState(false);
 
   return (
-    <header className="flex h-16 items-center justify-between border-b bg-card px-4">
+    <header className="relative flex h-16 items-center justify-between border-b bg-card px-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={onBack}>
           <ArrowLeft className="h-5 w-5" />
@@ -109,26 +112,38 @@ export function ChatHeader({
         </div>
       </div>
 
-      {/* Agent toggle */}
-      {onToggleAgent && (
-        <Button
-          variant={agentPaused ? 'outline' : 'secondary'}
-          size="sm"
-          onClick={onToggleAgent}
-          disabled={agentToggleLoading}
-        >
-          {agentPaused ? (
-            <>
-              <BotOff className="mr-2 h-4 w-4" />
-              Agent Paused
-            </>
-          ) : (
-            <>
-              <Bot className="mr-2 h-4 w-4" />
-              Agent Active
-            </>
-          )}
+      <div className="flex items-center gap-2">
+        {/* Search button */}
+        <Button variant="ghost" size="icon" onClick={() => setShowSearch(!showSearch)} title="Search messages">
+          <Search className="h-5 w-5" />
         </Button>
+
+        {/* Agent toggle */}
+        {onToggleAgent && (
+          <Button
+            variant={agentPaused ? 'outline' : 'secondary'}
+            size="sm"
+            onClick={onToggleAgent}
+            disabled={agentToggleLoading}
+          >
+            {agentPaused ? (
+              <>
+                <BotOff className="mr-2 h-4 w-4" />
+                Agent Paused
+              </>
+            ) : (
+              <>
+                <Bot className="mr-2 h-4 w-4" />
+                Agent Active
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+
+      {/* Search overlay */}
+      {showSearch && (
+        <MessageSearch chatId={chat.id} instanceId={chat.instanceId} onClose={() => setShowSearch(false)} />
       )}
     </header>
   );

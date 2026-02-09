@@ -1,14 +1,24 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { usePresence } from '@/hooks/usePresence';
+import { useSendContact, useSendLocation, useSendPoll } from '@/hooks/useSpecialMessages';
 import { cn } from '@/lib/utils';
-import { FileText, Image, MapPin, Mic, Paperclip, Send, Smile, X } from 'lucide-react';
-import { useCallback, useRef, useState } from 'react';
+import type { SendContactBody, SendLocationBody, SendPollBody } from '@omni/sdk';
+import { BarChart3, Contact, FileText, Image, MapPin, Mic, Paperclip, Send, Smile, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { ContactPicker } from './ContactPicker';
+import { LocationPicker } from './LocationPicker';
+import { PollCreator } from './PollCreator';
 
 interface MessageInputProps {
+  chatId: string;
+  instanceId: string;
+  to: string;
+  channel: string;
   onSend: (text: string) => void;
   onSendMedia?: (file: File, caption?: string) => void;
-  onSendLocation?: () => void;
   disabled?: boolean;
   error?: string | null;
   placeholder?: string;
@@ -40,9 +50,12 @@ const FILE_TYPES = {
  * Enhanced message input with media upload and emoji picker
  */
 export function MessageInput({
+  chatId,
+  instanceId,
+  to,
+  channel,
   onSend,
   onSendMedia,
-  onSendLocation,
   disabled,
   error,
   placeholder = 'Type a message...',
@@ -50,11 +63,31 @@ export function MessageInput({
   const [text, setText] = useState('');
   const [showEmojis, setShowEmojis] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showSpecialMenu, setShowSpecialMenu] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
 
+  // Special message modals
+  const [showContactPicker, setShowContactPicker] = useState(false);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [showPollCreator, setShowPollCreator] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const { sendTyping } = usePresence(chatId, instanceId, to);
+  const sendContact = useSendContact();
+  const sendLocation = useSendLocation();
+  const sendPoll = useSendPoll();
+
+  const isDiscord = channel === 'discord';
+
+  // Send typing presence when user types
+  useEffect(() => {
+    if (text.length > 0) {
+      sendTyping();
+    }
+  }, [text, sendTyping]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,6 +142,45 @@ export function MessageInput({
   const clearFile = () => {
     setSelectedFile(null);
     setFilePreview(null);
+  };
+
+  const handleSendContact = async (data: Omit<SendContactBody, 'instanceId' | 'to'>) => {
+    try {
+      await sendContact.mutateAsync({
+        ...data,
+        instanceId,
+        to,
+      });
+      toast.success('Contact sent');
+    } catch (error) {
+      toast.error('Failed to send contact');
+    }
+  };
+
+  const handleSendLocation = async (data: Omit<SendLocationBody, 'instanceId' | 'to'>) => {
+    try {
+      await sendLocation.mutateAsync({
+        ...data,
+        instanceId,
+        to,
+      });
+      toast.success('Location sent');
+    } catch (error) {
+      toast.error('Failed to send location');
+    }
+  };
+
+  const handleSendPoll = async (data: Omit<SendPollBody, 'instanceId' | 'to'>) => {
+    try {
+      await sendPoll.mutateAsync({
+        ...data,
+        instanceId,
+        to,
+      });
+      toast.success('Poll created');
+    } catch (error) {
+      toast.error('Failed to create poll');
+    }
   };
 
   return (
@@ -212,17 +284,66 @@ export function MessageInput({
             )}
           </div>
 
-          {/* Location button */}
-          {onSendLocation && (
+          {/* Special messages menu (contact, location, poll) */}
+          <div className="relative">
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button type="button" variant="ghost" size="icon" onClick={onSendLocation} disabled={disabled}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowSpecialMenu(!showSpecialMenu)}
+                  disabled={disabled}
+                >
                   <MapPin className="h-5 w-5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Send location</TooltipContent>
+              <TooltipContent>Special messages</TooltipContent>
             </Tooltip>
-          )}
+
+            {/* Special messages dropdown */}
+            {showSpecialMenu && (
+              <div className="absolute bottom-full left-0 mb-2 rounded-lg border bg-popover p-2 shadow-lg min-w-[160px]">
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowContactPicker(true);
+                      setShowSpecialMenu(false);
+                    }}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                  >
+                    <Contact className="h-4 w-4" />
+                    Contact
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLocationPicker(true);
+                      setShowSpecialMenu(false);
+                    }}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                  >
+                    <MapPin className="h-4 w-4" />
+                    Location
+                  </button>
+                  {isDiscord && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPollCreator(true);
+                        setShowSpecialMenu(false);
+                      }}
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent"
+                    >
+                      <BarChart3 className="h-4 w-4" />
+                      Poll
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </TooltipProvider>
 
         {/* Text input */}
@@ -251,6 +372,15 @@ export function MessageInput({
 
       {/* Error message */}
       {error && <p className="px-3 pb-2 text-sm text-destructive">{error}</p>}
+
+      {/* Special message modals */}
+      <ContactPicker open={showContactPicker} onClose={() => setShowContactPicker(false)} onSend={handleSendContact} />
+      <LocationPicker
+        open={showLocationPicker}
+        onClose={() => setShowLocationPicker(false)}
+        onSend={handleSendLocation}
+      />
+      <PollCreator open={showPollCreator} onClose={() => setShowPollCreator(false)} onSend={handleSendPoll} />
     </div>
   );
 }

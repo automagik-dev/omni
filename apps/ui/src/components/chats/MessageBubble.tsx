@@ -1,22 +1,37 @@
+import { Button } from '@/components/ui/button';
 import { cn, formatDateTime } from '@/lib/utils';
 import { type ExtendedMessage, aggregateReactions, isMediaType } from '@/types/message';
-import { Check, CheckCheck, Clock, CornerUpLeft, Forward, XCircle } from 'lucide-react';
+import { Check, CheckCheck, Clock, Copy, CornerUpLeft, Edit, Forward, Smile, Trash, XCircle } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { MediaMessage } from './MediaMessage';
 import { ReactionList } from './ReactionBadge';
+import { ReactionPicker } from './ReactionPicker';
 
 interface MessageBubbleProps {
   message: ExtendedMessage;
   showSenderName?: boolean;
   isGroupChat?: boolean;
+  instanceId: string;
+  to: string;
 }
 
 /**
  * Single message bubble in the conversation
  * Handles text, media, reactions, status indicators, replies, and forwards
  */
-export function MessageBubble({ message, showSenderName = false, isGroupChat = false }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  showSenderName = false,
+  isGroupChat = false,
+  instanceId,
+  to,
+}: MessageBubbleProps) {
   const isFromMe = message.isFromMe ?? false;
   const aggregatedReactions = aggregateReactions(message.reactions);
+  const [isHovering, setIsHovering] = useState(false);
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [reactionPickerPosition, setReactionPickerPosition] = useState({ x: 0, y: 0 });
 
   // Handle reaction-only messages (reactions to other messages)
   if (message.messageType === 'reaction') {
@@ -28,54 +43,131 @@ export function MessageBubble({ message, showSenderName = false, isGroupChat = f
     return <SystemMessage message={message} />;
   }
 
+  const handleReactClick = (e: React.MouseEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setReactionPickerPosition({
+      x: rect.left,
+      y: rect.top - 60, // Position above the button
+    });
+    setShowReactionPicker(true);
+  };
+
+  const handleCopyClick = () => {
+    const text = message.textContent || '';
+    if (text) {
+      navigator.clipboard.writeText(text);
+      toast.success('Message copied to clipboard');
+    }
+  };
+
+  const handleEditClick = () => {
+    toast.info('Edit feature coming soon');
+  };
+
+  const handleDeleteClick = () => {
+    toast.info('Delete feature coming soon');
+  };
+
+  const handleForwardClick = () => {
+    toast.info('Forward feature coming soon');
+  };
+
   return (
-    <div className={cn('flex flex-col', isFromMe ? 'items-end' : 'items-start')}>
+    <div className={cn('group flex flex-col', isFromMe ? 'items-end' : 'items-start')}>
       {/* Sender name for group chats */}
       {showSenderName && !isFromMe && isGroupChat && message.senderDisplayName && (
-        <span className="mb-1 ml-1 text-xs font-medium text-primary">{message.senderDisplayName}</span>
+        <span className="mb-1 ml-1 text-xs font-medium text-primary/80">{message.senderDisplayName}</span>
       )}
 
-      {/* Message content */}
-      <div
-        className={cn(
-          'relative max-w-[70%] rounded-lg',
-          isFromMe ? 'bg-primary text-primary-foreground' : 'bg-muted',
-          // Less padding for stickers
-          message.messageType === 'sticker' ? 'p-1' : 'px-4 py-2',
-        )}
-      >
-        {/* Forwarded indicator */}
-        {message.isForwarded && <ForwardedIndicator isFromMe={isFromMe} forwardCount={message.forwardCount} />}
-
-        {/* Reply/Quote indicator */}
-        {(message.quotedText || message.replyToMessageId) && (
-          <QuotedMessage
-            quotedText={message.quotedText}
-            quotedSenderName={message.quotedSenderName}
-            isFromMe={isFromMe}
-          />
+      {/* Message container with hover actions */}
+      <div className="relative" onMouseEnter={() => setIsHovering(true)} onMouseLeave={() => setIsHovering(false)}>
+        {/* Hover action bar */}
+        {(isHovering || showReactionPicker) && (
+          <div
+            className={cn(
+              'absolute -top-10 flex gap-1 rounded-lg bg-card/95 backdrop-blur-md border p-1 shadow-lg z-10',
+              'animate-in fade-in slide-in-from-bottom-2 duration-200',
+              isFromMe ? 'right-2' : 'left-2',
+            )}
+          >
+            <ActionButton icon={Smile} onClick={handleReactClick} label="React" />
+            <ActionButton icon={Copy} onClick={handleCopyClick} label="Copy" />
+            <ActionButton icon={Forward} onClick={handleForwardClick} label="Forward" />
+            {isFromMe && <ActionButton icon={Edit} onClick={handleEditClick} label="Edit" />}
+            {isFromMe && <ActionButton icon={Trash} onClick={handleDeleteClick} label="Delete" />}
+          </div>
         )}
 
-        {/* Message content based on type */}
-        <MessageContent message={message} isFromMe={isFromMe} />
-
-        {/* Timestamp and status */}
-        <div className={cn('mt-1 flex items-center gap-1', isFromMe ? 'justify-end' : 'justify-start')}>
-          <span className={cn('text-[10px]', isFromMe ? 'text-primary-foreground/60' : 'text-muted-foreground')}>
-            {formatDateTime(message.platformTimestamp)}
-          </span>
-          {isFromMe && <DeliveryStatus status={message.deliveryStatus} />}
-          {message.status === 'edited' && (
-            <span className={cn('text-[10px]', isFromMe ? 'text-primary-foreground/50' : 'text-muted-foreground/70')}>
-              (edited)
-            </span>
+        {/* Message content */}
+        <div
+          className={cn(
+            'relative max-w-[70%] rounded-xl shadow-sm backdrop-blur-sm transition-all',
+            isFromMe
+              ? 'bg-primary/10 border-l-2 border-primary/30 text-foreground'
+              : 'bg-muted/50 border-l-2 border-muted-foreground/20',
+            // Less padding for stickers
+            message.messageType === 'sticker' ? 'p-1' : 'px-4 py-2',
+            'group-hover:shadow-md',
           )}
+        >
+          {/* Forwarded indicator */}
+          {message.isForwarded && <ForwardedIndicator isFromMe={isFromMe} forwardCount={message.forwardCount} />}
+
+          {/* Reply/Quote indicator */}
+          {(message.quotedText || message.replyToMessageId) && (
+            <QuotedMessage
+              quotedText={message.quotedText}
+              quotedSenderName={message.quotedSenderName}
+              isFromMe={isFromMe}
+            />
+          )}
+
+          {/* Message content based on type */}
+          <MessageContent message={message} isFromMe={isFromMe} />
+
+          {/* Timestamp and status */}
+          <div className={cn('mt-1 flex items-center gap-1', isFromMe ? 'justify-end' : 'justify-start')}>
+            <span className="text-[10px] text-muted-foreground/60">{formatDateTime(message.platformTimestamp)}</span>
+            {isFromMe && <DeliveryStatus status={message.deliveryStatus} />}
+            {message.status === 'edited' && <span className="text-[10px] text-muted-foreground/60">(edited)</span>}
+          </div>
         </div>
+
+        {/* Reactions */}
+        {aggregatedReactions.length > 0 && <ReactionList reactions={aggregatedReactions} isFromMe={isFromMe} />}
       </div>
 
-      {/* Reactions */}
-      {aggregatedReactions.length > 0 && <ReactionList reactions={aggregatedReactions} isFromMe={isFromMe} />}
+      {/* Reaction picker */}
+      {showReactionPicker && (
+        <ReactionPicker
+          messageId={message.externalId}
+          instanceId={instanceId}
+          chatId={message.chatId}
+          to={to}
+          position={reactionPickerPosition}
+          onClose={() => setShowReactionPicker(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Action button for hover bar
+ */
+function ActionButton({
+  icon: Icon,
+  onClick,
+  label,
+}: {
+  icon: React.ElementType;
+  onClick: (e: React.MouseEvent) => void;
+  label: string;
+}) {
+  return (
+    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-accent" onClick={onClick} title={label}>
+      <Icon className="h-4 w-4" />
+    </Button>
   );
 }
 
@@ -90,7 +182,7 @@ function MessageContent({ message, isFromMe }: { message: ExtendedMessage; isFro
 
   // Text message
   if (message.textContent) {
-    return <p className="whitespace-pre-wrap break-words">{message.textContent}</p>;
+    return <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.textContent}</p>;
   }
 
   // LLM-processed content (transcription, description)

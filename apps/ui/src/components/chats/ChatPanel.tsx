@@ -4,10 +4,11 @@ import { flattenAndReverseMessages, useInfiniteMessages } from '@/hooks/useInfin
 import { useInstance } from '@/hooks/useInstances';
 import type { Chat } from '@omni/sdk';
 import { MessageSquare } from 'lucide-react';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatHeader } from './ChatHeader';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
+import { TypingIndicator } from './TypingIndicator';
 
 interface ChatPanelProps {
   chat: Chat;
@@ -32,6 +33,7 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
   const toggleAgent = useToggleAgent();
 
   const agentPaused = chat.settings?.agentPaused ?? false;
+  const [showTypingIndicator] = useState(false);
 
   const messages = flattenAndReverseMessages(data);
   const isGroupChat = GROUP_CHAT_TYPES.includes(chat.chatType);
@@ -146,8 +148,14 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
                 message={message}
                 showSenderName={isGroupChat}
                 isGroupChat={isGroupChat}
+                instanceId={chat.instanceId}
+                to={chat.externalId}
               />
             ))}
+
+            {/* Typing indicator */}
+            {showTypingIndicator && <TypingIndicator displayName={chat.name || 'Someone'} />}
+
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -155,6 +163,10 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
 
       {/* Input */}
       <MessageInput
+        chatId={chat.id}
+        instanceId={chat.instanceId}
+        to={chat.externalId}
+        channel={chat.channel}
         onSend={handleSend}
         onSendMedia={handleSendMedia}
         disabled={sendMessage.isPending || sendMedia.isPending}
