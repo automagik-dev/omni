@@ -122,16 +122,26 @@ export function ChatListItem({ chat, isSelected = false, onClick }: ChatListItem
   const config = CHAT_TYPE_CONFIG[chat.chatType] || DEFAULT_CONFIG;
   const ChatTypeIcon = config.icon;
 
+  // Generate accessible label
+  const chatLabel = `${getChatDisplayName(chat)}, ${config.label}${chat.isArchived ? ', archived' : ''}${chat.description ? `, ${chat.description}` : ', no messages'}`;
+
   return (
-    <button type="button" onClick={onClick} className={getItemClass(isSelected, chat.chatType)}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={getItemClass(isSelected, chat.chatType)}
+      role="option"
+      aria-selected={isSelected}
+      aria-label={chatLabel}
+    >
       {/* Avatar */}
       <div className={getAvatarClass(isSelected, chat.chatType)}>
         {chat.avatarUrl ? (
           <img src={chat.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
         ) : chat.chatType === 'dm' ? (
-          <User className={getIconClass(isSelected, chat.chatType)} />
+          <User className={getIconClass(isSelected, chat.chatType)} aria-hidden="true" />
         ) : (
-          <ChatTypeIcon className={getIconClass(isSelected, chat.chatType)} />
+          <ChatTypeIcon className={getIconClass(isSelected, chat.chatType)} aria-hidden="true" />
         )}
       </div>
 
@@ -162,7 +172,7 @@ export function ChatListItem({ chat, isSelected = false, onClick }: ChatListItem
             variant="outline"
             className={cn('gap-1 border px-1.5 py-0 text-[10px]', isSelected ? config.selectedColor : config.color)}
           >
-            <ChatTypeIcon className="h-3 w-3" />
+            <ChatTypeIcon className="h-3 w-3" aria-hidden="true" />
             {config.label}
           </Badge>
           {chat.isArchived && (

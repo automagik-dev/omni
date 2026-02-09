@@ -124,7 +124,13 @@ export function ChatPanel({ chat, onBack }: ChatPanelProps) {
       />
 
       {/* Messages */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto p-4">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-auto p-4"
+        role="log"
+        aria-live="polite"
+        aria-label="Chat messages"
+      >
         {isFetchingNextPage && (
           <div className="flex justify-center py-4">
             <Spinner size="sm" />
