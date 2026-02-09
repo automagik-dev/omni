@@ -2,17 +2,16 @@
 
 ## Urgent
 
-- **ALL PRs MERGED** (#6, #7, #9, #10) — 22 WhatsApp features shipped to main
+- **ALL PRs MERGED** (#6, #7, #9, #10, #11) — 23 WhatsApp features shipped to main
 - Production deploy needed — SSH access to `10.114.1.118` still blocked
 - Helena profile rename pending deploy: `omni instances update 910ab957 --profile-name "Helena"`
-- Helena wants `groupCreate` feature — not yet implemented
 - Gemini security suggestion (SSRF on mediaUrl) — file as issue later
 
 ## Next Actions
 
-- [ ] Deploy to production (needs SSH access)
-- [ ] Implement `groupCreate` (plugin + API + CLI)
-- [ ] Fix @ mentions (currently prepends, should be natural placement)
+- [ ] Deploy to production (needs SSH access to 10.114.1.118)
+- [ ] Helena rename: `omni instances update 910ab957 --profile-name "Helena"`
+- [ ] Helena group: `omni instances group-create 910ab957... --subject "C-Level Namastex" --participants ...`
 - [ ] Study Baileys LID addressing mode
 
 ## Periodic Checks
