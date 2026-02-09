@@ -2,7 +2,7 @@
 
 > Expose `sock.groupCreate(subject, participants)` as Omni API endpoint + CLI command so agents and users can create WhatsApp groups programmatically.
 
-**Status:** READY
+**Status:** SHIPPED
 **Created:** 2026-02-08
 **Author:** Omni 🐙
 **Requested by:** Helena (CAIFO, Namastex)
