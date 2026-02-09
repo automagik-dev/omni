@@ -1609,6 +1609,44 @@ instancesRoutes.post(
 // ============================================================================
 
 // ============================================================================
+// Group Profile Picture
+// ============================================================================
+
+/**
+ * PUT /instances/:id/groups/:groupJid/picture - Update group picture
+ */
+instancesRoutes.put(
+  '/:id/groups/:groupJid/picture',
+  instanceAccess,
+  zValidator('json', z.object({ base64: z.string().min(1), mimeType: z.string().optional() })),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { base64 } = c.req.valid('json');
+    const channelRegistry = c.get('channelRegistry');
+    const services = c.get('services');
+
+    const instance = await services.instances.getById(id);
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin || !('updateGroupPicture' in plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group picture update' } }, 400);
+    }
+
+    const imageBuffer = Buffer.from(base64, 'base64');
+    await (
+      plugin as { updateGroupPicture: (id: string, jid: string, buf: Buffer) => Promise<void> }
+    ).updateGroupPicture(id, groupJid, imageBuffer);
+
+    return c.json({ success: true, data: { instanceId: id, groupJid, action: 'group_picture_updated' } });
+  },
+);
+
+// ============================================================================
 // C5: Privacy Settings
 // ============================================================================
 
