@@ -14,6 +14,7 @@ import { AuditService } from './audit';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
+import { ConsumerOffsetService } from './consumer-offsets';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
@@ -50,6 +51,7 @@ export interface Services {
   batchJobs: BatchJobService;
   agentRunner: AgentRunnerService;
   tts: TTSService;
+  consumerOffsets: ConsumerOffsetService;
 }
 
 /**
@@ -82,6 +84,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
     tts: new TTSService(settings),
+    consumerOffsets: new ConsumerOffsetService(db),
   };
 }
 
@@ -104,5 +107,6 @@ export { MessageService } from './messages';
 export { SyncJobService } from './sync-jobs';
 export { BatchJobService } from './batch-jobs';
 export { AgentRunnerService } from './agent-runner';
+export { ConsumerOffsetService } from './consumer-offsets';
 export { TTSService } from './tts';
 export type { TTSOptions, TTSResult, TTSVoice, TTSSettingsReader } from './tts';

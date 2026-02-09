@@ -510,6 +510,10 @@ export const instances = pgTable(
     processVideo: boolean('process_video').notNull().default(true),
     processDocuments: boolean('process_documents').notNull().default(true),
 
+    // ---- Message Tracking ----
+    /** Timestamp of last processed message (for reconnect gap detection) */
+    lastMessageAt: timestamp('last_message_at'),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -1902,6 +1906,25 @@ export const automationLogs = pgTable(
 
 export type AutomationLog = typeof automationLogs.$inferSelect;
 export type NewAutomationLog = typeof automationLogs.$inferInsert;
+
+// ============================================================================
+// CONSUMER OFFSETS (NATS sequence tracking)
+// ============================================================================
+
+/**
+ * Tracks the last processed NATS sequence per durable consumer.
+ * Enables gap detection on startup and consumer lag monitoring.
+ */
+export const consumerOffsets = pgTable('consumer_offsets', {
+  consumerName: varchar('consumer_name', { length: 100 }).primaryKey(),
+  streamName: varchar('stream_name', { length: 50 }).notNull(),
+  lastSequence: integer('last_sequence').notNull().default(0),
+  lastEventId: uuid('last_event_id'),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export type ConsumerOffset = typeof consumerOffsets.$inferSelect;
+export type NewConsumerOffset = typeof consumerOffsets.$inferInsert;
 
 // Relations for webhook sources and automations
 export const automationsRelations = relations(automations, ({ many }) => ({

@@ -314,7 +314,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       queue: 'media-processor',
       maxRetries: 2,
       retryDelayMs: 1000,
-      startFrom: 'last',
+      startFrom: 'first',
       concurrency: 5, // Process up to 5 media files in parallel
     },
   );

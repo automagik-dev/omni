@@ -296,6 +296,11 @@ async function handleMessageReceived(
     const activityUserId = truncate(payload.from, 255) ?? payload.from;
     await services.chats.recordParticipantActivity(chat.id, activityUserId);
   }
+
+  // Step 6: Update lastMessageAt on instance (for reconnect gap detection)
+  services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
+    log.debug('Failed to update lastMessageAt (non-critical)', { error: String(error) });
+  });
 }
 
 /**
@@ -355,6 +360,15 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             { ...metadata, instanceId: metadata.instanceId },
             event.timestamp,
           );
+          // Track consumer offset after successful processing
+          if (metadata.streamSequence) {
+            await services.consumerOffsets.updateOffset(
+              'message-persistence-received',
+              'MESSAGE',
+              metadata.streamSequence,
+              event.id,
+            );
+          }
         } catch (error) {
           logMessageReceivedError(payload, error);
           throw error;
@@ -365,7 +379,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         queue: 'message-persistence',
         maxRetries: 3,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        startFrom: 'first',
         concurrency: 10, // Process up to 10 messages in parallel
       },
     );
@@ -418,6 +432,15 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               chatId: chat.id,
             });
           }
+          // Track consumer offset after successful processing
+          if (metadata.streamSequence) {
+            await services.consumerOffsets.updateOffset(
+              'message-persistence-sent',
+              'MESSAGE',
+              metadata.streamSequence,
+              event.id,
+            );
+          }
         } catch (error) {
           log.error('Failed to persist message.sent to unified model', {
             externalId: payload.externalId,
@@ -431,7 +454,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         queue: 'message-persistence',
         maxRetries: 3,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        startFrom: 'first',
         concurrency: 10,
       },
     );
@@ -480,7 +503,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         queue: 'message-persistence',
         maxRetries: 2,
         retryDelayMs: 500,
-        startFrom: 'last',
+        startFrom: 'first',
         concurrency: 10,
       },
     );
@@ -528,14 +551,104 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         queue: 'message-persistence',
         maxRetries: 2,
         retryDelayMs: 500,
-        startFrom: 'last',
+        startFrom: 'first',
         concurrency: 10,
       },
     );
 
+    // Subscribe to instance.connected for post-reconnect backfill detection
+    await eventBus.subscribe(
+      'instance.connected',
+      async (event) => {
+        const payload = event.payload as { instanceId: string };
+        const instanceId = payload.instanceId;
+        if (!instanceId) return;
+
+        try {
+          const lastMessageAt = await services.instances.getLastMessageAt(instanceId);
+          if (!lastMessageAt) return;
+
+          const gapMs = Date.now() - lastMessageAt.getTime();
+          const gapMinutes = Math.round(gapMs / 60_000);
+
+          // Only trigger backfill if gap > 5 minutes
+          if (gapMs > 5 * 60 * 1000) {
+            log.warn('Instance reconnected with message gap', {
+              instanceId,
+              lastMessageAt: lastMessageAt.toISOString(),
+              gapMinutes,
+            });
+
+            // Trigger resync via sync.started event (using generic publish for extended config)
+            await eventBus.publishGeneric(
+              'sync.started',
+              {
+                jobId: `reconnect-${instanceId}-${Date.now()}`,
+                instanceId,
+                type: 'messages',
+                since: lastMessageAt.toISOString(),
+                until: new Date().toISOString(),
+                trigger: 'reconnect-backfill',
+              },
+              {
+                instanceId,
+                channelType: event.metadata.channelType,
+              },
+            );
+
+            log.info('Post-reconnect backfill triggered', {
+              instanceId,
+              since: lastMessageAt.toISOString(),
+              gapMinutes,
+            });
+          } else {
+            log.debug('Instance reconnected, gap within threshold', { instanceId, gapMinutes });
+          }
+        } catch (error) {
+          log.warn('Post-reconnect gap check failed (non-critical)', {
+            instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'message-persistence-reconnect',
+        queue: 'message-persistence',
+        maxRetries: 2,
+        retryDelayMs: 1000,
+        startFrom: 'first',
+        concurrency: 5,
+      },
+    );
+
     log.info('Message persistence initialized - populating unified chats/messages');
+
+    // Startup gap detection (non-blocking)
+    detectStartupGaps(services).catch((error) => {
+      log.warn('Startup gap detection failed (non-critical)', { error: String(error) });
+    });
   } catch (error) {
     log.error('Failed to set up message persistence', { error: String(error) });
     throw error;
+  }
+}
+
+/**
+ * Detect unprocessed message gaps on startup by comparing
+ * stored consumer offsets with current stream state.
+ */
+async function detectStartupGaps(services: Services): Promise<void> {
+  const consumers = [
+    'message-persistence-received',
+    'message-persistence-sent',
+    'message-persistence-delivered',
+    'message-persistence-read',
+  ];
+
+  for (const consumerName of consumers) {
+    const offset = await services.consumerOffsets.getOffset(consumerName);
+    if (offset > 0) {
+      log.info('Consumer startup offset', { consumer: consumerName, lastSequence: offset });
+    }
   }
 }

@@ -1728,4 +1728,126 @@ instancesRoutes.post(
   },
 );
 
+// ============================================================================
+// Resync endpoint - trigger history backfill for an instance
+// ============================================================================
+
+const resyncSchema = z.object({
+  since: z
+    .string()
+    .optional()
+    .describe('Backfill start time (ISO 8601 or relative duration like "2h", "30m"). Default: 2h ago'),
+  until: z.string().optional().describe('Backfill end time (ISO 8601). Default: now'),
+});
+
+/**
+ * Parse a duration string (e.g., "2h", "30m", "1d") into milliseconds
+ */
+function parseDuration(duration: string): number | null {
+  const match = duration.match(/^(\d+)(s|m|h|d)$/);
+  if (!match?.[1] || !match[2]) return null;
+  const value = Number.parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case 's':
+      return value * 1000;
+    case 'm':
+      return value * 60 * 1000;
+    case 'h':
+      return value * 60 * 60 * 1000;
+    case 'd':
+      return value * 24 * 60 * 60 * 1000;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Parse a since value into a Date — supports ISO timestamps and durations
+ */
+function parseSince(since: string | undefined): Date {
+  if (!since) {
+    return new Date(Date.now() - 2 * 60 * 60 * 1000); // Default: 2h ago
+  }
+
+  // Try duration first
+  const durationMs = parseDuration(since);
+  if (durationMs !== null) {
+    return new Date(Date.now() - durationMs);
+  }
+
+  // Try ISO timestamp
+  const date = new Date(since);
+  if (!Number.isNaN(date.getTime())) {
+    return date;
+  }
+
+  return new Date(Date.now() - 2 * 60 * 60 * 1000); // Fallback: 2h ago
+}
+
+/**
+ * POST /v2/instances/:id/resync - Trigger history backfill
+ *
+ * Uses the channel's fetchHistory() via sync-worker to re-fetch messages
+ * from the platform for the specified time range.
+ */
+instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSchema), async (c) => {
+  const id = c.req.param('id');
+  const { since, until } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  const eventBus = c.get('eventBus');
+
+  // Get instance (throws NotFoundError if not found)
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry || !eventBus) {
+    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Channel registry or event bus not available' } }, 503);
+  }
+
+  const sinceDate = parseSince(since);
+  const untilDate = until ? new Date(until) : new Date();
+
+  // Emit a sync.started event to trigger the sync-worker
+  try {
+    const result = await eventBus.publishGeneric(
+      'sync.started',
+      {
+        jobId: `resync-${id}-${Date.now()}`,
+        instanceId: id,
+        type: 'messages',
+        since: sinceDate.toISOString(),
+        until: untilDate.toISOString(),
+        trigger: 'manual-resync',
+      },
+      {
+        instanceId: id,
+        channelType: instance.channel,
+      },
+    );
+
+    log.info('Resync triggered', {
+      instanceId: id,
+      since: sinceDate.toISOString(),
+      until: untilDate.toISOString(),
+      eventId: result.id,
+    });
+
+    return c.json({
+      success: true,
+      data: {
+        instanceId: id,
+        since: sinceDate.toISOString(),
+        until: untilDate.toISOString(),
+        eventId: result.id,
+        message: `Resync triggered for ${instance.name}. Messages since ${sinceDate.toISOString()} will be re-fetched.`,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    log.error('Failed to trigger resync', { instanceId: id, error: message });
+    return c.json({ error: { code: 'RESYNC_FAILED', message } }, 500);
+  }
+});
+
 export { instancesRoutes };

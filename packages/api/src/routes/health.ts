@@ -2,7 +2,7 @@
  * Health check endpoints
  */
 
-import { instances } from '@omni/db';
+import { consumerOffsets, instances } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
@@ -149,4 +149,40 @@ healthRoutes.get('/_internal/health', async (c) => {
     pid: process.pid,
     memory: process.memoryUsage(),
   });
+});
+
+/**
+ * GET /health/consumers - Consumer lag info (no auth required)
+ * Shows per-consumer offset tracking and lag
+ */
+healthRoutes.get('/health/consumers', async (c) => {
+  const db = c.get('db');
+
+  try {
+    const offsets = await db.select().from(consumerOffsets);
+
+    const consumers = offsets.map((offset) => ({
+      consumer: offset.consumerName,
+      stream: offset.streamName,
+      lastSequence: offset.lastSequence,
+      lastEventId: offset.lastEventId,
+      updatedAt: offset.updatedAt.toISOString(),
+    }));
+
+    return c.json({
+      status: 'ok',
+      consumers,
+      totalTracked: consumers.length,
+    });
+  } catch (error) {
+    return c.json(
+      {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        consumers: [],
+        totalTracked: 0,
+      },
+      500,
+    );
+  }
 });
