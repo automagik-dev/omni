@@ -23,6 +23,8 @@ export type WebhookSource = components['schemas']['WebhookSource'];
 export type PayloadConfig = components['schemas']['PayloadConfig'];
 export type ReplaySession = components['schemas']['ReplaySession'];
 export type LogEntry = components['schemas']['LogEntry'];
+export type EventMetrics = components['schemas']['EventMetrics'];
+export type EventAnalytics = components['schemas']['EventAnalytics'];
 
 // Types that will be added after SDK regeneration
 // For now, use generic interfaces
@@ -1620,6 +1622,18 @@ export function createOmniClient(config: OmniClientConfig) {
           items: data?.items ?? [],
           meta: data?.meta ?? { hasMore: false },
         };
+      },
+
+      /**
+       * Get event analytics
+       */
+      async analytics(params?: { granularity?: 'hourly' | 'daily' }): Promise<EventAnalytics> {
+        const { data, error, response } = await client.GET('/events/analytics', {
+          params: { query: params },
+        });
+        throwIfError(response, error);
+        if (!data) throw new OmniApiError('Analytics data not found', 'NOT_FOUND', undefined, 404);
+        return data as EventAnalytics;
       },
     },
 
