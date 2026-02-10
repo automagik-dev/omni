@@ -11,6 +11,7 @@
 import {
   type IAgnoClient,
   ProviderError,
+  type ProviderFile,
   type ProviderResponse,
   type StreamChunk,
   createProviderClient,
@@ -39,6 +40,8 @@ export interface AgentRunContext {
   senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
+  /** Optional file attachments (images, audio, documents) */
+  files?: ProviderFile[];
 }
 
 export interface AgentRunResult {
@@ -374,7 +377,7 @@ export class AgentRunnerService {
    * Run an agent call (sync mode)
    */
   async run(context: AgentRunContext): Promise<AgentRunResult> {
-    const { instance, chatId, senderId, senderName, messages } = context;
+    const { instance, chatId, senderId, senderName, messages, files } = context;
 
     if (!instance.agentProviderId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
@@ -415,6 +418,7 @@ export class AgentRunnerService {
       sessionId, // Computed based on session strategy
       userId: senderId, // User identifier (always sent for context)
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
+      files,
     };
 
     const agentType = instance.agentType ?? 'agent';
