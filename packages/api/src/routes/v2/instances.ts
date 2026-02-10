@@ -74,8 +74,17 @@ const createInstanceSchema = z.object({
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
 });
 
-// Update instance schema
-const updateInstanceSchema = createInstanceSchema.partial();
+// Update instance schema - allow null to clear values (only for nullable DB fields)
+const updateInstanceSchema = createInstanceSchema.partial().extend({
+  // Nullable fields in DB - can be set to null
+  agentProviderId: z.string().uuid().nullable().optional(),
+  agentId: z.string().max(255).nullable().optional(),
+  agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+  triggerEvents: z.array(z.string()).nullable().optional(),
+  // NOT NULL fields in DB - cannot be set to null
+  // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
+  // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
+});
 
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {

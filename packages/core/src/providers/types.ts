@@ -143,6 +143,9 @@ export interface IAgnoClient {
 
   /** Health check */
   checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }>;
+
+  /** Delete a session (clear conversation history) */
+  deleteSession(sessionId: string): Promise<void>;
 }
 
 /**

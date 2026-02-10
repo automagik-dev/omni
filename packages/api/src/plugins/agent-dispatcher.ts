@@ -1037,6 +1037,16 @@ function isReactionTrigger(instance: Instance, emoji: string): boolean {
 /**
  * Guard checks for incoming messages — returns the instance if message should be processed, null otherwise.
  */
+/**
+ * Check if message contains only trash emoji (session clear command)
+ */
+function isTrashEmojiOnly(text: string | undefined): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  const trashEmojiPattern = /^[\uFE0F\u200D]*(?:🗑️|🗑)[\uFE0F\u200D]*$/u;
+  return trashEmojiPattern.test(trimmed);
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -1046,6 +1056,15 @@ async function shouldProcessMessage(
 ): Promise<Instance | null> {
   if (!metadata.instanceId) return null;
   if (payload.from === metadata.platformIdentityId) return null;
+
+  // Skip trash emoji messages - handled by session-cleaner plugin
+  if (isTrashEmojiOnly(payload.content?.text)) {
+    log.debug('Skipping trash emoji message (session-cleaner handles this)', {
+      instanceId: metadata.instanceId,
+      chatId: payload.chatId,
+    });
+    return null;
+  }
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentProviderId) return null;

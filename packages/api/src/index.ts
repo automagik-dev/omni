@@ -35,6 +35,7 @@ import {
   setupMessageListener,
   setupMessagePersistence,
   setupQrCodeListener,
+  setupSessionCleaner,
   setupSyncWorker,
 } from './plugins';
 import { setupScheduler, stopScheduler } from './scheduler';
@@ -285,6 +286,13 @@ async function setupEventBusServices(
     globalDispatcherCleanup = await setupAgentResponder(eventBus, services);
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
+  }
+
+  // Session cleaner (clears agent sessions on trash emoji)
+  try {
+    await setupSessionCleaner(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up session cleaner', { error: String(error) });
   }
 
   // Sync worker

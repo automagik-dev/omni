@@ -44,5 +44,8 @@ export { setupAgentDispatcher, setupAgentResponder, type DispatcherCleanup } fro
 // Sync worker (processes sync jobs)
 export { setupSyncWorker } from './sync-worker';
 
+// Session cleaner (clears agent sessions on trash emoji)
+export { setupSessionCleaner } from './session-cleaner';
+
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';
