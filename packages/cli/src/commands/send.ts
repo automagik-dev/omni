@@ -9,7 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import type { OmniClient } from '@omni/sdk';
+import { OmniApiError, type OmniClient } from '@omni/sdk';
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
@@ -405,8 +405,15 @@ export function createSendCommand(): Command {
       try {
         await messageSenders[messageType](client, instanceId, options);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to send: ${message}`);
+        if (err instanceof OmniApiError) {
+          const details: Record<string, unknown> = { code: err.code };
+          if (err.status) details.status = err.status;
+          if (err.details) details.details = err.details;
+          output.error(`Failed to send: ${err.message}`, details);
+        } else {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to send: ${message}`);
+        }
       }
     });
 
