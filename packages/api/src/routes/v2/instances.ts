@@ -75,6 +75,12 @@ const createInstanceSchema = z.object({
 // Update instance schema
 const updateInstanceSchema = createInstanceSchema.partial();
 
+/** Default reply filter applied when an agent provider is bound but no filter is set */
+const DEFAULT_AGENT_REPLY_FILTER = {
+  mode: 'filtered' as const,
+  conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
+};
+
 /**
  * GET /instances - List all instances
  */
@@ -159,6 +165,11 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  // Default reply filter when binding an agent provider without explicit filter
+  if (data.agentProviderId && !data.agentReplyFilter) {
+    data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+  }
+
   // Create the database record first
   const instance = await services.instances.create(data);
 
@@ -199,6 +210,14 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // Default reply filter when binding an agent provider without explicit filter
+  if (data.agentProviderId && !data.agentReplyFilter) {
+    const existing = await services.instances.getById(id);
+    if (!existing.agentReplyFilter) {
+      data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+    }
+  }
 
   const instance = await services.instances.update(id, data);
 
