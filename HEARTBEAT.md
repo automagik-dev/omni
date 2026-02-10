@@ -1,5 +1,11 @@
 # HEARTBEAT.md
 
+## Rules for Heartbeat Self-Check
+- Before working any item below, verify it's ACTUALLY still open (check git log, grep code)
+- If an item is done, move it to Recently Completed and reply HEARTBEAT_OK
+- Don't trust wish file statuses — verify against actual code/commits
+- Run `git log --oneline -5` to catch recent changes you might not know about
+
 ## Urgent
 
 - **Genie + Helena instances DOWN** — need QR re-scan (see HANDOFF.md)
