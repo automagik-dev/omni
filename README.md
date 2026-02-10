@@ -622,6 +622,96 @@ export class MyPlugin extends BaseChannelPlugin {
 - **Pre-commit:** `make lint` — blocks commits with lint errors
 - **Pre-push:** `make typecheck` — blocks pushes with type errors
 
+## AI Agents
+
+Omni isn't just a message bus — it's an **agent runtime**. Connect any LLM provider and your instances become intelligent agents that respond to messages, react to events, and operate across every channel simultaneously.
+
+### How It Works
+
+```
+User sends WhatsApp message
+  → NATS event: message.received
+    → Agent Dispatcher: classify trigger (dm / mention / reply / reaction)
+      → Rate limit + access check + debounce
+        → Provider dispatch (Agno / Webhook / OpenAI / Anthropic / custom)
+          → Response split + humanized delays + typing presence
+            → Reply sent across same channel
+```
+
+### Connect a Provider
+
+```bash
+# Connect an OpenAI-compatible endpoint
+omni providers create --name "my-llm" --schema openai --base-url "https://api.openai.com/v1" --api-key "sk-..."
+
+# Or Agno (multi-agent orchestration)
+omni providers create --name "agno" --schema agnoos --base-url "https://your-agno.com" --api-key "..."
+
+# Or a simple webhook
+omni providers create --name "webhook" --schema webhook --base-url "https://your-app.com/agent"
+
+# Bind provider to an instance
+omni instances update <id> --agent-provider <provider-id>
+```
+
+### Trigger Types
+
+Agents can respond to multiple event types per instance:
+
+| Trigger | Event | Use Case |
+|---------|-------|----------|
+| **DM** | `message.received` | Direct messages → always reply |
+| **Mention** | `message.received` | @mentioned in groups → respond |
+| **Reply** | `message.received` | Replied to bot's message → continue thread |
+| **Reaction** | `reaction.received` | Emoji on a message → trigger action (👍 = approve, 🔥 = prioritize) |
+
+### Built-in Intelligence
+
+- **Message debouncing** — Waits for user to stop typing before responding (configurable per instance)
+- **Rate limiting** — Per-user-per-channel rate limits prevent abuse
+- **Access control** — Blocklist/allowlist modes per instance
+- **Smart chunking** — Long responses auto-split at paragraph/sentence boundaries
+- **Humanized delays** — Typing presence + random delays between message parts
+- **Identity awareness** — Agent knows the person across channels, not just the platform ID
+- **Self-chat detection** — Bot prefixes its own replies in self-chat so you can talk to yourself
+
+### Event-Driven Automations
+
+Beyond agents, automations react to any event in the system:
+
+```bash
+# Auto-reply to all messages on an instance
+omni automations create --name "welcome" \
+  --trigger "message.received" \
+  --action send_message \
+  --action-config '{"text": "Thanks for reaching out! 🐙"}'
+
+# Webhook on new connections
+omni automations create --name "notify-connect" \
+  --trigger "instance.connected" \
+  --action webhook \
+  --action-config '{"url": "https://your-app.com/hook"}'
+
+# Call an agent on specific conditions
+omni automations create --name "vip-agent" \
+  --trigger "message.received" \
+  --condition '{"field": "payload.from", "op": "in", "value": ["+551199..."]}' \
+  --action call_agent \
+  --agent-id "vip-handler" --provider-id <id>
+```
+
+### Where This Is Going
+
+Omni is evolving from a message bus into a **distributed agent nervous system**:
+
+- **Multi-agent routing** — Different agents for different channels, chats, or people
+- **Cross-channel context** — Agent remembers conversation across WhatsApp → Discord → Telegram
+- **Event replay for learning** — Replay message history through new agents to build context
+- **Autonomous sub-agents** — Spawn specialized agents for tasks (research, docs, monitoring)
+- **Self-improving infrastructure** — The octopus maintains its own docs, README, and codebase health
+
+*This README was written and is maintained by Scroll (📜), one of Omni's autonomous sub-agents.*
+
 ## Tech Stack
 
 | Component | Technology |
