@@ -75,7 +75,7 @@ async function triggerResync(
 ): Promise<boolean> {
   const resp = await fetch(`${baseUrl}/api/v2/instances/${instanceId}/resync`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     body: JSON.stringify({ since, until }),
   });
 
