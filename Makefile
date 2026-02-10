@@ -8,7 +8,8 @@
         restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
         cli cli-build cli-link \
-        migrate-messages migrate-messages-dry
+        migrate-messages migrate-messages-dry \
+        _init-db-wait
 
 # Default target
 help:
@@ -22,7 +23,7 @@ help:
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
 	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
-	@echo "  make dev-services  Start pgserve + nats via PM2"
+	@echo "  make dev-services  Start infrastructure (pgserve + NATS) via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
@@ -116,18 +117,31 @@ _init-db: _setup-env
 	echo "✓ Database schema initialized" || \
 	echo "⚠️  Database initialization skipped (PostgreSQL may not be running yet)"
 
+# Retry-based DB init: waits for PostgreSQL to be ready (used by setup/dev after dev-services)
+_init-db-wait: _setup-env
+	@echo "Initializing database schema (waiting for PostgreSQL)..."
+	@set -a && . ./.env && set +a && \
+	for i in $$(seq 1 15); do \
+		(cd packages/db && bun x drizzle-kit push --force) >/dev/null 2>&1 && \
+		echo "✓ Database schema initialized" && exit 0 || \
+		sleep 1; \
+	done; \
+	echo "⚠️  Could not initialize database (is PostgreSQL running?)" && exit 1
+
 # Check dependencies
 check-deps:
 	@./scripts/check-dependencies.sh
 
-# Complete setup: install + services + start all
-setup: check-deps install dev-services
+# Complete setup: install + services + init DB + build SDK + start all
+# Order matters: dev-services starts PostgreSQL, _init-db-wait retries until DB is ready,
+# _build-dist builds SDK before UI needs it, then turbo dev starts API + UI.
+setup: check-deps install dev-services _init-db-wait _build-dist
 	@echo ""
 	@echo "✓ Setup complete! Starting development..."
 	bun run dev
 
-# Start dev services (PM2) then run turbo dev
-dev: dev-services
+# Start dev services (PM2), init DB if needed, build SDK, then run turbo dev
+dev: dev-services _init-db-wait _build-dist
 	bun run dev
 
 # Start just the API (assumes services already running)
@@ -136,14 +150,15 @@ dev: dev-services
 dev-api:
 	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages npx tsx watch --clear-screen packages/api/src/index.ts
 
-# Start managed services via PM2 (reads *_MANAGED from .env)
+# Start infrastructure services via PM2 (pgserve + NATS only)
+# API is NOT started here — turbo dev handles it (avoids port conflicts, see GH #14)
 dev-services: ensure-nats
 	@if [ ! -f .env ]; then \
 		echo "Creating .env from .env.example..."; \
 		cp .env.example .env; \
 	fi
-	@echo "Starting managed services..."
-	@set -a && . ./.env && set +a && pm2 start ecosystem.config.cjs || true
+	@echo "Starting infrastructure services (pgserve + NATS)..."
+	@set -a && . ./.env && set +a && API_MANAGED=false pm2 start ecosystem.config.cjs || true
 	@sleep 2
 	@$(MAKE) status
 
