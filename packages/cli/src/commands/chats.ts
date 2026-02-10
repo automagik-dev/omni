@@ -93,7 +93,26 @@ function formatRelativeTime(date: Date | string | null | undefined): string {
 function formatTime(date: Date | string | null | undefined): string {
   if (!date) return '-';
   const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+  // Same calendar day → just time
+  if (d.toDateString() === now.toDateString()) return time;
+  // Yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `yesterday ${time}`;
+  // Within 7 days → day name
+  if (diffDays < 7) {
+    const day = d.toLocaleDateString('en-US', { weekday: 'short' });
+    return `${day} ${time}`;
+  }
+  // Older → compact date
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const dayNum = String(d.getDate()).padStart(2, '0');
+  return `${month}-${dayNum} ${time}`;
 }
 
 /** Module-level truncation limit — set by --full flag or default */
