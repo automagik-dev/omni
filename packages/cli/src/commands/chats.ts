@@ -115,6 +115,21 @@ function formatTime(date: Date | string | null | undefined): string {
   return `${month}-${dayNum} ${time}`;
 }
 
+/**
+ * Format timestamp for standard (agent) display — compact ISO: YYYY-MM-DD HH:MM
+ * Machine-parseable, unambiguous, includes full date always.
+ */
+function formatTimestamp(date: Date | string | null | undefined): string {
+  if (!date) return '-';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dy = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${mo}-${dy} ${h}:${mi}`;
+}
+
 /** Module-level truncation limit — set by --full flag or default */
 let _truncateMax = 200;
 
@@ -230,7 +245,7 @@ function formatStandardMessages(messages: ExtendedMessage[]): {
   type: string;
   content: string;
   fromMe: string;
-  timestamp: string | null;
+  timestamp: string;
 }[] {
   return messages.map((m) => ({
     id: m.id,
@@ -239,7 +254,7 @@ function formatStandardMessages(messages: ExtendedMessage[]): {
     type: m.messageType,
     content: _truncateMax > 0 ? truncate(m.textContent, _truncateMax) : (m.textContent ?? '-'),
     fromMe: m.isFromMe ? 'yes' : 'no',
-    timestamp: m.platformTimestamp,
+    timestamp: formatTimestamp(m.platformTimestamp),
   }));
 }
 
