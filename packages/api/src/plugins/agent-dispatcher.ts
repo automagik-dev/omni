@@ -282,7 +282,6 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
     !chatId.includes('@g.us') &&
     !chatId.includes('@broadcast') &&
     !chatId.includes('@newsletter') &&
-    !chatId.includes('@lid') &&
     !(rawPayload.isGroup as boolean);
 
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
@@ -739,6 +738,29 @@ async function prepareAgentContent(
 }
 
 /**
+ * Resolve person ID by waiting for message-persistence to create the identity.
+ * Polls the identity table up to 2s (10 x 200ms) before giving up.
+ */
+async function resolvePersonId(
+  services: Services,
+  channel: ChannelType,
+  instanceId: string,
+  senderId: string,
+  metadataPersonId?: string,
+): Promise<string | undefined> {
+  if (metadataPersonId) return metadataPersonId;
+  if (!senderId) return undefined;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    if (identity?.personId) return identity.personId;
+    await sleep(200);
+  }
+
+  return undefined;
+}
+
+/**
  * Fetch sender identity metadata (avatar URL, username)
  */
 async function fetchSenderMetadata(
@@ -796,10 +818,14 @@ async function processAgentResponse(
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
   const traceId = firstMessage.metadata.traceId;
 
-  // Extract person ID (already in event metadata)
-  const personId = firstMessage.metadata.personId;
+  // Resolve person ID (waits for message-persistence to create identity)
+  const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
   if (!personId) {
-    log.warn('No person ID in message metadata, skipping agent', { instanceId: instance.id, chatId });
+    log.warn('Could not resolve person ID, skipping agent', {
+      instanceId: instance.id,
+      chatId,
+      senderId,
+    });
     return;
   }
 
@@ -1065,11 +1091,7 @@ async function processReactionTrigger(
       instanceId: instance.id,
     });
 
-    const personId = metadata.personId;
-    if (!personId) {
-      log.warn('No person ID in reaction metadata, skipping agent', { instanceId: instance.id, chatId });
-      return;
-    }
+    const personId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
 
     const reactionMessage = `[Reacted with ${payload.emoji} to a message]`;
     const senderName = await services.agentRunner.getSenderName(personId, undefined);

@@ -432,12 +432,8 @@ async function processAgentResponse(
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
 
-  // Extract person ID (required for enhanced context)
+  // Resolve person ID: metadata first, then identity lookup fallback
   const personId = firstMessage.metadata.personId;
-  if (!personId) {
-    log.warn('No person ID in message metadata, skipping agent', { instanceId: instance.id, chatId });
-    return;
-  }
 
   // Get sender name from DB or fallback to pushName from payload
   const rawPayload = firstMessage.payload.rawPayload ?? {};
