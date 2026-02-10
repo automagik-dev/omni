@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { PROVIDER_SCHEMAS } from '../types/agent';
 
 /**
  * UUID schema
@@ -112,14 +113,10 @@ export const EventTypeSchema = z.enum([
 export const JobStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']);
 
 /**
- * Provider schema enum
- * - agnoos: AgnoOS AI orchestration platform
- * - a2a: Agent-to-Agent protocol (Google A2A)
- * - openai: OpenAI-compatible API
- * - anthropic: Anthropic Claude API
- * - custom: Custom provider implementation
+ * Provider schema enum — derived from PROVIDER_SCHEMAS (single source of truth)
+ * @see DEC-12: packages/core/src/types/agent.ts is the canonical list
  */
-export const ProviderSchemaEnum = z.enum(['agnoos', 'a2a', 'openai', 'anthropic', 'custom']);
+export const ProviderSchemaEnum = z.enum(PROVIDER_SCHEMAS);
 
 /**
  * Rule type enum

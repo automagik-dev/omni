@@ -253,6 +253,12 @@ export interface IAgentProvider {
 
   /** Health check */
   checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }>;
+
+  /** Optional: Gracefully dispose resources (WS connections, timers, etc.) */
+  dispose?(): Promise<void>;
+
+  /** Optional: Reset/clear a session by session key */
+  resetSession?(sessionKey: string): Promise<void>;
 }
 
 /**

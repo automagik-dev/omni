@@ -52,7 +52,7 @@ const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 let globalEventBus: EventBus | null = null;
 let globalChannelRegistry: ChannelRegistry | null = null;
 let globalInstanceMonitor: InstanceMonitor | null = null;
-let globalDispatcherCleanup: (() => void) | null = null;
+let globalDispatcherCleanup: (() => Promise<void>) | null = null;
 
 /**
  * Get the global channel registry
@@ -224,7 +224,7 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
 
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
-        globalDispatcherCleanup();
+        await globalDispatcherCleanup();
       }
 
       if (globalInstanceMonitor) {
