@@ -209,7 +209,7 @@ export class InstanceService {
     await this.db
       .update(instances)
       .set({
-        lastMessageAt: sql`GREATEST(${instances.lastMessageAt}, ${timestamp})`,
+        lastMessageAt: sql`GREATEST(${instances.lastMessageAt}, ${timestamp.toISOString()})`,
       })
       .where(eq(instances.id, instanceId));
   }
