@@ -1,14 +1,29 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" />
+  <picture>
+    <img src=".github/assets/omni-header-2.png" alt="Omni — One API, Every Channel" width="800" />
+  </picture>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
   <img src="https://img.shields.io/badge/version-2.0.0-8b5cf6?style=flat-square" alt="v2.0.0" />
-  <img src="https://img.shields.io/badge/channels-WhatsApp%20%7C%20Discord%20%7C%20Telegram-25D366?style=flat-square" alt="Channels" />
+  <img src="https://img.shields.io/badge/channels-3-25D366?style=flat-square" alt="Channels" />
   <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS" />
 </p>
 
-<h1 align="center">🐙 Omni</h1>
 <p align="center"><strong>Universal event-driven omnichannel messaging platform</strong></p>
 <p align="center">One API to send and receive messages across WhatsApp, Discord, Telegram, and more.<br/>CLI-first. Event-driven. Built for AI agents.</p>
+
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#cli-command-reference">CLI</a> •
+  <a href="#rest-api">API</a> •
+  <a href="#sdks">SDKs</a> •
+  <a href="#web-dashboard">Dashboard</a> •
+  <a href="#development">Development</a>
+</p>
 
 ---
 
