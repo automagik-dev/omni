@@ -2,7 +2,7 @@
 
 > Five CLI-only improvements to make the developer experience smoother: better message display, whoami info, enhanced contacts/groups output, and events analytics.
 
-**Status:** IN_PROGRESS
+**Status:** SHIPPED
 **Created:** 2026-02-08
 **Author:** Omni + Guga
 **Branch:** `feat/cli-dx-improvements`

@@ -8,8 +8,12 @@
 
 - [ ] Re-scan QR for Genie + Helena (HANDOFF.md steps)
 - [ ] Add `~/.omni/bin` to prod user's PATH
-- [ ] Fix NATS "consumer already exists" errors on restart
-- [ ] Study Baileys LID addressing mode
+- [ ] Merge `feat/medium-features` branch (C1-C7 code complete, needs PR review)
+- [ ] Study Baileys LID addressing mode (partial research in docs/research/baileys/)
+- [ ] Fix cognitive complexity lint errors (channels.ts:20, send.ts:26, nats/client.ts:22, session-cleaner.ts:24 — all >15 max) — blocks `make check`
+- [ ] Clean 6 stale git stashes
+- [ ] Commit dirty files: `memory/baileys-version-state.json`, `packages/core/src/logger/__tests__/logger.test.ts`
+- [ ] Wire Scroll daily cron for README maintenance
 
 ## Periodic Checks
 
@@ -24,7 +28,11 @@
 - [x] Fix CLI sender field in JSON output (PR #18)
 - [x] Fix `omni send` silent failure (PR #18)
 - [x] Fix turbo typecheck pipeline (PR #19)
+- [x] Fix UI typecheck errors (PR #19 — merged, `bun typecheck` passes)
 - [x] Run `db:push` on prod (audit_logs + trigger_logs tables)
 - [x] Deploy latest to production (c130656)
 - [x] Install CLI on production (~/.omni/bin/omni)
 - [x] Fix local dev PM2 services (were pointing to deleted worktree)
+- [x] Fix NATS "consumer already exists" errors on restart (df31c0a)
+- [x] Baileys Quick Wins B1-B6 (merged ff68219)
+- [x] CLI DX Improvements A1-A5 (merged d8ecb90)

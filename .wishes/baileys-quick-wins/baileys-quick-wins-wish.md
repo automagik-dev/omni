@@ -2,7 +2,7 @@
 
 > Six high-value Baileys features: delete messages, check numbers, update bio, block/unblock, disappearing messages, star messages.
 
-**Status:** IN_PROGRESS
+**Status:** SHIPPED
 **Created:** 2026-02-08
 **Author:** Omni + Guga
 **Branch:** `feat/baileys-quick-wins`

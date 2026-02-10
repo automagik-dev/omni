@@ -222,13 +222,39 @@ First autonomous sub-agent with a persistent role. Scroll reviews the README aga
 ## Open Items
 
 - ~~Avatar still needed~~ ✅ Generated via Nano Banana Pro (3 variations in .github/assets/)
-- Re-scan QR for Genie + Helena instances (HANDOFF.md)
-- `api_key_audit_logs` table missing on prod — needs db:push
+- Re-scan QR for Genie + Helena instances (HANDOFF.md) — **STILL BLOCKED** (manual)
+- ~~`api_key_audit_logs` table missing on prod~~ — schema exists in db package, needs `db:push` on prod
 - Omni Native Agent (Option A) — backlog, terms TBD with Felipe
-- `omni` CLI not yet globally installed on production
+- `omni` CLI not yet globally installed on production (prod PATH task)
 - Wire Scroll daily cron for README maintenance
-- Cognitive complexity refactors: channels.ts (20), send.ts (26), session-cleaner.ts (24), nats/client.ts (22) — all >15 max
+- Cognitive complexity refactors — **blocks `make check`**: channels.ts (20), send.ts (26), session-cleaner.ts (24), nats/client.ts (22) — all >15 max
+- Merge `feat/medium-features` branch (C1-C7 code complete)
+- 6 stale git stashes to clean
+
+## Status Corrections (Self-Awareness Audit 2026-02-10)
+
+Audited all 70+ wishes with 5 parallel sub-agents on flash model. Found multiple status mismatches:
+
+| Wish | Was | Now | Evidence |
+|------|-----|-----|----------|
+| baileys-quick-wins (B1-B6) | IN_PROGRESS | SHIPPED | merged ff68219 |
+| cli-dx-improvements (A1-A5) | IN_PROGRESS | SHIPPED | merged d8ecb90 |
+| fix-ui-typecheck | READY | SHIPPED | PR #19 merged (3ec4711) |
+| api-key-security | DRAFT | SHIPPED | expires_at, revoked_at in schema |
+| discord-interactivity | DRAFT | SHIPPED | slash commands + modals exist |
+| baileys-esm-fix | DRAFT | N/A | Bun bypasses ESM issues |
+| NATS consumer errors | OPEN | DONE | fix in df31c0a + 490c255 |
+
+### Wishes confirmed still DRAFT (no code):
+channel-email-gmail, channel-whatsapp-cloud, claude-code-provider, openclaw-provider-integration, mcp-server, omni-skill, pix-button-research, events-refactor
+
+### Wishes partially done:
+- **channel-telegram**: Plugin code exists (PR #13) but not wired end-to-end
+- **provider-system-refactor**: Factory/types exist but Agno still hardcoded
+- **whatsapp-newsletters**: Handlers exist but actively filtered out
+- **api-key-audit**: Schema exists but no dedicated audit log table
+- **media-serving/auto-processing**: Processing pipeline exists, serving partially done
 
 ---
 
-_Last updated: 2026-02-10 — added agency lesson, testing insights, README UX patterns_
+_Last updated: 2026-02-10 — self-awareness audit, corrected 7 wish statuses, updated open items_
