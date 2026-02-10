@@ -1140,18 +1140,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     instanceId: string,
     anchors: NonNullable<FetchHistoryOptions['anchors']>,
     count: number,
-    depth: number,
+    _depth: number,
     messagesPerChat: Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>,
   ): Promise<void> {
     for (const anchor of anchors) {
       try {
-        this.logger.debug('Fetching history for chat', {
-          instanceId,
-          chatJid: anchor.chatJid,
-          anchorId: anchor.messageKey.id,
-          timestamp: new Date(anchor.timestamp).toISOString(),
-          depth,
-        });
         await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
         await new Promise((resolve) => setTimeout(resolve, 300));
       } catch (error) {

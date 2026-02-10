@@ -35,8 +35,8 @@ export interface AgentRunContext {
   /** Chat ID for session continuity */
   chatId: string;
 
-  /** Person UUID (internal identity) */
-  personId: string;
+  /** Person UUID (internal identity) — falls back to senderId if unresolved */
+  personId?: string;
 
   /** Platform-specific sender ID (KEEP for backward compat) */
   senderId: string;
@@ -444,7 +444,7 @@ export class AgentRunnerService {
       message: combinedMessage,
       stream: false,
       sessionId, // Computed based on session strategy
-      userId: personId, // ← Person UUID (internal identity)
+      userId: personId || senderId, // ← Person UUID (internal identity)
       platform: {
         id: senderId,
         channel: instance.channel as ChannelType,
@@ -547,7 +547,7 @@ export class AgentRunnerService {
       message: combinedMessage,
       stream: true,
       sessionId, // Computed based on session strategy
-      userId: personId, // ← Person UUID (internal identity)
+      userId: personId || senderId, // ← Person UUID (internal identity)
       platform: {
         id: senderId,
         channel: instance.channel as ChannelType,
