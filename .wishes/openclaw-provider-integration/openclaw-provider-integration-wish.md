@@ -1,6 +1,6 @@
 # Wish: OpenClaw Provider Integration
 
-**Status:** REVIEW (Forged 2026-02-10 — Groups A+B+C complete, 1 gap: trigger_logs INSERT deferred)
+**Status:** SHIPPED (Review 2026-02-10 — SHIP verdict, trigger_logs INSERT deferred to follow-up)
 **Slug:** `openclaw-provider-integration`
 **Created:** 2026-02-10
 **Council:** R1: 1/9/0 → R2: 0/10/0 → R3: 10 APPROVE Phase 1 (Phase 2 split to `session-observatory`) + Sofia PM APPROVE
@@ -468,3 +468,60 @@ packages/api/src/services/agent-runner.ts           (isProviderSchemaSupported)
 packages/api/src/index.ts                           (await async DispatcherCleanup)
 packages/cli/src/commands/providers.ts              (VALID_SCHEMAS from @omni/core, flags, WS test, errors)
 ```
+
+---
+
+## Review Verdict
+
+**Verdict:** SHIP
+**Date:** 2026-02-10
+**Branch:** `feat/openclaw-provider` (3 commits, 22 files, +2638/-113)
+**Evidence:** `make check` — 949 pass, 33 skip, 0 fail, 14/14 typecheck
+
+### Acceptance Criteria
+
+| Category | Criteria | PASS | FAIL | E2E-ONLY |
+|----------|----------|------|------|----------|
+| Core Pipeline (6) | Provider create, test, routing, response, reconnect, make check | 4 | 0 | 2 |
+| Sofia's Requirements (7) | Session, sender name, media, trash reset, multi-agent, latency | 5 | 0 | 2 |
+| Operational (12) | WS sharing, shutdown, circuit breaker, ws:// warn, session keys, reconnect, caps, lazy, redaction, agentId validation, deactivation guard | 12 | 0 | 0 |
+| Observability (16) | Correlation, Prometheus metrics, TTFD, two-phase timeout, dead-response, lastDelta, sessionKey logs, user-facing timeout | 15 | 1 | 0 |
+| **Total** | | **36** | **1** | **4** |
+
+### Gap: trigger_logs INSERT (MEDIUM — non-blocking)
+
+The `trigger_logs` table exists in the DB schema but the generic INSERT write logic for ALL providers was not implemented. This is an observability feature, not core pipeline. The table has never been populated by any provider — adding OpenClaw-specific writes would be inconsistent.
+
+**Resolution:** Deferred to follow-up task. Should be implemented as a cross-provider observability enhancement (all providers, not just OpenClaw).
+
+### E2E Items (4 — require live OpenClaw gateway)
+
+These criteria cannot be validated without a running OpenClaw gateway:
+- Sofia's instance routes incoming Telegram → OpenClaw → response
+- Agent responds with full text delivered back to user
+- Latency < 30s for typical replies
+- Session persists across multiple messages
+
+**Resolution:** Validate during first deployment with Sofia's Telegram instance.
+
+### Security Verification
+
+| Check | Status | Evidence |
+|-------|--------|---------|
+| Token never in logs | ✅ PASS | `auth: { token: '[REDACTED]' }` in client.ts:340 |
+| Minimum scopes only | ✅ PASS | Test asserts `not.toContain('operator.admin')` |
+| ws:// warning | ✅ PASS | Warns on non-localhost unencrypted WS |
+| No `any` types | ✅ PASS | TypeScript strict, typecheck passes |
+| No secrets in code | ✅ PASS | Token from DB only (provider.apiKey) |
+
+### Quality Advisory (non-blocking)
+
+| Severity | Finding | Recommendation |
+|----------|---------|----------------|
+| MEDIUM | Stale WS connection if provider config changes | Add config hash to cache key (follow-up) |
+| LOW | agent-dispatcher.ts >1700 lines | Extract ProviderFactory to @omni/core (follow-up) |
+| WARNING | 8 biome warnings (complexity, non-null assertions) | Address in polish pass |
+
+### Recommendation
+
+**SHIP.** Core pipeline is complete and well-tested. The 1 gap (trigger_logs) is observability, not functionality, and should be implemented as a cross-provider feature. 4 E2E criteria require live gateway validation during deployment.
