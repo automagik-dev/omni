@@ -128,7 +128,7 @@ export class AgnoClient implements IAgnoClient {
 
   // --- Run Endpoints ---
 
-  private buildFormData(request: ProviderRequest, stream: boolean): FormData {
+  private async buildFormData(request: ProviderRequest, stream: boolean): Promise<FormData> {
     const formData = new FormData();
     formData.append('message', request.message);
     formData.append('stream', String(stream));
@@ -140,12 +140,17 @@ export class AgnoClient implements IAgnoClient {
       formData.append('user_id', request.userId);
     }
 
-    // TODO: Handle file attachments when needed
-    // if (request.files?.length) {
-    //   for (const file of request.files) {
-    //     formData.append('files', new Blob([...]), file.filename);
-    //   }
-    // }
+    if (request.files?.length) {
+      for (const file of request.files) {
+        try {
+          const fileData = await Bun.file(file.path).arrayBuffer();
+          const blob = new Blob([fileData], { type: file.mimeType });
+          formData.append('files', blob, file.filename ?? file.path.split('/').pop() ?? 'file');
+        } catch {
+          // Skip files that can't be read
+        }
+      }
+    }
 
     return formData;
   }
@@ -168,7 +173,7 @@ export class AgnoClient implements IAgnoClient {
     request: ProviderRequest,
   ): Promise<ProviderResponse> {
     const url = `${this.baseUrl}/${endpoint}/${id}/runs`;
-    const formData = this.buildFormData(request, false);
+    const formData = await this.buildFormData(request, false);
     const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
 
     const response = await this.fetchWithTimeout(
@@ -235,7 +240,7 @@ export class AgnoClient implements IAgnoClient {
     request: ProviderRequest,
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.baseUrl}/${endpoint}/${id}/runs`;
-    const formData = this.buildFormData(request, true);
+    const formData = await this.buildFormData(request, true);
     const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
 
     const response = await this.fetchWithTimeout(

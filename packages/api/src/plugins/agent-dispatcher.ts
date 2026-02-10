@@ -17,6 +17,7 @@
  * - Preserves existing debouncing for message events
  */
 
+import { join } from 'node:path';
 import {
   type AgentTrigger,
   type AgentTriggerType,
@@ -24,6 +25,7 @@ import {
   type EventBus,
   type IAgentProvider,
   type MessageReceivedPayload,
+  type ProviderFile,
   type ReactionReceivedPayload,
   WebhookAgentProvider,
   createLogger,
@@ -385,6 +387,38 @@ function chunkText(text: string, maxLength: number): string[] {
 }
 
 // ============================================================================
+// Media File Resolution
+// ============================================================================
+
+/** Base path for media storage, matching the WhatsApp handler */
+const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
+
+/**
+ * Convert a relative media URL (/api/v2/media/...) to a local file path.
+ */
+function resolveMediaPath(mediaUrl: string): string {
+  const relativePath = mediaUrl.replace(/^\/api\/v2\/media\//, '');
+  return join(MEDIA_BASE_PATH, relativePath);
+}
+
+/**
+ * Extract ProviderFile entries from buffered messages that have media attachments.
+ */
+function extractMediaFiles(messages: BufferedMessage[]): ProviderFile[] {
+  const files: ProviderFile[] = [];
+  for (const m of messages) {
+    const content = m.payload.content;
+    if (content?.mediaUrl && content.mimeType) {
+      files.push({
+        path: resolveMediaPath(content.mediaUrl),
+        mimeType: content.mimeType,
+      });
+    }
+  }
+  return files;
+}
+
+// ============================================================================
 // Self-Chat Detection
 // ============================================================================
 
@@ -468,10 +502,17 @@ async function processAgentResponse(
 
   try {
     const messageTexts = messages.map((m) => m.payload.content?.text).filter((t): t is string => !!t);
-    if (!messageTexts.length) {
-      log.debug('No text content in messages, skipping agent call');
+    const mediaFiles = extractMediaFiles(messages);
+
+    if (!messageTexts.length && !mediaFiles.length) {
+      log.debug('No text or media content in messages, skipping agent call');
       await sendTypingPresence(channel, instance.id, chatId, 'paused');
       return;
+    }
+
+    // If there's media but no text, provide a placeholder so the agent knows media was sent
+    if (!messageTexts.length && mediaFiles.length) {
+      messageTexts.push('[Media message]');
     }
 
     const result = await services.agentRunner.run({
@@ -480,6 +521,7 @@ async function processAgentResponse(
       senderId,
       senderName,
       messages: messageTexts,
+      files: mediaFiles.length > 0 ? mediaFiles : undefined,
     });
 
     // In self-chat (user messaging themselves), prefix bot replies with emoji
