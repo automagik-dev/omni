@@ -27,7 +27,7 @@ export { getPluginStorage, setStorageDatabase, DatabasePluginStorage, InMemoryPl
 export { storeQrCode, getQrCode, clearQrCode, setupQrCodeListener } from './qr-store';
 
 // Event listeners (connection, messages)
-export { setupConnectionListener, setupMessageListener } from './event-listeners';
+export { setupConnectionListener, setupLidMappingListener, setupMessageListener } from './event-listeners';
 
 // Event persistence (writes events to omni_events table)
 export { setupEventPersistence } from './event-persistence';

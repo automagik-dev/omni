@@ -7,12 +7,13 @@
 
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
-import { instances } from '@omni/db';
+import { chatIdMappings, instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { clearQrCode } from './qr-store';
 
 const instanceLog = createLogger('instance');
 const messageLog = createLogger('message');
+const lidLog = createLogger('lid-mapping');
 
 /**
  * Set up event listener for connection events
@@ -107,5 +108,42 @@ export async function setupMessageListener(eventBus: EventBus): Promise<void> {
     messageLog.info('Listening for message.received events');
   } catch (error) {
     messageLog.warn('Failed to set up message listener', { error: String(error) });
+  }
+}
+
+/**
+ * Set up event listener for custom.lid-mapping.batch events
+ * Persists LID→phone JID mappings discovered during contacts sync to chatIdMappings table
+ */
+export async function setupLidMappingListener(eventBus: EventBus, db?: Database): Promise<void> {
+  if (!db) return;
+
+  try {
+    await eventBus.subscribePattern('custom.lid-mapping.batch', async (event) => {
+      const instanceId = event.metadata.instanceId;
+      const mappings = (event.payload as { mappings: { lidJid: string; phoneJid: string }[] }).mappings;
+      if (!instanceId || !mappings?.length) return;
+
+      let persisted = 0;
+      for (const { lidJid, phoneJid } of mappings) {
+        try {
+          await db
+            .insert(chatIdMappings)
+            .values({ instanceId, lidId: lidJid, phoneId: phoneJid, discoveredFrom: 'contacts_sync' })
+            .onConflictDoUpdate({
+              target: [chatIdMappings.instanceId, chatIdMappings.lidId],
+              set: { phoneId: phoneJid, discoveredAt: new Date() },
+            });
+          persisted++;
+        } catch {
+          // Skip individual failures
+        }
+      }
+
+      lidLog.info('LID mappings persisted', { instanceId, total: mappings.length, persisted });
+    });
+    lidLog.info('Listening for custom.lid-mapping.batch events');
+  } catch (error) {
+    lidLog.warn('Failed to set up LID mapping listener', { error: String(error) });
   }
 }

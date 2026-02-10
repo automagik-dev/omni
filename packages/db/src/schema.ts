@@ -670,6 +670,7 @@ export const chats = pgTable(
   },
   (table) => ({
     instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
+    canonicalIdIdx: index('chats_canonical_id_idx').on(table.canonicalId),
     chatTypeIdx: index('chats_type_idx').on(table.chatType),
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),

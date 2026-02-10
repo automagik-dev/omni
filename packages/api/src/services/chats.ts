@@ -14,6 +14,7 @@ import {
   type ChatType,
   type NewChat,
   type NewChatParticipant,
+  chatIdMappings,
   chatParticipants,
   chats,
 } from '@omni/db';
@@ -90,6 +91,7 @@ export class ChatService {
           ilike(chats.name, searchPattern),
           ilike(chats.description, searchPattern),
           ilike(chats.externalId, searchPattern),
+          ilike(chats.canonicalId, searchPattern),
         ),
       );
     }
@@ -175,16 +177,47 @@ export class ChatService {
   }
 
   /**
-   * Find or create a chat by external ID
+   * Find or create a chat by external ID.
+   * Performs secondary lookups via canonicalId and chatIdMappings
+   * to prevent duplicate chats from LID/phone JID addressing.
    */
   async findOrCreate(
     instanceId: string,
     externalId: string,
     defaults: Omit<NewChat, 'instanceId' | 'externalId'>,
   ): Promise<{ chat: Chat; created: boolean }> {
+    // Primary lookup: exact externalId match
     const existing = await this.getByExternalId(instanceId, externalId);
     if (existing) {
       return { chat: existing, created: false };
+    }
+
+    // Secondary lookup: check if another chat has this as its canonicalId
+    // (e.g., an @lid chat that was previously resolved to this phone JID)
+    const [byCanonical] = await this.db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
+      .limit(1);
+    if (byCanonical) {
+      return { chat: byCanonical, created: false };
+    }
+
+    // Secondary lookup: check chatIdMappings for a LID→phone mapping
+    // If the externalId is a phone JID, check if any LID maps to it
+    if (externalId.endsWith('@s.whatsapp.net')) {
+      const [mapping] = await this.db
+        .select()
+        .from(chatIdMappings)
+        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
+        .limit(1);
+      if (mapping) {
+        // A LID chat exists for this phone — find it
+        const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
+        if (lidChat) {
+          return { chat: lidChat, created: false };
+        }
+      }
     }
 
     const chat = await this.create({
@@ -194,6 +227,24 @@ export class ChatService {
     });
 
     return { chat, created: true };
+  }
+
+  /**
+   * Upsert a LID→phone JID mapping into the chatIdMappings table.
+   */
+  async upsertLidMapping(instanceId: string, lidId: string, phoneId: string): Promise<void> {
+    await this.db
+      .insert(chatIdMappings)
+      .values({
+        instanceId,
+        lidId,
+        phoneId,
+        discoveredFrom: 'message_key',
+      })
+      .onConflictDoUpdate({
+        target: [chatIdMappings.instanceId, chatIdMappings.lidId],
+        set: { phoneId, discoveredAt: new Date() },
+      });
   }
 
   /**

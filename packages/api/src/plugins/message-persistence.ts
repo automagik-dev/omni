@@ -49,13 +49,16 @@ const CONTENT_TYPE_MAP: Record<string, MessageType> = {
 
 /**
  * WhatsApp internal JID suffixes that don't represent real chats.
- * These are used for device sync, broadcasts, and channels - not user conversations.
+ * These are used for broadcasts and channels - not user conversations.
  *
- * @lid - Linked Device ID (device-to-device sync)
+ * Note: @lid JIDs ARE real chats (Linked Device IDs) — they get resolved
+ * to phone JIDs in the WhatsApp message handler before reaching here.
+ * Any unresolved @lid JIDs that still arrive should be stored (not skipped).
+ *
  * @broadcast - Status broadcasts and broadcast lists
  * @newsletter - WhatsApp Channels (one-way broadcasts)
  */
-const INTERNAL_JID_SUFFIXES = ['@lid', '@broadcast', '@newsletter'];
+const INTERNAL_JID_SUFFIXES = ['@broadcast', '@newsletter'];
 
 /**
  * Check if a chat ID is an internal WhatsApp JID that should be skipped.
@@ -115,10 +118,13 @@ function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefine
 }
 
 /**
- * Extract phone number from WhatsApp JID
+ * Extract phone number from WhatsApp JID.
+ * Returns undefined for @lid JIDs (the numeric part is NOT a phone number).
  */
 function extractPhoneFromJid(jid: string, channel: string): string | undefined {
   if (!channel.startsWith('whatsapp')) return undefined;
+  // @lid JIDs contain a Linked Device ID, not a phone number — skip them
+  if (jid.endsWith('@lid')) return undefined;
   return jid.split('@')[0]?.replace(/\D/g, '');
 }
 
@@ -232,6 +238,42 @@ async function isUserBlocked(
 }
 
 /**
+ * Post-process a chat after findOrCreate: populate canonicalId, persist LID mappings,
+ * and fix stale names (raw JIDs).
+ */
+async function postProcessChat(
+  services: Services,
+  chat: { id: string; canonicalId?: string | null; name?: string | null },
+  chatCreated: boolean,
+  chatExternalId: string,
+  chatType: ChatType,
+  pushName: string | undefined,
+  instanceId: string,
+  rawPayload: Record<string, unknown> | undefined,
+): Promise<void> {
+  // Populate canonicalId for phone-based chats (enables search by phone number)
+  if (chatExternalId.endsWith('@s.whatsapp.net') && !chat.canonicalId) {
+    await services.chats.update(chat.id, { canonicalId: chatExternalId });
+    chat.canonicalId = chatExternalId;
+  }
+
+  // Persist LID→phone mapping if the message was resolved from a LID
+  const originalLidJid = rawPayload?.originalLidJid as string | undefined;
+  if (originalLidJid && chatExternalId.endsWith('@s.whatsapp.net')) {
+    services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
+      log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
+    });
+  }
+
+  // Update chat name if missing or still shows a raw JID
+  const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
+  if (!chatCreated && chatType === 'dm' && pushName && (!chat.name || hasStaleJidName)) {
+    await services.chats.update(chat.id, { name: pushName });
+    chat.name = pushName;
+  }
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -266,11 +308,17 @@ async function handleMessageReceived(
     name: effectiveName,
   });
 
-  // Update chat name if it's missing and we have a pushName (for DMs)
-  if (!chatCreated && !chat.name && chatType === 'dm' && pushName) {
-    await services.chats.update(chat.id, { name: pushName });
-    chat.name = pushName; // Update local reference
-  }
+  // Post-process chat: canonicalId, LID mapping, name updates
+  await postProcessChat(
+    services,
+    chat,
+    chatCreated,
+    chatExternalId,
+    chatType,
+    pushName,
+    metadata.instanceId,
+    rawPayload,
+  );
 
   // Step 2: Process sender identity (before participant, so we have IDs)
   const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);

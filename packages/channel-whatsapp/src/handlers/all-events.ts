@@ -21,6 +21,31 @@ function logEvent(event: string, data: unknown): void {
 }
 
 /**
+ * Process a single LID mapping entry and store it in the plugin cache
+ */
+function processLidEntry(entry: unknown, plugin: WhatsAppPlugin, instanceId: string): void {
+  const e = entry as { lid?: string; phone?: string; id?: string };
+  const lid = e.lid;
+  const phone = e.phone || e.id;
+  if (!lid || !phone || typeof lid !== 'string' || typeof phone !== 'string') return;
+
+  const lidJid = lid.includes('@') ? lid : `${lid}@lid`;
+  const phoneJid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+  plugin.storeLidMapping(instanceId, lidJid, phoneJid);
+}
+
+/**
+ * Process LID mapping data from Baileys lid-mapping.update event
+ */
+function processLidMappings(data: unknown, plugin: WhatsAppPlugin, instanceId: string): void {
+  if (!data || typeof data !== 'object') return;
+  const entries = Array.isArray(data) ? data : [data];
+  for (const entry of entries) {
+    processLidEntry(entry, plugin, instanceId);
+  }
+}
+
+/**
  * Set up handlers for ALL Baileys events
  * This captures everything for debugging and future feature development
  */
@@ -223,5 +248,6 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   // ============================================================================
   sock.ev.on('lid-mapping.update', (data) => {
     if (DEBUG) logEvent('lid-mapping.update', data);
+    processLidMappings(data, plugin, instanceId);
   });
 }
