@@ -465,8 +465,9 @@ export function createChatsCommand(): Command {
       try {
         if (options.instance) {
           // Call API with instanceId to archive on channel
-          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-          const apiKey = process.env.OMNI_API_KEY ?? '';
+          const _cfg = (await import('../config.js')).loadConfig();
+          const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+          const apiKey = _cfg.apiKey ?? '';
           const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
@@ -496,8 +497,9 @@ export function createChatsCommand(): Command {
 
       try {
         if (options.instance) {
-          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-          const apiKey = process.env.OMNI_API_KEY ?? '';
+          const _cfg = (await import('../config.js')).loadConfig();
+          const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+          const apiKey = _cfg.apiKey ?? '';
           const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
@@ -524,8 +526,9 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const _cfg = (await import('../config.js')).loadConfig();
+        const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+        const apiKey = _cfg.apiKey ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/pin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
@@ -549,8 +552,9 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const _cfg = (await import('../config.js')).loadConfig();
+        const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+        const apiKey = _cfg.apiKey ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unpin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
@@ -575,8 +579,9 @@ export function createChatsCommand(): Command {
     .option('--duration <ms>', 'Mute duration in milliseconds (default: 8 hours)', (v) => Number.parseInt(v, 10))
     .action(async (id: string, options: { instance: string; duration?: number }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const _cfg = (await import('../config.js')).loadConfig();
+        const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+        const apiKey = _cfg.apiKey ?? '';
         const body: Record<string, unknown> = { instanceId: options.instance };
         if (options.duration) body.duration = options.duration;
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/mute`, {
@@ -602,8 +607,9 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const _cfg = (await import('../config.js')).loadConfig();
+        const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+        const apiKey = _cfg.apiKey ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unmute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },

@@ -36,8 +36,9 @@ async function resolveBase64Image(options: { base64?: string; url?: string }): P
 
 /** Generic API call helper for direct fetch requests */
 async function apiCall(path: string, method = 'GET', body?: unknown): Promise<unknown> {
-  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-  const apiKey = process.env.OMNI_API_KEY ?? '';
+  const config = (await import('../config.js')).loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+  const apiKey = config.apiKey ?? '';
   const headers: Record<string, string> = { 'x-api-key': apiKey };
   if (body) headers['Content-Type'] = 'application/json';
   const resp = await fetch(`${baseUrl}/api/v2/${path}`, {

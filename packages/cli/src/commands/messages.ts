@@ -110,8 +110,9 @@ function buildSearchParams(
  * Fetch search results from API
  */
 async function fetchSearchResults(params: URLSearchParams): Promise<ExtendedMessage[]> {
-  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-  const apiKey = process.env.OMNI_API_KEY ?? '';
+  const _cfg = (await import('../config.js')).loadConfig();
+  const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+  const apiKey = _cfg.apiKey ?? '';
 
   const resp = await fetch(`${baseUrl}/api/v2/messages?${params}`, {
     headers: { 'x-api-key': apiKey },
@@ -381,8 +382,9 @@ export function createMessagesCommand(): Command {
     .requiredOption('--text <text>', 'New text content')
     .action(async (messageId: string, options: { instance: string; chat: string; text: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
-        const apiKey = process.env.OMNI_API_KEY ?? '';
+        const _cfg = (await import('../config.js')).loadConfig();
+        const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+        const apiKey = _cfg.apiKey ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/messages/edit-channel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
