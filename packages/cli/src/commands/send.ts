@@ -234,6 +234,33 @@ function getMessageType(options: SendOptions): keyof typeof messageSenders | nul
   return null;
 }
 
+/** Validate send options and return instance ID */
+function validateSendOptions(options: SendOptions): string {
+  const instanceId = options.instance ?? loadConfig().defaultInstance;
+  if (!instanceId) {
+    output.error('No instance specified. Use --instance <id> or set default: omni config set defaultInstance <id>');
+  }
+
+  if (!options.to && !options.presence) {
+    output.error('--to <recipient> is required');
+  }
+
+  return instanceId;
+}
+
+/** Handle send error */
+function handleSendError(err: unknown): void {
+  if (err instanceof OmniApiError) {
+    const details: Record<string, unknown> = { code: err.code };
+    if (err.status) details.status = err.status;
+    if (err.details) details.details = err.details;
+    output.error(`Failed to send: ${err.message}`, details);
+  } else {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to send: ${message}`);
+  }
+}
+
 /** Get chalk instance (respects color setting) */
 function c(): ChalkInstance {
   if (areColorsEnabled()) {
@@ -383,16 +410,7 @@ export function createSendCommand(): Command {
     // Presence
     .option('--presence <type>', 'Send presence indicator (typing, recording, paused)')
     .action(async (options: SendOptions) => {
-      // Resolve instance ID
-      const instanceId = options.instance ?? loadConfig().defaultInstance;
-      if (!instanceId) {
-        output.error('No instance specified. Use --instance <id> or set default: omni config set defaultInstance <id>');
-      }
-
-      // Validate recipient
-      if (!options.to && !options.presence) {
-        output.error('--to <recipient> is required');
-      }
+      const instanceId = validateSendOptions(options);
 
       const messageType = getMessageType(options);
       if (!messageType) {
@@ -405,15 +423,7 @@ export function createSendCommand(): Command {
       try {
         await messageSenders[messageType](client, instanceId, options);
       } catch (err) {
-        if (err instanceof OmniApiError) {
-          const details: Record<string, unknown> = { code: err.code };
-          if (err.status) details.status = err.status;
-          if (err.details) details.details = err.details;
-          output.error(`Failed to send: ${err.message}`, details);
-        } else {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to send: ${message}`);
-        }
+        handleSendError(err);
       }
     });
 

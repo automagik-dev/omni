@@ -738,6 +738,50 @@ async function prepareAgentContent(
   return { messageTexts, mediaFiles };
 }
 
+/**
+ * Fetch sender identity metadata (avatar URL, username)
+ */
+async function fetchSenderMetadata(
+  services: Services,
+  channel: ChannelType,
+  instanceId: string,
+  senderId: string,
+): Promise<{ avatarUrl?: string; platformUsername?: string }> {
+  try {
+    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    return {
+      avatarUrl: identity?.profilePicUrl ?? undefined,
+      platformUsername: identity?.platformUsername ?? undefined,
+    };
+  } catch (error) {
+    log.debug('Failed to fetch sender identity metadata', { error: String(error) });
+    return {};
+  }
+}
+
+/**
+ * Fetch chat metadata for groups (name, participant count)
+ */
+async function fetchChatMetadata(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  chatType: string,
+): Promise<{ chatName?: string; participantCount?: number }> {
+  if (chatType !== 'group') return {};
+
+  try {
+    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    return {
+      chatName: chat?.name ?? undefined,
+      participantCount: chat?.participantCount ?? undefined,
+    };
+  } catch (error) {
+    log.debug('Failed to fetch chat metadata', { error: String(error) });
+    return {};
+  }
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -763,36 +807,15 @@ async function processAgentResponse(
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
 
-  // Determine chat type
+  // Determine chat type and fetch metadata
   const chatType = determineChatType(chatId, instance.channel);
-
-  // Fetch sender identity metadata
-  let senderAvatarUrl: string | undefined;
-  let senderPlatformUsername: string | undefined;
-  try {
-    const identity = await services.persons.getIdentityByPlatformId(instance.channel, instance.id, senderId);
-    if (identity) {
-      senderAvatarUrl = identity.profilePicUrl ?? undefined;
-      senderPlatformUsername = identity.platformUsername ?? undefined;
-    }
-  } catch (error) {
-    log.debug('Failed to fetch sender identity metadata', { error: String(error) });
-  }
-
-  // Fetch chat metadata if group
-  let chatName: string | undefined;
-  let participantCount: number | undefined;
-  if (chatType === 'group') {
-    try {
-      const chat = await services.chats.getByExternalId(instance.id, chatId);
-      if (chat) {
-        chatName = chat.name ?? undefined;
-        participantCount = chat.participantCount ?? undefined;
-      }
-    } catch (error) {
-      log.debug('Failed to fetch chat metadata', { error: String(error) });
-    }
-  }
+  const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
+    services,
+    channel,
+    instance.id,
+    senderId,
+  );
+  const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
 
   log.info('Dispatching to agent', {
     instanceId: instance.id,
@@ -1051,36 +1074,15 @@ async function processReactionTrigger(
     const reactionMessage = `[Reacted with ${payload.emoji} to a message]`;
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
-    // Determine chat type
+    // Determine chat type and fetch metadata
     const chatType = determineChatType(chatId, instance.channel);
-
-    // Fetch sender identity metadata
-    let senderAvatarUrl: string | undefined;
-    let senderPlatformUsername: string | undefined;
-    try {
-      const identity = await services.persons.getIdentityByPlatformId(instance.channel, instance.id, payload.from);
-      if (identity) {
-        senderAvatarUrl = identity.profilePicUrl ?? undefined;
-        senderPlatformUsername = identity.platformUsername ?? undefined;
-      }
-    } catch (error) {
-      log.debug('Failed to fetch sender identity metadata', { error: String(error) });
-    }
-
-    // Fetch chat metadata if group
-    let chatName: string | undefined;
-    let participantCount: number | undefined;
-    if (chatType === 'group') {
-      try {
-        const chat = await services.chats.getByExternalId(instance.id, chatId);
-        if (chat) {
-          chatName = chat.name ?? undefined;
-          participantCount = chat.participantCount ?? undefined;
-        }
-      } catch (error) {
-        log.debug('Failed to fetch chat metadata', { error: String(error) });
-      }
-    }
+    const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
+      services,
+      channel,
+      instance.id,
+      payload.from,
+    );
+    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
 
     const result = await services.agentRunner.run({
       instance,
