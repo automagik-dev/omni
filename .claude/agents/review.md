@@ -84,6 +84,7 @@ End-to-end testing with scenario validation.
 - [ ] Edge cases covered
 - [ ] Error paths tested
 - [ ] `make check` passes (typecheck + lint + test)
+- [ ] **Mock boundaries valid**: If tests mock event bus/HTTP/DB, verify the mocked data would actually work against the real consumer (correct ID types, auth headers, required DB rows exist)
 
 ### Documentation
 - [ ] Code is self-documenting or has necessary comments

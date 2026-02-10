@@ -106,12 +106,50 @@ After green only:
 - "I'll add tests later"
 - Mocking everything instead of using fixtures
 
+## Mock Boundary Rule
+
+**Never mock away the boundary you're supposed to test.**
+
+When code publishes an event that a downstream consumer processes, you MUST verify:
+1. The payload is **valid for the consumer** (not just that publish was called)
+2. IDs passed across boundaries match their target schema (UUID column = UUID value)
+3. Auth headers match what the receiving service expects
+4. DB rows are created before referencing them
+
+### Anti-Pattern: Mock Hides Real Bug
+
+```typescript
+// BAD: Mocks eventBus, never checks if jobId is valid for sync_jobs.id (UUID column)
+const mockEventBus = { publishGeneric: mock(async () => ({ id: 'test-id' })) };
+// Test passes! But live system crashes: "invalid input syntax for type uuid"
+
+// GOOD: Use the real service that creates the DB row + publishes event
+const job = await services.syncJobs.create({ instanceId, channelType, type });
+// Test verifies jobId is a UUID that the sync-worker can actually look up
+expect(body.data.jobId).toMatch(/^[0-9a-f-]{36}$/);
+```
+
+### Anti-Pattern: Wrong Auth Header
+
+```typescript
+// BAD: Test doesn't verify the auth header format against the API middleware
+headers: { Authorization: `Bearer ${apiKey}` }  // API expects x-api-key!
+
+// GOOD: Check how other commands in the same codebase send auth, be consistent
+headers: { 'x-api-key': apiKey }  // Matches what API middleware reads
+```
+
+### Rule of Thumb
+
+If your code **sends data to another component** (event, HTTP call, DB query), your test must verify the data is **valid for the receiving component**, not just that it was sent.
+
 ## Why Integration TDD (Not Unit TDD)
 
 Unit tests with mocks often become flaky because:
 - Mocks drift from real implementations
 - Agents create brittle mock setups
 - Tests pass but real integration fails
+- **Mocked boundaries hide type mismatches** (string vs UUID, wrong headers)
 
 Integration tests with fixtures:
 - Test real behavior
