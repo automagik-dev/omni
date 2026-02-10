@@ -12,6 +12,8 @@
 
 import {
   type ConnectionOptions,
+  type ConsumerConfig,
+  type ConsumerUpdateConfig,
   type JetStreamClient,
   type JetStreamManager,
   type NatsConnection,
@@ -329,6 +331,70 @@ export class NatsEventBus implements EventBus {
   }
 
   /**
+   * Resolve stream name for a subscription pattern
+   */
+  private resolveStreamName(pattern: string): string {
+    try {
+      return getStreamForPattern(pattern);
+    } catch {
+      // Fall back to checking the pattern prefix
+      const prefix = pattern.split('.')[0] ?? 'custom';
+      return getStreamForEventType(prefix);
+    }
+  }
+
+  /**
+   * Ensure consumer exists (create or update)
+   */
+  private async ensureConsumer(
+    jsm: JetStreamManager,
+    streamName: string,
+    consumerName: string,
+    consumerConfig: Partial<ConsumerConfig>,
+  ): Promise<void> {
+    try {
+      await jsm.consumers.add(streamName, {
+        ...consumerConfig,
+        name: consumerName,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('consumer already exists') || errMsg.includes('consumer name already')) {
+        await this.updateOrRecreateConsumer(jsm, streamName, consumerName, consumerConfig);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Update existing consumer or recreate if config is incompatible
+   */
+  private async updateOrRecreateConsumer(
+    jsm: JetStreamManager,
+    streamName: string,
+    consumerName: string,
+    consumerConfig: Partial<ConsumerConfig>,
+  ): Promise<void> {
+    try {
+      await jsm.consumers.update(streamName, consumerName, consumerConfig as Partial<ConsumerUpdateConfig>);
+    } catch (updateErr: unknown) {
+      const updateMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+      if (updateMsg.includes('can not be updated')) {
+        // Immutable fields changed — delete and recreate
+        log.warn('Consumer config incompatible, recreating', { consumerName, streamName });
+        await jsm.consumers.delete(streamName, consumerName);
+        await jsm.consumers.add(streamName, {
+          ...consumerConfig,
+          name: consumerName,
+        });
+      } else {
+        throw updateErr;
+      }
+    }
+  }
+
+  /**
    * Internal subscribe implementation
    */
   private async subscribeInternal(
@@ -340,14 +406,7 @@ export class NatsEventBus implements EventBus {
     const jsm = this.requireJetStreamManager();
 
     // Determine which stream to subscribe to
-    let streamName: string;
-    try {
-      streamName = getStreamForPattern(pattern);
-    } catch {
-      // Fall back to checking the pattern prefix
-      const prefix = pattern.split('.')[0] ?? 'custom';
-      streamName = getStreamForEventType(prefix);
-    }
+    const streamName = this.resolveStreamName(pattern);
 
     // Build consumer config
     const consumerConfig = buildConsumerConfig(pattern, options);
@@ -356,35 +415,7 @@ export class NatsEventBus implements EventBus {
     const consumerName = options.durable ?? generateConsumerName(pattern);
 
     // Add consumer to stream (create or update if it already exists)
-    try {
-      await jsm.consumers.add(streamName, {
-        ...consumerConfig,
-        name: consumerName,
-      });
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('consumer already exists') || errMsg.includes('consumer name already')) {
-        // Consumer exists with potentially different config — try update first
-        try {
-          await jsm.consumers.update(streamName, consumerName, consumerConfig);
-        } catch (updateErr: unknown) {
-          const updateMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
-          if (updateMsg.includes('can not be updated')) {
-            // Immutable fields changed — delete and recreate
-            log.warn('Consumer config incompatible, recreating', { consumerName, streamName });
-            await jsm.consumers.delete(streamName, consumerName);
-            await jsm.consumers.add(streamName, {
-              ...consumerConfig,
-              name: consumerName,
-            });
-          } else {
-            throw updateErr;
-          }
-        }
-      } else {
-        throw err;
-      }
-    }
+    await this.ensureConsumer(jsm, streamName, consumerName, consumerConfig);
 
     // Get consumer
     const consumer = await js.consumers.get(streamName, consumerName);

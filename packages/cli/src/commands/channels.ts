@@ -48,6 +48,18 @@ function promptUser(question: string): Promise<string> {
   });
 }
 
+/** Build status items from instances */
+function buildStatusItems(
+  instances: Array<{ channel: string; name: string; isActive: boolean; profileName?: string | null }>,
+) {
+  return instances.map((inst) => ({
+    channel: inst.channel,
+    name: inst.name,
+    active: inst.isActive ? 'yes' : 'no',
+    profile: inst.profileName ?? '-',
+  }));
+}
+
 export function createChannelsCommand(): Command {
   const channels = new Command('channels').description('Channel management — list types, add instances, check status');
 
@@ -156,33 +168,7 @@ export function createChannelsCommand(): Command {
           return;
         }
 
-        // Group by channel type
-        const grouped = new Map<string, typeof result.items>();
-        for (const inst of result.items) {
-          const group = grouped.get(inst.channel) ?? [];
-          group.push(inst);
-          grouped.set(inst.channel, group);
-        }
-
-        // Build status overview
-        const items: Array<{
-          channel: string;
-          name: string;
-          active: string;
-          profile: string;
-        }> = [];
-
-        for (const [channel, instances] of grouped) {
-          for (const inst of instances) {
-            items.push({
-              channel,
-              name: inst.name,
-              active: inst.isActive ? 'yes' : 'no',
-              profile: inst.profileName ?? '-',
-            });
-          }
-        }
-
+        const items = buildStatusItems(result.items);
         output.list(items, { emptyMessage: 'No instances found.' });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
