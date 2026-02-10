@@ -213,6 +213,32 @@ omni status
 | **PARTIAL** | Some tests fail, non-blocking | Document issues, may proceed |
 | **FAIL** | Critical failures or regressions | Back to FORGE |
 
+## Cross-Boundary Smoke Tests
+
+Unit tests with mocked boundaries (event bus, HTTP, DB) can hide real bugs. QA must verify these integration seams work end-to-end:
+
+**When code publishes events:**
+- Trigger the action via API/CLI
+- Check logs for the **downstream consumer** (not just the publisher)
+- Verify the consumer didn't error (wrong ID types, missing DB rows, auth failures)
+
+**When code makes HTTP calls:**
+- Verify the auth header matches what the target expects (`x-api-key` vs `Bearer`)
+- Test with real credentials, not mocks
+
+**When code references DB rows:**
+- Verify the row actually exists before the reference
+- Check ID format matches the column type (UUID vs string)
+
+**Example: Resync publishes sync.started → sync-worker processes it**
+```bash
+# 1. Trigger resync
+omni resync -i <id> --since 2h
+# 2. Check sync-worker logs (not just the API response)
+pm2 logs omni-v2-api | grep "sync-worker"
+# 3. Verify no UUID/auth errors downstream
+```
+
 ## Never Do
 
 - Skip regression tests
@@ -221,6 +247,7 @@ omni status
 - Ignore flaky tests (investigate or document)
 - Modify code (that's FORGE's job)
 - Skip evidence collection (screenshots, logs)
+- Trust unit test mocks as proof of integration (verify the live system)
 
 ## Beads Integration
 

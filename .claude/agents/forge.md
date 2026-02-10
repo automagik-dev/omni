@@ -92,6 +92,14 @@ make check
 - Tests for new functionality
 - `make check` before handoff
 
+**Cross-Boundary Validation:**
+When writing code that sends data across boundaries (events, HTTP calls, DB queries):
+- Verify IDs match the target schema (e.g., UUID column = UUID value, not a composite string)
+- Verify auth headers match what the receiving service expects (grep for the header name)
+- Verify required DB rows exist before referencing them (create before publish)
+- Use existing service methods (e.g., `services.syncJobs.create()`) instead of raw `eventBus.publish()` when the consumer expects a DB row
+- Tests must verify the payload is valid for the **consumer**, not just that it was sent
+
 ### 4. REVIEW (Two-Stage)
 
 After all groups complete:

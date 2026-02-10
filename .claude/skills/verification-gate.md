@@ -44,6 +44,7 @@ Skip any step = lying, not verifying
 | Build succeeds | `make check` exit 0 | Linter passing |
 | Bug fixed | Test for bug passes | Code changed |
 | Requirements met | Line-by-line checklist | Tests passing |
+| Integration works | Live system test (API + downstream logs) | Unit tests with mocked boundaries |
 
 ## Red Flags - STOP
 
