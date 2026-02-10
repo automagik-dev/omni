@@ -279,7 +279,11 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
   const chatId = payload.chatId ?? '';
 
   const isDirectMessage =
-    !chatId.includes('@g.us') && !chatId.includes('@broadcast') && !(rawPayload.isGroup as boolean);
+    !chatId.includes('@g.us') &&
+    !chatId.includes('@broadcast') &&
+    !chatId.includes('@newsletter') &&
+    !chatId.includes('@lid') &&
+    !(rawPayload.isGroup as boolean);
 
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
   const ownerJid = instance.ownerIdentifier ?? '';
