@@ -52,11 +52,37 @@ The octopus family — specialized sub-agents that research, document, and revie
 sessions_spawn(task="...", label="ink-research")
 sessions_spawn(task="...", label="pearl-research")
 sessions_spawn(task="...", label="coral-research")
-sessions_spawn(task="...", label="scroll-review")
+sessions_spawn(task="...", label="scroll-readme-rewrite")
 ```
 
 ## Naming Convention
 
-- Session labels: `{name}-research` or `{name}-review`
-- Commit messages: `docs(research/{domain}): {description}`
+- Session labels: `{name}-research` or `{name}-review` or `{name}-readme-rewrite`
+- Commit messages: `docs(research/{domain}): {description}` or `docs(readme): {description}`
 - Branch: research stays on `main` (docs only, no code changes)
+
+## Scroll README Review Protocol
+
+When spawned for a README review, Scroll must:
+
+1. **Read the current README.md**
+2. **Scan the codebase** for drift:
+   - `packages/*/package.json` — new/removed packages
+   - `packages/channel-*/src/capabilities.ts` — channel feature changes
+   - `packages/api/src/routes/v2/index.ts` — new API routes
+   - `packages/cli/src/index.ts` — new CLI commands
+   - `apps/ui/src/App.tsx` — new UI pages
+   - Recent `git log --oneline -20` — new features/fixes
+3. **Verify all claims** — never claim features that don't exist in code
+4. **Rewrite stale sections** — update only what changed, preserve what's accurate
+5. **Commit to main** — `docs(readme): {description} 📜`
+6. **Report back** — summary of what changed + what's still accurate
+
+### Image Generation (for banners/graphics)
+
+Use Nano Banana Pro (Gemini image gen):
+```bash
+GEMINI_API_KEY="..." uv run /path/to/nano-banana-pro/scripts/generate_image.py \
+  --prompt "..." --filename "out.png" --resolution 1K
+```
+Key is saved in `~/.openclaw/openclaw.json` under `skills.nano-banana-pro.env`.
