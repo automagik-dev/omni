@@ -407,6 +407,21 @@ export class AgnoClient implements IAgnoClient {
       };
     }
   }
+
+  // --- Session Management ---
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}`;
+    const response = await this.fetchWithTimeout(
+      url,
+      { method: 'DELETE', headers: this.getHeaders() },
+      this.defaultTimeoutMs,
+    );
+
+    if (!response.ok) {
+      this.handleErrorResponse(response, `deleting session ${sessionId}`);
+    }
+  }
 }
 
 /**
