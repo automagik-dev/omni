@@ -11,6 +11,7 @@ import type { EventBus } from '@omni/core';
 import { createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/db';
 import type { Services } from '../services';
+import { computeSessionId } from '../services/agent-runner';
 import { getPlugin } from './loader';
 
 const log = createLogger('session-cleaner');
@@ -73,8 +74,9 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
             return;
           }
 
-          // Use chatId as sessionId (this is the sender's identity)
-          const sessionId = chatId;
+          // Compute session ID using the same strategy as agent-runner
+          const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+          const sessionId = computeSessionId(sessionStrategy, from, chatId);
 
           // Create client and clear the session
           const client = createAgnoClient({
@@ -87,6 +89,7 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
           log.info('Session cleared successfully', {
             instanceId,
             sessionId,
+            sessionStrategy,
           });
 
           // Send confirmation message
