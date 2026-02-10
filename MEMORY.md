@@ -158,14 +158,42 @@ Spawned 2026-02-09. Research squad for overnight deep-dives:
 
 Squad definition: `docs/research/SQUAD.md`
 
+## Scroll — The README Keeper 📜 (Day 4)
+
+First autonomous sub-agent with a persistent role. Scroll reviews the README against the actual codebase and rewrites it to stay current. 
+
+**What happened:**
+- Spawned Scroll for first README rewrite — comprehensive 264-insertion rewrite
+- Added Telegram channel (verified from actual code), architecture diagram, multi-SDK docs, nav links
+- Generated 3 header images via Nano Banana Pro (Gemini image gen) — picked Header 2 (wireframe octopus + channel logos)
+- All pushed to main, live on GitHub
+
+**Patterns learned from viral READMEs:**
+- OpenClaw: centered logo with light/dark mode `<picture>` elements, link bar (Website · Docs · Discord), badges as `<a>` wrapping `<img>`, concise "what it is" paragraph
+- Genie: emotion-first ("The Problem With AI Today"), feature grid in HTML `<table>`, 3-column layout
+- AutoGPT: simple, focused on install, system requirements upfront
+- Best practice: header image → badges → one-liner → link bar → why → install → quickstart
+
+**Nano Banana Pro skill:**
+- Installed in OpenClaw, needs `GEMINI_API_KEY` (now saved in openclaw.json)
+- `uv run .../generate_image.py --prompt "..." --filename "out.png" --resolution 1K`
+- Excellent for repo graphics, logos, banners
+
+**Next for Scroll:**
+- Wire daily cron in OpenClaw for automated README reviews
+- Evolve to auto-docs: per-package READMEs, changelog, OpenAPI sync
+- Keep Header 3 (circuit-board octopus mark) as standalone logo/avatar
+
 ## Open Items
 
-- Avatar still needed (deep-sea octopus, bioluminescent, dark water)
+- ~~Avatar still needed~~ ✅ Generated via Nano Banana Pro (3 variations in .github/assets/)
 - Re-scan QR for Genie + Helena instances (HANDOFF.md)
 - `api_key_audit_logs` table missing on prod — needs db:push
 - Omni Native Agent (Option A) — backlog, terms TBD with Felipe
 - `omni` CLI not yet globally installed on production
+- Wire Scroll daily cron for README maintenance
+- channels.ts cognitive complexity warnings (20 and 26 vs max 15) — needs refactor
 
 ---
 
-_Last updated: 2026-02-09_
+_Last updated: 2026-02-10_
