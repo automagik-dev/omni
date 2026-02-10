@@ -126,6 +126,34 @@ export function createAccessCommand(): Command {
       }
     });
 
+  // omni access mode <instance-id> [disabled|blocklist|allowlist]
+  access
+    .command('mode <instanceId> [mode]')
+    .description('Get or set access control mode for an instance')
+    .action(async (instanceId: string, mode?: string) => {
+      const client = getClient();
+
+      try {
+        if (!mode) {
+          // Display current mode
+          const instance = await client.instances.get(instanceId);
+          const currentMode = (instance as Record<string, unknown>).accessMode ?? 'blocklist';
+          output.success(`Access mode: ${currentMode}`);
+        } else {
+          const validModes = ['disabled', 'blocklist', 'allowlist'];
+          if (!validModes.includes(mode)) {
+            output.error(`Invalid mode. Must be one of: ${validModes.join(', ')}`);
+            return;
+          }
+          await client.instances.update(instanceId, { accessMode: mode } as Record<string, unknown>);
+          output.success(`Access mode set to: ${mode}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to ${mode ? 'set' : 'get'} access mode: ${message}`);
+      }
+    });
+
   // omni access check
   access
     .command('check')

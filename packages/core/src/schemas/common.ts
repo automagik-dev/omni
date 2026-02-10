@@ -127,6 +127,14 @@ export const ProviderSchemaEnum = z.enum(['agnoos', 'a2a', 'openai', 'anthropic'
 export const RuleTypeSchema = z.enum(['allow', 'deny']);
 
 /**
+ * Access mode enum - controls how access rules are evaluated
+ * - disabled: No access control, all users allowed
+ * - blocklist: Default allow, deny matching rules (default)
+ * - allowlist: Default deny, allow matching rules
+ */
+export const AccessModeSchema = z.enum(['disabled', 'blocklist', 'allowlist']);
+
+/**
  * Setting value type enum
  */
 export const SettingValueTypeSchema = z.enum(['string', 'integer', 'boolean', 'json', 'secret']);

@@ -7,6 +7,7 @@
 
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
+import { accessCache } from '../cache/cache-keys';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { ApiKeyService } from './api-keys';
@@ -71,7 +72,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     persons: new PersonService(db, eventBus),
     events: new EventService(db),
     settings,
-    access: new AccessService(db, eventBus),
+    access: new AccessService(db, eventBus, accessCache),
     providers: new ProviderService(db),
     deadLetters,
     payloadStore,

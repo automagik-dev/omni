@@ -71,6 +71,9 @@ export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 export const ruleTypes = ['allow', 'deny'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
+export const accessModes = ['disabled', 'blocklist', 'allowlist'] as const;
+export type AccessMode = (typeof accessModes)[number];
+
 export const settingValueTypes = ['string', 'integer', 'boolean', 'json', 'secret'] as const;
 export type SettingValueType = (typeof settingValueTypes)[number];
 
@@ -480,6 +483,7 @@ export const instances = pgTable(
     enableAutoSplit: boolean('enable_auto_split').notNull().default(true),
     disableUsernamePrefix: boolean('disable_username_prefix').notNull().default(false),
     processMediaOnBlocked: boolean('process_media_on_blocked').notNull().default(true),
+    accessMode: varchar('access_mode', { length: 20 }).notNull().default('blocklist').$type<AccessMode>(),
 
     // ---- Message Debounce ----
     messageDebounceMode: varchar('message_debounce_mode', { length: 20 })

@@ -1,23 +1,31 @@
 /**
  * Access service - manages access rules (allow/deny lists)
+ *
+ * Supports three access modes per instance:
+ * - disabled: No access control, all users allowed
+ * - blocklist: Default allow, deny matching rules (default)
+ * - allowlist: Default deny, allow matching rules
  */
 
-import type { EventBus } from '@omni/core';
+import type { CacheProvider, EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type AccessRule, type NewAccessRule, type RuleType, accessRules } from '@omni/db';
+import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules } from '@omni/db';
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { CacheKeys } from '../cache/cache-keys';
 
 export interface CheckAccessResult {
   allowed: boolean;
   rule?: AccessRule;
   reason: string;
+  mode: AccessMode;
 }
 
 export class AccessService {
   constructor(
     private db: Database,
     private eventBus: EventBus | null,
+    private cache?: CacheProvider,
   ) {}
 
   /**
@@ -69,6 +77,9 @@ export class AccessService {
       throw new Error('Failed to create access rule');
     }
 
+    // Invalidate access cache on rule mutation
+    await this.cache?.clear();
+
     return created;
   }
 
@@ -86,6 +97,9 @@ export class AccessService {
       throw new NotFoundError('AccessRule', id);
     }
 
+    // Invalidate access cache on rule mutation
+    await this.cache?.clear();
+
     return updated;
   }
 
@@ -98,31 +112,79 @@ export class AccessService {
     if (!result.length) {
       throw new NotFoundError('AccessRule', id);
     }
+
+    // Invalidate access cache on rule mutation
+    await this.cache?.clear();
   }
 
   /**
-   * Check if access is allowed for a user
+   * Check if access is allowed for a user.
+   *
+   * Mode-aware evaluation:
+   * - disabled: always allow, skip rule evaluation
+   * - blocklist: default allow, deny on matching deny rule
+   * - allowlist: default deny, allow on matching allow rule
    */
-  async checkAccess(instanceId: string, platformUserId: string, _channel: string): Promise<CheckAccessResult> {
+  async checkAccess(
+    instance: { id: string; accessMode: AccessMode },
+    platformUserId: string,
+    _channel: string,
+  ): Promise<CheckAccessResult> {
+    const { id: instanceId, accessMode } = instance;
+
+    if (accessMode === 'disabled') {
+      return { allowed: true, reason: 'Access control disabled', mode: 'disabled' };
+    }
+
+    const cacheKey = CacheKeys.accessCheck(instanceId, platformUserId);
+    const cached = await this.cache?.get<CheckAccessResult>(cacheKey);
+    if (cached) return cached;
+
     const rules = await this.getApplicableRules(instanceId);
     const matchingRule = rules.find((rule) => this.ruleMatches(rule, platformUserId));
+    const result = this.evaluateMode(accessMode, matchingRule);
 
+    await this.cache?.set(cacheKey, result);
+    await this.publishResult(instanceId, platformUserId, result);
+
+    return result;
+  }
+
+  /**
+   * Evaluate access mode against a matching rule (or lack thereof).
+   */
+  private evaluateMode(mode: AccessMode, matchingRule: AccessRule | undefined): CheckAccessResult {
     if (!matchingRule) {
-      return { allowed: true, reason: 'No matching rule, default allow' };
+      const defaultAllowed = mode === 'blocklist';
+      return {
+        allowed: defaultAllowed,
+        reason: defaultAllowed ? 'No matching rule, default allow' : 'No matching rule, default deny (allowlist)',
+        mode,
+      };
     }
 
     const allowed = matchingRule.ruleType === 'allow';
-    await this.publishAccessEvent(instanceId, platformUserId, matchingRule, allowed);
-
     return {
       allowed,
       rule: matchingRule,
       reason: matchingRule.reason ?? (allowed ? 'Allowed by rule' : 'Denied by rule'),
+      mode,
     };
   }
 
   /**
-   * Get all applicable rules for an instance
+   * Publish access event based on result.
+   */
+  private async publishResult(instanceId: string, platformUserId: string, result: CheckAccessResult): Promise<void> {
+    if (result.rule) {
+      await this.publishAccessEvent(instanceId, platformUserId, result.rule, result.allowed);
+    } else if (!result.allowed) {
+      await this.publishDefaultDenyEvent(instanceId, platformUserId);
+    }
+  }
+
+  /**
+   * Get all applicable rules for an instance, ordered by priority desc then newest first.
    */
   private async getApplicableRules(instanceId: string): Promise<AccessRule[]> {
     return this.db
@@ -135,7 +197,7 @@ export class AccessService {
           or(isNull(accessRules.expiresAt), sql`${accessRules.expiresAt} > now()`),
         ),
       )
-      .orderBy(desc(accessRules.priority));
+      .orderBy(desc(accessRules.priority), desc(accessRules.createdAt));
   }
 
   /**
@@ -167,6 +229,20 @@ export class AccessService {
   }
 
   /**
+   * Publish deny event for allowlist default deny (no matching rule)
+   */
+  private async publishDefaultDenyEvent(instanceId: string, platformUserId: string): Promise<void> {
+    if (!this.eventBus) return;
+
+    await this.eventBus.publish('access.denied', {
+      instanceId,
+      platformUserId,
+      reason: 'Not in allowlist',
+      action: 'block',
+    });
+  }
+
+  /**
    * Check if a rule matches a platform user ID
    */
   private ruleMatches(rule: AccessRule, platformUserId: string): boolean {
@@ -177,7 +253,9 @@ export class AccessService {
 
     // Phone pattern match (supports wildcards)
     if (rule.phonePattern) {
-      const pattern = rule.phonePattern.replace(/\*/g, '.*');
+      // Escape regex metacharacters except *, then replace * with .*
+      const escaped = rule.phonePattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = escaped.replace(/\*/g, '.*');
       const regex = new RegExp(`^${pattern}$`);
       return regex.test(platformUserId);
     }

@@ -127,13 +127,15 @@ accessRoutes.post('/check', zValidator('json', checkAccessSchema), async (c) => 
   const { instanceId, platformUserId, channel } = c.req.valid('json');
   const services = c.get('services');
 
-  const result = await services.access.checkAccess(instanceId, platformUserId, channel);
+  const instance = await services.instances.getById(instanceId);
+  const result = await services.access.checkAccess(instance, platformUserId, channel);
 
   return c.json({
     data: {
       allowed: result.allowed,
       rule: result.rule,
       reason: result.reason,
+      mode: result.mode,
     },
   });
 });

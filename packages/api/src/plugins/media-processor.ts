@@ -250,6 +250,23 @@ async function processMessageMedia(
 }
 
 /**
+ * Check if user is blocked by access control for the given instance.
+ */
+async function isUserBlocked(
+  services: Services,
+  instanceId: string,
+  from: string | undefined,
+  channelType: string | undefined,
+): Promise<boolean> {
+  if (!from) return false;
+  const instance = await services.instances.getById(instanceId).catch(() => null);
+  if (!instance || instance.accessMode === 'disabled') return false;
+  const channel = (channelType ?? 'whatsapp') as import('@omni/db').ChannelType;
+  const result = await services.access.checkAccess(instance, from, channel);
+  return !result.allowed;
+}
+
+/**
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
@@ -286,6 +303,15 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 
       // Skip if no instance ID
       if (!metadata.instanceId) {
+        return;
+      }
+
+      // Skip media processing for blocked users
+      if (await isUserBlocked(ctx.services, metadata.instanceId, payload.from, metadata.channelType)) {
+        log.debug('Skipping media processing for blocked user', {
+          from: payload.from,
+          instanceId: metadata.instanceId,
+        });
         return;
       }
 

@@ -268,7 +268,8 @@ export const appRouter = t.router({
         }),
       )
       .query(async ({ ctx, input }) => {
-        return ctx.services.access.checkAccess(input.instanceId, input.platformUserId, input.channel);
+        const instance = await ctx.services.instances.getById(input.instanceId);
+        return ctx.services.access.checkAccess(instance, input.platformUserId, input.channel);
       }),
   }),
 

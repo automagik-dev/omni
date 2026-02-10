@@ -4,9 +4,10 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin } from '@omni/channel-sdk';
-import { ChannelTypeSchema, createLogger } from '@omni/core';
+import { AccessModeSchema, ChannelTypeSchema, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { AppVariables } from '../../types';
@@ -68,6 +69,7 @@ const createInstanceSchema = z.object({
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
   ttsModelId: z.string().optional().nullable().describe('Default ElevenLabs model for this instance'),
+  accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
 });
 
 // Update instance schema
@@ -199,6 +201,11 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const services = c.get('services');
 
   const instance = await services.instances.update(id, data);
+
+  // Invalidate access cache when access mode changes
+  if (data.accessMode !== undefined) {
+    await accessCache.clear();
+  }
 
   return c.json({ data: instance });
 });
