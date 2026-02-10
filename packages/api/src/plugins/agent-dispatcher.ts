@@ -385,6 +385,24 @@ function chunkText(text: string, maxLength: number): string[] {
 }
 
 // ============================================================================
+// Self-Chat Detection
+// ============================================================================
+
+/** Bot prefix for self-chat replies so the user can distinguish bot messages from their own */
+const BOT_PREFIX = '\u{1F916} ';
+
+/**
+ * Check if a chat is a self-chat (user messaging themselves).
+ * Compares chatId against the instance's ownerIdentifier (connected account JID).
+ * Normalizes JIDs by stripping device suffix (e.g., ":0" in "5511999@s.whatsapp.net:0").
+ */
+function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
+  if (!ownerIdentifier) return false;
+  const normalize = (jid: string) => jid.replace(/:.*/, '').replace(/@.*/, '');
+  return normalize(chatId) === normalize(ownerIdentifier);
+}
+
+// ============================================================================
 // Response Sending
 // ============================================================================
 
@@ -464,7 +482,12 @@ async function processAgentResponse(
       messages: messageTexts,
     });
 
-    await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+    // In self-chat (user messaging themselves), prefix bot replies with emoji
+    // so the user can visually distinguish their messages from bot responses
+    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+    const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
 
     log.info('Agent response sent', {
       instanceId: instance.id,
