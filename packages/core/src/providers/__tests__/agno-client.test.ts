@@ -209,7 +209,7 @@ describe('AgnoClient', () => {
       );
 
       const client = createAgnoClient(config);
-      const result = await client.runAgent('agent-1', { message: 'Hello!' });
+      const result = await client.runAgent('agent-1', { message: 'Hello!', userId: 'test-user-id' });
 
       expect(result.status).toBe('failed');
     });
@@ -228,7 +228,7 @@ describe('AgnoClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
 
       const client = createAgnoClient(config);
-      const result = await client.runTeam('team-1', { message: 'Hello!' });
+      const result = await client.runTeam('team-1', { message: 'Hello!', userId: 'test-user-id' });
 
       expect(result.content).toBe('Team response');
     });
@@ -247,7 +247,7 @@ describe('AgnoClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
 
       const client = createAgnoClient(config);
-      const result = await client.runWorkflow('wf-1', { message: 'Run workflow' });
+      const result = await client.runWorkflow('wf-1', { message: 'Run workflow', userId: 'test-user-id' });
 
       expect(result.content).toBe('Workflow result');
     });
@@ -280,7 +280,7 @@ describe('AgnoClient', () => {
       const client = createAgnoClient(config);
       const chunks: StreamChunk[] = [];
 
-      for await (const chunk of client.streamAgent('agent-1', { message: 'Hi!' })) {
+      for await (const chunk of client.streamAgent('agent-1', { message: 'Hi!', userId: 'test-user-id' })) {
         chunks.push(chunk);
       }
 
@@ -307,7 +307,7 @@ describe('AgnoClient', () => {
       const client = createAgnoClient(config);
 
       await expect(async () => {
-        for await (const _ of client.streamAgent('agent-1', { message: 'Hi!' })) {
+        for await (const _ of client.streamAgent('agent-1', { message: 'Hi!', userId: 'test-user-id' })) {
           // Should throw before yielding
         }
       }).toThrow(ProviderError);
@@ -319,7 +319,7 @@ describe('AgnoClient', () => {
       const client = createAgnoClient(config);
 
       await expect(async () => {
-        for await (const _ of client.streamAgent('agent-1', { message: 'Hi!' })) {
+        for await (const _ of client.streamAgent('agent-1', { message: 'Hi!', userId: 'test-user-id' })) {
           // Should throw
         }
       }).toThrow(ProviderError);

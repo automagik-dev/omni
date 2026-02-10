@@ -432,10 +432,17 @@ async function processAgentResponse(
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
 
+  // Extract person ID (required for enhanced context)
+  const personId = firstMessage.metadata.personId;
+  if (!personId) {
+    log.warn('No person ID in message metadata, skipping agent', { instanceId: instance.id, chatId });
+    return;
+  }
+
   // Get sender name from DB or fallback to pushName from payload
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
-  const senderName = await agentRunner.getSenderName(firstMessage.metadata.personId, pushName);
+  const senderName = await agentRunner.getSenderName(personId, pushName);
 
   log.info('Processing agent response', {
     instanceId: instance.id,
@@ -457,12 +464,14 @@ async function processAgentResponse(
       return;
     }
 
-    // Call agent
+    // Call agent (minimal context for deprecated path)
     const result = await agentRunner.run({
       instance,
       chatId,
+      personId,
       senderId,
       senderName,
+      chatType: 'dm', // Simplified for deprecated path
       messages: messageTexts,
     });
 

@@ -75,6 +75,10 @@ function createLogger(level: string) {
         // that dump massive raw byte arrays into logs (Baileys bug in rc.9)
         const msg = inputArgs.find((a): a is string => typeof a === 'string');
         if (msg?.includes('mex newsletter notification')) return;
+        // Suppress "received error in ack" warnings (error 479 = offline recipient, normal)
+        if (msg?.includes('received error in ack')) return;
+        // Suppress "Fetching history for chat" debug spam during sync
+        if (msg?.includes('Fetching history for chat')) return;
         method.apply(this, inputArgs as Parameters<typeof method>);
       },
     },
