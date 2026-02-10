@@ -424,9 +424,17 @@ function isFromMe(msg: WAMessage): boolean {
 /**
  * Check if a message should be processed
  */
-function shouldProcessMessage(msg: WAMessage): boolean {
+function shouldProcessMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): boolean {
   if (!msg.message) return false;
-  // Group messages are now supported
+
+  // Skip bot-sent message echoes: when we send a message via sendMessage(),
+  // Baileys receives it back as messages.upsert with fromMe=true.
+  // Without this check, agents would reply to their own messages in self-chat.
+  if (isFromMe(msg) && msg.key.id && plugin.isBotSentMessage(instanceId, msg.key.id)) {
+    log.debug('Skipping bot-sent message echo', { instanceId, externalId: msg.key.id });
+    return false;
+  }
+
   return true;
 }
 
@@ -578,7 +586,7 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
     if (upsert.type !== 'notify') return;
 
     for (const msg of upsert.messages) {
-      if (shouldProcessMessage(msg)) {
+      if (shouldProcessMessage(plugin, instanceId, msg)) {
         await processMessage(plugin, instanceId, msg);
       }
     }

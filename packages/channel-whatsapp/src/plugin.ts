@@ -232,6 +232,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private lastActionTime = new Map<string, number>();
 
   /**
+   * Cache of message IDs sent by this bot (per instance).
+   * Used to detect and skip echoed messages that Baileys receives back
+   * after we send them — prevents infinite agent reply loops in self-chat.
+   * Entries auto-expire after 5 minutes.
+   */
+  private sentMessageIds = new Map<string, Set<string>>();
+  private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
+
+  /**
    * Enforce a randomized delay between outgoing actions to avoid
    * WhatsApp anti-bot detection. Simulates human-probable timing.
    *
@@ -267,6 +276,32 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     } catch {
       // Non-critical — don't fail the send if presence update fails
     }
+  }
+
+  /**
+   * Track a message ID as sent by this bot.
+   * Called after sendMessage() succeeds so we can detect the echo later.
+   */
+  trackSentMessageId(instanceId: string, messageId: string): void {
+    let ids = this.sentMessageIds.get(instanceId);
+    if (!ids) {
+      ids = new Set();
+      this.sentMessageIds.set(instanceId, ids);
+    }
+    ids.add(messageId);
+
+    // Auto-expire after TTL
+    setTimeout(() => {
+      ids?.delete(messageId);
+    }, WhatsAppPlugin.SENT_ID_TTL_MS);
+  }
+
+  /**
+   * Check if a message was sent by this bot (echo detection).
+   * Used by message handlers to skip bot-originated messages and prevent loops.
+   */
+  isBotSentMessage(instanceId: string, messageId: string): boolean {
+    return this.sentMessageIds.get(instanceId)?.has(messageId) ?? false;
   }
 
   /** Cached chat display names per instance (for DMs from chats.upsert) */
@@ -512,6 +547,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const result = await sock.sendMessage(jid, content, quotedOptions as never);
 
       const externalId = result?.key?.id || '';
+
+      // Track this message ID so we can detect the echo when Baileys receives it back
+      if (externalId) {
+        this.trackSentMessageId(instanceId, externalId);
+      }
 
       // Emit sent event
       await this.emitMessageSent({
