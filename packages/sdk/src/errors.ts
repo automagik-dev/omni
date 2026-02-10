@@ -10,6 +10,12 @@ export interface ApiErrorDetails {
 
 /** Extract error info from an object-shaped API response */
 function parseErrorObject(error: object, status?: number): OmniApiError | null {
+  // Skip plain Error instances — they have .message but aren't API response shapes.
+  // Let the caller handle them with UNKNOWN_ERROR via instanceof Error check.
+  if (error instanceof Error && !('error' in error)) {
+    return null;
+  }
+
   // Handle { error: "string" | { message, code, details } }
   if ('error' in error) {
     const rawError = (error as { error: unknown }).error;
