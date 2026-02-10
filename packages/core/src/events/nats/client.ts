@@ -364,8 +364,23 @@ export class NatsEventBus implements EventBus {
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('consumer already exists') || errMsg.includes('consumer name already')) {
-        log.debug('Consumer already exists, updating', { consumerName, streamName });
-        await jsm.consumers.update(streamName, consumerName, consumerConfig);
+        // Consumer exists with potentially different config — try update first
+        try {
+          await jsm.consumers.update(streamName, consumerName, consumerConfig);
+        } catch (updateErr: unknown) {
+          const updateMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+          if (updateMsg.includes('can not be updated')) {
+            // Immutable fields changed — delete and recreate
+            log.warn('Consumer config incompatible, recreating', { consumerName, streamName });
+            await jsm.consumers.delete(streamName, consumerName);
+            await jsm.consumers.add(streamName, {
+              ...consumerConfig,
+              name: consumerName,
+            });
+          } else {
+            throw updateErr;
+          }
+        }
       } else {
         throw err;
       }
