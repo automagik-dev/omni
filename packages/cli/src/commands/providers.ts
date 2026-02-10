@@ -11,12 +11,29 @@
  * omni providers delete <id>
  */
 
+import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
-type ProviderSchema = 'agnoos' | 'a2a' | 'openai' | 'anthropic' | 'custom';
-const VALID_SCHEMAS: ProviderSchema[] = ['agnoos', 'a2a', 'openai', 'anthropic', 'custom'];
+// Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
+const VALID_SCHEMAS: readonly string[] = PROVIDER_SCHEMAS;
+
+// Schemas that require ws:// or wss:// URLs
+const WS_ONLY_SCHEMAS: ProviderSchema[] = ['openclaw'];
+
+/**
+ * Validate URL scheme for a given schema.
+ * OpenClaw requires ws:// or wss://.
+ */
+function validateUrlScheme(schema: string, baseUrl: string): string | null {
+  if (WS_ONLY_SCHEMAS.includes(schema as ProviderSchema)) {
+    if (!baseUrl.startsWith('ws://') && !baseUrl.startsWith('wss://')) {
+      return `OpenClaw requires ws:// or wss:// URL scheme. Got: ${baseUrl}\nExample: --base-url ws://127.0.0.1:18789 or --base-url wss://gateway.example.com`;
+    }
+  }
+  return null;
+}
 
 export function createProvidersCommand(): Command {
   const providers = new Command('providers').description('Manage AI/agent providers');
@@ -70,11 +87,12 @@ export function createProvidersCommand(): Command {
     .description('Create a new AI provider')
     .requiredOption('--name <name>', 'Provider name (unique)')
     .requiredOption('--schema <schema>', `Provider schema (${VALID_SCHEMAS.join(', ')})`)
-    .requiredOption('--base-url <url>', 'API base URL')
+    .requiredOption('--base-url <url>', 'API base URL (ws:// or wss:// for openclaw)')
     .requiredOption('--api-key <key>', 'API key')
     .option('--description <desc>', 'Provider description')
     .option('--timeout <seconds>', 'Default timeout in seconds', Number.parseInt, 60)
     .option('--stream', 'Enable streaming by default')
+    .option('--default-agent-id <agentId>', 'Default agent ID (required for openclaw)')
     .action(
       async (options: {
         name: string;
@@ -84,12 +102,35 @@ export function createProvidersCommand(): Command {
         description?: string;
         timeout?: number;
         stream?: boolean;
+        defaultAgentId?: string;
       }) => {
-        if (!VALID_SCHEMAS.includes(options.schema as ProviderSchema)) {
+        if (!VALID_SCHEMAS.includes(options.schema)) {
           output.error(`Invalid schema: ${options.schema}`, {
-            validSchemas: VALID_SCHEMAS,
+            validSchemas: [...VALID_SCHEMAS],
           });
           return;
+        }
+
+        // URL scheme validation
+        const urlError = validateUrlScheme(options.schema, options.baseUrl);
+        if (urlError) {
+          output.error(urlError);
+          return;
+        }
+
+        // OpenClaw requires --default-agent-id
+        if (options.schema === 'openclaw' && !options.defaultAgentId) {
+          output.error(
+            'OpenClaw providers require --default-agent-id.\n' +
+              'Example: omni providers create --schema openclaw --default-agent-id sofia ...',
+          );
+          return;
+        }
+
+        // Build schemaConfig from flags
+        const schemaConfig: Record<string, unknown> = {};
+        if (options.defaultAgentId) {
+          schemaConfig.defaultAgentId = options.defaultAgentId;
         }
 
         const client = getClient();
@@ -103,10 +144,18 @@ export function createProvidersCommand(): Command {
             description: options.description,
             defaultTimeout: options.timeout,
             defaultStream: options.stream ?? true,
+            schemaConfig: Object.keys(schemaConfig).length > 0 ? schemaConfig : undefined,
           });
 
           output.success(`Created provider: ${provider.id}`);
           output.data(provider);
+
+          // Guided next steps
+          output.info('\nNext steps:');
+          output.info(`  1. Test connectivity:  omni providers test ${provider.id}`);
+          output.info(
+            `  2. Assign to instance: omni instances update <instance-id> --agent-provider-id ${provider.id}${options.defaultAgentId ? ` --agent-id ${options.defaultAgentId}` : ''}`,
+          );
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to create provider: ${message}`);
@@ -127,7 +176,21 @@ export function createProvidersCommand(): Command {
         if (result.healthy) {
           output.success(`Provider is healthy (latency: ${result.latency}ms)`);
         } else {
-          output.error(`Provider health check failed: ${result.error ?? 'Unknown error'}`, {
+          // Contextual error messages for common WS failure modes
+          const errorMsg = result.error ?? 'Unknown error';
+          let hint = '';
+
+          if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect ECONNREFUSED')) {
+            hint = '\nHint: Cannot connect to gateway. Is it running?';
+          } else if (errorMsg.includes('401') || errorMsg.includes('auth') || errorMsg.includes('Unauthorized')) {
+            hint = '\nHint: Gateway rejected the API key. Verify token with: omni providers get <id>';
+          } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+            hint = '\nHint: Connection timed out. Check network connectivity and URL.';
+          } else if (errorMsg.includes('WebSocket') && errorMsg.includes('state')) {
+            hint = '\nHint: WebSocket is not connected. The gateway may be unreachable.';
+          }
+
+          output.error(`Provider health check failed: ${errorMsg}${hint}`, {
             latency: result.latency,
           });
         }
