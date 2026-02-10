@@ -283,6 +283,74 @@ export const scheduledJobNextRun = new Gauge({
 });
 
 // ============================================================================
+// OPENCLAW METRICS
+// ============================================================================
+
+/**
+ * Gauge for OpenClaw WebSocket connection state
+ * 0=disconnected, 1=connecting, 2=connected
+ */
+export const openclawWsState = new Gauge({
+  name: 'omni_openclaw_ws_state',
+  help: 'OpenClaw WebSocket connection state (0=disconnected, 1=connecting, 2=connected)',
+  labelNames: ['provider_id'] as const,
+  registers: [registry],
+});
+
+/**
+ * Histogram for OpenClaw trigger duration
+ */
+export const openclawTriggerDuration = new Histogram({
+  name: 'omni_openclaw_trigger_duration_seconds',
+  help: 'OpenClaw agent trigger duration in seconds',
+  labelNames: ['provider_id', 'status'] as const,
+  buckets: [1, 5, 10, 30, 60, 120, 180],
+  registers: [registry],
+});
+
+/**
+ * Counter for OpenClaw trigger errors
+ */
+export const openclawTriggerErrors = new Counter({
+  name: 'omni_openclaw_trigger_errors_total',
+  help: 'Total OpenClaw trigger errors',
+  labelNames: ['provider_id', 'error_type'] as const,
+  registers: [registry],
+});
+
+/**
+ * Counter for OpenClaw reconnections
+ */
+export const openclawReconnects = new Counter({
+  name: 'omni_openclaw_reconnects_total',
+  help: 'Total OpenClaw WebSocket reconnections',
+  labelNames: ['provider_id'] as const,
+  registers: [registry],
+});
+
+/**
+ * Histogram for time-to-first-delta
+ */
+export const openclawTimeToFirstDelta = new Histogram({
+  name: 'omni_openclaw_time_to_first_delta_seconds',
+  help: 'Time from chat.send to first delta event in seconds',
+  labelNames: ['provider_id'] as const,
+  buckets: [0.5, 1, 2, 5, 10, 30],
+  registers: [registry],
+});
+
+/**
+ * Gauge for circuit breaker state
+ * 0=closed (healthy), 1=open (tripping)
+ */
+export const openclawCircuitBreakerState = new Gauge({
+  name: 'omni_openclaw_circuit_breaker_state',
+  help: 'OpenClaw circuit breaker state (0=closed, 1=open)',
+  labelNames: ['provider_id'] as const,
+  registers: [registry],
+});
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
@@ -348,6 +416,49 @@ export function updateDbPoolMetrics(idle: number, active: number, waiting: numbe
   dbPoolSize.set({ state: 'idle' }, idle);
   dbPoolSize.set({ state: 'active' }, active);
   dbPoolSize.set({ state: 'waiting' }, waiting);
+}
+
+/**
+ * Record OpenClaw trigger completion
+ */
+export function recordOpenClawTrigger(
+  providerId: string,
+  status: 'success' | 'timeout' | 'error' | 'circuit_open',
+  durationSeconds: number,
+): void {
+  openclawTriggerDuration.observe({ provider_id: providerId, status }, durationSeconds);
+  if (status !== 'success') {
+    openclawTriggerErrors.inc({ provider_id: providerId, error_type: status.toUpperCase() });
+  }
+}
+
+/**
+ * Record OpenClaw time-to-first-delta
+ */
+export function recordOpenClawTTFD(providerId: string, ttfdSeconds: number): void {
+  openclawTimeToFirstDelta.observe({ provider_id: providerId }, ttfdSeconds);
+}
+
+/**
+ * Update OpenClaw WebSocket connection state
+ */
+export function updateOpenClawWsState(providerId: string, state: 'disconnected' | 'connecting' | 'connected'): void {
+  const value = state === 'disconnected' ? 0 : state === 'connecting' ? 1 : 2;
+  openclawWsState.set({ provider_id: providerId }, value);
+}
+
+/**
+ * Update OpenClaw circuit breaker state
+ */
+export function updateOpenClawCircuitBreaker(providerId: string, open: boolean): void {
+  openclawCircuitBreakerState.set({ provider_id: providerId }, open ? 1 : 0);
+}
+
+/**
+ * Record OpenClaw reconnection
+ */
+export function recordOpenClawReconnect(providerId: string): void {
+  openclawReconnects.inc({ provider_id: providerId });
 }
 
 /**

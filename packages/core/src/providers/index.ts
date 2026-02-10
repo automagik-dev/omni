@@ -38,6 +38,8 @@ export { AgnoClient, createAgnoClient } from './agno-client';
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';
 export { WebhookAgentProvider } from './webhook-provider';
+export { OpenClawAgentProvider, OpenClawClient, createOpenClawProvider } from './openclaw';
+export type { OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
 
 // Factory
 export {

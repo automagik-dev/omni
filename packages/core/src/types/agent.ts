@@ -5,7 +5,16 @@
 export const AGENT_TYPES = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-export const PROVIDER_SCHEMAS = ['agnoos', 'agno', 'a2a', 'openai', 'anthropic', 'webhook', 'custom'] as const;
+export const PROVIDER_SCHEMAS = [
+  'agnoos',
+  'agno',
+  'a2a',
+  'openai',
+  'anthropic',
+  'webhook',
+  'openclaw',
+  'custom',
+] as const;
 export type ProviderSchema = (typeof PROVIDER_SCHEMAS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -20,7 +29,7 @@ export interface AgentProviderConfig {
   schema: ProviderSchema;
   baseUrl: string;
   apiKey?: string;
-  schemaConfig?: OpenAIConfig | AnthropicConfig | AgnoOSConfig | A2AConfig | CustomConfig;
+  schemaConfig?: OpenAIConfig | AnthropicConfig | AgnoOSConfig | A2AConfig | OpenClawConfig | CustomConfig;
   defaultStream: boolean;
   defaultTimeout: number;
   capabilities: AgentCapabilities;
@@ -56,6 +65,15 @@ export interface A2AConfig {
   agentUrl: string;
   capabilities?: string[];
   timeout?: number;
+}
+
+export interface OpenClawConfig {
+  /** Default agent ID (e.g. 'sofia') */
+  defaultAgentId: string;
+  /** Agent timeout in seconds (default: 120) */
+  agentTimeoutMs?: number;
+  /** Origin header for WS connection */
+  origin?: string;
 }
 
 export interface CustomConfig {

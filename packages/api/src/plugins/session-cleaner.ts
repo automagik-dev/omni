@@ -12,6 +12,7 @@ import { createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/db';
 import type { Services } from '../services';
 import { computeSessionId } from '../services/agent-runner';
+import { resolveProvider } from './agent-dispatcher';
 import { getPlugin } from './loader';
 
 const log = createLogger('session-cleaner');
@@ -47,9 +48,11 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
 }
 
 /**
- * Clear AgnoOS session for the given user and chat
+ * Clear agent session for the given user and chat.
+ * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
+ * falls back to direct AgnoOS client for legacy.
  */
-async function clearAgnoOSSession(
+async function clearAgentSession(
   services: Services,
   instanceId: string,
   from: string,
@@ -62,22 +65,29 @@ async function clearAgnoOSSession(
     throw new Error('No agent provider configured for instance');
   }
 
-  // Get provider
-  const provider = await services.providers.getById(instance.agentProviderId);
-
-  if (provider.schema !== 'agnoos') {
-    throw new Error('Session clearing only supported for AgnoOS providers');
-  }
+  // Get provider record from DB
+  const providerRecord = await services.providers.getById(instance.agentProviderId);
 
   // Compute session ID using the same strategy as agent-runner
   const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
   const sessionId = computeSessionId(sessionStrategy, from, chatId);
 
-  // Create client and clear the session
+  // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, etc.)
+  const agentProvider = resolveProvider(providerRecord, instance);
+  if (agentProvider?.resetSession) {
+    await agentProvider.resetSession(sessionId);
+    return { sessionId, sessionStrategy };
+  }
+
+  // Fallback: direct AgnoOS client
+  if (providerRecord.schema !== 'agnoos' && providerRecord.schema !== 'agno') {
+    throw new Error(`Session clearing not supported for ${providerRecord.schema} providers`);
+  }
+
   const client = createAgnoClient({
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey ?? '',
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    baseUrl: providerRecord.baseUrl,
+    apiKey: providerRecord.apiKey ?? '',
+    defaultTimeoutMs: (providerRecord.defaultTimeout ?? 60) * 1000,
   });
 
   await client.deleteSession(sessionId);
@@ -101,7 +111,7 @@ async function handleTrashEmojiMessage(services: Services, event: TypedOmniEvent
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
 
   try {
-    const { sessionId, sessionStrategy } = await clearAgnoOSSession(services, instanceId, from, chatId);
+    const { sessionId, sessionStrategy } = await clearAgentSession(services, instanceId, from, chatId);
 
     log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
 
@@ -116,7 +126,7 @@ async function handleTrashEmojiMessage(services: Services, event: TypedOmniEvent
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     // Skip logging if it's a known skippable case
-    if (errorMessage.includes('No agent provider') || errorMessage.includes('only supported for AgnoOS')) {
+    if (errorMessage.includes('No agent provider') || errorMessage.includes('not supported for')) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
       return;
     }
