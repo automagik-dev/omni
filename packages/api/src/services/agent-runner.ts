@@ -18,7 +18,7 @@ import {
   isProviderSchemaSupported,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
-import type { AgentReplyFilter, AgentSessionStrategy, Instance } from '@omni/db';
+import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } from '@omni/db';
 import type { Database } from '@omni/db';
 import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -34,10 +34,25 @@ export interface AgentRunContext {
   instance: Instance;
   /** Chat ID for session continuity */
   chatId: string;
-  /** Sender ID for user identification */
+
+  /** Person UUID (internal identity) */
+  personId: string;
+
+  /** Platform-specific sender ID (KEEP for backward compat) */
   senderId: string;
+
   /** Sender's display name (from DB or payload) */
   senderName?: string;
+
+  /** Additional sender metadata */
+  senderAvatarUrl?: string;
+  senderPlatformUsername?: string;
+
+  /** Chat metadata */
+  chatType: 'dm' | 'group' | 'channel';
+  chatName?: string;
+  participantCount?: number;
+
   /** The message(s) to send to the agent */
   messages: string[];
   /** Optional file attachments (images, audio, documents) */
@@ -377,7 +392,20 @@ export class AgentRunnerService {
    * Run an agent call (sync mode)
    */
   async run(context: AgentRunContext): Promise<AgentRunResult> {
-    const { instance, chatId, senderId, senderName, messages, files } = context;
+    const {
+      instance,
+      chatId,
+      personId,
+      senderId,
+      senderName,
+      senderAvatarUrl,
+      senderPlatformUsername,
+      chatType,
+      chatName,
+      participantCount,
+      messages,
+      files,
+    } = context;
 
     if (!instance.agentProviderId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
@@ -416,7 +444,24 @@ export class AgentRunnerService {
       message: combinedMessage,
       stream: false,
       sessionId, // Computed based on session strategy
-      userId: senderId, // User identifier (always sent for context)
+      userId: personId, // ← Person UUID (internal identity)
+      platform: {
+        id: senderId,
+        channel: instance.channel as ChannelType,
+        instanceId: instance.id,
+        instanceName: instance.name ?? undefined,
+      },
+      sender: {
+        displayName: senderName,
+        avatarUrl: senderAvatarUrl,
+        platformUsername: senderPlatformUsername,
+      },
+      chat: {
+        type: chatType,
+        id: chatId,
+        name: chatName,
+        participantCount,
+      },
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
       files,
     };
@@ -463,7 +508,19 @@ export class AgentRunnerService {
    * Yields split parts as they become available
    */
   async *stream(context: AgentRunContext): AsyncGenerator<string> {
-    const { instance, chatId, senderId, senderName, messages } = context;
+    const {
+      instance,
+      chatId,
+      personId,
+      senderId,
+      senderName,
+      senderAvatarUrl,
+      senderPlatformUsername,
+      chatType,
+      chatName,
+      participantCount,
+      messages,
+    } = context;
 
     if (!instance.agentProviderId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
@@ -490,7 +547,24 @@ export class AgentRunnerService {
       message: combinedMessage,
       stream: true,
       sessionId, // Computed based on session strategy
-      userId: senderId, // User identifier (always sent for context)
+      userId: personId, // ← Person UUID (internal identity)
+      platform: {
+        id: senderId,
+        channel: instance.channel as ChannelType,
+        instanceId: instance.id,
+        instanceName: instance.name ?? undefined,
+      },
+      sender: {
+        displayName: senderName,
+        avatarUrl: senderAvatarUrl,
+        platformUsername: senderPlatformUsername,
+      },
+      chat: {
+        type: chatType,
+        id: chatId,
+        name: chatName,
+        participantCount,
+      },
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
     };
 

@@ -11,6 +11,12 @@ import type { ChannelType } from '../types/channel';
 
 /**
  * Request to run an agent/team/workflow
+ *
+ * **Breaking Change (Semantic)**: The `userId` field now represents the internal
+ * Person UUID instead of platform-specific IDs. Use `platform.id` to access the
+ * platform-specific identifier (phone number, Discord ID, etc.).
+ *
+ * All new fields (platform, sender, chat) are optional for backward compatibility.
  */
 export interface ProviderRequest {
   /** The message/prompt to send */
@@ -19,8 +25,43 @@ export interface ProviderRequest {
   stream?: boolean;
   /** Session ID for conversation continuity (typically chatId) */
   sessionId?: string;
-  /** User ID for the requester (typically personId or senderId) */
-  userId?: string;
+  /** User ID for the requester - NOW ALWAYS Person UUID (internal identity) */
+  userId: string;
+
+  /** Platform context for backward compat and provider flexibility */
+  platform?: {
+    /** Platform-specific ID (phone number, Discord ID, etc.) */
+    id: string;
+    /** Channel type ('whatsapp', 'discord', etc.) */
+    channel: ChannelType;
+    /** Instance UUID */
+    instanceId: string;
+    /** Human-readable instance name */
+    instanceName?: string;
+  };
+
+  /** Sender metadata */
+  sender?: {
+    /** Person display name or platform username */
+    displayName?: string;
+    /** Profile picture URL */
+    avatarUrl?: string;
+    /** Platform-specific username/handle */
+    platformUsername?: string;
+  };
+
+  /** Chat metadata */
+  chat?: {
+    /** Chat type */
+    type: 'dm' | 'group' | 'channel';
+    /** Platform chat ID */
+    id: string;
+    /** Group/channel name (null for DMs) */
+    name?: string;
+    /** For group chats */
+    participantCount?: number;
+  };
+
   /** Optional file attachments */
   files?: ProviderFile[];
   /** Request timeout in milliseconds */

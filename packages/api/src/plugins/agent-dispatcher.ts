@@ -311,6 +311,26 @@ function classifyMessageTrigger(context: MessageContext): AgentTriggerType {
   return 'name_match';
 }
 
+/**
+ * Determine chat type from platform-specific chat ID
+ */
+function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'channel' {
+  if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
+    if (chatId.includes('@s.whatsapp.net')) return 'dm';
+    if (chatId.includes('@g.us')) return 'group';
+    if (chatId.includes('@newsletter')) return 'channel';
+    return 'dm'; // fallback
+  }
+
+  if (channel === 'discord') {
+    // Discord group detection logic (based on chatId format or instance metadata)
+    // For now, assume DM unless proven otherwise
+    return 'dm';
+  }
+
+  return 'dm'; // default fallback
+}
+
 async function sendTypingPresence(
   channel: ChannelType,
   instanceId: string,
@@ -732,9 +752,47 @@ async function processAgentResponse(
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
   const traceId = firstMessage.metadata.traceId;
 
+  // Extract person ID (already in event metadata)
+  const personId = firstMessage.metadata.personId;
+  if (!personId) {
+    log.warn('No person ID in message metadata, skipping agent', { instanceId: instance.id, chatId });
+    return;
+  }
+
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
-  const senderName = await services.agentRunner.getSenderName(firstMessage.metadata.personId, pushName);
+  const senderName = await services.agentRunner.getSenderName(personId, pushName);
+
+  // Determine chat type
+  const chatType = determineChatType(chatId, instance.channel);
+
+  // Fetch sender identity metadata
+  let senderAvatarUrl: string | undefined;
+  let senderPlatformUsername: string | undefined;
+  try {
+    const identity = await services.persons.getIdentityByPlatformId(instance.channel, instance.id, senderId);
+    if (identity) {
+      senderAvatarUrl = identity.profilePicUrl ?? undefined;
+      senderPlatformUsername = identity.platformUsername ?? undefined;
+    }
+  } catch (error) {
+    log.debug('Failed to fetch sender identity metadata', { error: String(error) });
+  }
+
+  // Fetch chat metadata if group
+  let chatName: string | undefined;
+  let participantCount: number | undefined;
+  if (chatType === 'group') {
+    try {
+      const chat = await services.chats.getByExternalId(instance.id, chatId);
+      if (chat) {
+        chatName = chat.name ?? undefined;
+        participantCount = chat.participantCount ?? undefined;
+      }
+    } catch (error) {
+      log.debug('Failed to fetch chat metadata', { error: String(error) });
+    }
+  }
 
   log.info('Dispatching to agent', {
     instanceId: instance.id,
@@ -743,6 +801,7 @@ async function processAgentResponse(
     triggerType,
     traceId,
     senderName,
+    chatType,
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
@@ -761,11 +820,18 @@ async function processAgentResponse(
       messageTexts.push('[Media message]');
     }
 
+    // Build enhanced context
     const result = await services.agentRunner.run({
       instance,
       chatId,
+      personId,
       senderId,
       senderName,
+      senderAvatarUrl,
+      senderPlatformUsername,
+      chatType,
+      chatName,
+      participantCount,
       messages: messageTexts,
       files: mediaFiles.length > 0 ? mediaFiles : undefined,
     });
@@ -976,14 +1042,57 @@ async function processReactionTrigger(
       instanceId: instance.id,
     });
 
+    const personId = metadata.personId;
+    if (!personId) {
+      log.warn('No person ID in reaction metadata, skipping agent', { instanceId: instance.id, chatId });
+      return;
+    }
+
     const reactionMessage = `[Reacted with ${payload.emoji} to a message]`;
-    const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
+    const senderName = await services.agentRunner.getSenderName(personId, undefined);
+
+    // Determine chat type
+    const chatType = determineChatType(chatId, instance.channel);
+
+    // Fetch sender identity metadata
+    let senderAvatarUrl: string | undefined;
+    let senderPlatformUsername: string | undefined;
+    try {
+      const identity = await services.persons.getIdentityByPlatformId(instance.channel, instance.id, payload.from);
+      if (identity) {
+        senderAvatarUrl = identity.profilePicUrl ?? undefined;
+        senderPlatformUsername = identity.platformUsername ?? undefined;
+      }
+    } catch (error) {
+      log.debug('Failed to fetch sender identity metadata', { error: String(error) });
+    }
+
+    // Fetch chat metadata if group
+    let chatName: string | undefined;
+    let participantCount: number | undefined;
+    if (chatType === 'group') {
+      try {
+        const chat = await services.chats.getByExternalId(instance.id, chatId);
+        if (chat) {
+          chatName = chat.name ?? undefined;
+          participantCount = chat.participantCount ?? undefined;
+        }
+      } catch (error) {
+        log.debug('Failed to fetch chat metadata', { error: String(error) });
+      }
+    }
 
     const result = await services.agentRunner.run({
       instance,
       chatId,
+      personId,
       senderId: payload.from,
       senderName,
+      senderAvatarUrl,
+      senderPlatformUsername,
+      chatType,
+      chatName,
+      participantCount,
       messages: [reactionMessage],
     });
 
