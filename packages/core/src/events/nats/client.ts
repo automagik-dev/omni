@@ -355,11 +355,21 @@ export class NatsEventBus implements EventBus {
     // Create consumer name
     const consumerName = options.durable ?? generateConsumerName(pattern);
 
-    // Add consumer to stream
-    await jsm.consumers.add(streamName, {
-      ...consumerConfig,
-      name: consumerName,
-    });
+    // Add consumer to stream (create or update if it already exists)
+    try {
+      await jsm.consumers.add(streamName, {
+        ...consumerConfig,
+        name: consumerName,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('consumer already exists') || errMsg.includes('consumer name already')) {
+        log.debug('Consumer already exists, updating', { consumerName, streamName });
+        await jsm.consumers.update(streamName, consumerName, consumerConfig);
+      } else {
+        throw err;
+      }
+    }
 
     // Get consumer
     const consumer = await js.consumers.get(streamName, consumerName);
