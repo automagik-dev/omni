@@ -243,6 +243,14 @@ export class AccessService {
   }
 
   /**
+   * Normalize a phone number by stripping leading '+' for comparison.
+   * WhatsApp sends numbers without '+' while rules may be stored with it.
+   */
+  private normalizePhone(phone: string): string {
+    return phone.replace(/^\+/, '');
+  }
+
+  /**
    * Check if a rule matches a platform user ID
    */
   private ruleMatches(rule: AccessRule, platformUserId: string): boolean {
@@ -253,11 +261,13 @@ export class AccessService {
 
     // Phone pattern match (supports wildcards)
     if (rule.phonePattern) {
+      const normalizedPattern = this.normalizePhone(rule.phonePattern);
+      const normalizedUserId = this.normalizePhone(platformUserId);
       // Escape regex metacharacters except *, then replace * with .*
-      const escaped = rule.phonePattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
       const pattern = escaped.replace(/\*/g, '.*');
       const regex = new RegExp(`^${pattern}$`);
-      return regex.test(platformUserId);
+      return regex.test(normalizedUserId);
     }
 
     return false;
