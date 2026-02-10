@@ -349,6 +349,7 @@ const INTERNAL_MESSAGE_TYPES = new Set([
   'peerDataOperationRequestResponseMessage', // Internal peer sync response
   'botInvokeMessage', // Bot-related internal
   'callLogMessage', // Call log sync
+  'pollResultSnapshotMessage', // Poll result sync (internal, not user-facing content)
 ]);
 
 /**
