@@ -88,6 +88,7 @@ const CLI_COMMANDS: Record<string, string> = {
   // EVENTS
   // ============================================================================
   'events.list': 'events list',
+  'events.analytics': 'events analytics',
 
   // ============================================================================
   // PERSONS

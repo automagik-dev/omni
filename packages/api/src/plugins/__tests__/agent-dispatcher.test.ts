@@ -32,9 +32,12 @@ mock.module('../loader', () => ({
   getPlugin: mock(() => Promise.resolve(undefined)),
 }));
 
-// Mock @omni/core selectively — keep real types, mock functions
+// Mock @omni/core selectively — only mock classes/functions the dispatcher needs.
+// IMPORTANT: Do NOT mock createLogger here — bun's mock.module merges with the
+// real module, and mocking createLogger contaminates concurrent test files
+// (logger.test.ts) because bun applies the mock process-wide.
 mock.module('@omni/core', () => {
-  // We need to provide the class constructors and type re-exports
+  // We need to provide the class constructors for agent providers
   class MockAgnoAgentProvider {
     readonly schema = 'agnoos' as const;
     readonly mode = 'round-trip' as const;
@@ -76,15 +79,11 @@ mock.module('@omni/core', () => {
     }
   }
 
+  // createLogger is NOT mocked — the real implementation passes through via
+  // bun's merge behavior, keeping logger.test.ts and other test files working.
   return {
     AgnoAgentProvider: MockAgnoAgentProvider,
     WebhookAgentProvider: MockWebhookAgentProvider,
-    createLogger: () => ({
-      info: () => {},
-      debug: () => {},
-      warn: () => {},
-      error: () => {},
-    }),
     createProviderClient: mock(() => ({})),
     generateCorrelationId: (prefix?: string) => `${prefix ?? 'corr'}-test-${Date.now()}`,
   };
