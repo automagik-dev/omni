@@ -350,6 +350,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Create a new Baileys connection using socket wrapper
    */
   private async createConnection(instanceId: string, config: InstanceConfig): Promise<void> {
+    // Close existing socket if any (critical: prevents duplicate connections)
+    const existingSocket = this.sockets.get(instanceId);
+    if (existingSocket) {
+      this.logger.info('Closing existing socket before reconnect', { instanceId });
+      await closeSocket(existingSocket, false);
+      this.sockets.delete(instanceId);
+    }
+
     // Storage-backed auth state
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
 

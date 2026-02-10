@@ -227,6 +227,15 @@ async function handleConnectionClose(
   const reason = error?.output?.payload?.message || 'Unknown error';
   const wasLoggedOut = statusCode === DisconnectReason.loggedOut;
 
+  // DEBUG: Log all disconnect events to diagnose reconnect loop
+  log.info('Connection closed', {
+    instanceId,
+    statusCode,
+    reason,
+    wasLoggedOut,
+    errorMessage: error?.message,
+  });
+
   // Clear active QR - connection error is NOT a QR expiry
   activeQrCodes.delete(instanceId);
 
