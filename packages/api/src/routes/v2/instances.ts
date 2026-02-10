@@ -72,6 +72,23 @@ const createInstanceSchema = z.object({
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
+  messageDebounceMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .default('randomized')
+    .describe('Message debounce mode: disabled, fixed delay, or randomized delay'),
+  messageDebounceMinMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Minimum debounce delay in milliseconds (0 = no debounce)'),
+  messageDebounceMaxMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Maximum debounce delay in milliseconds (0 = no debounce)'),
+  messageDebounceRestartOnTyping: z.boolean().default(false).describe('Restart debounce timer when user is typing'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
