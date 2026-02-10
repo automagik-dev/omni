@@ -46,23 +46,35 @@ interface ExtendedMessage extends Message {
 // Formatting Helpers
 // ============================================================================
 
+interface ChatWithCanonical extends ExtendedChat {
+  canonicalId?: string | null;
+}
+
 /**
- * Format chat name - use name if available, otherwise format externalId
+ * Format chat name - use name if available, otherwise format externalId.
+ * Handles @lid JIDs by trying canonicalId first, then showing truncated LID.
  */
-function formatChatName(chat: ExtendedChat): string {
+function formatChatName(chat: ChatWithCanonical): string {
   if (chat.name) return chat.name;
 
+  // Try canonicalId first (resolved phone JID for @lid chats)
+  const identifier = chat.canonicalId || chat.externalId;
+
   // Format WhatsApp-style external IDs (e.g., "5551999237715@s.whatsapp.net")
-  const externalId = chat.externalId;
-  if (externalId.includes('@s.whatsapp.net')) {
-    const phone = externalId.replace('@s.whatsapp.net', '');
+  if (identifier.includes('@s.whatsapp.net')) {
+    const phone = identifier.replace('@s.whatsapp.net', '');
     return phone.length > 10 ? `+${phone}` : phone;
   }
-  if (externalId.includes('@g.us')) {
-    return externalId.replace('@g.us', ' (group)');
+  if (identifier.includes('@g.us')) {
+    return identifier.replace('@g.us', ' (group)');
+  }
+  // Show truncated LID for unresolvable @lid JIDs
+  if (identifier.endsWith('@lid')) {
+    const lidNum = identifier.replace('@lid', '');
+    return `LID:${lidNum.slice(0, 8)}...`;
   }
 
-  return externalId;
+  return identifier;
 }
 
 /**

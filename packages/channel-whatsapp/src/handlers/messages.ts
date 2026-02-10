@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
-import { fromJid } from '../jid';
+import { fromJid, isLidJid, resolveToPhoneJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 
@@ -496,6 +496,82 @@ async function tryDownloadMedia(
 }
 
 /**
+ * Handle special message types (reactions, edits, deletes).
+ * Returns true if the message was handled and should not be processed further.
+ */
+async function handleSpecialMessage(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  content: ExtractedContent,
+  externalId: string,
+  chatId: string,
+  senderId: string,
+  msg: WAMessage,
+): Promise<boolean> {
+  if (content.type === 'reaction') {
+    await plugin.handleReactionReceived(
+      instanceId,
+      externalId,
+      chatId,
+      senderId,
+      content.emoji || '',
+      content.targetMessageId || '',
+      isFromMe(msg),
+    );
+    return true;
+  }
+
+  if (content.type === 'edit' && content.targetMessageId) {
+    await plugin.handleMessageEdited(
+      instanceId,
+      content.targetMessageId,
+      chatId,
+      content.editedText || content.text || '',
+    );
+    return true;
+  }
+
+  if (content.type === 'delete' && content.targetMessageId) {
+    await plugin.handleMessageDeleted(instanceId, content.targetMessageId, chatId, isFromMe(msg));
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Annotate the raw message with LID resolution info for downstream persistence
+ */
+function annotateLidResolution(msg: WAMessage, rawChatId: string, chatId: string): void {
+  if (isLidJid(rawChatId) && chatId !== rawChatId) {
+    (msg as unknown as Record<string, unknown>).originalLidJid = rawChatId;
+    (msg as unknown as Record<string, unknown>).addressingMode = 'lid';
+  }
+}
+
+/**
+ * Resolve the chat ID from a message, handling @lid → phone JID conversion
+ */
+function resolveChatId(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  msg: WAMessage,
+): { chatId: string; rawChatId: string } {
+  const rawChatId = msg.key.remoteJid || '';
+  const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
+  const lidCache = plugin.getLidMappingCache(instanceId);
+  const chatId = resolveToPhoneJid(rawChatId, remoteJidAlt, lidCache);
+
+  // If we resolved a LID, store the mapping for future messages
+  if (isLidJid(rawChatId) && chatId !== rawChatId) {
+    plugin.storeLidMapping(instanceId, rawChatId, chatId);
+    log.debug('Resolved LID to phone JID', { rawChatId, chatId, source: remoteJidAlt ? 'remoteJidAlt' : 'cache' });
+  }
+
+  return { chatId, rawChatId };
+}
+
+/**
  * Process a single message
  */
 async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
@@ -507,39 +583,15 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   const content = extractContent(msg);
   if (!content) return;
 
-  const chatId = msg.key.remoteJid || '';
+  // Resolve @lid JID to phone-based JID before any event emission
+  const { chatId, rawChatId } = resolveChatId(plugin, instanceId, msg);
+
   const externalId = msg.key.id || '';
   const { id: senderId } = fromJid(isFromMe(msg) ? chatId : msg.key.participant || chatId);
   const replyToId = getReplyToId(msg);
 
-  // Handle reactions specially (they reference another message)
-  if (content.type === 'reaction') {
-    await plugin.handleReactionReceived(
-      instanceId,
-      externalId,
-      chatId,
-      senderId,
-      content.emoji || '',
-      content.targetMessageId || '',
-      isFromMe(msg),
-    );
-    return;
-  }
-
-  // Handle edit messages via protocol message
-  if (content.type === 'edit' && content.targetMessageId) {
-    await plugin.handleMessageEdited(
-      instanceId,
-      content.targetMessageId,
-      chatId,
-      content.editedText || content.text || '',
-    );
-    return;
-  }
-
-  // Handle delete messages via protocol message
-  if (content.type === 'delete' && content.targetMessageId) {
-    await plugin.handleMessageDeleted(instanceId, content.targetMessageId, chatId, isFromMe(msg));
+  // Handle special message types (reactions, edits, deletes) — returns true if handled
+  if (await handleSpecialMessage(plugin, instanceId, content, externalId, chatId, senderId, msg)) {
     return;
   }
 
@@ -550,6 +602,9 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
     content.mediaLocalPath = mediaResult.mediaLocalPath;
     content.mimeType = mediaResult.mimeType;
   }
+
+  // If LID was resolved, annotate the raw message so downstream can persist the mapping
+  annotateLidResolution(msg, rawChatId, chatId);
 
   // Pass all content fields including extended ones (poll, event, product, etc.)
   await plugin.handleMessageReceived(instanceId, externalId, chatId, senderId, content, replyToId, msg, isFromMe(msg));

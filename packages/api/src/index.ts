@@ -31,6 +31,7 @@ import {
   setupAgentResponder,
   setupConnectionListener,
   setupEventPersistence,
+  setupLidMappingListener,
   setupMediaProcessor,
   setupMessageListener,
   setupMessagePersistence,
@@ -90,6 +91,7 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     // Set up event listeners
     await setupQrCodeListener(eventBus);
     await setupConnectionListener(eventBus, db);
+    await setupLidMappingListener(eventBus, db);
     await setupMessageListener(eventBus);
     await setupEventPersistence(eventBus, db);
 

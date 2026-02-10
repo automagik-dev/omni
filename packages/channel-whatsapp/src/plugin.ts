@@ -21,7 +21,7 @@ import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
 import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
-import { fromJid, toJid } from './jid';
+import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
@@ -306,6 +306,33 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Cached chat display names per instance (for DMs from chats.upsert) */
   private chatNamesCache = new Map<string, Map<string, string>>();
+
+  /**
+   * LID → phone JID mapping cache per instance.
+   * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
+   * Populated from contacts.upsert (c.lid + c.id) and lid-mapping.update events.
+   */
+  private lidMappingCache = new Map<string, Map<string, string>>();
+
+  /**
+   * Store a LID → phone JID mapping for an instance
+   */
+  storeLidMapping(instanceId: string, lidJid: string, phoneJid: string): void {
+    let cache = this.lidMappingCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.lidMappingCache.set(instanceId, cache);
+    }
+    cache.set(lidJid, phoneJid);
+    this.logger.debug('Stored LID mapping', { instanceId, lidJid, phoneJid });
+  }
+
+  /**
+   * Get the LID mapping cache for an instance
+   */
+  getLidMappingCache(instanceId: string): Map<string, string> {
+    return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
 
   /**
    * Plugin-specific initialization
@@ -1779,9 +1806,33 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
 
       cache.set(c.id, syncContact);
+
+      // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
+      if (c.lid && isUserJid(c.id)) {
+        const lidJid = c.lid.endsWith('@lid') ? c.lid : `${c.lid}@lid`;
+        this.storeLidMapping(instanceId, lidJid, c.id);
+      }
     }
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
+    this.publishLidMappings(instanceId);
+  }
+
+  /**
+   * Publish all cached LID mappings for an instance to the event bus for DB persistence
+   */
+  private publishLidMappings(instanceId: string): void {
+    const lidCache = this.lidMappingCache.get(instanceId);
+    if (!lidCache || lidCache.size === 0) return;
+
+    const mappings = Array.from(lidCache.entries()).map(([lidJid, phoneJid]) => ({ lidJid, phoneJid }));
+    this.eventBus
+      .publishGeneric(
+        'custom.lid-mapping.batch',
+        { mappings },
+        { instanceId, channelType: this.id, source: `channel:${this.id}`, correlationId: `lid-batch-${instanceId}` },
+      )
+      .catch((err) => this.logger.warn('Failed to publish LID mappings', { error: String(err) }));
   }
 
   /**

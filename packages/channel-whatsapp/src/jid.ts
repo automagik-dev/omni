@@ -15,6 +15,7 @@ export const JID_SUFFIX = {
   USER: '@s.whatsapp.net',
   GROUP: '@g.us',
   BROADCAST: '@broadcast',
+  LID: '@lid',
 } as const;
 
 /**
@@ -106,6 +107,52 @@ export function extractPhone(jid: string): string | undefined {
     return undefined;
   }
   return jid.replace(JID_SUFFIX.USER, '');
+}
+
+/**
+ * Check if a JID is a LID (Linked Device ID) JID
+ */
+export function isLidJid(jid: string): boolean {
+  return jid.endsWith(JID_SUFFIX.LID);
+}
+
+/**
+ * Resolve a JID to a phone-based JID when possible.
+ *
+ * Strategy:
+ * 1. If it's already a phone JID (@s.whatsapp.net), return as-is
+ * 2. If remoteJidAlt is available and is a phone JID, use it
+ * 3. If a LID→phone cache entry exists, use it
+ * 4. Otherwise return the original JID unchanged
+ *
+ * @param jid - The JID to resolve (may be @lid or @s.whatsapp.net)
+ * @param remoteJidAlt - Alternative JID from msg.key.remoteJidAlt (if available)
+ * @param lidCache - Map of LID JID → phone JID for this instance
+ * @returns The resolved phone-based JID, or the original if unresolvable
+ */
+export function resolveToPhoneJid(
+  jid: string | undefined | null,
+  remoteJidAlt: string | undefined | null,
+  lidCache?: Map<string, string>,
+): string {
+  if (!jid) return '';
+
+  // Already a phone-based JID — nothing to do
+  if (!isLidJid(jid)) return jid;
+
+  // Try remoteJidAlt first (most reliable — comes directly from the message)
+  if (remoteJidAlt && isUserJid(remoteJidAlt)) {
+    return remoteJidAlt;
+  }
+
+  // Try the in-memory LID cache
+  if (lidCache) {
+    const cached = lidCache.get(jid);
+    if (cached) return cached;
+  }
+
+  // Unresolvable — return original @lid JID
+  return jid;
 }
 
 /**
