@@ -1808,29 +1808,23 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
   const sinceDate = parseSince(since);
   const untilDate = until ? new Date(until) : new Date();
 
-  // Emit a sync.started event to trigger the sync-worker
+  // Create a sync job (inserts DB row + publishes sync.started event)
   try {
-    const result = await eventBus.publishGeneric(
-      'sync.started',
-      {
-        jobId: `resync-${id}-${Date.now()}`,
-        instanceId: id,
-        type: 'messages',
+    const job = await services.syncJobs.create({
+      instanceId: id,
+      channelType: instance.channel,
+      type: 'messages',
+      config: {
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
-        trigger: 'manual-resync',
       },
-      {
-        instanceId: id,
-        channelType: instance.channel,
-      },
-    );
+    });
 
     log.info('Resync triggered', {
       instanceId: id,
+      jobId: job.id,
       since: sinceDate.toISOString(),
       until: untilDate.toISOString(),
-      eventId: result.id,
     });
 
     return c.json({
@@ -1839,7 +1833,7 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
         instanceId: id,
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
-        eventId: result.id,
+        jobId: job.id,
         message: `Resync triggered for ${instance.name}. Messages since ${sinceDate.toISOString()} will be re-fetched.`,
       },
     });

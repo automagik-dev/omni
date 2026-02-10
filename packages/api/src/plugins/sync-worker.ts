@@ -263,7 +263,7 @@ async function processMessageSync(
     return;
   }
 
-  const since = parseSyncDepth(config.depth);
+  const since = config.since ? new Date(config.since) : parseSyncDepth(config.depth);
   const rateLimiter = getRateLimiter(channelType);
 
   let fetched = 0;

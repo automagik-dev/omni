@@ -79,8 +79,8 @@ describeWithDb('Resync Endpoint', () => {
     return { app, mockEventBus };
   }
 
-  test('POST /instances/:id/resync triggers sync.started event', async () => {
-    const { app, mockEventBus } = createTestApp();
+  test('POST /instances/:id/resync creates sync job and returns jobId', async () => {
+    const { app } = createTestApp();
 
     const res = await app.request(`/instances/${testInstance.id}/resync`, {
       method: 'POST',
@@ -89,18 +89,11 @@ describeWithDb('Resync Endpoint', () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { success: boolean; data: { instanceId: string; eventId: string } };
+    const body = (await res.json()) as { success: boolean; data: { instanceId: string; jobId: string } };
     expect(body.success).toBe(true);
     expect(body.data.instanceId).toBe(testInstance.id);
-    expect(body.data.eventId).toBe('test-event-id');
-
-    // Verify publishGeneric was called with sync.started
-    const publishMock = (mockEventBus as { publishGeneric: ReturnType<typeof mock> }).publishGeneric;
-    expect(publishMock).toHaveBeenCalled();
-    const [eventType, payload] = publishMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(eventType).toBe('sync.started');
-    expect(payload.instanceId).toBe(testInstance.id);
-    expect(payload.trigger).toBe('manual-resync');
+    // jobId should be a valid UUID (from sync_jobs table)
+    expect(body.data.jobId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   test('POST /instances/:id/resync accepts ISO timestamp', async () => {

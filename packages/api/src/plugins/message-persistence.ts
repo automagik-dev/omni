@@ -579,25 +579,20 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               gapMinutes,
             });
 
-            // Trigger resync via sync.started event (using generic publish for extended config)
-            await eventBus.publishGeneric(
-              'sync.started',
-              {
-                jobId: `reconnect-${instanceId}-${Date.now()}`,
-                instanceId,
-                type: 'messages',
+            // Create a sync job (inserts DB row + publishes sync.started event)
+            const job = await services.syncJobs.create({
+              instanceId,
+              channelType: event.metadata.channelType ?? ('whatsapp-baileys' as ChannelType),
+              type: 'messages',
+              config: {
                 since: lastMessageAt.toISOString(),
                 until: new Date().toISOString(),
-                trigger: 'reconnect-backfill',
               },
-              {
-                instanceId,
-                channelType: event.metadata.channelType,
-              },
-            );
+            });
 
             log.info('Post-reconnect backfill triggered', {
               instanceId,
+              jobId: job.id,
               since: lastMessageAt.toISOString(),
               gapMinutes,
             });

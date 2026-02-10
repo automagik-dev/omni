@@ -1136,6 +1136,10 @@ export interface SyncJobConfig {
   depth?: '7d' | '30d' | '90d' | '1y' | 'all';
   channelId?: string; // For Discord channel-specific sync
   downloadMedia?: boolean;
+  /** Explicit since timestamp (ISO string) — takes precedence over depth */
+  since?: string;
+  /** Explicit until timestamp (ISO string) */
+  until?: string;
 }
 
 /**
