@@ -845,6 +845,33 @@ export function createInstancesCommand(): Command {
     });
 
   // ============================================================================
+  // Group Picture
+  // ============================================================================
+
+  // omni instances group-update-picture <id> --group <jid>
+  instances
+    .command('group-update-picture <id>')
+    .description('Update a WhatsApp group profile picture')
+    .requiredOption('--group <jid>', 'Group JID (e.g., 120363xxx@g.us)')
+    .option('--base64 <data>', 'Base64-encoded image data')
+    .option('--url <url>', 'URL to fetch image from')
+    .action(async (id: string, options: { group: string; base64?: string; url?: string }) => {
+      if (!options.base64 && !options.url) {
+        output.error('Either --base64 or --url is required');
+        return;
+      }
+
+      try {
+        const base64Data = await resolveBase64Image(options);
+        await apiCall(`instances/${id}/groups/${options.group}/picture`, 'PUT', { base64: base64Data });
+        output.success(`Group picture updated for ${options.group}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update group picture: ${message}`);
+      }
+    });
+
+  // ============================================================================
   // Group Create
   // ============================================================================
 
