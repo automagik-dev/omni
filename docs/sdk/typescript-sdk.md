@@ -55,7 +55,7 @@ const omni = new OmniClient({
   apiKey: 'sk-omni-...',
 
   // Optional
-  baseUrl: 'https://api.example.com',  // Default: http://localhost:8881
+  baseUrl: 'https://api.example.com',  // Default: http://localhost:8882
   timeout: 30000,                       // Request timeout in ms (default: 30000)
   retries: 3,                           // Number of retries (default: 3)
   retryDelay: 1000,                     // Initial retry delay (default: 1000)
@@ -485,7 +485,7 @@ import type { AppRouter } from '@omni/api';
 const trpc = createTRPCProxyClient<AppRouter>({
   links: [
     httpBatchLink({
-      url: 'http://localhost:8881/trpc',
+      url: 'http://localhost:8882/trpc',
       headers: {
         'x-api-key': process.env.OMNI_API_KEY,
       },

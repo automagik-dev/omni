@@ -291,7 +291,7 @@ describe('Formatters', () => {
     module: 'api:startup',
     msg: 'Server listening',
     host: '0.0.0.0',
-    port: 8881,
+    port: 8882,
   };
 
   describe('formatJson', () => {
@@ -304,7 +304,7 @@ describe('Formatters', () => {
       expect(parsed.module).toBe('api:startup');
       expect(parsed.msg).toBe('Server listening');
       expect(parsed.host).toBe('0.0.0.0');
-      expect(parsed.port).toBe(8881);
+      expect(parsed.port).toBe(8882);
     });
   });
 
@@ -324,7 +324,7 @@ describe('Formatters', () => {
       const output = formatPretty(entry);
 
       expect(output).toContain('host=0.0.0.0');
-      expect(output).toContain('port=8881');
+      expect(output).toContain('port=8882');
     });
 
     it('should quote strings with spaces', () => {

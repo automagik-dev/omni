@@ -233,13 +233,13 @@ interface CacheProvider {
 bun test packages/api/src/cache
 
 # Compression check
-curl -H "Accept-Encoding: gzip" http://localhost:8881/api/v2/health -v 2>&1 | grep "Content-Encoding"
+curl -H "Accept-Encoding: gzip" http://localhost:8882/api/v2/health -v 2>&1 | grep "Content-Encoding"
 
 # Timeout check (should timeout)
 # Requires a slow endpoint for testing
 
 # Body limit check
-dd if=/dev/zero bs=11M count=1 | curl -X POST -d @- http://localhost:8881/api/v2/test
+dd if=/dev/zero bs=11M count=1 | curl -X POST -d @- http://localhost:8882/api/v2/test
 # Should return 413 Payload Too Large
 ```
 

@@ -7,7 +7,7 @@ Example:
     from omni import OmniClient
 
     client = OmniClient(
-        base_url="http://localhost:8881",
+        base_url="http://localhost:8882",
         api_key="omni_sk_your_key"
     )
 

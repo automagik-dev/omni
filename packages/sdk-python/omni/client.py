@@ -600,7 +600,7 @@ class OmniClient:
 
     Example:
         client = OmniClient(
-            base_url="http://localhost:8881",
+            base_url="http://localhost:8882",
             api_key="omni_sk_your_key"
         )
 
@@ -625,7 +625,7 @@ class OmniClient:
         Initialize the Omni client.
 
         Args:
-            base_url: Base URL of the API (e.g., 'http://localhost:8881')
+            base_url: Base URL of the API (e.g., 'http://localhost:8882')
             api_key: API key for authentication
             timeout: Request timeout in seconds (default: 30)
         """

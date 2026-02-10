@@ -114,7 +114,7 @@ cd packages/sdk && bun run build
 import { createOmniClient } from '@omni/sdk';
 
 const omni = createOmniClient({
-  baseUrl: 'http://localhost:8881',
+  baseUrl: 'http://localhost:8882',
   apiKey: 'test-key',
 });
 

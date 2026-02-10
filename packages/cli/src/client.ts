@@ -32,7 +32,7 @@ export function getClient(): OmniClient {
   }
 
   cachedClient = createOmniClient({
-    baseUrl: config.apiUrl ?? 'http://localhost:8881',
+    baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
   });
 
@@ -60,7 +60,7 @@ export function getOptionalClient(): OmniClient | null {
   }
 
   cachedClient = createOmniClient({
-    baseUrl: config.apiUrl ?? 'http://localhost:8881',
+    baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
   });
 

@@ -16,11 +16,11 @@
  *   - /tmp/omni-heap-*.json (heap snapshots if --heap)
  *
  * Requirements:
- *   - API running on API_URL (default: http://localhost:8881)
+ *   - API running on API_URL (default: http://localhost:8882)
  *   - OMNI_API_KEY set in environment
  */
 
-const API_URL = process.env.API_URL || 'http://localhost:8881';
+const API_URL = process.env.API_URL || 'http://localhost:8882';
 const API_KEY = process.env.OMNI_API_KEY || '';
 
 interface TimingData {

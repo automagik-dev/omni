@@ -290,8 +290,8 @@ data: {"instanceId":"...","isConnected":true}
 make typecheck
 bun test packages/api/src/__tests__/event-ops.test.ts
 bun test packages/api/src/__tests__/events.test.ts
-curl http://localhost:3000/api/v2/event-ops/metrics | jq
-curl 'http://localhost:3000/api/v2/events/analytics?granularity=hourly' | jq
+curl http://localhost:8882/api/v2/event-ops/metrics | jq
+curl 'http://localhost:8882/api/v2/events/analytics?granularity=hourly' | jq
 ```
 
 ---
@@ -318,7 +318,7 @@ curl 'http://localhost:3000/api/v2/events/analytics?granularity=hourly' | jq
 ```bash
 make typecheck
 bun test packages/api/src/__tests__/events.test.ts
-curl http://localhost:3000/api/v2/events/analytics | jq '.byChannel, .byDirection'
+curl http://localhost:8882/api/v2/events/analytics | jq '.byChannel, .byDirection'
 ```
 
 ---
@@ -344,7 +344,7 @@ curl http://localhost:3000/api/v2/events/analytics | jq '.byChannel, .byDirectio
 ```bash
 make typecheck
 bun test packages/api/src/__tests__/automations.test.ts
-curl http://localhost:3000/api/v2/automation-metrics | jq
+curl http://localhost:8882/api/v2/automation-metrics | jq
 ```
 
 ---
@@ -365,7 +365,7 @@ After all groups complete:
 
 3. **Verify OpenAPI docs:**
    ```bash
-   curl http://localhost:3000/api/v2/openapi | jq
+   curl http://localhost:8882/api/v2/openapi | jq
    ```
 
 4. **Manual smoke test with dashboard:**

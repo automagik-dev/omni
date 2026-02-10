@@ -183,7 +183,7 @@ export function getLogConfig(): Readonly<Required<LogConfig>> {
  * @example
  * ```typescript
  * const logger = createLogger('api:startup');
- * logger.info('Server listening', { host: '0.0.0.0', port: 8881 });
+ * logger.info('Server listening', { host: '0.0.0.0', port: 8882 });
  * ```
  */
 export function createLogger(module: string): Logger {

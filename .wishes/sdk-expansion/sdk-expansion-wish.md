@@ -65,7 +65,7 @@ The SDK currently only wraps 8 of 16+ API route groups. The CLI and other client
 
 **Validation:**
 ```bash
-curl -X POST http://localhost:8881/api/v2/auth/validate \
+curl -X POST http://localhost:8882/api/v2/auth/validate \
   -H "x-api-key: $API_KEY"
 ```
 

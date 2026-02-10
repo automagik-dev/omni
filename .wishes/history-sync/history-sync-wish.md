@@ -217,18 +217,18 @@ if (!existing) {
 **Validation:**
 ```bash
 # Check instance has profile after connect
-curl http://localhost:8881/api/v2/instances/$INSTANCE_ID | jq '.data.profileName, .data.profileBio'
+curl http://localhost:8882/api/v2/instances/$INSTANCE_ID | jq '.data.profileName, .data.profileBio'
 
 # Trigger profile sync
-curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
+curl -X POST http://localhost:8882/api/v2/instances/$INSTANCE_ID/sync \
   -d '{"type": "profile"}'
 
 # Start a message sync job
-JOB_ID=$(curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
+JOB_ID=$(curl -X POST http://localhost:8882/api/v2/instances/$INSTANCE_ID/sync \
   -d '{"type": "messages", "depth": "7d"}' | jq -r '.data.jobId')
 
 # Check status
-curl http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync/$JOB_ID
+curl http://localhost:8882/api/v2/instances/$INSTANCE_ID/sync/$JOB_ID
 # Returns: { "status": "in_progress", "progress": { "fetched": 150, "stored": 148, "duplicates": 2 }}
 ```
 
@@ -273,18 +273,18 @@ curl http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync/$JOB_ID
 **Validation:**
 ```bash
 # Enable media download for instance
-curl -X PATCH http://localhost:8881/api/v2/instances/$INSTANCE_ID \
+curl -X PATCH http://localhost:8882/api/v2/instances/$INSTANCE_ID \
   -d '{"downloadMediaOnSync": true}'
 
 # Sync messages with media
-curl -X POST http://localhost:8881/api/v2/instances/$INSTANCE_ID/sync \
+curl -X POST http://localhost:8882/api/v2/instances/$INSTANCE_ID/sync \
   -d '{"type": "messages", "depth": "7d"}'
 
 # Check messages have local paths
 psql -c "SELECT id, media_local_path, media_metadata FROM messages WHERE has_media = true LIMIT 5"
 
 # Serve stored media
-curl http://localhost:8881/api/v2/media/$INSTANCE_ID/2026-02/$MESSAGE_ID.jpg --output test.jpg
+curl http://localhost:8882/api/v2/media/$INSTANCE_ID/2026-02/$MESSAGE_ID.jpg --output test.jpg
 ```
 
 ---

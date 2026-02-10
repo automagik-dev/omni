@@ -87,9 +87,9 @@ Reference docs:
 ```bash
 bun run packages/api/src/index.ts &
 sleep 2
-curl -s http://localhost:8881/api/v2/health | jq .
-curl -s -H "x-api-key: invalid" http://localhost:8881/api/v2/instances
-curl -s -H "x-api-key: test-key" http://localhost:8881/api/v2/instances
+curl -s http://localhost:8882/api/v2/health | jq .
+curl -s -H "x-api-key: invalid" http://localhost:8882/api/v2/instances
+curl -s -H "x-api-key: test-key" http://localhost:8882/api/v2/instances
 kill %1
 ```
 
@@ -125,12 +125,12 @@ kill %1
 bun run packages/api/src/index.ts &
 sleep 2
 # Test OpenAPI spec
-curl -s http://localhost:8881/api/v2/openapi.json | jq .info
+curl -s http://localhost:8882/api/v2/openapi.json | jq .info
 # Test instances endpoint
-curl -s -H "x-api-key: test-key" http://localhost:8881/api/v2/instances | jq .
+curl -s -H "x-api-key: test-key" http://localhost:8882/api/v2/instances | jq .
 # Test validation
 curl -s -X POST -H "x-api-key: test-key" -H "Content-Type: application/json" \
-  -d '{"name":""}' http://localhost:8881/api/v2/instances | jq .error
+  -d '{"name":""}' http://localhost:8882/api/v2/instances | jq .error
 kill %1
 ```
 
@@ -162,7 +162,7 @@ kill %1
 bun run packages/api/src/index.ts &
 sleep 2
 # Test WebSocket (using websocat if available)
-websocat ws://localhost:8881/api/v2/ws/events --header "x-api-key: test-key" &
+websocat ws://localhost:8882/api/v2/ws/events --header "x-api-key: test-key" &
 # Or use a simple test script
 bun run packages/api/test/ws-test.ts
 kill %1

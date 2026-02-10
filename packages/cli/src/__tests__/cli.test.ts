@@ -8,7 +8,7 @@
  *   bun test
  *
  * Full integration tests require:
- *   1. API running at http://localhost:8881 (or API_URL env var)
+ *   1. API running at http://localhost:8882 (or API_URL env var)
  *   2. Valid API key (set API_KEY env var)
  *
  * Run full integration tests:

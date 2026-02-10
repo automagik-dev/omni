@@ -314,7 +314,7 @@ Located at `~/.omni/config.json`:
 ```json
 {
   "apiKey": "omni_sk_...",
-  "baseUrl": "http://localhost:8881",
+  "baseUrl": "http://localhost:8882",
   "instance": "07a5178e-...",
   "format": "human"
 }

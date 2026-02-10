@@ -87,7 +87,7 @@ The CLI is designed for both humans and LLM agents. Key principles:
 
 **Acceptance Criteria:**
 - [ ] `omni --help` shows available commands
-- [ ] `omni auth login --api-key sk_... --api-url http://localhost:8881` saves config
+- [ ] `omni auth login --api-key sk_... --api-url http://localhost:8882` saves config
 - [ ] `omni auth status` shows current auth (validates key via API)
 - [ ] `omni auth logout` clears stored key
 - [ ] `omni config list` shows all config values
@@ -115,7 +115,7 @@ The CLI is designed for both humans and LLM agents. Key principles:
 ```bash
 cd packages/cli && bun run build
 ./bin/omni --help
-./bin/omni auth login --api-key test_key --api-url http://localhost:8881
+./bin/omni auth login --api-key test_key --api-url http://localhost:8882
 ./bin/omni auth status
 ./bin/omni config set format json
 ./bin/omni instances list | head  # Should be JSON
@@ -337,7 +337,7 @@ omni
 ```json
 // ~/.omni/config.json
 {
-  "apiUrl": "http://localhost:8881",
+  "apiUrl": "http://localhost:8882",
   "apiKey": "omni_sk_...",
   "defaultInstance": "my-whatsapp",
   "format": "human"  // human | json

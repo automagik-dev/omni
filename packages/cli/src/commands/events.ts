@@ -130,7 +130,7 @@ async function fetchAnalytics(options: {
   allTime?: boolean;
 }): Promise<AnalyticsData> {
   const config = loadConfig();
-  const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
 
   const params = new URLSearchParams();
   if (options.instance) params.set('instanceId', options.instance);

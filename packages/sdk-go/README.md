@@ -22,7 +22,7 @@ import (
 
 func main() {
     // Create a client
-    client := omni.NewClient("http://localhost:8881", "omni_sk_your_key")
+    client := omni.NewClient("http://localhost:8882", "omni_sk_your_key")
 
     // List instances
     instances, err := client.Instances.List(nil)
@@ -195,7 +195,7 @@ if page1.Meta.HasMore && page1.Meta.Cursor != nil {
 ```go
 // Custom configuration
 client := omni.NewClientWithConfig(&omni.Config{
-    BaseURL: "http://localhost:8881",
+    BaseURL: "http://localhost:8882",
     APIKey:  "omni_sk_your_key",
     Timeout: 60 * time.Second,
 })

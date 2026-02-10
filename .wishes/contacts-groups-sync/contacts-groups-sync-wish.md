@@ -151,19 +151,19 @@ interface GroupSyncPlugin {
 
 ```bash
 # Sync contacts
-curl -X POST http://localhost:8881/api/v2/instances/$WHATSAPP_INSTANCE/sync \
+curl -X POST http://localhost:8882/api/v2/instances/$WHATSAPP_INSTANCE/sync \
   -d '{"type": "contacts"}'
 
 # Check persons
-curl http://localhost:8881/api/v2/persons?search=John
+curl http://localhost:8882/api/v2/persons?search=John
 # Should show synced contacts
 
 # Sync groups
-curl -X POST http://localhost:8881/api/v2/instances/$WHATSAPP_INSTANCE/sync \
+curl -X POST http://localhost:8882/api/v2/instances/$WHATSAPP_INSTANCE/sync \
   -d '{"type": "groups"}'
 
 # Check groups
-curl http://localhost:8881/api/v2/instances/$WHATSAPP_INSTANCE/groups
+curl http://localhost:8882/api/v2/instances/$WHATSAPP_INSTANCE/groups
 ```
 
 ---

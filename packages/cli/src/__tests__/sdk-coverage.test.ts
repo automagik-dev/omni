@@ -235,7 +235,7 @@ function getMethodPaths(obj: unknown, prefix = ''): string[] {
 describe('SDK Coverage', () => {
   test('All SDK methods are mapped', () => {
     const client = createOmniClient({
-      baseUrl: 'http://localhost:8881',
+      baseUrl: 'http://localhost:8882',
       apiKey: 'test-key',
     });
 

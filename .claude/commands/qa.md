@@ -58,7 +58,7 @@ Before testing, verify the system is running:
 
 ```bash
 # Check API is up
-curl -s http://localhost:8881/api/v2/health | jq .
+curl -s http://localhost:8882/api/v2/health | jq .
 
 # If not running
 make dev-api &
@@ -109,7 +109,7 @@ Based on Impact Analysis, create specific tests:
 
 ```bash
 # Test new/modified endpoints
-curl -X POST http://localhost:8881/api/v2/<endpoint> \
+curl -X POST http://localhost:8882/api/v2/<endpoint> \
   -H "x-api-key: $OMNI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '<request-body>'
@@ -153,7 +153,7 @@ When `--ui` or UI components affected:
    make dev-ui &
 
 2. Navigate to page
-   mcp__playwright__browser_navigate → http://localhost:3000/<path>
+   mcp__playwright__browser_navigate → http://localhost:5173/<path>
 
 3. Take accessibility snapshot (better than screenshot for testing)
    mcp__playwright__browser_snapshot

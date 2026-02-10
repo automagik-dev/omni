@@ -130,7 +130,7 @@ packages/sdk-python/
 ```python
 from omni import OmniClient
 
-client = OmniClient(base_url="http://localhost:8881", api_key="omni_...")
+client = OmniClient(base_url="http://localhost:8882", api_key="omni_...")
 instances = client.instances.list(channel="whatsapp")
 instance = client.instances.get(instance_id)
 client.messages.send(instance_id=id, to="123", text="Hello")
@@ -167,7 +167,7 @@ packages/sdk-go/
 ```go
 import omni "github.com/anthropics/omni-v2/packages/sdk-go"
 
-client := omni.NewClient("http://localhost:8881", "omni_...")
+client := omni.NewClient("http://localhost:8882", "omni_...")
 
 instances, err := client.Instances.List(nil)
 
@@ -294,14 +294,14 @@ The 3 test failures are pre-existing integration tests that require a running se
 
 ### Issues Identified During QA
 
-1. **TypeScript SDK tests hardcoded port** - Tests in `type-safety.test.ts` used hardcoded `http://localhost:8881` instead of `process.env.API_URL`
+1. **TypeScript SDK tests hardcoded port** - Tests in `type-safety.test.ts` used hardcoded `http://localhost:8882` instead of `process.env.API_URL`
 2. **Python SDK import errors** - Generated code had absolute imports (`from omni_generated.xxx`) that failed when package is nested at `omni._generated.omni_generated/`
 3. **Docker file ownership** - Generated files were owned by `root` because Docker runs as root by default
 
 ### Fixes Applied
 
 1. **TypeScript test fix** (`packages/sdk/src/__tests__/type-safety.test.ts`):
-   - Changed to use `process.env.API_URL || 'http://localhost:8881'`
+   - Changed to use `process.env.API_URL || 'http://localhost:8882'`
 
 2. **Python SDK generator fix** (`scripts/generate-sdk-python.ts`):
    - Added `-u ${uid}:${gid}` to Docker command for correct file ownership
