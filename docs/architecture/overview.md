@@ -547,7 +547,7 @@ pm2 startup
 curl http://localhost:8222/healthz
 
 # Check API is running
-curl http://localhost:8881/api/v2/health
+curl http://localhost:8882/api/v2/health
 ```
 
 ## Security

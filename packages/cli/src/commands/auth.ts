@@ -19,7 +19,7 @@ export function createAuthCommand(): Command {
     .command('login')
     .description('Save API credentials')
     .requiredOption('--api-key <key>', 'API key for authentication')
-    .option('--api-url <url>', 'API base URL (default: http://localhost:8881)')
+    .option('--api-url <url>', 'API base URL (default: http://localhost:8882)')
     .action(async (options: { apiKey: string; apiUrl?: string }) => {
       const config = loadConfig();
       config.apiKey = options.apiKey;
@@ -30,7 +30,7 @@ export function createAuthCommand(): Command {
 
       // Validate the key by calling the API
       const client = createOmniClient({
-        baseUrl: config.apiUrl ?? 'http://localhost:8881',
+        baseUrl: config.apiUrl ?? 'http://localhost:8882',
         apiKey: config.apiKey,
       });
 
@@ -72,7 +72,7 @@ export function createAuthCommand(): Command {
       const apiKey = config.apiKey;
 
       const client = createOmniClient({
-        baseUrl: config.apiUrl ?? 'http://localhost:8881',
+        baseUrl: config.apiUrl ?? 'http://localhost:8882',
         apiKey,
       });
 

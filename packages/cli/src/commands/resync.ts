@@ -93,7 +93,7 @@ async function triggerResync(
 /** Execute resync for a list of instances, return {succeeded, failed} */
 async function executeResync(instanceIds: string[], since: string, until?: string): Promise<void> {
   const config = loadConfig();
-  const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
   const apiKey = config.apiKey ?? '';
   let succeeded = 0;
   let failed = 0;

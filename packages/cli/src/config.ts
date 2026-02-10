@@ -25,13 +25,13 @@ export interface Config {
 
 /** Default config values */
 const DEFAULT_CONFIG: Config = {
-  apiUrl: 'http://localhost:8881',
+  apiUrl: 'http://localhost:8882',
   format: 'human',
 };
 
 /** Valid config keys with descriptions */
 export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: string[] }> = {
-  apiUrl: { description: 'API base URL (e.g., http://localhost:8881)' },
+  apiUrl: { description: 'API base URL (e.g., http://localhost:8882)' },
   apiKey: { description: 'API key for authentication' },
   defaultInstance: { description: 'Default instance ID for commands' },
   format: { description: 'Output format', values: ['human', 'json'] },

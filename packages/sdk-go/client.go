@@ -2,7 +2,7 @@
 //
 // Example usage:
 //
-//	client := omni.NewClient("http://localhost:8881", "omni_sk_your_key")
+//	client := omni.NewClient("http://localhost:8882", "omni_sk_your_key")
 //
 //	// List instances
 //	instances, err := client.Instances.List(nil)

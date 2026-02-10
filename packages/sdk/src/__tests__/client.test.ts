@@ -39,11 +39,11 @@ describe('createOmniClient', () => {
 
   test('normalizes trailing slash in baseUrl', () => {
     const client1 = createOmniClient({
-      baseUrl: 'http://localhost:8881/',
+      baseUrl: 'http://localhost:8882/',
       apiKey: API_KEY,
     });
     const client2 = createOmniClient({
-      baseUrl: 'http://localhost:8881',
+      baseUrl: 'http://localhost:8882',
       apiKey: API_KEY,
     });
     // Both should work identically

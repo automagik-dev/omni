@@ -8,7 +8,7 @@
  * import { createOmniClient } from '@omni/sdk';
  *
  * const omni = createOmniClient({
- *   baseUrl: 'http://localhost:8881',
+ *   baseUrl: 'http://localhost:8882',
  *   apiKey: 'your-api-key',
  * });
  *

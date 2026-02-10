@@ -156,7 +156,7 @@ async function resolveRecipient(to: string, instance: Instance): Promise<string>
 **Validation:**
 ```bash
 # Start API with WhatsApp instance connected
-curl -X POST http://localhost:8881/api/v2/messages \
+curl -X POST http://localhost:8882/api/v2/messages \
   -H "x-api-key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"instanceId": "'$INSTANCE_ID'", "to": "+1234567890", "text": "Test from API"}'
@@ -190,11 +190,11 @@ psql -c "SELECT id, direction, text_content FROM omni_events ORDER BY received_a
 **Validation:**
 ```bash
 # Send reaction
-curl -X POST http://localhost:8881/api/v2/messages/reaction \
+curl -X POST http://localhost:8882/api/v2/messages/reaction \
   -d '{"instanceId": "'$INSTANCE_ID'", "to": "chat-id", "messageId": "msg-id", "emoji": "👍"}'
 
 # Should fail gracefully for unsupported types
-curl -X POST http://localhost:8881/api/v2/messages/location \
+curl -X POST http://localhost:8882/api/v2/messages/location \
   -d '{"instanceId": "'$DISCORD_INSTANCE'", ...}'
 # Returns: { "error": { "code": "CAPABILITY_NOT_SUPPORTED", "message": "Discord does not support location messages" }}
 ```
@@ -228,10 +228,10 @@ curl -X POST http://localhost:8881/api/v2/messages/location \
 **Validation:**
 ```bash
 # Get a person ID
-PERSON_ID=$(curl -s http://localhost:8881/api/v2/persons?search=John | jq -r '.items[0].id')
+PERSON_ID=$(curl -s http://localhost:8882/api/v2/persons?search=John | jq -r '.items[0].id')
 
 # Send using person ID (auto-resolves to WhatsApp number)
-curl -X POST http://localhost:8881/api/v2/messages \
+curl -X POST http://localhost:8882/api/v2/messages \
   -d '{"instanceId": "'$WHATSAPP_INSTANCE'", "to": "'$PERSON_ID'", "text": "Hello via person ID!"}'
 
 # Should work!

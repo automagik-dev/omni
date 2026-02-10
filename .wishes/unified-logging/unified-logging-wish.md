@@ -196,8 +196,8 @@ LOG_LEVEL=debug bun run packages/core/src/logger/example.ts
 
 **Validation:**
 ```bash
-curl -N "http://localhost:8881/api/v2/logs/stream" # Should stream
-curl "http://localhost:8881/api/v2/logs/recent?limit=10" | jq
+curl -N "http://localhost:8882/api/v2/logs/stream" # Should stream
+curl "http://localhost:8882/api/v2/logs/recent?limit=10" | jq
 bun test packages/api
 ```
 

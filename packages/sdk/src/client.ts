@@ -174,7 +174,7 @@ export interface CostEstimate {
  * Client configuration
  */
 export interface OmniClientConfig {
-  /** Base URL of the API (e.g., 'http://localhost:8881') */
+  /** Base URL of the API (e.g., 'http://localhost:8882') */
   baseUrl: string;
   /** API key for authentication */
   apiKey: string;

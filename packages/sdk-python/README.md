@@ -15,7 +15,7 @@ from omni import OmniClient
 
 # Create a client
 client = OmniClient(
-    base_url="http://localhost:8881",
+    base_url="http://localhost:8882",
     api_key="omni_sk_your_key_here"
 )
 
@@ -179,7 +179,7 @@ The SDK also includes a fully-generated client from the OpenAPI spec at `omni/_g
 from omni._generated.omni_generated import ApiClient, Configuration
 from omni._generated.omni_generated.api import InstancesApi
 
-config = Configuration(host="http://localhost:8881/api/v2")
+config = Configuration(host="http://localhost:8882/api/v2")
 config.api_key['ApiKeyAuth'] = 'omni_sk_your_key'
 
 with ApiClient(config) as api_client:

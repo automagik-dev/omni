@@ -48,7 +48,7 @@ export function createStatusCommand(): Command {
   const status = new Command('status').description('Show API health and connection info').action(async () => {
     const config = loadConfig();
     const isAuthenticated = hasAuth();
-    const apiUrl = config.apiUrl ?? 'http://localhost:8881';
+    const apiUrl = config.apiUrl ?? 'http://localhost:8882';
 
     const statusInfo: Record<string, unknown> = {
       configDir: getConfigDir(),

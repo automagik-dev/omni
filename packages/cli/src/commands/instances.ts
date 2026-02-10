@@ -36,7 +36,7 @@ async function resolveBase64Image(options: { base64?: string; url?: string }): P
 
 /** Generic API call helper for direct fetch requests */
 async function apiCall(path: string, method = 'GET', body?: unknown): Promise<unknown> {
-  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
   const apiKey = process.env.OMNI_API_KEY ?? '';
   const headers: Record<string, string> = { 'x-api-key': apiKey };
   if (body) headers['Content-Type'] = 'application/json';
@@ -475,7 +475,7 @@ export function createInstancesCommand(): Command {
   // Helper: update profile name via API (calls WhatsApp directly)
   async function updateProfileName(instanceId: string, name: string): Promise<void> {
     const config = (await import('../config.js')).loadConfig();
-    const apiUrl = (config.apiUrl ?? 'http://localhost:8881').replace(/\/$/, '');
+    const apiUrl = (config.apiUrl ?? 'http://localhost:8882').replace(/\/$/, '');
     const response = await fetch(`${apiUrl}/api/v2/instances/${instanceId}/profile/name`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey ?? '' },
@@ -654,7 +654,7 @@ export function createInstancesCommand(): Command {
     .action(async (id: string, phone: string) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/check-number`, {
@@ -691,7 +691,7 @@ export function createInstancesCommand(): Command {
     .action(async (id: string, status: string) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/profile/status`, {
@@ -719,7 +719,7 @@ export function createInstancesCommand(): Command {
     .action(async (id: string, contactId: string) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
@@ -747,7 +747,7 @@ export function createInstancesCommand(): Command {
     .action(async (id: string, contactId: string) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/block`, {
@@ -775,7 +775,7 @@ export function createInstancesCommand(): Command {
     .action(async (id: string) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/blocklist`, {

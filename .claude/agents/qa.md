@@ -66,7 +66,7 @@ Based on Impact Analysis, create test plan:
 make dev-api &
 
 # Test endpoints with curl or SDK
-curl -X POST http://localhost:8881/api/v2/messages/send \
+curl -X POST http://localhost:8882/api/v2/messages/send \
   -H "x-api-key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"instanceId": "...", "to": "...", "text": "test"}'

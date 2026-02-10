@@ -212,7 +212,7 @@ export const chatsResource = {
       "command": "bunx",
       "args": ["@omni/mcp"],
       "env": {
-        "OMNI_API_URL": "http://localhost:3000",
+        "OMNI_API_URL": "http://localhost:8882",
         "OMNI_API_KEY": "your-api-key"
       }
     }

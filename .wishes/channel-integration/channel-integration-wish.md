@@ -134,7 +134,7 @@ POST /instances { name, channel: "whatsapp-baileys" }
 make dev-api
 
 # Terminal 2: Create instance
-curl -X POST http://localhost:8881/api/v2/instances \
+curl -X POST http://localhost:8882/api/v2/instances \
   -H "x-api-key: test-key" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-whatsapp", "channel": "whatsapp-baileys"}'
@@ -143,7 +143,7 @@ curl -X POST http://localhost:8881/api/v2/instances \
 # Scan with phone
 
 # Check status
-curl http://localhost:8881/api/v2/instances/{id}/status \
+curl http://localhost:8882/api/v2/instances/{id}/status \
   -H "x-api-key: test-key"
 # Should show: { "state": "connected", "profileName": "..." }
 ```

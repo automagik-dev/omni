@@ -417,11 +417,11 @@ The gateway process uses these endpoints during startup:
 
 async function startChannelServices() {
   // 1. Get subprocess config
-  const config = await fetch('http://localhost:3000/api/v2/_internal/subprocess-config')
+  const config = await fetch('http://localhost:8882/api/v2/_internal/subprocess-config')
     .then(r => r.json());
 
   // 2. Get channel startup info
-  const channels = await fetch('http://localhost:3000/api/v2/_internal/channel-startup-info')
+  const channels = await fetch('http://localhost:8882/api/v2/_internal/channel-startup-info')
     .then(r => r.json());
 
   // 3. Start each needed channel
@@ -445,7 +445,7 @@ async function startChannelService(channel: ChannelInfo, config: SubprocessConfi
   const proc = spawn(`bun run channel-${channel.name}`, { env });
 
   // Register it
-  await fetch('http://localhost:3000/api/v2/_internal/services/register', {
+  await fetch('http://localhost:8882/api/v2/_internal/services/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

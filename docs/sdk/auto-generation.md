@@ -796,7 +796,7 @@ X-API-Key: sk-your-api-key
     },
   },
   servers: [
-    { url: 'http://localhost:8881', description: 'Development' },
+    { url: 'http://localhost:8882', description: 'Development' },
     { url: 'https://api.omni.example.com', description: 'Production' },
   ],
   tags: [
@@ -1161,7 +1161,7 @@ export default createOmniClient;
 import { createOmniClient } from '@omni/sdk';
 
 const omni = createOmniClient({
-  baseUrl: 'http://localhost:8881',
+  baseUrl: 'http://localhost:8882',
   apiKey: 'sk-your-api-key',
 });
 
@@ -1192,7 +1192,7 @@ const timeline = await omni.events.timeline('person-uuid', {
 from omni import OmniApi, Configuration
 
 config = Configuration(
-    host="http://localhost:8881",
+    host="http://localhost:8882",
     api_key={"apiKey": "sk-your-api-key"}
 )
 
@@ -1227,7 +1227,7 @@ result = api.messages_api.send_message({
     "prepublish:sdk": "bun run generate:sdk",
 
     "docs:serve": "bun run --hot packages/api/src/index.ts",
-    "docs:open": "open http://localhost:8881/api/v2/docs"
+    "docs:open": "open http://localhost:8882/api/v2/docs"
   }
 }
 ```

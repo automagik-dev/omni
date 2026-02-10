@@ -110,7 +110,7 @@ function buildSearchParams(
  * Fetch search results from API
  */
 async function fetchSearchResults(params: URLSearchParams): Promise<ExtendedMessage[]> {
-  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+  const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
   const apiKey = process.env.OMNI_API_KEY ?? '';
 
   const resp = await fetch(`${baseUrl}/api/v2/messages?${params}`, {
@@ -281,7 +281,7 @@ export function createMessagesCommand(): Command {
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/messages/delete-channel`, {
@@ -315,7 +315,7 @@ export function createMessagesCommand(): Command {
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
@@ -348,7 +348,7 @@ export function createMessagesCommand(): Command {
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
@@ -381,7 +381,7 @@ export function createMessagesCommand(): Command {
     .requiredOption('--text <text>', 'New text content')
     .action(async (messageId: string, options: { instance: string; chat: string; text: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
         const apiKey = process.env.OMNI_API_KEY ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/messages/edit-channel`, {
           method: 'POST',

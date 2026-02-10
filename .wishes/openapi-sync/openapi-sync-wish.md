@@ -138,7 +138,7 @@ app.doc('/openapi.json', { ... });
 **Validation:**
 ```bash
 bun run packages/api/src/index.ts &
-curl http://localhost:8881/api/v2/openapi.json | jq '.paths | keys | length'
+curl http://localhost:8882/api/v2/openapi.json | jq '.paths | keys | length'
 # Should show 12+ paths for instances alone
 make check
 ```
@@ -171,7 +171,7 @@ make check
 
 **Validation:**
 ```bash
-curl http://localhost:8881/api/v2/openapi.json | jq '.paths | keys | length'
+curl http://localhost:8882/api/v2/openapi.json | jq '.paths | keys | length'
 # Should show 40+ paths
 make check
 ```

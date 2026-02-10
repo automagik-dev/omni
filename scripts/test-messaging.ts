@@ -15,7 +15,7 @@
  *   bun scripts/test-messaging.ts --channel=discord
  */
 
-const API_URL = process.env.API_URL || 'http://localhost:8881/api/v2';
+const API_URL = process.env.API_URL || 'http://localhost:8882/api/v2';
 const API_KEY = process.env.OMNI_API_KEY || '';
 
 // Test config from env

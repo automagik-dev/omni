@@ -22,7 +22,7 @@
   - Actual: 400 with `Invalid discriminator value. Expected 'webhook' | 'send_message' | 'emit_event' | 'log'`
 
 ```bash
-curl -X POST http://localhost:8881/api/v2/automations \
+curl -X POST http://localhost:8882/api/v2/automations \
   -H "x-api-key: $OMNI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{

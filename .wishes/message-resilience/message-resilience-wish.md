@@ -246,7 +246,7 @@ make check
 bun test packages/api
 bun test packages/core
 make sdk-generate
-# Manual: curl localhost:4000/health/consumers -> shows consumer lag info
+# Manual: curl localhost:8882/health/consumers -> shows consumer lag info
 ```
 
 ---
@@ -345,7 +345,7 @@ make dev-api
 make cli ARGS="messages list --chat-id <chat>"
 
 # 7. Check consumer health
-curl http://localhost:4000/health/consumers
+curl http://localhost:8882/health/consumers
 ```
 
 ---

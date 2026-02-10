@@ -422,7 +422,7 @@ export function createChatsCommand(): Command {
       try {
         if (options.instance) {
           // Call API with instanceId to archive on channel
-          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
           const apiKey = process.env.OMNI_API_KEY ?? '';
           const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
             method: 'POST',
@@ -453,7 +453,7 @@ export function createChatsCommand(): Command {
 
       try {
         if (options.instance) {
-          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+          const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
           const apiKey = process.env.OMNI_API_KEY ?? '';
           const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
             method: 'POST',
@@ -481,7 +481,7 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
         const apiKey = process.env.OMNI_API_KEY ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/pin`, {
           method: 'POST',
@@ -506,7 +506,7 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
         const apiKey = process.env.OMNI_API_KEY ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unpin`, {
           method: 'POST',
@@ -532,7 +532,7 @@ export function createChatsCommand(): Command {
     .option('--duration <ms>', 'Mute duration in milliseconds (default: 8 hours)', (v) => Number.parseInt(v, 10))
     .action(async (id: string, options: { instance: string; duration?: number }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
         const apiKey = process.env.OMNI_API_KEY ?? '';
         const body: Record<string, unknown> = { instanceId: options.instance };
         if (options.duration) body.duration = options.duration;
@@ -559,7 +559,7 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
-        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8881';
+        const baseUrl = process.env.OMNI_API_URL ?? 'http://localhost:8882';
         const apiKey = process.env.OMNI_API_KEY ?? '';
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unmute`, {
           method: 'POST',
@@ -713,7 +713,7 @@ export function createChatsCommand(): Command {
 
       try {
         const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8881';
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
         const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/disappearing`, {
