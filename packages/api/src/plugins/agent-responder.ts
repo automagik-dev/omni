@@ -523,7 +523,7 @@ async function processIncomingMessage(
   }
 
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-  const accessResult = await accessService.checkAccess(instance.id, payload.from ?? '', channel);
+  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
 
   if (!accessResult.allowed) {
     log.info('Access denied by rule', {

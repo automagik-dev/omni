@@ -758,7 +758,7 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const accessResult = await accessService.checkAccess(instance.id, payload.from ?? '', channel);
+  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
   if (!accessResult.allowed) {
     log.info('Access denied', {
       instanceId: instance.id,
@@ -766,6 +766,10 @@ async function shouldProcessMessage(
       from: payload.from,
       reason: accessResult.reason,
     });
+    // Send block message if applicable
+    if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
+      sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
+    }
     return null;
   }
 
@@ -777,6 +781,7 @@ async function shouldProcessMessage(
  */
 async function shouldProcessReaction(
   agentRunner: Services['agentRunner'],
+  accessService: Services['access'],
   rateLimiter: RateLimiter,
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
@@ -799,6 +804,17 @@ async function shouldProcessReaction(
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
   if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
+    return null;
+  }
+
+  // Access check for reactions
+  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
+  if (!accessResult.allowed) {
+    log.info('Access denied for reaction', {
+      instanceId: instance.id,
+      from: payload.from,
+      reason: accessResult.reason,
+    });
     return null;
   }
 
@@ -909,7 +925,14 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
         const metadata = event.metadata;
 
         try {
-          const instance = await shouldProcessReaction(agentRunner, rateLimiter, reactionDedup, payload, metadata);
+          const instance = await shouldProcessReaction(
+            agentRunner,
+            accessService,
+            rateLimiter,
+            reactionDedup,
+            payload,
+            metadata,
+          );
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
@@ -956,6 +979,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
         try {
           const instance = await shouldProcessReaction(
             agentRunner,
+            accessService,
             rateLimiter,
             reactionDedup,
             payload,

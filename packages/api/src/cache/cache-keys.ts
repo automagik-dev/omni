@@ -40,6 +40,12 @@ export const CacheKeys = {
    * TTL: 30 seconds
    */
   instance: (instanceId: string) => `instance:${instanceId}`,
+
+  /**
+   * Access check result cache.
+   * TTL: 5 minutes
+   */
+  accessCheck: (instanceId: string, userId: string) => `access:${instanceId}:${userId}`,
 } as const;
 
 /**
@@ -51,6 +57,7 @@ export const CacheTTL = {
   INFO: 30_000, // 30 seconds
   SETTINGS: 60_000, // 1 minute
   INSTANCE: 30_000, // 30 seconds
+  ACCESS_CHECK: 300_000, // 5 minutes
 } as const;
 
 /**
@@ -82,5 +89,14 @@ export const apiKeyCache = new MemoryCache({
 export const responseCache = new MemoryCache({
   defaultTtlMs: CacheTTL.INFO,
   maxSize: 1_000,
+  cleanupIntervalMs: 60_000,
+});
+
+/**
+ * Access check cache - caches allow/deny decisions per user per instance.
+ */
+export const accessCache = new MemoryCache({
+  defaultTtlMs: CacheTTL.ACCESS_CHECK,
+  maxSize: 50_000,
   cleanupIntervalMs: 60_000,
 });

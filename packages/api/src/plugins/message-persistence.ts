@@ -216,6 +216,22 @@ interface MessageMetadata {
 }
 
 /**
+ * Check if a user is blocked by access control.
+ */
+async function isUserBlocked(
+  services: Services,
+  instanceId: string | undefined,
+  from: string | undefined,
+  channel: ChannelType,
+): Promise<boolean> {
+  if (!instanceId || !from) return false;
+  const instance = await services.instances.getById(instanceId).catch(() => null);
+  if (!instance || instance.accessMode === 'disabled') return false;
+  const result = await services.access.checkAccess(instance, from, channel);
+  return !result.allowed;
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -225,6 +241,13 @@ async function handleMessageReceived(
   eventTimestamp: number,
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+
+  // Skip persistence for blocked users
+  if (await isUserBlocked(services, metadata.instanceId, payload.from, channel)) {
+    log.debug('Skipping persistence for blocked user', { from: payload.from, instanceId: metadata.instanceId });
+    return;
+  }
+
   const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
   const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
   const rawPayload = payload.rawPayload;
