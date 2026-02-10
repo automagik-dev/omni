@@ -8,6 +8,34 @@ export interface ApiErrorDetails {
   details?: Record<string, unknown>;
 }
 
+/** Extract error info from an object-shaped API response */
+function parseErrorObject(error: object, status?: number): OmniApiError | null {
+  // Handle { error: "string" | { message, code, details } }
+  if ('error' in error) {
+    const rawError = (error as { error: unknown }).error;
+    if (typeof rawError === 'string') {
+      return new OmniApiError(rawError, 'API_ERROR', undefined, status);
+    }
+    if (rawError && typeof rawError === 'object') {
+      const apiError = rawError as ApiErrorDetails;
+      return new OmniApiError(
+        apiError.message ?? `API error (status ${status ?? 'unknown'})`,
+        apiError.code ?? 'API_ERROR',
+        apiError.details as Record<string, unknown>,
+        status,
+      );
+    }
+  }
+  // Handle { message: "..." } without error wrapper
+  if ('message' in error) {
+    const msg = (error as { message: unknown }).message;
+    if (typeof msg === 'string') {
+      return new OmniApiError(msg, 'API_ERROR', undefined, status);
+    }
+  }
+  return null;
+}
+
 /**
  * Error thrown when an API request fails
  */
@@ -28,16 +56,21 @@ export class OmniApiError extends Error {
    * Create from API error response
    */
   static from(error: unknown, status?: number): OmniApiError {
-    if (error && typeof error === 'object' && 'error' in error) {
-      const apiError = (error as { error: ApiErrorDetails }).error;
-      return new OmniApiError(apiError.message, apiError.code, apiError.details as Record<string, unknown>, status);
+    if (error && typeof error === 'object') {
+      const result = parseErrorObject(error, status);
+      if (result) return result;
     }
 
     if (error instanceof Error) {
       return new OmniApiError(error.message, 'UNKNOWN_ERROR', undefined, status);
     }
 
-    return new OmniApiError(String(error), 'UNKNOWN_ERROR', undefined, status);
+    return new OmniApiError(
+      typeof error === 'string' ? error : `API error (status ${status ?? 'unknown'})`,
+      'UNKNOWN_ERROR',
+      undefined,
+      status,
+    );
   }
 
   toJSON() {

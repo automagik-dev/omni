@@ -32,6 +32,7 @@ interface ExtendedChat extends Chat {
 
 interface ExtendedMessage extends Message {
   senderDisplayName?: string | null;
+  senderPlatformUserId?: string | null;
   hasMedia?: boolean;
   mediaMimeType?: string | null;
   mediaMetadata?: { filename?: string; size?: number; duration?: number } | null;
@@ -203,11 +204,19 @@ function formatRichMessages(
 /**
  * Format messages for standard display
  */
-function formatStandardMessages(
-  messages: ExtendedMessage[],
-): { id: string; type: string; content: string; fromMe: string; timestamp: string | null }[] {
+function formatStandardMessages(messages: ExtendedMessage[]): {
+  id: string;
+  from: string;
+  senderId: string;
+  type: string;
+  content: string;
+  fromMe: string;
+  timestamp: string | null;
+}[] {
   return messages.map((m) => ({
     id: m.id,
+    from: formatSender(m),
+    senderId: m.senderPlatformUserId ?? '-',
     type: m.messageType,
     content: _truncateMax > 0 ? truncate(m.textContent, _truncateMax) : (m.textContent ?? '-'),
     fromMe: m.isFromMe ? 'yes' : 'no',
