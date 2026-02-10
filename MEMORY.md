@@ -300,15 +300,9 @@ sessions_send(agentId="<agent>", sessionKey="agent:<agent>:main", gatewayUrl="<u
 
 **Not systemic:** Gabriel Moojen (same instance) has 13 incoming messages today, all working. Only Chiozzini + a few group senders affected.
 
-**Fix executed (evening):** Deleted corrupted Signal session (`:54`) from `plugin_storage`. Restarted API. Baileys auto-renegotiates on next message.
+**Fix needed:** Delete Signal session for Chiozzini to force key renegotiation, or restart instance.
 
-**Prod DB access pattern:**
-```bash
-ssh omni@10.114.1.140
-PGPASSWORD=postgres psql -h localhost -p 8432 -U postgres -d omni
-```
-
-**API keys for media processing:** All configured (Groq, OpenAI, Gemini) on both dev and prod. Verified working.
+**Also found:** All API keys for media processing are missing on prod — audio transcription (Groq), image vision (Gemini/OpenAI) all failing silently. Felipe is about to configure them.
 
 ---
 
