@@ -1,17 +1,39 @@
-# Omni
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" />
+  <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
+  <img src="https://img.shields.io/badge/version-2.0.0-8b5cf6?style=flat-square" alt="v2.0.0" />
+  <img src="https://img.shields.io/badge/channels-WhatsApp%20%7C%20Discord%20%7C%20Telegram-25D366?style=flat-square" alt="Channels" />
+  <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS" />
+</p>
 
-> One API to send and receive messages across WhatsApp, Discord, and more.
-> CLI-first. Event-driven. Built for AI agents.
+<h1 align="center">🐙 Omni</h1>
+<p align="center"><strong>Universal event-driven omnichannel messaging platform</strong></p>
+<p align="center">One API to send and receive messages across WhatsApp, Discord, Telegram, and more.<br/>CLI-first. Event-driven. Built for AI agents.</p>
+
+---
+
+Think of Omni as a deep-sea octopus. Each **channel** is a tentacle — WhatsApp, Discord, Telegram — reaching into a different messaging ecosystem. **Events** are the nerve impulses that flow through the organism: every message received, every reaction sent, every connection made pulses through NATS JetStream and can trigger automations, notify webhooks, or wake up AI agents. The **core** is the brain — identity resolution, event routing, and a unified API that lets you treat all channels as one.
+
+## Why Omni?
+
+- **One API, every channel** — Send a WhatsApp message, a Discord embed, and a Telegram photo with the same endpoint
+- **Event-driven by default** — Every action produces an event. Subscribe, replay, automate
+- **Identity graph** — Same person on WhatsApp and Discord? Omni knows. Cross-channel person resolution
+- **AI-native** — Agent providers, event-driven automations, built to be controlled by LLMs
+- **Plugin architecture** — Build new channel integrations with the Channel SDK
+- **CLI-first** — 20+ command groups, designed for both humans and AI agents
+- **Multi-SDK** — Auto-generated TypeScript, Python, and Go SDKs from OpenAPI
+- **Web Dashboard** — React UI for visual management of everything
 
 ## Channels
 
-| Channel | Status | Notes |
-|---------|--------|-------|
-| WhatsApp (Baileys) | **Stable** | QR pairing, full messaging, media sync |
-| Discord | **Stable** | Bots, embeds, polls, reactions |
-| WhatsApp Cloud API | Planned | — |
-| Telegram | Planned | — |
-| Slack | Planned | — |
+| Channel | Status | Features |
+|---------|--------|----------|
+| **WhatsApp** (Baileys) | ✅ Stable | QR/phone pairing, text, media, stickers, contacts, location, polls, reactions, typing, read receipts, reply, edit, delete, forward |
+| **Discord** | ✅ Stable | Bots, text, media, embeds, polls, buttons, select menus, modals, reactions, stickers, slash commands, threads, DMs, guilds, webhooks |
+| **Telegram** | ✅ New | Bot API (grammy), text, photos, audio, video, documents, stickers, contacts, location, polls, reactions, inline keyboards, bot commands, groups, channels, threads, typing, reply, edit, delete, forward |
+| WhatsApp Cloud API | 🔮 Planned | — |
+| Slack | 🔮 Planned | — |
 
 ## Install
 
@@ -21,75 +43,114 @@ One command — interactive wizard handles the rest:
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash
 ```
 
-The wizard offers three modes:
-
 | Mode | What it does |
 |------|-------------|
-| **CLI only** | Install the `omni` command to control a remote server |
-| **Full server** | Clone repo + install deps + start services locally |
-| **CLI + connect** | Install CLI and configure a remote server URL + API key |
+| **CLI only** | Install the `omni` binary to control a remote server |
+| **Full server** | Clone repo, install deps, start PostgreSQL + NATS + API |
+| **CLI + connect** | Install CLI and configure remote server URL + API key |
 
 ### Non-interactive
 
 ```bash
-# CLI only (no prompts)
+# CLI only
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli
 
-# CLI + connect to remote server
+# CLI + connect to remote
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli https://your-omni-server.com
 
-# Full server (no prompts)
+# Full server
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --server
 ```
 
-## Quick Start
-
-After install, your API key is printed in the startup banner. **Save it** — it's only shown once.
-
-```bash
-# Authenticate
-omni auth login --api-key <your-key>
-
-# Create a WhatsApp connection and scan QR
-omni instances create --name "my-whatsapp" --channel whatsapp-baileys
-omni instances qr <id> --watch
-
-# Send your first message
-omni send --to "+5511999999999" --text "Hello from Omni!"
-
-# Or create a Discord connection
-omni instances create --name "my-discord" --channel discord
-omni instances connect <id> --token "BOT_TOKEN"
-```
-
 ### Manual Setup
-
-If you prefer full control:
 
 ```bash
 # Prerequisites: Bun (https://bun.sh), PM2 (bun add -g pm2)
 git clone https://github.com/automagik-dev/omni.git
 cd omni
-
-# One-command setup: install deps, create .env, start services
-make setup
+make setup    # Install deps, create .env, start services
 ```
 
 The API runs at `http://localhost:8882` with Swagger docs at `/api/v2/docs`.
 
-Check the API logs for your key:
+Your primary API key is printed in the startup banner — save it.
 
 ```bash
-make logs-api
+make logs-api   # Find your key in startup output
 ```
 
-#### Step-by-step
+## Quick Start
 
 ```bash
-make install           # Install dependencies, create .env
-# (Optional) Edit .env to customize ports or disable managed services
-make dev-services      # Start PostgreSQL + NATS + API via PM2
-make status            # Verify everything is running
+# Authenticate
+omni auth login --api-key <your-key>
+
+# WhatsApp — create instance and scan QR
+omni instances create --name "my-whatsapp" --channel whatsapp-baileys
+omni instances qr <id> --watch
+
+# Discord — connect a bot
+omni instances create --name "my-discord" --channel discord
+omni instances connect <id> --token "BOT_TOKEN"
+
+# Telegram — connect a bot
+omni instances create --name "my-telegram" --channel telegram
+omni instances connect <id> --token "BOT_TOKEN"
+
+# Send messages across any channel
+omni send --to "+5511999999999" --text "Hello from the deep 🐙"
+omni send --to "discord-channel-id" --embed --title "Alert" --description "Tentacle deployed"
+
+# Browse conversations
+omni chats list --unread --sort unread
+omni chats messages <chatId> --limit 20 --rich
+```
+
+## Architecture
+
+```
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│  WhatsApp   │  │   Discord   │  │  Telegram   │  ← Tentacles (Channel Plugins)
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                │                │
+       └────────────────┼────────────────┘
+                        │
+              ┌─────────▼─────────┐
+              │    NATS JetStream  │  ← Nerve System (Event Bus)
+              └─────────┬─────────┘
+                        │
+              ┌─────────▼─────────┐
+              │     Omni Core     │  ← Brain (Identity, Routing, Schemas)
+              └─────────┬─────────┘
+                        │
+         ┌──────────────┼──────────────┐
+         │              │              │
+   ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼─────┐
+   │  REST API  │ │    CLI    │ │ Dashboard  │  ← Interfaces
+   │ (Hono+tRPC)│ │ (omni)   │ │ (React)    │
+   └───────────┘ └───────────┘ └───────────┘
+```
+
+## Project Structure
+
+```
+omni/
+├── packages/
+│   ├── core/               # Events, identity, schemas (shared foundation)
+│   ├── db/                 # Database schema (Drizzle ORM + PostgreSQL)
+│   ├── api/                # HTTP API (Hono + tRPC + OpenAPI)
+│   ├── channel-sdk/        # Plugin SDK for building channel integrations
+│   ├── channel-whatsapp/   # WhatsApp plugin (Baileys)
+│   ├── channel-discord/    # Discord plugin (discord.js)
+│   ├── channel-telegram/   # Telegram plugin (grammy)
+│   ├── cli/                # CLI (`omni` command)
+│   ├── media-processing/   # Media handling and sync
+│   ├── sdk/                # Auto-generated TypeScript SDK
+│   ├── sdk-go/             # Auto-generated Go SDK
+│   └── sdk-python/         # Auto-generated Python SDK
+├── apps/
+│   └── ui/                 # React dashboard (Vite + Tailwind)
+└── scripts/                # Build, deploy, SDK generation
 ```
 
 ## CLI Command Reference
@@ -145,7 +206,7 @@ omni instances list
 omni instances create --name "work-whatsapp" --channel whatsapp-baileys
 omni instances qr <id> --watch
 omni instances pair <id> --phone "+5511999999999"
-omni instances connect <id> --token "BOT_TOKEN"    # Discord
+omni instances connect <id> --token "BOT_TOKEN"    # Discord / Telegram
 omni instances sync <id> --type all --depth 30
 omni instances contacts <id> --limit 50
 omni instances groups <id>
@@ -154,7 +215,16 @@ omni instances status <id>
 
 **Subcommands:** `list`, `get`, `create`, `delete`, `status`, `qr`, `pair`, `connect`, `disconnect`, `restart`, `logout`, `sync`, `syncs`, `update`, `contacts`, `groups`, `profile`
 
-**Key flags:** `--name`, `--channel` (whatsapp-baileys|discord), `--base64`, `--watch`, `--phone`, `--token`, `--force-new-qr`, `--type` (profile|messages|contacts|groups|all), `--depth`, `--download-media`, `--status`, `--limit`, `--cursor`, `--guild`, `--agent-provider`, `--agent`
+**Key flags:** `--name`, `--channel` (whatsapp-baileys|discord|telegram), `--base64`, `--watch`, `--phone`, `--token`, `--force-new-qr`, `--type` (profile|messages|contacts|groups|all), `--depth`, `--download-media`, `--status`, `--limit`, `--cursor`, `--guild`, `--agent-provider`, `--agent`
+
+#### `channels` — Channel setup
+
+```bash
+omni channels list
+omni channels status
+```
+
+**Subcommands:** `list`, `status`
 
 #### `persons` — Contact directory
 
@@ -226,6 +296,8 @@ omni access delete <id>
 **Subcommands:** `list`, `create`, `delete`, `check`
 
 **Key flags:** `--type` (allow|deny), `--instance`, `--phone`, `--user`, `--priority`, `--action` (block|silent_block|allow), `--reason`, `--message`, `--channel`
+
+Access control supports three modes: `disabled` (open), `blocklist` (deny-listed users blocked), and `allowlist` (only approved users allowed).
 
 #### `webhooks` — External event sources
 
@@ -306,77 +378,51 @@ omni batch list --status running
 
 **Key flags:** `--instance`, `--type` (targeted_chat_sync|time_based_batch), `--chat`, `--days`, `--limit`, `--content-types` (audio|image|video|document), `--force`, `--watch`, `--interval`, `--status`
 
-## Web Dashboard
+#### `resync` — History backfill
 
 ```bash
-make dev-ui              # Vite dev server on http://localhost:5173
+omni resync --instance <id>
 ```
 
-For production, build and serve from the API:
+Triggers a history backfill for the specified instance.
+
+#### `logs` — Server logs
 
 ```bash
-make build-ui            # Builds to apps/ui/dist
-make restart-api         # API auto-serves UI on :8882
+omni logs list --level error --limit 50
 ```
 
-In production, everything runs on a single port — the API serves the built UI as a SPA.
-
-**Features:** Instances, Chats, Contacts, Persons, Events, Automations, Providers, Access Rules, Batch Jobs, Dead Letters, Settings, Logs
-
-## API Keys & Security
-
-### Primary key
-
-On first boot, the API generates a primary API key and prints it in the startup banner. Save it — it's only shown once.
+#### `dead-letters` — Failed event inspection
 
 ```bash
-make logs-api            # Find your key in the startup output
+omni dead-letters list --limit 20
 ```
 
-### Creating scoped keys
+## REST API
 
-```bash
-# Full access key for an admin
-omni keys create --name "admin" --scopes "*"
+| | |
+|---|---|
+| **Base URL** | `http://localhost:8882/api/v2` |
+| **Docs** | `/api/v2/docs` (Swagger UI) |
+| **OpenAPI spec** | `/api/v2/openapi.json` |
+| **Auth** | `x-api-key` header or `?api_key=` query param |
+| **Health** | `/api/v2/health` (no auth required) |
 
-# Read-only agent
-omni keys create --name "reader" --scopes "messages:read,chats:read,instances:read"
+### Endpoints
 
-# Restricted to specific instances
-omni keys create --name "wa-only" --scopes "messages:*" --instances "uuid1,uuid2"
+`/auth` · `/instances` · `/messages` · `/chats` · `/events` · `/persons` · `/access` · `/settings` · `/providers` · `/automations` · `/webhooks` · `/keys` · `/logs` · `/batch-jobs` · `/dead-letters` · `/media` · `/metrics` · `/event-ops` · `/payloads`
 
-# Rate-limited with expiry
-omni keys create --name "temp" --scopes "messages:read" --rate-limit 60 --expires "2025-12-31"
+### Response Format
+
+```json
+{ "data": { ... } }                                  // Single object
+{ "items": [...], "meta": { "total": 42 } }          // Lists
+{ "error": { "code": "...", "message": "..." } }      // Errors
 ```
 
-### Scope system
+## SDKs
 
-Scopes follow the pattern `namespace:action`:
-
-| Pattern | Meaning |
-|---------|---------|
-| `*` | Full access (all scopes) |
-| `messages:*` | All message operations |
-| `messages:read` | Read messages only |
-| `instances:write` | Create/modify instances |
-| `keys:read` | List/view API keys |
-
-Available namespaces: `messages`, `chats`, `instances`, `persons`, `events`, `access`, `settings`, `providers`, `automations`, `webhooks`, `keys`, `logs`, `batch`
-
-### Key lifecycle
-
-```
-create → use → update (scopes, rate-limit, instances) → revoke → delete
-```
-
-- **Active** keys authenticate requests via `x-api-key` header
-- **Revoked** keys are immediately denied; revocation is recorded with reason
-- **Expired** keys are automatically denied after their expiry date
-- Deleted keys are permanently removed
-
-## SDK
-
-Auto-generated TypeScript SDK from the OpenAPI spec:
+### TypeScript
 
 ```typescript
 import { createOmniClient } from '@omni/sdk';
@@ -386,47 +432,92 @@ const omni = createOmniClient({
   apiKey: 'your-api-key',
 });
 
-// List instances
 const instances = await omni.instances.list();
 
-// Send a message
 await omni.messages.send({
   instanceId: '...',
   to: '+5511999999999',
   text: 'Hello from SDK!',
 });
-
-// Manage keys
-const key = await omni.keys.create({ name: 'agent', scopes: ['messages:*'] });
 ```
 
-Regenerate after API changes:
+### Python
+
+```python
+from omni import OmniClient
+
+client = OmniClient(base_url="http://localhost:8882", api_key="your-api-key")
+instances = client.instances.list()
+```
+
+### Go
+
+```go
+client := omni.NewClient("http://localhost:8882", "your-api-key")
+instances, _ := client.Instances.List(ctx)
+```
+
+Regenerate SDKs after API changes:
 
 ```bash
 make sdk-generate
 ```
 
-## REST API
+## Web Dashboard
 
-- **Base URL:** `http://localhost:8882/api/v2`
-- **Docs:** `/api/v2/docs` (Swagger UI)
-- **OpenAPI spec:** `/api/v2/openapi.json`
-- **Auth:** `x-api-key` header (or `?api_key=` query param)
-- **Health:** `/api/v2/health` (no auth required)
-
-**Endpoints:** `/auth`, `/instances`, `/messages`, `/chats`, `/events`, `/persons`, `/access`, `/settings`, `/providers`, `/automations`, `/webhooks`, `/keys`, `/logs`, `/batch-jobs`, `/dead-letters`, `/media`, `/metrics`, `/event-ops`, `/payloads`
-
-**Response format:**
-
-```json
-{ "data": { ... } }                           // Single object
-{ "items": [...], "meta": { "total": 42 } }   // Lists
-{ "error": { "code": "...", "message": "..." } } // Errors
+```bash
+make dev-ui    # Vite dev server → http://localhost:5173
 ```
+
+For production, the API serves the built UI on a single port:
+
+```bash
+make build-ui      # Build to apps/ui/dist
+make restart-api   # API serves UI on :8882
+```
+
+**Pages:** Dashboard · Instances · Instance Detail · Chats · Chat View · People · Contacts · Providers · Automations · Batch Jobs · Access Rules · Dead Letters · Events · Logs · Voices · Settings
+
+## API Keys & Security
+
+### Primary Key
+
+Generated on first boot and printed in the startup banner. It's only shown once.
+
+### Scoped Keys
+
+```bash
+# Full access
+omni keys create --name "admin" --scopes "*"
+
+# Read-only agent
+omni keys create --name "reader" --scopes "messages:read,chats:read,instances:read"
+
+# Instance-restricted
+omni keys create --name "wa-only" --scopes "messages:*" --instances "uuid1,uuid2"
+
+# Rate-limited with expiry
+omni keys create --name "temp" --scopes "messages:read" --rate-limit 60 --expires "2025-12-31"
+```
+
+### Scope System
+
+Pattern: `namespace:action`
+
+| Pattern | Meaning |
+|---------|---------|
+| `*` | Full access |
+| `messages:*` | All message operations |
+| `messages:read` | Read messages only |
+| `instances:write` | Create/modify instances |
+
+**Namespaces:** `messages`, `chats`, `instances`, `persons`, `events`, `access`, `settings`, `providers`, `automations`, `webhooks`, `keys`, `logs`, `batch`
+
+**Lifecycle:** create → use → update → revoke → delete
 
 ## Configuration
 
-### Environment variables
+### Environment Variables
 
 Copy `.env.example` to `.env` (done automatically by `make install`).
 
@@ -443,21 +534,21 @@ Copy `.env.example` to `.env` (done automatically by `make install`).
 | `NATS_PORT` | `4222` | NATS port |
 | `OMNI_API_KEY` | *(auto-generated)* | Override primary API key |
 
-Set any `*_MANAGED=false` in `.env` if you run that service externally.
+Set `*_MANAGED=false` to use externally managed services.
 
-### Service control
+### Service Control
 
-| Service | PM2 Name | Default Port | Controlled By |
-|---------|----------|-------------|---------------|
-| PostgreSQL (pgserve) | `omni-pgserve` | 8432 | `PGSERVE_MANAGED=true` |
-| NATS JetStream | `omni-nats` | 4222 | `NATS_MANAGED=true` |
-| API Server | `omni-api` | 8882 | `API_MANAGED=true` |
+| Service | PM2 Name | Default Port |
+|---------|----------|-------------|
+| PostgreSQL | `omni-pgserve` | 8432 |
+| NATS JetStream | `omni-nats` | 4222 |
+| API Server | `omni-api` | 8882 |
 
 ```bash
-make status            # View all services and URLs
-make restart-api       # Restart API only
-make restart-nats      # Restart NATS only
-make restart-pgserve   # Restart PostgreSQL only
+make status            # View all services
+make restart-api       # Restart API
+make restart-nats      # Restart NATS
+make restart-pgserve   # Restart PostgreSQL
 make logs-api          # Tail API logs
 make logs              # Tail all logs
 make stop              # Stop everything
@@ -465,63 +556,72 @@ make stop              # Stop everything
 
 ## Development
 
-### Quality checks
+### Prerequisites
+
+- [Bun](https://bun.sh) (runtime — **not** Node.js)
+- [PM2](https://pm2.keymetrics.io/) (`bun add -g pm2`)
+
+### Commands
 
 ```bash
+make dev               # Start all services + API
+make dev-api           # Start just the API
+make dev-services      # Start PostgreSQL + NATS + API via PM2
 make check             # All checks: typecheck + lint + test
 make typecheck         # TypeScript only
 make lint              # Biome linter
 make lint-fix          # Auto-fix lint issues
-make test              # Run all tests
+make test              # All tests
 make test-api          # API tests only
 make test-file F=path  # Specific test file
 ```
 
-**Git hooks** (auto-installed via `bun install`):
-- **Pre-commit:** `make lint` — blocks commits with lint errors
-- **Pre-push:** `make typecheck` — blocks pushes with type errors
-
 ### Database
 
 ```bash
-make db-push           # Push schema changes (development)
-make db-studio         # Open Drizzle Studio (visual DB browser)
+make db-push           # Push schema changes (dev)
+make db-studio         # Open Drizzle Studio
 make db-reset          # Reset database (DESTRUCTIVE)
 ```
 
-### Project structure
+### Building a Channel Plugin
 
-```
-packages/
-├── core/              # Events, identity, schemas (shared)
-├── db/                # Database schema (Drizzle ORM)
-├── api/               # HTTP API (Hono + tRPC + OpenAPI)
-├── channel-sdk/       # Plugin SDK for channel developers
-├── channel-whatsapp/  # WhatsApp (Baileys)
-├── channel-discord/   # Discord
-├── cli/               # LLM-optimized CLI
-└── sdk/               # Auto-generated TypeScript SDK
-apps/
-└── ui/                # React dashboard (Vite + Tailwind)
+Use the Channel SDK to add new tentacles:
+
+```typescript
+import { BaseChannelPlugin } from '@omni/channel-sdk';
+
+export class MyPlugin extends BaseChannelPlugin {
+  readonly id = 'my-channel';
+  readonly name = 'My Channel';
+  readonly version = '1.0.0';
+  readonly capabilities = { /* ... */ };
+
+  async connect(instanceId: string, config: InstanceConfig) { /* ... */ }
+  async disconnect(instanceId: string) { /* ... */ }
+  async sendMessage(instanceId: string, message: OutgoingMessage) { /* ... */ }
+}
 ```
 
-Run `make help` to see all available commands.
+**Git hooks** (auto-installed):
+- **Pre-commit:** `make lint` — blocks commits with lint errors
+- **Pre-push:** `make typecheck` — blocks pushes with type errors
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Runtime | Bun |
-| HTTP | Hono |
-| Type-safe API | tRPC + OpenAPI |
-| Database | PostgreSQL + Drizzle ORM |
-| Event Bus | NATS JetStream |
-| Validation | Zod |
-| Frontend | React + Vite + Tailwind |
-| Monorepo | Turborepo |
-| Process Manager | PM2 |
-| Linter | Biome |
+| Runtime | [Bun](https://bun.sh) |
+| HTTP Framework | [Hono](https://hono.dev) |
+| Type-safe API | [tRPC](https://trpc.io) + OpenAPI |
+| Database | PostgreSQL + [Drizzle ORM](https://orm.drizzle.team) |
+| Event Bus | [NATS JetStream](https://nats.io) |
+| Validation | [Zod](https://zod.dev) |
+| Frontend | React + [Vite](https://vitejs.dev) + Tailwind CSS |
+| Monorepo | [Turborepo](https://turbo.build) |
+| Process Manager | [PM2](https://pm2.keymetrics.io) |
+| Linter | [Biome](https://biomejs.dev) |
 
 ## License
 
-MIT License — see [LICENSE](./LICENSE) for details.
+[MIT](./LICENSE) — do whatever you want, just don't blame the octopus. 🐙
