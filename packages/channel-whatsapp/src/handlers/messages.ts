@@ -459,7 +459,12 @@ async function tryDownloadMedia(
   if (!mediaInfo) return null;
 
   try {
-    const result = await downloadMediaToBuffer(msg);
+    // Try download with retry — iOS/macOS media sometimes needs a second attempt
+    let result = await downloadMediaToBuffer(msg);
+    if (!result) {
+      await new Promise((r) => setTimeout(r, 1000));
+      result = await downloadMediaToBuffer(msg);
+    }
     if (!result) return null;
 
     // Build path matching MediaStorageService layout

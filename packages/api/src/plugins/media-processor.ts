@@ -53,6 +53,23 @@ function getContentFieldForType(
 }
 
 /**
+ * Infer processing type from content type (for error marker writes when result.processingType is absent)
+ */
+function inferProcessingType(contentType?: string): 'transcription' | 'description' | 'extraction' {
+  switch (contentType) {
+    case 'audio':
+      return 'transcription';
+    case 'image':
+    case 'video':
+      return 'description';
+    case 'document':
+      return 'extraction';
+    default:
+      return 'transcription';
+  }
+}
+
+/**
  * Check if a content type should be processed
  */
 function shouldProcess(contentType: string | undefined): boolean {
@@ -245,6 +262,19 @@ async function processMessageMedia(
 
   if (!result.success) {
     log.warn('Media processing failed', { messageId: media.messageId, error: result.errorMessage });
+
+    // Write error marker so waitForMediaProcessing can fail fast instead of polling for minutes
+    const errorColumn = getContentFieldForType(
+      result.processingType ?? inferProcessingType(content.type),
+      content.type,
+    );
+    if (errorColumn) {
+      const marker = `[error: ${result.errorMessage ?? 'unknown'}]`;
+      await ctx.db
+        .update(messages)
+        .set({ [errorColumn]: marker })
+        .where(eq(messages.id, media.messageId));
+    }
     return;
   }
 
