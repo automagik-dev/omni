@@ -166,8 +166,9 @@ program
   .name('omni')
   .description('CLI for Omni v2 - Universal Omnichannel Platform')
   .version(VERSION)
+  .enablePositionalOptions()
+  .passThroughOptions()
   .option('--no-color', 'Disable colored output')
-  .option('--all', 'Show all commands in help (including hidden)')
   .hook('preAction', (_thisCommand, actionCommand) => {
     // Handle --no-color flag
     const opts = actionCommand.optsWithGlobals();
