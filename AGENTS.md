@@ -628,6 +628,7 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Never Do
 
 **Technical:**
+- **CODE ON MAIN** — main is production. Use `dev` for development, `feat/*` for features. If `git branch --show-current` returns `main`, STOP immediately.
 - Use npm/yarn/pnpm (use Bun)
 - Mix channel logic in core (channels are plugins)
 - Skip event publishing for state changes
