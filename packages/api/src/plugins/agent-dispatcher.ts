@@ -473,8 +473,31 @@ function getProcessedColumn(
   }
 }
 
+const MEDIA_WAIT_NULL = { content: null, localPath: null } as const;
+
+/**
+ * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
+ */
+function checkProcessedColumn(
+  msg: { mediaUrl?: string | null; [key: string]: unknown } | null,
+  column: string,
+): { content: string; localPath: string | null } | 'error' | 'pending' {
+  if (!msg) return 'pending';
+  const processed = msg[column];
+  if (processed == null) return 'pending';
+  if (typeof processed === 'string' && processed.startsWith('[error')) return 'error';
+  if (processed) {
+    return {
+      content: processed as string,
+      localPath: msg.mediaUrl ? resolve(resolveMediaPath(msg.mediaUrl as string)) : null,
+    };
+  }
+  return 'pending';
+}
+
 /**
  * Poll the messages table until the media processing column is populated or timeout.
+ * Detects error markers written by media-processor on failure to fail fast.
  */
 async function waitForMediaProcessing(
   services: Services,
@@ -485,34 +508,30 @@ async function waitForMediaProcessing(
   pollMs = 500,
 ): Promise<{ content: string | null; localPath: string | null }> {
   const column = getProcessedColumn(contentType);
-  if (!column) return { content: null, localPath: null };
+  if (!column) return MEDIA_WAIT_NULL;
 
-  // Safety net: 5 minutes max to prevent infinite hang if processor crashes
-  const deadline = Date.now() + 5 * 60_000;
-
-  // First resolve the internal chat ID
   const chat = await services.chats.getByExternalId(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
-    return { content: null, localPath: null };
+    return MEDIA_WAIT_NULL;
   }
+
+  // 60s timeout — processing typically completes in <15s
+  const deadline = Date.now() + 60_000;
 
   while (Date.now() < deadline) {
     const msg = await services.messages.getByExternalId(chat.id, externalId);
-    if (msg) {
-      const processed = msg[column];
-      if (processed) {
-        return {
-          content: processed,
-          localPath: msg.mediaUrl ? resolve(resolveMediaPath(msg.mediaUrl)) : null,
-        };
-      }
+    const result = checkProcessedColumn(msg, column);
+    if (result === 'error') {
+      log.warn('Media processing failed', { instanceId, chatId, externalId, error: msg?.[column] });
+      return MEDIA_WAIT_NULL;
     }
+    if (result !== 'pending') return result;
     await sleep(pollMs);
   }
 
-  log.warn('Media processing wait exceeded safety limit', { instanceId, chatId, externalId, contentType });
-  return { content: null, localPath: null };
+  log.warn('Media processing wait timed out', { instanceId, chatId, externalId, contentType });
+  return MEDIA_WAIT_NULL;
 }
 
 /**

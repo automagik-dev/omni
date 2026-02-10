@@ -201,9 +201,20 @@ export async function downloadMediaToBuffer(msg: WAMessage): Promise<{ buffer: B
   }
 
   try {
-    const buffer = await downloadMediaMessage(msg, 'buffer', {});
+    const raw = await downloadMediaMessage(msg, 'buffer', {});
 
-    if (!buffer || !(buffer instanceof Buffer)) {
+    // Baileys may return Buffer, Uint8Array, or null
+    let buffer: Buffer;
+    if (raw instanceof Buffer) {
+      buffer = raw;
+    } else if (raw instanceof Uint8Array) {
+      buffer = Buffer.from(raw);
+    } else {
+      return null;
+    }
+
+    // Empty buffer = decryption failed (common with iOS/macOS voice notes)
+    if (buffer.length === 0) {
       return null;
     }
 
