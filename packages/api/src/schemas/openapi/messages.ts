@@ -200,7 +200,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/media',
+    path: '/messages/send/media',
     operationId: 'sendMediaMessage',
     tags: ['Messages'],
     summary: 'Send media message',

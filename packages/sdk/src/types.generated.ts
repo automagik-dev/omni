@@ -376,7 +376,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/messages/media": {
+    "/messages/send/media": {
         parameters: {
             query?: never;
             header?: never;
