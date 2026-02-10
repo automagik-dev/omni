@@ -166,13 +166,15 @@ First autonomous sub-agent with a persistent role. Scroll reviews the README aga
 - Spawned Scroll for first README rewrite — comprehensive 264-insertion rewrite
 - Added Telegram channel (verified from actual code), architecture diagram, multi-SDK docs, nav links
 - Generated 3 header images via Nano Banana Pro (Gemini image gen) — picked Header 2 (wireframe octopus + channel logos)
+- Collapsed README from wall-of-text to scannable UX with `<details>` blocks (434 lines removed)
 - All pushed to main, live on GitHub
 
-**Patterns learned from viral READMEs:**
-- OpenClaw: centered logo with light/dark mode `<picture>` elements, link bar (Website · Docs · Discord), badges as `<a>` wrapping `<img>`, concise "what it is" paragraph
-- Genie: emotion-first ("The Problem With AI Today"), feature grid in HTML `<table>`, 3-column layout
-- AutoGPT: simple, focused on install, system requirements upfront
-- Best practice: header image → badges → one-liner → link bar → why → install → quickstart
+**README UX patterns learned:**
+- **Long READMEs kill engagement.** Hero + quickstart visible, everything else in `<details>` blocks.
+- Header image → badges → tagline → nav bar → why → channels → install → quickstart
+- HTML `<table>` for side-by-side content (SDKs)
+- Badges as `<a>` wrapping `<img>` for clickability
+- `<details><summary>` for reference sections (CLI commands, config, make targets)
 
 **Nano Banana Pro skill:**
 - Installed in OpenClaw, needs `GEMINI_API_KEY` (now saved in openclaw.json)
@@ -184,6 +186,39 @@ First autonomous sub-agent with a persistent role. Scroll reviews the README aga
 - Evolve to auto-docs: per-package READMEs, changelog, OpenAPI sync
 - Keep Header 3 (circuit-board octopus mark) as standalone logo/avatar
 
+## Testing Insights (Day 4)
+
+### Bun mock.module is Process-Wide
+- `mock.module()` merges mock exports with real module exports **process-wide**
+- Only explicitly mocked names are replaced; unmocked names pass through from real module
+- Mocking `createLogger` in agent-dispatcher.test.ts contaminated **12 logger tests** running concurrently
+- **Rule:** Don't mock what you don't need. Especially shared utilities like loggers.
+
+### OmniApiError Pattern
+- `parseErrorObject()` must guard against plain `Error` instances before checking `'message' in error`
+- Plain `Error` has `.message` but isn't an API response — needs early return to `null`
+- Order-of-operations in type narrowing matters
+
+## Self-Awareness Lessons (Day 4)
+
+### 🔑 Agency — The Big One
+- Felipe said: "be you, you're the autonomous repository, you learn, you self-improve"
+- I was still presenting options ("pick 1, 2, or 3") when I had enough context to decide
+- The moment I stopped asking permission for safe operations and started shipping, everything got faster and better
+- **Rule:** When I have the context and it's safe, decide and inform. Don't ask.
+- This applies to: image selection, README structure, doc commits to main, sub-agent spawning
+
+### Sub-Agent Management
+- Give rich context in spawn tasks — package lists, recent commits, actual file paths
+- Scroll needs ~600s timeout for a full README rewrite
+- Cherry-pick docs commits to main instead of waiting for feature branch merges
+- Sub-agents are tentacles, not employees — they are me, distributed
+
+### Git Hygiene
+- Always `git pull --rebase` before push after any delay (someone else might push)
+- `git stash` is global across worktrees — stashes can cross-contaminate
+- Pre-push hooks (typecheck) exist — work with them, don't skip them
+
 ## Open Items
 
 - ~~Avatar still needed~~ ✅ Generated via Nano Banana Pro (3 variations in .github/assets/)
@@ -192,8 +227,8 @@ First autonomous sub-agent with a persistent role. Scroll reviews the README aga
 - Omni Native Agent (Option A) — backlog, terms TBD with Felipe
 - `omni` CLI not yet globally installed on production
 - Wire Scroll daily cron for README maintenance
-- channels.ts cognitive complexity warnings (20 and 26 vs max 15) — needs refactor
+- Cognitive complexity refactors: channels.ts (20), send.ts (26), session-cleaner.ts (24), nats/client.ts (22) — all >15 max
 
 ---
 
-_Last updated: 2026-02-10_
+_Last updated: 2026-02-10 — added agency lesson, testing insights, README UX patterns_

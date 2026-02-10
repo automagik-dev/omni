@@ -81,6 +81,27 @@ make cli ARGS="..."   # Run CLI from source
 make cli-link         # Build + link globally
 ```
 
+## Bun Testing Gotchas
+
+- **`mock.module()` is process-wide** — mocked names apply to ALL concurrent test files, not just the importing one
+- **Only explicitly mocked names are replaced** — unmocked exports pass through from the real module
+- **Don't mock shared utilities** (like `createLogger`) in one test if other concurrent tests depend on the real implementation
+- **Test isolation:** Bun runs test files in parallel by default. Cross-file mock contamination is a real risk.
+
+## GitHub README Resources
+
+- `<details><summary>Title</summary>content</details>` — collapsible sections
+- `<picture><img src="..."/></picture>` — light/dark mode images
+- `<p align="center">` — centered content
+- HTML `<table>` — side-by-side layouts (e.g., SDKs)
+- Nav bar pattern: `[Link 1](#anchor) • [Link 2](#anchor) • [Link 3](#anchor)`
+
+## Image Generation
+
+- **Nano Banana Pro (Gemini):** `uv run /home/genie/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py --prompt "..." --filename "out.png" --resolution 1K`
+- GEMINI_API_KEY configured in `~/.openclaw/openclaw.json`
+- Good for: repo headers, logos, banners, diagrams
+
 ---
 
-_Updated: 2026-02-07_
+_Updated: 2026-02-10_
