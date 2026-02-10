@@ -2,7 +2,7 @@
 
 > Fix Baileys/Node.js ESM compatibility for WhatsApp plugin.
 
-**Status:** DRAFT
+**Status:** N/A (Bun bypasses ESM issues)
 **Created:** 2026-02-02
 **Author:** WISH Agent
 **Beads:** omni-9q2

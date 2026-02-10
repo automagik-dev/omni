@@ -2,7 +2,7 @@
 
 > Add API key expiration and revocation support.
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Created:** 2026-02-02
 **Author:** WISH Agent
 **Beads:** omni-axi

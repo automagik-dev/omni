@@ -2,7 +2,7 @@
 
 > Add Discord slash commands and interactive components (buttons, selects, modals) to the bot.
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Created:** 2026-02-02
 **Author:** WISH Agent
 **Beads:** omni-ras
