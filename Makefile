@@ -145,10 +145,9 @@ dev: dev-services _init-db-wait _build-dist
 	bun run dev
 
 # Start just the API (assumes services already running)
-# Note: Uses Node.js runtime (tsx) instead of Bun for WhatsApp Baileys WebSocket compatibility
 # OMNI_PACKAGES_DIR is passed explicitly to ensure correct plugin directory
 dev-api:
-	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages npx tsx watch --clear-screen packages/api/src/index.ts
+	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages bun --watch packages/api/src/index.ts
 
 # Start infrastructure services via PM2 (pgserve + NATS only)
 # API is NOT started here — turbo dev handles it (avoids port conflicts, see GH #14)
