@@ -34,14 +34,17 @@ const log = createLogger('media-processor');
 const PROCESSABLE_MEDIA_TYPES = new Set(['audio', 'image', 'document', 'video']);
 
 /**
- * Map processing type to message column name
+ * Map processing type + content type to message column name
  */
-function getContentFieldForType(processingType: 'transcription' | 'description' | 'extraction'): string | undefined {
+function getContentFieldForType(
+  processingType: 'transcription' | 'description' | 'extraction',
+  contentType?: string,
+): string | undefined {
   switch (processingType) {
     case 'transcription':
       return 'transcription';
     case 'description':
-      return 'imageDescription';
+      return contentType === 'video' ? 'videoDescription' : 'imageDescription';
     case 'extraction':
       return 'documentExtraction';
     default:
@@ -110,15 +113,29 @@ async function resolveMediaPath(
   content: MessageReceivedPayload['content'],
   mimeType: string,
 ): Promise<MediaResolution | null> {
-  const chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+  // Wait briefly for message-persistence to create the DB row (race condition:
+  // both media-processor and message-persistence subscribe to message.received)
+  const maxWaitMs = 5_000;
+  const pollMs = 250;
+  const deadline = Date.now() + maxWaitMs;
+
+  let chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+  while (!chat && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+  }
   if (!chat) {
     log.debug('Chat not found, cannot process media', { chatId, externalId });
     return null;
   }
 
-  const message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+  let message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+  while (!message && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+  }
   if (!message) {
-    log.debug('Message not found, cannot process media', { externalId });
+    log.debug('Message not found after waiting, cannot process media', { externalId });
     return null;
   }
 
@@ -163,31 +180,39 @@ async function persistProcessingResult(
   messageId: string,
   eventId: string | undefined,
   result: Awaited<ReturnType<MediaProcessingService['process']>>,
+  contentType?: string,
 ): Promise<void> {
-  // Store result in media_content table
-  await ctx.db.insert(mediaContent).values({
-    eventId: eventId ?? undefined,
-    mediaId: messageId,
-    processingType: result.processingType,
-    content: result.content ?? '',
-    model: result.model,
-    provider: result.provider,
-    language: result.language,
-    duration: result.duration,
-    tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-    costUsd: result.costCents,
-    processingTimeMs: result.processingTimeMs,
-  });
-
-  // Update message with processed content (for quick access in automations)
+  // Update message with processed content first (critical path for agent dispatcher)
   if (result.content) {
-    const updateField = getContentFieldForType(result.processingType);
+    const updateField = getContentFieldForType(result.processingType, contentType);
     if (updateField) {
       await ctx.db
         .update(messages)
         .set({ [updateField]: result.content })
         .where(eq(messages.id, messageId));
     }
+  }
+
+  // Store result in media_content table (non-critical analytics/audit record)
+  try {
+    await ctx.db.insert(mediaContent).values({
+      eventId: eventId ?? undefined,
+      mediaId: messageId,
+      processingType: result.processingType,
+      content: result.content ?? '',
+      model: result.model,
+      provider: result.provider,
+      language: result.language,
+      duration: result.duration,
+      tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+      costUsd: result.costCents,
+      processingTimeMs: result.processingTimeMs,
+    });
+  } catch (error) {
+    log.warn('Failed to insert media_content record (non-critical)', {
+      messageId,
+      error: String(error),
+    });
   }
 }
 
@@ -223,7 +248,7 @@ async function processMessageMedia(
     return;
   }
 
-  await persistProcessingResult(ctx, media.messageId, eventId, result);
+  await persistProcessingResult(ctx, media.messageId, eventId, result, content.type);
 
   log.info('Media processing complete', {
     messageId: media.messageId,

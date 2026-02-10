@@ -17,7 +17,7 @@
  * - Preserves existing debouncing for message events
  */
 
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   type AgentTrigger,
   type AgentTriggerType,
@@ -419,6 +419,165 @@ function extractMediaFiles(messages: BufferedMessage[]): ProviderFile[] {
 }
 
 // ============================================================================
+// Media Preprocessing for Agents
+// ============================================================================
+
+/** Emoji icons for each media content type */
+const MEDIA_ICONS: Record<string, string> = {
+  audio: '\u{1F3B5}',
+  image: '\u{1F5BC}\uFE0F',
+  video: '\u{1F3A5}',
+  document: '\u{1F4C4}',
+};
+
+/**
+ * Map content type to the corresponding processed-text column on the messages table.
+ */
+function getProcessedColumn(
+  contentType: string,
+): 'transcription' | 'imageDescription' | 'videoDescription' | 'documentExtraction' | null {
+  switch (contentType) {
+    case 'audio':
+      return 'transcription';
+    case 'image':
+      return 'imageDescription';
+    case 'video':
+      return 'videoDescription';
+    case 'document':
+      return 'documentExtraction';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Poll the messages table until the media processing column is populated or timeout.
+ */
+async function waitForMediaProcessing(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  externalId: string,
+  contentType: string,
+  pollMs = 500,
+): Promise<{ content: string | null; localPath: string | null }> {
+  const column = getProcessedColumn(contentType);
+  if (!column) return { content: null, localPath: null };
+
+  // Safety net: 5 minutes max to prevent infinite hang if processor crashes
+  const deadline = Date.now() + 5 * 60_000;
+
+  // First resolve the internal chat ID
+  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  if (!chat) {
+    log.warn('Chat not found for media wait', { instanceId, chatId });
+    return { content: null, localPath: null };
+  }
+
+  while (Date.now() < deadline) {
+    const msg = await services.messages.getByExternalId(chat.id, externalId);
+    if (msg) {
+      const processed = msg[column];
+      if (processed) {
+        return {
+          content: processed,
+          localPath: msg.mediaUrl ? resolve(resolveMediaPath(msg.mediaUrl)) : null,
+        };
+      }
+    }
+    await sleep(pollMs);
+  }
+
+  log.warn('Media processing wait exceeded safety limit', { instanceId, chatId, externalId, contentType });
+  return { content: null, localPath: null };
+}
+
+/**
+ * Format processed media content for the agent.
+ */
+function formatProcessedMedia(
+  contentType: string,
+  fullPath: string | null,
+  processedText: string,
+  includePath: boolean,
+): string {
+  const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
+  if (includePath && fullPath) {
+    return `${icon} [${fullPath}]: ${processedText}`;
+  }
+  return `${icon}: ${processedText}`;
+}
+
+// ============================================================================
+// Quoted Message Resolution
+// ============================================================================
+
+/**
+ * Get the best text representation of a message's content.
+ * Prefers processed media text (transcription, description) over raw text.
+ */
+function getMessageContentText(msg: {
+  messageType: string;
+  textContent: string | null;
+  transcription: string | null;
+  imageDescription: string | null;
+  videoDescription: string | null;
+  documentExtraction: string | null;
+}): string | null {
+  switch (msg.messageType) {
+    case 'audio':
+      return msg.transcription ? `${MEDIA_ICONS.audio}: ${msg.transcription}` : (msg.textContent ?? '[audio]');
+    case 'image':
+      return msg.imageDescription ? `${MEDIA_ICONS.image}: ${msg.imageDescription}` : (msg.textContent ?? '[image]');
+    case 'video':
+      return msg.videoDescription ? `${MEDIA_ICONS.video}: ${msg.videoDescription}` : (msg.textContent ?? '[video]');
+    case 'document':
+      return msg.documentExtraction
+        ? `${MEDIA_ICONS.document}: ${msg.documentExtraction}`
+        : (msg.textContent ?? '[document]');
+    default:
+      return msg.textContent;
+  }
+}
+
+/**
+ * Resolve a quoted message into formatted text for the agent.
+ * Looks up the referenced message and formats its content.
+ */
+async function resolveQuotedMessage(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  replyToId: string,
+): Promise<string | null> {
+  try {
+    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    if (!chat) return null;
+
+    const quoted = await services.messages.getByExternalId(chat.id, replyToId);
+    if (!quoted) return null;
+
+    const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? 'unknown';
+    const time = quoted.platformTimestamp
+      ? new Date(quoted.platformTimestamp).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+      : '';
+
+    const content = getMessageContentText(quoted);
+    if (!content) return null;
+
+    // Truncate long quoted content to keep context manageable
+    const maxLen = 500;
+    const truncated = content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
+
+    const timeStr = time ? ` at ${time}` : '';
+    return `[Quoting ${sender}${timeStr}: ${truncated}]`;
+  } catch (error) {
+    log.debug('Failed to resolve quoted message', { replyToId, error: String(error) });
+    return null;
+  }
+}
+
+// ============================================================================
 // Self-Chat Detection
 // ============================================================================
 
@@ -471,6 +630,90 @@ async function sendResponseParts(
 // Agent Execution (using existing AgentRunnerService for now)
 // ============================================================================
 
+/**
+ * Wait for media processing on all media messages, returning formatted text.
+ */
+async function collectProcessedMedia(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+): Promise<string[]> {
+  const results: string[] = [];
+  const mediaMessages = messages.filter((m) => m.payload.content?.mediaUrl && m.payload.content?.type);
+
+  for (const m of mediaMessages) {
+    const contentType = m.payload.content?.type;
+    if (!contentType || !getProcessedColumn(contentType)) continue;
+
+    const result = await waitForMediaProcessing(
+      services,
+      instance.id,
+      m.payload.chatId,
+      m.payload.externalId,
+      contentType,
+    );
+
+    if (result.content) {
+      results.push(formatProcessedMedia(contentType, result.localPath, result.content, instance.agentSendMediaPath));
+    } else {
+      const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
+      results.push(`${icon}: [media processing unavailable]`);
+    }
+  }
+  return results;
+}
+
+/**
+ * Resolve quoted messages and prepend context to message texts.
+ */
+async function prependQuotedContext(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  messages: BufferedMessage[],
+  messageTexts: string[],
+): Promise<void> {
+  for (const m of messages) {
+    const replyToId = m.payload.replyToId;
+    if (!replyToId) continue;
+
+    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId);
+    if (!quotedText) continue;
+
+    const replyText = m.payload.content?.text;
+    const idx = replyText ? messageTexts.indexOf(replyText) : -1;
+    if (idx >= 0) {
+      messageTexts[idx] = `${quotedText}\n${messageTexts[idx]}`;
+    } else {
+      messageTexts.unshift(quotedText);
+    }
+  }
+}
+
+/**
+ * Collect message texts, wait for media processing, and resolve quoted messages.
+ * Returns { messageTexts, mediaFiles } ready for the agent runner.
+ */
+async function prepareAgentContent(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+): Promise<{ messageTexts: string[]; mediaFiles: ProviderFile[] }> {
+  const chatId = messages[0]?.payload.chatId ?? '';
+  const messageTexts = messages.map((m) => m.payload.content?.text).filter((t): t is string => !!t);
+  let mediaFiles = extractMediaFiles(messages);
+
+  if (instance.agentWaitForMedia) {
+    const processed = await collectProcessedMedia(services, instance, messages);
+    messageTexts.push(...processed);
+    if (processed.length > 0) mediaFiles = [];
+  }
+
+  await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
+
+  return { messageTexts, mediaFiles };
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -501,8 +744,7 @@ async function processAgentResponse(
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
   try {
-    const messageTexts = messages.map((m) => m.payload.content?.text).filter((t): t is string => !!t);
-    const mediaFiles = extractMediaFiles(messages);
+    const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
 
     if (!messageTexts.length && !mediaFiles.length) {
       log.debug('No text or media content in messages, skipping agent call');

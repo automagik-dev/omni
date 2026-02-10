@@ -514,6 +514,12 @@ export const instances = pgTable(
     processVideo: boolean('process_video').notNull().default(true),
     processDocuments: boolean('process_documents').notNull().default(true),
 
+    // ---- Agent Media Preprocessing ----
+    /** Wait for media processing (transcription/vision) before dispatching to agent */
+    agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
+    /** Include the full file path in formatted text sent to agent */
+    agentSendMediaPath: boolean('agent_send_media_path').notNull().default(true),
+
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */
     lastMessageAt: timestamp('last_message_at'),
