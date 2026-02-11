@@ -360,15 +360,12 @@ export function createChatsCommand(): Command {
             includeArchived: options.archived,
             limit: options.limit,
             chatType: options.type,
+            // Filter out newsletters and broadcasts server-side (use --all to include)
+            excludeChatTypes: options.all ? undefined : 'channel,broadcast',
           });
 
           // Cast to extended type to access additional fields
           let chats = result.items as ExtendedChat[];
-
-          // Filter out newsletters and broadcasts by default (use --all to include)
-          if (!options.all) {
-            chats = chats.filter((c) => c.chatType !== 'channel' && c.chatType !== 'broadcast');
-          }
 
           // Client-side filtering for --unread
           if (options.unread) {
