@@ -1430,12 +1430,23 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
+  // Baileys LID addressing: payload.from may be a LID (e.g. "54958418317348") while
+  // access rules use phone patterns (e.g. "5511986780008"). Try both the LID and the
+  // phone JID from rawPayload.key.participantAlt for access matching.
+  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
+  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  const primaryId = payload.from ?? '';
+
+  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
+  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
+    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+  }
   if (!accessResult.allowed) {
     log.info('Access denied', {
       instanceId: instance.id,
       chatId: payload.chatId,
       from: payload.from,
+      participantAlt,
       reason: accessResult.reason,
     });
     // Send block message if applicable
@@ -1480,7 +1491,16 @@ async function shouldProcessReaction(
   }
 
   // Access check for reactions
-  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
+  let accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
+  if (!accessResult.allowed) {
+    // Fallback for Baileys LID mode: try participantAlt phone from reaction metadata
+    const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
+    const key = rawPayload?.key as Record<string, unknown> | undefined;
+    const participantAlt = (key?.participantAlt as string)?.replace(/@.*$/, '');
+    if (participantAlt && participantAlt !== payload.from) {
+      accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+    }
+  }
   if (!accessResult.allowed) {
     log.info('Access denied for reaction', {
       instanceId: instance.id,
