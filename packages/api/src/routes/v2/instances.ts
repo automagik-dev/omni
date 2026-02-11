@@ -97,16 +97,8 @@ const createInstanceSchema = z.object({
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
   agentGateEnabled: z.boolean().default(false).describe('Enable LLM response gate (pre-filter before agent dispatch)'),
-  agentGateModel: z
-    .string()
-    .nullable()
-    .default(null)
-    .describe('Model for response gate (default: gemini-2.0-flash)'),
-  agentGatePrompt: z
-    .string()
-    .nullable()
-    .default(null)
-    .describe('Custom prompt for response gate (null = use default)'),
+  agentGateModel: z.string().nullable().default(null).describe('Model for response gate (default: gemini-2.0-flash)'),
+  agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)

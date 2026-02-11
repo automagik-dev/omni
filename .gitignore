@@ -59,3 +59,4 @@ omni-93g/
 # bd worktree
 omni-4l0/
 .research/
+*.egg-info/
