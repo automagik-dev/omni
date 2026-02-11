@@ -92,5 +92,5 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agnoos', 'webhook', 'openclaw'];
+  return ['agnoos', 'agno', 'webhook', 'openclaw'];
 }
