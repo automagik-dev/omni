@@ -12,12 +12,26 @@
  * omni chats participants <id>
  */
 
-import type { Channel, Chat, Message } from '@omni/sdk';
+import type { Channel, Chat, Message, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
+
+/** Build a map of instanceId → instance name for display */
+async function buildInstanceNameMap(client: OmniClient): Promise<Map<string, string>> {
+  try {
+    const result = await client.instances.list();
+    const map = new Map<string, string>();
+    for (const inst of result.items) {
+      map.set(inst.id, inst.name);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
 
 // ============================================================================
 // Helper Types - Extended fields from API (SDK types incomplete)
@@ -270,6 +284,42 @@ function formatStandardMessages(messages: ExtendedMessage[]): {
   }));
 }
 
+/** Display chat list in verbose or compact format */
+function displayChatList(
+  chatItems: ExtendedChat[],
+  instanceNames: Map<string, string>,
+  options: { instance?: string; verbose?: boolean },
+): void {
+  if (options.verbose) {
+    const items = chatItems.map((c) => ({
+      id: c.id,
+      name: c.name ?? c.externalId,
+      instance: instanceNames.get(c.instanceId) ?? c.instanceId.slice(0, 8),
+      channel: c.channel,
+      type: c.chatType,
+      unread: c.unreadCount ?? 0,
+      messages: c.messageCount ?? 0,
+      archived: c.isArchived ? 'yes' : 'no',
+    }));
+    output.list(items, { emptyMessage: 'No chats found.' });
+  } else {
+    const showInstance = !options.instance && instanceNames.size > 0;
+    const items = chatItems.map((c) => {
+      const row: Record<string, string | number> = {
+        name: truncate(formatChatName(c), 25),
+      };
+      if (showInstance) {
+        row.instance = instanceNames.get(c.instanceId) ?? c.instanceId.slice(0, 8);
+      }
+      row.unread = c.unreadCount ?? 0;
+      row['last message'] = truncate(c.lastMessagePreview?.replace(/\n/g, ' '), 35) ?? '-';
+      row.time = formatRelativeTime(c.lastMessageAt);
+      return row;
+    });
+    output.list(items, { emptyMessage: 'No chats found.' });
+  }
+}
+
 export function createChatsCommand(): Command {
   const chats = new Command('chats').description('Manage chats');
 
@@ -286,6 +336,7 @@ export function createChatsCommand(): Command {
     .option('--sort <field>', 'Sort by: activity (default), unread, name')
     .option('--type <type>', 'Filter by chat type: dm, group, channel')
     .option('--verbose', 'Show full details (ID, channel, archived)')
+    .option('--all', 'Include newsletters and broadcasts')
     .action(
       async (options: {
         instance?: string;
@@ -297,6 +348,7 @@ export function createChatsCommand(): Command {
         sort?: string;
         type?: string;
         verbose?: boolean;
+        all?: boolean;
       }) => {
         const client = getClient();
 
@@ -313,6 +365,11 @@ export function createChatsCommand(): Command {
           // Cast to extended type to access additional fields
           let chats = result.items as ExtendedChat[];
 
+          // Filter out newsletters and broadcasts by default (use --all to include)
+          if (!options.all) {
+            chats = chats.filter((c) => c.chatType !== 'channel' && c.chatType !== 'broadcast');
+          }
+
           // Client-side filtering for --unread
           if (options.unread) {
             chats = chats.filter((c) => (c.unreadCount ?? 0) > 0);
@@ -326,28 +383,9 @@ export function createChatsCommand(): Command {
           }
           // Default is 'activity' - already sorted by lastMessageAt from API
 
-          if (options.verbose) {
-            // Verbose format - show full details
-            const items = chats.map((c) => ({
-              id: c.id,
-              name: c.name ?? c.externalId,
-              channel: c.channel,
-              type: c.chatType,
-              unread: c.unreadCount ?? 0,
-              messages: c.messageCount ?? 0,
-              archived: c.isArchived ? 'yes' : 'no',
-            }));
-            output.list(items, { emptyMessage: 'No chats found.' });
-          } else {
-            // Default format - compact view with preview
-            const items = chats.map((c) => ({
-              name: truncate(formatChatName(c), 25),
-              unread: c.unreadCount ?? 0,
-              'last message': truncate(c.lastMessagePreview?.replace(/\n/g, ' '), 35),
-              time: formatRelativeTime(c.lastMessageAt),
-            }));
-            output.list(items, { emptyMessage: 'No chats found.' });
-          }
+          // Build instance name lookup for multi-instance display
+          const instanceNames = options.instance ? new Map<string, string>() : await buildInstanceNameMap(client);
+          displayChatList(chats, instanceNames, options);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to list chats: ${message}`);
