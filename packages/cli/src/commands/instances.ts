@@ -1,6 +1,8 @@
 /**
  * Instance Commands
  *
+ * All <id> arguments accept: full UUID, partial UUID prefix, or instance name.
+ *
  * omni instances list
  * omni instances get <id>
  * omni instances create --name <name> --channel <type>
@@ -21,6 +23,7 @@ import { Command } from 'commander';
 import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveInstanceId } from '../resolve.js';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
@@ -113,10 +116,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('get <id>')
     .description('Get instance details')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const instance = await client.instances.get(id);
         output.data(instance);
       } catch (err) {
@@ -166,10 +170,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('delete <id>')
     .description('Delete an instance')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         await client.instances.delete(id);
         output.success(`Instance deleted: ${id}`);
       } catch (err) {
@@ -182,10 +187,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('status <id>')
     .description('Get instance connection status')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const status = await client.instances.status(id);
         output.data({
           instanceId: id,
@@ -201,10 +207,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('whoami <id>')
     .description('Show phone number and identity for an instance')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const status = (await client.instances.status(id)) as {
           state: string;
           isConnected: boolean;
@@ -236,8 +243,9 @@ export function createInstancesCommand(): Command {
     .description('Get QR code for WhatsApp instances')
     .option('--base64', 'Output raw base64 instead of ASCII')
     .option('--watch', 'Auto-refresh QR until connected')
-    .action(async (id: string, options: { base64?: boolean; watch?: boolean }) => {
+    .action(async (rawId: string, options: { base64?: boolean; watch?: boolean }) => {
       const client = getClient();
+      const id = await resolveInstanceId(rawId);
 
       const renderQrAscii = async (qrData: string, expiresAt?: string): Promise<void> => {
         return new Promise<void>((resolve) => {
@@ -310,10 +318,11 @@ export function createInstancesCommand(): Command {
     .command('pair <id>')
     .description('Request pairing code (alternative to QR)')
     .requiredOption('--phone <number>', 'Phone number with country code (e.g., +5511999999999)')
-    .action(async (id: string, options: { phone: string }) => {
+    .action(async (rawId: string, options: { phone: string }) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const result = await client.instances.pair(id, { phoneNumber: options.phone });
         output.success(`Pairing code: ${result.code}`, {
           code: result.code,
@@ -333,10 +342,11 @@ export function createInstancesCommand(): Command {
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
-    .action(async (id: string, options: { forceNewQr?: boolean; token?: string }) => {
+    .action(async (rawId: string, options: { forceNewQr?: boolean; token?: string }) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const result = await client.instances.connect(id, {
           forceNewQr: options.forceNewQr,
           token: options.token,
@@ -355,10 +365,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('disconnect <id>')
     .description('Disconnect an instance')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         await client.instances.disconnect(id);
         output.success(`Instance disconnected: ${id}`);
       } catch (err) {
@@ -372,10 +383,11 @@ export function createInstancesCommand(): Command {
     .command('restart <id>')
     .description('Restart an instance')
     .option('--force-new-qr', 'Force generation of new QR code after restart')
-    .action(async (id: string, options: { forceNewQr?: boolean }) => {
+    .action(async (rawId: string, options: { forceNewQr?: boolean }) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const result = await client.instances.restart(id, options.forceNewQr);
         output.success(result.message, {
           status: result.status,
@@ -390,10 +402,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('logout <id>')
     .description('Logout and clear session data')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         await client.instances.logout(id);
         output.success(`Instance logged out: ${id}`);
       } catch (err) {
@@ -409,7 +422,7 @@ export function createInstancesCommand(): Command {
     .requiredOption('--type <type>', `Sync type (${VALID_SYNC_TYPES.join(', ')})`)
     .option('--depth <depth>', 'Sync depth (7d, 30d, 90d, 1y, all)')
     .option('--download-media', 'Download media files')
-    .action(async (id: string, options: { type: string; depth?: string; downloadMedia?: boolean }) => {
+    .action(async (rawId: string, options: { type: string; depth?: string; downloadMedia?: boolean }) => {
       if (!VALID_SYNC_TYPES.includes(options.type as (typeof VALID_SYNC_TYPES)[number])) {
         output.error(`Invalid sync type: ${options.type}`, {
           validTypes: VALID_SYNC_TYPES,
@@ -419,6 +432,7 @@ export function createInstancesCommand(): Command {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         // Profile sync is immediate
         if (options.type === 'profile') {
           const result = await client.instances.syncProfile(id);
@@ -450,10 +464,11 @@ export function createInstancesCommand(): Command {
     .description('List sync jobs or get job status')
     .option('--status <status>', 'Filter by status')
     .option('--limit <n>', 'Limit results', Number.parseInt)
-    .action(async (id: string, jobId?: string, options?: { status?: string; limit?: number }) => {
+    .action(async (rawId: string, jobId?: string, options?: { status?: string; limit?: number }) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         if (jobId) {
           // Get specific job status
           const job = await client.instances.getSyncStatus(id, jobId);
@@ -497,10 +512,14 @@ export function createInstancesCommand(): Command {
     .option('--agent <id>', 'New agent ID')
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
     .action(
-      async (id: string, options: { name?: string; agentProvider?: string; agent?: string; profileName?: string }) => {
+      async (
+        rawId: string,
+        options: { name?: string; agentProvider?: string; agent?: string; profileName?: string },
+      ) => {
         const client = getClient();
 
         try {
+          const id = await resolveInstanceId(rawId);
           if (options.profileName) {
             await updateProfileName(id, options.profileName);
             output.success(`Profile name updated to "${options.profileName}"`);
@@ -536,12 +555,13 @@ export function createInstancesCommand(): Command {
     .option('--no-groups', 'Exclude group contacts')
     .action(
       async (
-        id: string,
+        rawId: string,
         options: { limit?: number; cursor?: string; guild?: string; search?: string; groups?: boolean },
       ) => {
         const client = getClient();
 
         try {
+          const id = await resolveInstanceId(rawId);
           const result = await client.instances.listContacts(id, {
             limit: options.limit,
             cursor: options.cursor,
@@ -593,10 +613,11 @@ export function createInstancesCommand(): Command {
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10))
     .option('--cursor <cursor>', 'Pagination cursor')
     .option('--search <query>', 'Filter groups by name')
-    .action(async (id: string, options: { limit?: number; cursor?: string; search?: string }) => {
+    .action(async (rawId: string, options: { limit?: number; cursor?: string; search?: string }) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const result = await client.instances.listGroups(id, {
           limit: options.limit,
           cursor: options.cursor,
@@ -636,10 +657,11 @@ export function createInstancesCommand(): Command {
   instances
     .command('profile <id> <userId>')
     .description('Get user profile from the channel')
-    .action(async (id: string, userId: string) => {
+    .action(async (rawId: string, userId: string) => {
       const client = getClient();
 
       try {
+        const id = await resolveInstanceId(rawId);
         const profile = await client.instances.getUserProfile(id, userId);
         output.data(profile);
       } catch (err) {
@@ -652,8 +674,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('check <id> <phone>')
     .description('Check if phone number is registered on WhatsApp')
-    .action(async (id: string, phone: string) => {
+    .action(async (rawId: string, phone: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -689,8 +712,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('update-bio <id> <status>')
     .description('Update own profile bio/status on WhatsApp')
-    .action(async (id: string, status: string) => {
+    .action(async (rawId: string, status: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -717,8 +741,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('block <id> <contactId>')
     .description('Block a contact on WhatsApp')
-    .action(async (id: string, contactId: string) => {
+    .action(async (rawId: string, contactId: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -745,8 +770,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('unblock <id> <contactId>')
     .description('Unblock a contact on WhatsApp')
-    .action(async (id: string, contactId: string) => {
+    .action(async (rawId: string, contactId: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -773,8 +799,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('blocklist <id>')
     .description('List blocked contacts on WhatsApp')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -815,13 +842,14 @@ export function createInstancesCommand(): Command {
     .description('Update instance profile picture')
     .option('--base64 <data>', 'Base64-encoded image data')
     .option('--url <url>', 'URL to fetch image from')
-    .action(async (id: string, options: { base64?: string; url?: string }) => {
+    .action(async (rawId: string, options: { base64?: string; url?: string }) => {
       if (!options.base64 && !options.url) {
         output.error('Either --base64 or --url is required');
         return;
       }
 
       try {
+        const id = await resolveInstanceId(rawId);
         const base64Data = await resolveBase64Image(options);
         await apiCall(`instances/${id}/profile/picture`, 'PUT', { base64: base64Data });
         output.success('Profile picture updated');
@@ -835,8 +863,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('remove-picture <id>')
     .description('Remove instance profile picture')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         await apiCall(`instances/${id}/profile/picture`, 'DELETE');
         output.success('Profile picture removed');
       } catch (err) {
@@ -856,13 +885,14 @@ export function createInstancesCommand(): Command {
     .requiredOption('--group <jid>', 'Group JID (e.g., 120363xxx@g.us)')
     .option('--base64 <data>', 'Base64-encoded image data')
     .option('--url <url>', 'URL to fetch image from')
-    .action(async (id: string, options: { group: string; base64?: string; url?: string }) => {
+    .action(async (rawId: string, options: { group: string; base64?: string; url?: string }) => {
       if (!options.base64 && !options.url) {
         output.error('Either --base64 or --url is required');
         return;
       }
 
       try {
+        const id = await resolveInstanceId(rawId);
         const base64Data = await resolveBase64Image(options);
         await apiCall(`instances/${id}/groups/${options.group}/picture`, 'PUT', { base64: base64Data });
         output.success(`Group picture updated for ${options.group}`);
@@ -882,8 +912,9 @@ export function createInstancesCommand(): Command {
     .description('Create a new WhatsApp group')
     .requiredOption('--subject <name>', 'Group name/subject')
     .requiredOption('--participants <phones...>', 'Phone numbers or JIDs to add (space-separated)')
-    .action(async (id: string, opts: { subject: string; participants: string[] }) => {
+    .action(async (rawId: string, opts: { subject: string; participants: string[] }) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const result = (await apiCall(`instances/${id}/groups`, 'POST', {
           subject: opts.subject,
           participants: opts.participants,
@@ -911,8 +942,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('group-invite <id> <groupJid>')
     .description('Get group invite link')
-    .action(async (id: string, groupJid: string) => {
+    .action(async (rawId: string, groupJid: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const result = (await apiCall(`instances/${id}/groups/${encodeURIComponent(groupJid)}/invite`)) as {
           data: { code: string; inviteLink: string };
         };
@@ -927,8 +959,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('group-revoke-invite <id> <groupJid>')
     .description('Revoke group invite link and generate new one')
-    .action(async (id: string, groupJid: string) => {
+    .action(async (rawId: string, groupJid: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const result = (await apiCall(
           `instances/${id}/groups/${encodeURIComponent(groupJid)}/invite/revoke`,
           'POST',
@@ -944,8 +977,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('group-join <id> <code>')
     .description('Join a group via invite code')
-    .action(async (id: string, code: string) => {
+    .action(async (rawId: string, code: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const result = (await apiCall(`instances/${id}/groups/join`, 'POST', { code })) as {
           data: { groupJid: string; joined: boolean };
         };
@@ -966,8 +1000,9 @@ export function createInstancesCommand(): Command {
   instances
     .command('privacy <id>')
     .description('Fetch privacy settings')
-    .action(async (id: string) => {
+    .action(async (rawId: string) => {
       try {
+        const id = await resolveInstanceId(rawId);
         const result = (await apiCall(`instances/${id}/privacy`)) as { data: Record<string, unknown> };
         output.data(result.data);
       } catch (err) {
@@ -986,8 +1021,9 @@ export function createInstancesCommand(): Command {
     .description('Reject an incoming call')
     .requiredOption('--call-id <callId>', 'Call ID from the call event')
     .requiredOption('--from <jid>', 'Caller JID')
-    .action(async (id: string, options: { callId: string; from: string }) => {
+    .action(async (rawId: string, options: { callId: string; from: string }) => {
       try {
+        const id = await resolveInstanceId(rawId);
         await apiCall(`instances/${id}/calls/reject`, 'POST', {
           callId: options.callId,
           callFrom: options.from,

@@ -13,6 +13,7 @@ import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import { type Example, type OptionDef, formatExamples, formatOptionGroup } from '../help.js';
 import * as output from '../output.js';
+import { resolveInstanceId } from '../resolve.js';
 
 interface ResyncOptions {
   instance?: string;
@@ -53,13 +54,8 @@ async function resolveInstanceIds(opts: ResyncOptions): Promise<string[] | null>
   }
 
   if (opts.instance) {
-    try {
-      const instance = await client.instances.get(opts.instance);
-      if (instance) return [(instance as { id: string }).id];
-    } catch {
-      // Assume it's already an ID
-    }
-    return [opts.instance];
+    const id = await resolveInstanceId(opts.instance);
+    return [id];
   }
 
   return [];
