@@ -152,13 +152,21 @@ export function setupMessageHandlers(bot: Bot, plugin: TelegramPlugin, instanceI
       },
       replyToId,
       {
+        // Telegram-specific fields
         chatType: msg.chat.type,
-        displayName,
         username: from.username,
         isMention,
-        isForwarded: !!msg.forward_origin,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
+
+        // Cross-channel rawPayload contract (used by message-persistence, agent-dispatcher, agent-responder)
+        displayName,
+        pushName: displayName,
+        chatName:
+          ('title' in msg.chat ? msg.chat.title : undefined) || (msg.chat.type === 'private' ? displayName : undefined),
+        isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
+        isDM: msg.chat.type === 'private',
+        isForwarded: !!msg.forward_origin,
       },
     );
   });
