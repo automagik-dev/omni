@@ -2079,9 +2079,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         payload.isGroup = true;
       }
     } else {
+      // Try chatNamesCache first (from chats.upsert), then contactsCache (from contacts.upsert)
       const chatName = this.chatNamesCache.get(instanceId)?.get(chatId);
       if (chatName) {
         payload.chatName = chatName;
+      } else {
+        const contact = this.contactsCache.get(instanceId)?.get(chatId);
+        if (contact?.name) {
+          payload.chatName = contact.name;
+        }
       }
     }
   }
