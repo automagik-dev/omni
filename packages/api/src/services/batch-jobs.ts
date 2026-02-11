@@ -61,6 +61,10 @@ export interface CreateBatchJobOptions {
   contentTypes?: ProcessableContentType[];
   /** Re-process items that already have content (default: false) */
   force?: boolean;
+  /** Minimum delay between items in ms (default: 1000) */
+  delayMinMs?: number;
+  /** Maximum delay between items in ms (default: 3000) */
+  delayMaxMs?: number;
 }
 
 /**
@@ -128,8 +132,10 @@ export class BatchJobService {
   private static readonly AVG_PROCESSING_TIME_MS = 3000;
   /** Average re-download time per item in ms */
   private static readonly AVG_REDOWNLOAD_TIME_MS = 1500;
-  /** Delay between items to avoid blocking event loop */
-  private static readonly INTER_ITEM_DELAY_MS = 100;
+  /** Default minimum delay between items in ms */
+  private static readonly DEFAULT_DELAY_MIN_MS = 1000;
+  /** Default maximum delay between items in ms */
+  private static readonly DEFAULT_DELAY_MAX_MS = 3000;
   /** Progress update interval (items) */
   private static readonly PROGRESS_UPDATE_INTERVAL = 5;
 
@@ -145,7 +151,17 @@ export class BatchJobService {
    * Create and start a batch job
    */
   async create(options: CreateBatchJobOptions): Promise<BatchJob> {
-    const { jobType, instanceId, chatId, daysBack, limit, contentTypes, force = false } = options;
+    const {
+      jobType,
+      instanceId,
+      chatId,
+      daysBack,
+      limit,
+      contentTypes,
+      force = false,
+      delayMinMs,
+      delayMaxMs,
+    } = options;
 
     // Validate based on job type
     if (jobType === 'targeted_chat_sync' && !chatId) {
@@ -164,6 +180,8 @@ export class BatchJobService {
       limit,
       contentTypes: contentTypes ?? ['audio', 'image', 'video', 'document'],
       force,
+      delayMinMs: delayMinMs ?? BatchJobService.DEFAULT_DELAY_MIN_MS,
+      delayMaxMs: delayMaxMs ?? BatchJobService.DEFAULT_DELAY_MAX_MS,
     };
 
     const jobData: NewBatchJob = {
@@ -365,7 +383,11 @@ export class BatchJobService {
     const estimatedCostCents =
       counts.audioCount * 10 + counts.imageCount * 1 + counts.videoCount * 2 + counts.documentCount * 0;
 
-    const estimatedDurationMinutes = Math.ceil((items.length * BatchJobService.AVG_PROCESSING_TIME_MS) / 60000);
+    // Factor in average random delay between items (midpoint of default range)
+    const avgDelayMs = (BatchJobService.DEFAULT_DELAY_MIN_MS + BatchJobService.DEFAULT_DELAY_MAX_MS) / 2;
+    const estimatedDurationMinutes = Math.ceil(
+      (items.length * (BatchJobService.AVG_PROCESSING_TIME_MS + avgDelayMs)) / 60000,
+    );
 
     return {
       totalItems: items.length,
@@ -419,7 +441,20 @@ export class BatchJobService {
       const state = this.initializeJobState(job);
       const startTime = Date.now();
 
-      await this.processAllItems(jobId, instanceId, eligibleItems, totalItems, skippedItems, state, redownloadItems);
+      const delayMinMs = params.delayMinMs ?? BatchJobService.DEFAULT_DELAY_MIN_MS;
+      const delayMaxMs = params.delayMaxMs ?? BatchJobService.DEFAULT_DELAY_MAX_MS;
+
+      await this.processAllItems(
+        jobId,
+        instanceId,
+        eligibleItems,
+        totalItems,
+        skippedItems,
+        state,
+        redownloadItems,
+        delayMinMs,
+        delayMaxMs,
+      );
 
       await this.finalizeJob(
         jobId,
@@ -526,7 +561,9 @@ export class BatchJobService {
     totalItems: number,
     skippedItems: number,
     state: JobProcessingState,
-    redownloadItems?: RedownloadItem[],
+    redownloadItems: RedownloadItem[] | undefined,
+    delayMinMs: number,
+    delayMaxMs: number,
   ): Promise<void> {
     // media_redownload path: process from raw event payloads
     if (redownloadItems && redownloadItems.length > 0) {
@@ -548,7 +585,8 @@ export class BatchJobService {
           item.message.id,
           state,
         );
-        await new Promise((resolve) => setTimeout(resolve, BatchJobService.INTER_ITEM_DELAY_MS));
+        const redownloadDelay = delayMinMs + Math.random() * (delayMaxMs - delayMinMs);
+        await new Promise((resolve) => setTimeout(resolve, redownloadDelay));
       }
       return;
     }
@@ -571,7 +609,9 @@ export class BatchJobService {
         item.id,
         state,
       );
-      await new Promise((resolve) => setTimeout(resolve, BatchJobService.INTER_ITEM_DELAY_MS));
+      // Random delay between items to avoid API rate limits and behave humanly
+      const delay = delayMinMs + Math.random() * (delayMaxMs - delayMinMs);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 

@@ -35,6 +35,8 @@ interface CreateOptions {
   contentTypes?: string;
   force?: boolean;
   noConfirm?: boolean;
+  delayMin?: number;
+  delayMax?: number;
 }
 
 interface StatusOptions {
@@ -218,6 +220,8 @@ async function handleCreate(client: OmniClient, options: CreateOptions): Promise
     limit: options.limit,
     contentTypes,
     force: options.force,
+    delayMinMs: options.delayMin,
+    delayMaxMs: options.delayMax,
   });
 
   output.success(`Batch job created: ${job.id}`);
@@ -349,6 +353,8 @@ export function createBatchCommand(): Command {
     .option('--limit <n>', 'Max items to process', Number.parseInt)
     .option('--content-types <types>', 'Content types: audio,image,video,document')
     .option('--force', 'Re-process items that already have content')
+    .option('--delay-min <ms>', 'Min random delay between items in ms (default: 1000)', Number.parseInt)
+    .option('--delay-max <ms>', 'Max random delay between items in ms (default: 3000)', Number.parseInt)
     .option('--no-confirm', 'Skip confirmation prompt')
     .action(async (options: CreateOptions) => {
       const client = getClient();
