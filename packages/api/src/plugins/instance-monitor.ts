@@ -91,16 +91,28 @@ function wasAuthenticated(instance: InstanceInfo): boolean {
 /**
  * Connect a single instance via its plugin
  */
-async function connectInstance(instance: { id: string; channel: string }, registry: ChannelRegistry): Promise<void> {
+async function connectInstance(
+  instance: { id: string; channel: string; telegramBotToken?: string | null; discordBotToken?: string | null },
+  registry: ChannelRegistry,
+): Promise<void> {
   const plugin = registry.get(instance.channel as Parameters<typeof registry.get>[0]);
   if (!plugin) {
     throw new Error(`No plugin for channel: ${instance.channel}`);
   }
 
+  // Pass channel-specific tokens from DB for reconnection
+  const options: Record<string, unknown> = {};
+  if (instance.telegramBotToken) {
+    options.token = instance.telegramBotToken;
+  }
+  if (instance.discordBotToken) {
+    options.token = instance.discordBotToken;
+  }
+
   await plugin.connect(instance.id, {
     instanceId: instance.id,
     credentials: {},
-    options: {},
+    options,
   });
 }
 
