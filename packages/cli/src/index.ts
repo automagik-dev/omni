@@ -22,6 +22,7 @@ import { createEventsCommand } from './commands/events.js';
 import { createInstancesCommand } from './commands/instances.js';
 import { createKeysCommand } from './commands/keys.js';
 import { createLogsCommand } from './commands/logs.js';
+import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
@@ -136,6 +137,12 @@ const COMMANDS: CommandDef[] = [
   { create: createAuthCommand, category: 'core', helpGroup: 'System', helpDescription: 'Authentication management' },
   { create: createSettingsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Server settings' },
   { create: createBatchCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Batch operations' },
+  {
+    create: createMediaCommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'Browse and download media items',
+  },
   {
     create: createResyncCommand,
     category: 'standard',

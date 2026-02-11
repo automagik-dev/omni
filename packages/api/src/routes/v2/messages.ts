@@ -8,6 +8,7 @@
  * - PATCH  /messages/:id          - Update message
  * - DELETE /messages/:id          - Mark message as deleted
  * - GET    /messages/by-external  - Find by external ID
+ * - POST   /messages/media/download - Ensure media is cached locally
  *
  * Message operations:
  * - POST   /messages/:id/edit            - Record edit
@@ -31,15 +32,21 @@
  * @see unified-messages wish
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
-import { ERROR_CODES, OmniError } from '@omni/core';
+import { ERROR_CODES, OmniError, createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
+import { MediaStorageService } from '../../services/media-storage';
 import type { ApiKeyData, AppVariables } from '../../types';
+
+const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -466,6 +473,160 @@ messagesRoutes.get('/by-external', async (c) => {
   }
 
   return c.json({ data: message });
+});
+
+// ============================================================================
+// Media Download (Ensure Cached) Route
+// ============================================================================
+
+// MessageRef union schema — address a message by internal ID or (chatId, externalId)
+const messageRefSchema = z.union([
+  z.object({ messageId: z.string().uuid() }),
+  z.object({ chatId: z.string().uuid(), externalId: z.string().min(1) }),
+]);
+
+// Lazy singleton for MediaStorageService (same pattern as media.ts)
+let _mediaStorageForDownload: MediaStorageService | null = null;
+
+function getMediaStorageForDownload(db: unknown): MediaStorageService {
+  if (!_mediaStorageForDownload) {
+    // biome-ignore lint/suspicious/noExplicitAny: db type bridging
+    _mediaStorageForDownload = new MediaStorageService(db as any);
+  }
+  return _mediaStorageForDownload;
+}
+
+/**
+ * Resolve a message from a MessageRef union (either by messageId or chatId+externalId)
+ */
+async function resolveMessageFromRef(
+  services: Services,
+  ref: z.infer<typeof messageRefSchema>,
+): Promise<Awaited<ReturnType<typeof services.messages.getById>>> {
+  if ('messageId' in ref) {
+    // getById throws NotFoundError (→ 404) if missing
+    return services.messages.getById(ref.messageId);
+  }
+  const found = await services.messages.getByExternalId(ref.chatId, ref.externalId);
+  if (!found) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: `Message not found for chatId=${ref.chatId}, externalId=${ref.externalId}`,
+      context: { chatId: ref.chatId, externalId: ref.externalId },
+      recoverable: false,
+    });
+  }
+  return found;
+}
+
+/**
+ * POST /messages/media/download - Ensure media is cached locally
+ *
+ * Accepts a MessageRef (either { messageId } or { chatId, externalId }).
+ * If the message has media and it's already cached on disk, returns the download URL immediately.
+ * Otherwise downloads from the remote mediaUrl, persists locally, and returns the download URL.
+ *
+ * @see media-drive-download wish — Group A
+ */
+messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), async (c) => {
+  const body = c.req.valid('json');
+  const services = c.get('services');
+  const db = c.get('db');
+  const apiKey = c.get('apiKey');
+
+  // 1. Resolve message from either ref type
+  const message = await resolveMessageFromRef(services, body);
+
+  // 2. Access check — resolve chat to verify instance ownership
+  const chat = await services.chats.getById(message.chatId);
+  const instanceId = chat.instanceId;
+  if (!instanceId) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: 'Chat has no associated instance',
+      context: { chatId: chat.id },
+      recoverable: false,
+    });
+  }
+  checkInstanceAccess(apiKey, instanceId);
+
+  // 3. Validate message has media
+  if (!message.hasMedia || !message.mediaUrl) {
+    return c.json(
+      {
+        error: {
+          code: 'NO_MEDIA',
+          message: 'Message has no media or no mediaUrl',
+        },
+      },
+      400,
+    );
+  }
+
+  const mediaStorage = getMediaStorageForDownload(db);
+  const mediaUrl = message.mediaUrl as string; // validated non-null above
+  let mediaLocalPath = message.mediaLocalPath as string | null;
+  let cached = false;
+
+  // 4. Check if already cached on disk
+  if (mediaLocalPath) {
+    const fullPath = join(mediaStorage.getBasePath(), mediaLocalPath);
+    if (existsSync(fullPath)) {
+      cached = true;
+    } else {
+      // Path set but file missing — need to re-download
+      mediaDownloadLog.warn('mediaLocalPath set but file missing, re-downloading', {
+        messageId: message.id,
+        mediaLocalPath,
+      });
+      mediaLocalPath = null;
+    }
+  }
+
+  // 5. Download from remote if not cached
+  if (!cached) {
+    try {
+      const result = await mediaStorage.storeFromUrl(
+        instanceId,
+        message.id,
+        mediaUrl,
+        message.mediaMimeType ?? undefined,
+        message.platformTimestamp ?? undefined,
+      );
+      mediaLocalPath = result.localPath;
+      await mediaStorage.updateMessageLocalPath(message.id, result.localPath);
+      mediaDownloadLog.info('Downloaded and cached media', {
+        messageId: message.id,
+        mediaLocalPath: result.localPath,
+      });
+    } catch (error) {
+      mediaDownloadLog.error('Failed to download media from remote', {
+        messageId: message.id,
+        mediaUrl,
+        error: String(error),
+      });
+      throw new OmniError({
+        code: ERROR_CODES.UNKNOWN,
+        message: 'Failed to download media from remote URL',
+        context: { messageId: message.id, mediaUrl },
+        recoverable: true,
+      });
+    }
+  }
+
+  // 6. Build download URL — mediaLocalPath is guaranteed non-null here (either cached or just downloaded)
+  const downloadUrl = `/api/v2/media/${instanceId}/${mediaLocalPath as string}`;
+
+  return c.json({
+    data: {
+      messageId: message.id,
+      instanceId,
+      mediaMimeType: message.mediaMimeType,
+      mediaLocalPath,
+      downloadUrl,
+      cached,
+    },
+  });
 });
 
 /**
