@@ -223,6 +223,11 @@ class MessageDebouncer {
 
   private restartTimer(chatKey: string, config: DebounceConfig): void {
     const existing = this.timers.get(chatKey);
+
+    // In 'fixed' mode, the timer is a fixed collection window from the first
+    // message — do NOT restart it when subsequent messages arrive.
+    if (config.mode === 'fixed' && existing) return;
+
     if (existing) clearTimeout(existing);
 
     let delay: number;

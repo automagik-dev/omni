@@ -796,7 +796,7 @@ describe('agent-dispatcher', () => {
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>
           createMockInstance({
-            messageDebounceMode: 'fixed',
+            messageDebounceMode: 'randomized',
             messageDebounceMinMs: 150,
             messageDebounceMaxMs: 150,
             messageDebounceRestartOnTyping: true,
