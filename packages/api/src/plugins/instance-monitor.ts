@@ -410,9 +410,14 @@ export class InstanceMonitor {
   }
 
   /**
-   * Fetch an instance by ID
+   * Fetch an instance by ID (includes bot token columns for reconnect)
    */
-  private async fetchInstanceById(instanceId: string): Promise<{ id: string; channel: string } | null> {
+  private async fetchInstanceById(instanceId: string): Promise<{
+    id: string;
+    channel: string;
+    telegramBotToken?: string | null;
+    discordBotToken?: string | null;
+  } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;
   }

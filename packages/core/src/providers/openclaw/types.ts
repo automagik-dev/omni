@@ -74,7 +74,8 @@ export interface ConnectParams {
     platform: string;
     mode: string;
   };
-  role: string;
+  /** Gateway accepts 'operator' or 'node' only */
+  role: 'operator' | 'node';
   scopes: string[];
   caps?: string[];
   auth?: {

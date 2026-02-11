@@ -319,7 +319,9 @@ export class OpenClawClient {
     if (this.connectSent || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.connectSent = true;
 
-    // DEC-7: Server-side params, DEC-8: minimum scopes
+    // DEC-7: Server-side params
+    // Gateway accepts role: 'operator' | 'node' (not 'client').
+    // Use operator scope to allow session/chat lifecycle methods used by Omni.
     const params: ConnectParams = {
       minProtocol: 3,
       maxProtocol: 3,
@@ -329,8 +331,8 @@ export class OpenClawClient {
         platform: 'omni',
         mode: 'backend',
       },
-      role: 'client',
-      scopes: ['chat.send'],
+      role: 'operator',
+      scopes: ['operator.admin'],
       caps: [],
       auth: this.config.token ? { token: this.config.token } : undefined,
       locale: 'en-US',
