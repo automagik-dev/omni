@@ -96,6 +96,10 @@ const listQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof ChatTypeSchema>[] | undefined),
+  excludeChatTypes: z
+    .string()
+    .optional()
+    .transform((v) => v?.split(',') as z.infer<typeof ChatTypeSchema>[] | undefined),
   search: z.string().optional(),
   includeArchived: z.coerce.boolean().default(false),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -578,6 +582,9 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
       recoverable: false,
     });
   }
+
+  // Reset unread count in our database
+  await services.chats.resetUnreadCount(chatId);
 
   return c.json({
     success: true,

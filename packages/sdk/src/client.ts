@@ -371,6 +371,7 @@ export interface ListChatsParams {
   instanceId?: string;
   channel?: string;
   chatType?: string;
+  excludeChatTypes?: string;
   search?: string;
   includeArchived?: boolean;
   limit?: number;
@@ -1285,6 +1286,7 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('instanceId', params?.instanceId);
         setIfDefined('channel', params?.channel);
         setIfDefined('chatType', params?.chatType);
+        setIfDefined('excludeChatTypes', params?.excludeChatTypes);
         setIfDefined('search', params?.search);
         setIfDefined('includeArchived', params?.includeArchived);
         setIfDefined('limit', params?.limit);

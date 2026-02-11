@@ -38,6 +38,7 @@ export interface ListChatsOptions {
   instanceId?: string;
   channel?: ChannelType[];
   chatType?: ChatType[];
+  excludeChatTypes?: ChatType[];
   search?: string;
   includeArchived?: boolean;
   limit?: number;
@@ -69,7 +70,16 @@ export class ChatService {
     hasMore: boolean;
     cursor?: string;
   }> {
-    const { instanceId, channel, chatType, search, includeArchived = false, limit = 50, cursor } = options;
+    const {
+      instanceId,
+      channel,
+      chatType,
+      excludeChatTypes,
+      search,
+      includeArchived = false,
+      limit = 50,
+      cursor,
+    } = options;
 
     const conditions = [];
 
@@ -83,6 +93,15 @@ export class ChatService {
 
     if (chatType?.length) {
       conditions.push(inArray(chats.chatType, chatType));
+    }
+
+    if (excludeChatTypes?.length) {
+      conditions.push(
+        sql`${chats.chatType} NOT IN (${sql.join(
+          excludeChatTypes.map((t) => sql`${t}`),
+          sql`, `,
+        )})`,
+      );
     }
 
     if (search) {
@@ -303,6 +322,13 @@ export class ChatService {
         updatedAt: new Date(),
       })
       .where(eq(chats.id, chatId));
+  }
+
+  /**
+   * Reset unread count for a chat (e.g., when marked as read)
+   */
+  async resetUnreadCount(chatId: string): Promise<void> {
+    await this.db.update(chats).set({ unreadCount: 0, updatedAt: new Date() }).where(eq(chats.id, chatId));
   }
 
   /**

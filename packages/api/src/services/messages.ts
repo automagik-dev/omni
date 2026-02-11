@@ -356,13 +356,15 @@ export class MessageService {
       throw new Error('Failed to create message');
     }
 
-    // Update chat's last message
+    // Update chat's last message and stats
     await this.db
       .update(chats)
       .set({
         lastMessageAt: options.platformTimestamp,
         lastMessagePreview: (options.textContent ?? '[Media]').substring(0, 500),
         messageCount: sql`${chats.messageCount} + 1`,
+        // Incoming: increment unread; Sent: reset unread (sending implies reading)
+        ...(options.isFromMe ? { unreadCount: 0 } : { unreadCount: sql`${chats.unreadCount} + 1` }),
         updatedAt: new Date(),
       })
       .where(eq(chats.id, options.chatId));
