@@ -56,12 +56,21 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
     case 'webhook':
       // Webhook providers are created via WebhookAgentProvider directly,
       // not through the legacy createProviderClient factory.
-      // This entry exists to prevent "unknown schema" errors.
       throw new ProviderError(
         'Webhook providers should be created via WebhookAgentProvider, not createProviderClient',
         'NOT_FOUND',
         400,
         { schema: 'webhook', hint: 'Use new WebhookAgentProvider(id, name, config) instead' },
+      );
+
+    case 'openclaw':
+      // OpenClaw providers are created via OpenClawAgentProvider + OpenClawClient,
+      // not through the legacy createProviderClient factory.
+      throw new ProviderError(
+        'OpenClaw providers should be created via OpenClawAgentProvider, not createProviderClient',
+        'NOT_FOUND',
+        400,
+        { schema: 'openclaw', hint: 'Use createOpenClawProvider(id, name, clientConfig, providerConfig) instead' },
       );
 
     case 'custom':
@@ -76,12 +85,12 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
  * Check if a provider schema is currently supported
  */
 export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
-  return schema === 'agnoos' || schema === 'agno' || schema === 'webhook';
+  return schema === 'agnoos' || schema === 'agno' || schema === 'webhook' || schema === 'openclaw';
 }
 
 /**
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agnoos', 'webhook'];
+  return ['agnoos', 'agno', 'webhook', 'openclaw'];
 }

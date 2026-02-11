@@ -19,6 +19,7 @@
     "noFallthroughCasesInSwitch": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "incremental": true,
     "types": ["bun-types"]
   },
   "exclude": ["node_modules", "dist", ".turbo"]

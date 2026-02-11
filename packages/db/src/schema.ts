@@ -9,6 +9,7 @@
  * @see /home/cezar/dev/omni/src/db/models.py (v1 reference)
  */
 
+import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { relations } from 'drizzle-orm';
 import {
   boolean,
@@ -222,7 +223,16 @@ export type JobStatus = (typeof jobStatuses)[number];
 // AGENT PROVIDERS
 // ============================================================================
 
-export const providerSchemas = ['agnoos', 'agno', 'a2a', 'openai', 'anthropic', 'webhook', 'custom'] as const;
+export const providerSchemas = [
+  'agnoos',
+  'agno',
+  'a2a',
+  'openai',
+  'anthropic',
+  'webhook',
+  'openclaw',
+  'custom',
+] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**

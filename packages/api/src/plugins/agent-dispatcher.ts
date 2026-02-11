@@ -25,6 +25,10 @@ import {
   type EventBus,
   type IAgentProvider,
   type MessageReceivedPayload,
+  OpenClawAgentProvider,
+  OpenClawClient,
+  type OpenClawClientConfig,
+  type OpenClawProviderConfig,
   type ProviderFile,
   type ReactionReceivedPayload,
   WebhookAgentProvider,
@@ -823,6 +827,148 @@ async function fetchChatMetadata(
   }
 }
 
+/**
+ * Try IAgentProvider dispatch first, return true if handled.
+ * Falls back to legacy agentRunner.run() if provider not resolved.
+ */
+async function dispatchViaProvider(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  personId: string,
+  senderName: string | undefined,
+  traceId: string,
+  rawEvent: AgentTrigger['event'],
+): Promise<boolean> {
+  const provider = await getAgentProvider(services, instance);
+  if (!provider) return false;
+
+  const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+
+  if (!messageTexts.length && !mediaFiles.length) {
+    log.debug('No text or media content for provider trigger, skipping');
+    return false;
+  }
+
+  // Ensure provider always gets at least a placeholder for media-only messages
+  if (!messageTexts.length && mediaFiles.length) {
+    messageTexts.push('[Media message]');
+  }
+
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+
+  const trigger: AgentTrigger = {
+    traceId,
+    type: triggerType,
+    event: rawEvent,
+    source: {
+      channelType: channel,
+      instanceId: instance.id,
+      chatId,
+      messageId: messages[0]?.payload.externalId ?? '',
+    },
+    sender: {
+      platformUserId: senderId,
+      personId,
+      displayName: senderName,
+    },
+    content: {
+      text: messageTexts.join('\n'),
+    },
+    sessionId,
+  };
+
+  const result = await provider.trigger(trigger);
+
+  if (result && result.parts.length > 0) {
+    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+    const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+  }
+
+  log.info('Agent response via IAgentProvider', {
+    instanceId: instance.id,
+    chatId,
+    parts: result?.parts.length ?? 0,
+    providerId: result?.metadata.providerId,
+    durationMs: result?.metadata.durationMs,
+    triggerType,
+    traceId,
+  });
+
+  return true;
+}
+
+/**
+ * Legacy fallback: dispatch via agentRunner.run()
+ */
+async function dispatchViaLegacy(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  personId: string,
+  senderName: string | undefined,
+  traceId: string,
+): Promise<void> {
+  const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+
+  if (!messageTexts.length && !mediaFiles.length) {
+    log.debug('No text or media content in messages, skipping agent call');
+    return;
+  }
+
+  if (!messageTexts.length && mediaFiles.length) {
+    messageTexts.push('[Media message]');
+  }
+
+  // Determine chat type and fetch metadata
+  const chatType = determineChatType(chatId, instance.channel);
+  const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
+    services,
+    channel,
+    instance.id,
+    senderId,
+  );
+  const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
+
+  const result = await services.agentRunner.run({
+    instance,
+    chatId,
+    personId,
+    senderId,
+    senderName,
+    senderAvatarUrl,
+    senderPlatformUsername,
+    chatType,
+    chatName,
+    participantCount,
+    messages: messageTexts,
+    files: mediaFiles.length > 0 ? mediaFiles : undefined,
+  });
+
+  const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+  const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+
+  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+
+  log.info('Agent response via legacy runner', {
+    instanceId: instance.id,
+    chatId,
+    parts: result.parts.length,
+    runId: result.metadata.runId,
+    triggerType,
+    traceId,
+  });
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -852,16 +998,6 @@ async function processAgentResponse(
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
 
-  // Determine chat type and fetch metadata
-  const chatType = determineChatType(chatId, instance.channel);
-  const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
-    services,
-    channel,
-    instance.id,
-    senderId,
-  );
-  const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
-
   log.info('Dispatching to agent', {
     instanceId: instance.id,
     chatId,
@@ -869,56 +1005,61 @@ async function processAgentResponse(
     triggerType,
     traceId,
     senderName,
-    chatType,
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
   try {
-    const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
-
-    if (!messageTexts.length && !mediaFiles.length) {
-      log.debug('No text or media content in messages, skipping agent call');
-      await sendTypingPresence(channel, instance.id, chatId, 'paused');
-      return;
+    // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
+    // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
+    // a type mismatch. BufferedMessage doesn't carry the original NATS event envelope.
+    // Providers reading context.event fields (id, type, timestamp) will get undefined.
+    // Fix: either store the full OmniEvent in BufferedMessage, or make AgentTrigger.event optional.
+    const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
+    let handled = false;
+    try {
+      handled = await dispatchViaProvider(
+        services,
+        instance,
+        messages,
+        triggerType,
+        channel,
+        chatId,
+        senderId,
+        personId,
+        senderName,
+        traceId,
+        rawEvent,
+      );
+    } catch (providerError) {
+      log.error('Provider dispatch failed, falling back to legacy', {
+        instanceId: instance.id,
+        chatId,
+        error: String(providerError),
+        traceId,
+      });
+      // Fall through to legacy path
     }
 
-    // If there's media but no text, provide a placeholder so the agent knows media was sent
-    if (!messageTexts.length && mediaFiles.length) {
-      messageTexts.push('[Media message]');
-    }
+    if (handled) return;
 
-    // Build enhanced context
-    const result = await services.agentRunner.run({
-      instance,
-      chatId,
-      personId,
-      senderId,
-      senderName,
-      senderAvatarUrl,
-      senderPlatformUsername,
-      chatType,
-      chatName,
-      participantCount,
-      messages: messageTexts,
-      files: mediaFiles.length > 0 ? mediaFiles : undefined,
-    });
-
-    // In self-chat (user messaging themselves), prefix bot replies with emoji
-    // so the user can visually distinguish their messages from bot responses
-    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
-
-    log.info('Agent response sent', {
+    // Fallback: legacy agentRunner.run() path
+    log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
       instanceId: instance.id,
-      chatId,
-      parts: result.parts.length,
-      runId: result.metadata.runId,
-      triggerType,
-      traceId,
     });
+
+    await dispatchViaLegacy(
+      services,
+      instance,
+      messages,
+      triggerType,
+      channel,
+      chatId,
+      senderId,
+      personId,
+      senderName,
+      traceId,
+    );
   } catch (error) {
     log.error('Failed to process agent response', {
       instanceId: instance.id,
@@ -935,8 +1076,39 @@ async function processAgentResponse(
 // Provider Resolution
 // ============================================================================
 
-/** Cache of IAgentProvider instances by provider DB ID */
+/** Cache of IAgentProvider instances by "providerId:instanceId" */
 const providerCache = new Map<string, IAgentProvider>();
+
+/** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
+const openclawClientPool = new Map<string, OpenClawClient>();
+
+/** Create an OpenClaw-based agent provider */
+function createOpenClawProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+  // DEC-3: Reuse shared WS client per provider ID
+  let client = openclawClientPool.get(provider.id);
+  if (!client) {
+    const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+    const clientConfig: OpenClawClientConfig = {
+      url: provider.baseUrl,
+      token: provider.apiKey ?? '',
+      providerId: provider.id,
+      origin: (schemaConfig.origin as string) ?? undefined,
+    };
+    client = new OpenClawClient(clientConfig);
+    client.start(); // DEC-14: lazy connect — starts WS in background
+    openclawClientPool.set(provider.id, client);
+  }
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const providerConfig: OpenClawProviderConfig = {
+    defaultAgentId: (instance.agentId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
+    agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+    sendAckTimeoutMs: 10_000,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  };
+
+  return new OpenClawAgentProvider(provider.id, provider.name, client, providerConfig);
+}
 
 /** Create an Agno-based agent provider */
 function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
@@ -979,8 +1151,10 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
  * Returns null if the schema is not supported for the new provider abstraction.
+ *
+ * Exported for use by session-cleaner (provider.resetSession).
  */
-function resolveProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+export function resolveProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
   if (cached) return cached;
@@ -994,6 +1168,9 @@ function resolveProvider(provider: AgentProvider, instance: Instance): IAgentPro
       break;
     case 'webhook':
       agentProvider = createWebhookProvider(provider);
+      break;
+    case 'openclaw':
+      agentProvider = createOpenClawProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -1313,9 +1490,10 @@ async function shouldProcessReaction(
 }
 
 /**
- * Cleanup function returned by setupAgentDispatcher for graceful shutdown
+ * Cleanup function returned by setupAgentDispatcher for graceful shutdown.
+ * Async to support OpenClaw WS client pool teardown.
  */
-export type DispatcherCleanup = () => void;
+export type DispatcherCleanup = () => Promise<void>;
 
 /**
  * Set up agent dispatcher - subscribes to message AND reaction events
@@ -1543,10 +1721,51 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
   }
 
   // Return cleanup function for graceful shutdown
-  return () => {
+  return async () => {
     log.info('Shutting down agent dispatcher');
     clearInterval(cleanupInterval);
     debouncer.clear();
+
+    // Dispose all providers that support it (e.g., OpenClaw WS clients)
+    const disposePromises: Promise<void>[] = [];
+    for (const [key, provider] of providerCache.entries()) {
+      if (provider.dispose) {
+        disposePromises.push(
+          provider.dispose().catch((err) => {
+            log.warn('Error disposing provider', { key, error: String(err) });
+          }),
+        );
+      }
+    }
+
+    // Stop all shared OpenClaw WS clients
+    const clientStopPromises: Promise<void>[] = [];
+    for (const [id, client] of openclawClientPool.entries()) {
+      clientStopPromises.push(
+        Promise.resolve().then(() => {
+          try {
+            client.stop();
+          } catch (err) {
+            log.warn('Error stopping OpenClaw client', { providerId: id, error: String(err) });
+          }
+        }),
+      );
+    }
+
+    // Use allSettled + 5s top-level timeout so one stuck provider can't block shutdown
+    const allCleanup = Promise.allSettled([...disposePromises, ...clientStopPromises]);
+    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) =>
+      setTimeout(() => {
+        log.warn('Dispatcher shutdown timed out after 5s, proceeding');
+        resolve([]);
+      }, 5_000),
+    );
+    await Promise.race([allCleanup, timeoutGuard]);
+
+    providerCache.clear();
+    openclawClientPool.clear();
+
+    log.info('Agent dispatcher shutdown complete');
   };
 }
 
