@@ -2,7 +2,7 @@
 
 > Google-Drive-like semantics for media: know it exists, download only when you want
 
-**Status:** SHIPPED (Groups A-C) / DEFERRED (Group D)
+**Status:** IN_PROGRESS
 **Created:** 2026-02-10
 **Author:** Omni (OpenClaw)
 **Beads:** TBD
@@ -221,45 +221,3 @@ But we are missing:
 
 - Consider adding `HEAD /api/v2/media/...` in the future for cheap cache checks.
 - Consider optional `--downloadMedia` default behavior on sync as a separate policy wish.
-
----
-
-## Review (2026-02-11)
-
-### Verdict: **SHIP** ✅ (Groups A-C)
-
-### Evidence
-
-**Quality Gates:**
-- `make check` — **PASS** (928 tests, 0 failures, 2249 expect() calls)
-- `make typecheck` — **PASS** (14/14 packages, FULL TURBO)
-- Prod deployed and healthy (`GET /api/v2/health` → `{"status":"healthy"}`)
-
-**Commit Evidence:**
-- `f9c1419` — `feat(api): add POST /messages/media/download — ensure-cached endpoint`
-- `a0634d4` — `feat(cli): add omni media ls + download commands`
-- Cherry-picked to main as `ff1648f`, deployed to prod
-
-**Criterion-by-criterion audit:**
-
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| Group A: POST /messages/media/download | ✅ | `messages.ts:531` — full endpoint with Zod validation, access checks, cache-or-download logic |
-| Group A: MessageRef union validation | ✅ | `messageRefSchema` — accepts `{ messageId }` OR `{ chatId, externalId }` |
-| Group A: Idempotent behavior | ✅ | Checks `existsSync(fullPath)` before download; returns cached URL if present |
-| Group A: Access checks | ✅ | `checkInstanceAccess(apiKey, instanceId)` — consistent with existing endpoints |
-| Group A: Error handling | ✅ | 400 for no media, 404 for not found, OmniError wrapping |
-| Group B: SDK types | ⚠️ | Types regenerated but endpoint NOT in OpenAPI schema — non-blocking, SDK can use `apiCall()` |
-| Group C: `omni media ls` | ✅ | Full metadata browsing with filters: --instance, --chat, --since/until, --type, --cached-only, --remote-only, --limit |
-| Group C: `omni media download` | ✅ | Both `--message <uuid>` and `--chat <uuid> --external <id>` modes |
-| Group C: JSON output | ✅ | `--json` flag supported |
-| Group D: Genie-OS UI | 📋 DEFERRED | Separate wish — Genie-OS agent was building terminal-app; non-blocking for shipped scope |
-
-**Known gaps (non-blocking):**
-1. OpenAPI schema registration for `/messages/media/download` — needs entry in `packages/api/src/schemas/openapi/messages.ts` so auto-generated SDK picks it up. CLI uses `apiCall()` directly (works fine).
-2. Group D (UI) deferred to Genie-OS repo as separate wish.
-
-**Code quality spot-check:**
-- API endpoint: 100 lines, well-structured with numbered steps (1-6), proper error handling, logging
-- CLI commands: 298 lines, clean Commander pattern, filter composition, table + JSON output
-- No `any` types, no raw SQL, proper Zod validation throughout

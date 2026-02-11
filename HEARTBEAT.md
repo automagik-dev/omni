@@ -17,8 +17,8 @@
 - [ ] Merge `feat/medium-features` branch (C1-C7 code complete, needs PR review)
 - [ ] Study Baileys LID addressing mode (partial research in docs/research/baileys/)
 - [ ] Fix cognitive complexity lint errors (channels.ts:20, send.ts:26, nats/client.ts:22, session-cleaner.ts:24 — all >15 max) — blocks `make check`
-- [ ] Fix prod workspace symlinks properly (bun install not creating node_modules/@omni/*)
-- [ ] Register `/messages/media/download` in OpenAPI schema (packages/api/src/schemas/openapi/messages.ts)
+- [ ] Clean 6 stale git stashes
+- [ ] Commit dirty files: `memory/baileys-version-state.json`, `packages/core/src/logger/__tests__/logger.test.ts`
 - [ ] Wire Scroll daily cron for README maintenance
 
 ## Periodic Checks
@@ -45,7 +45,3 @@
 - [x] Fix Chiozzini Signal session corruption (deleted :54 from plugin_storage, API restarted)
 - [x] Configure media processing API keys on dev + prod (Groq, OpenAI, Gemini)
 - [x] ClawNet cross-gateway mesh deployed (cegonha, juice, guardiola, luis)
-- [x] Clean 8 stale git stashes (all dropped)
-- [x] Media drive-download SHIP (Groups A-C: API + CLI deployed to prod)
-- [x] Configurable batch delay cherry-picked to main + deployed (1-3s random)
-- [x] Fixed @omni/channel-whatsapp module resolution on prod (workspace symlinks)
