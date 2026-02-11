@@ -170,7 +170,12 @@ batchJobsRoutes.get('/:id', async (c) => {
 
   const job = await services.batchJobs.getById(id);
 
-  return c.json({ data: job });
+  return c.json({
+    data: {
+      ...job,
+      totalCostUsd: (job.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
+    },
+  });
 });
 
 /**
@@ -195,7 +200,7 @@ batchJobsRoutes.get('/:id/status', async (c) => {
       skippedItems: status.skippedItems,
       progressPercent: status.progressPercent,
       currentItem: status.currentItem,
-      totalCostUsd: status.totalCostUsd,
+      totalCostUsd: (status.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
       totalTokens: status.totalTokens,
       estimatedCompletion: status.estimatedCompletion?.toISOString(),
       startedAt: status.startedAt?.toISOString(),

@@ -690,7 +690,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent,
-        totalCostUsd: state.totalCostCents,
+        totalCostUsd: Math.round(state.totalCostCents),
         totalTokens: state.totalTokens,
         errors: state.errors,
       })
@@ -747,7 +747,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent: 100,
-        totalCostUsd: state.totalCostCents,
+        totalCostUsd: Math.round(state.totalCostCents),
         totalTokens: state.totalTokens,
         errors: state.errors,
         currentItem: null,

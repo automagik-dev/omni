@@ -63,8 +63,8 @@ describe('pricing', () => {
         const costCents = calculateCost('groq_whisper', 'whisper-large-v3-turbo', {
           durationSeconds: 60,
         });
-        // $0.04/hour * (1/60) = ~0.07 cents
-        expect(costCents).toBe(0);
+        // $0.04/hour * (1/60) = ~0.067 cents (fractional, not rounded)
+        expect(costCents).toBeCloseTo(0.067, 2);
       });
     });
 
@@ -81,8 +81,8 @@ describe('pricing', () => {
         const costCents = calculateCost('openai_whisper', 'whisper-1', {
           durationSeconds: 60,
         });
-        // $0.006/minute = 0.6 cents, rounds to 1
-        expect(costCents).toBe(1);
+        // $0.006/minute = 0.6 cents (fractional, not rounded)
+        expect(costCents).toBeCloseTo(0.6, 2);
       });
     });
 
@@ -94,8 +94,8 @@ describe('pricing', () => {
         });
         // Input: $0.15/1M * 10000 = $0.0015
         // Output: $0.60/1M * 500 = $0.0003
-        // Total: ~$0.0018 = ~0.18 cents, rounds to 0
-        expect(costCents).toBe(0);
+        // Total: ~$0.0018 = ~0.18 cents (fractional, not rounded)
+        expect(costCents).toBeCloseTo(0.18, 2);
       });
 
       it('calculates cost for larger usage', () => {
@@ -105,8 +105,8 @@ describe('pricing', () => {
         });
         // Input: $0.15/1M * 100000 = $0.015
         // Output: $0.60/1M * 5000 = $0.003
-        // Total: $0.018 = 1.8 cents, rounds to 2
-        expect(costCents).toBe(2);
+        // Total: $0.018 = 1.8 cents (fractional, not rounded)
+        expect(costCents).toBeCloseTo(1.8, 2);
       });
     });
 

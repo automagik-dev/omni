@@ -196,6 +196,7 @@ export function calculateCost(
     }
   }
 
-  // Convert to cents and round to integer
-  return Math.round(costUsd * 100);
+  // Return cost in fractional cents (NOT rounded) for sub-cent precision.
+  // Callers accumulate float values; only round at final persistence/display.
+  return costUsd * 100;
 }
