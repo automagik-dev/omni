@@ -2,7 +2,7 @@
 
 > Align Telegram channel's rawPayload with the implicit contract that downstream consumers (message-persistence, agent-dispatcher, agent-responder) depend on.
 
-**Status:** REVIEW
+**Status:** SHIPPED
 **Created:** 2026-02-11
 **Author:** WISH Agent
 **Beads:** omni-ou4
