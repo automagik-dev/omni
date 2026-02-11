@@ -686,29 +686,40 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Only trigger backfill if gap > 5 minutes
           if (gapMs > 5 * 60 * 1000) {
-            log.warn('Instance reconnected with message gap', {
-              instanceId,
-              lastMessageAt: lastMessageAt.toISOString(),
-              gapMinutes,
-            });
+            const channelType = event.metadata.channelType ?? ('whatsapp-baileys' as ChannelType);
 
-            // Create a sync job (inserts DB row + publishes sync.started event)
-            const job = await services.syncJobs.create({
-              instanceId,
-              channelType: event.metadata.channelType ?? ('whatsapp-baileys' as ChannelType),
-              type: 'messages',
-              config: {
+            // Discord sync requires a specific channelId — skip auto-backfill
+            // (users can trigger per-channel sync manually via POST /instances/:id/sync)
+            if (channelType === 'discord') {
+              log.info('Instance reconnected with message gap (Discord — skipping auto-backfill, use manual sync)', {
+                instanceId,
+                gapMinutes,
+              });
+            } else {
+              log.warn('Instance reconnected with message gap', {
+                instanceId,
+                lastMessageAt: lastMessageAt.toISOString(),
+                gapMinutes,
+              });
+
+              // Create a sync job (inserts DB row + publishes sync.started event)
+              const job = await services.syncJobs.create({
+                instanceId,
+                channelType,
+                type: 'messages',
+                config: {
+                  since: lastMessageAt.toISOString(),
+                  until: new Date().toISOString(),
+                },
+              });
+
+              log.info('Post-reconnect backfill triggered', {
+                instanceId,
+                jobId: job.id,
                 since: lastMessageAt.toISOString(),
-                until: new Date().toISOString(),
-              },
-            });
-
-            log.info('Post-reconnect backfill triggered', {
-              instanceId,
-              jobId: job.id,
-              since: lastMessageAt.toISOString(),
-              gapMinutes,
-            });
+                gapMinutes,
+              });
+            }
           } else {
             log.debug('Instance reconnected, gap within threshold', { instanceId, gapMinutes });
           }
