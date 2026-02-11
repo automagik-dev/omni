@@ -131,7 +131,7 @@ export class OpenClawClient {
   }
 
   /** Send a request and await response */
-  async request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+  async request<T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs = 30_000): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to gateway');
     }
@@ -142,8 +142,8 @@ export class OpenClawClient {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Request ${method} timed out`));
-      }, 30_000);
+        reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
 
       this.pending.set(id, {
         resolve: resolve as (payload: unknown) => void,
@@ -157,8 +157,8 @@ export class OpenClawClient {
   }
 
   /** Send a chat.send request */
-  async chatSend(params: ChatSendParams): Promise<ChatSendResult> {
-    return this.request<ChatSendResult>('chat.send', params as unknown as Record<string, unknown>);
+  async chatSend(params: ChatSendParams, timeoutMs?: number): Promise<ChatSendResult> {
+    return this.request<ChatSendResult>('chat.send', params as unknown as Record<string, unknown>, timeoutMs);
   }
 
   /** Delete/reset an OpenClaw session */
