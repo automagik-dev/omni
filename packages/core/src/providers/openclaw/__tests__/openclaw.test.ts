@@ -420,7 +420,9 @@ describe('OpenClawAgentProvider', () => {
           status: 'started',
         });
 
-        // Simulate agent response with delta + final
+        // Simulate agent response with cumulative delta + final.
+        // Gateway sends cumulative snapshots: each delta contains the full
+        // response so far, not just new tokens.
         setTimeout(() => {
           sendServerEvent('chat', {
             state: 'delta',
@@ -433,7 +435,7 @@ describe('OpenClawAgentProvider', () => {
               state: 'final',
               sessionKey: params.sessionKey,
               runId: 'run-trigger-1',
-              message: { role: 'assistant', content: 'world!' },
+              message: { role: 'assistant', content: 'Hello world!' },
             });
           }, 50);
         }, 50);

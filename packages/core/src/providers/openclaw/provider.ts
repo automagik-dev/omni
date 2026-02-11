@@ -339,11 +339,13 @@ export class OpenClawAgentProvider implements IAgentProvider {
             log.debug('Time-to-first-delta', { traceId, runId, ttfdMs, providerId: this.id });
           }
 
-          // Extract text content from message
+          // Extract text content from message.
+          // Gateway sends CUMULATIVE snapshots: each delta's message.content contains
+          // the full response so far (not just new tokens). Replace, don't append.
           const text = this.extractText(event);
           if (text) {
             const textBytes = new TextEncoder().encode(text).length;
-            if (accumulatedBytes + textBytes > MAX_ACCUMULATION_BYTES) {
+            if (textBytes > MAX_ACCUMULATION_BYTES) {
               resolved = true;
               clearTimeout(timer);
               this.client.unregisterAccumulation(runId);
@@ -351,13 +353,13 @@ export class OpenClawAgentProvider implements IAgentProvider {
                 traceId,
                 runId,
                 providerId: this.id,
-                accumulatedBytes: accumulatedBytes + textBytes,
+                accumulatedBytes: textBytes,
               });
               reject(new Error('Response too large (1MB cap)'));
               return;
             }
-            accumulated += text;
-            accumulatedBytes += textBytes;
+            accumulated = text;
+            accumulatedBytes = textBytes;
           }
         }
 
