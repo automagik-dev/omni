@@ -337,7 +337,7 @@ export interface ProfileSyncedPayload {
 /**
  * Batch job event payloads
  */
-export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch';
+export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch' | 'media_redownload';
 
 export interface BatchJobProgress {
   totalItems: number;

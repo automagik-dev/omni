@@ -22,7 +22,7 @@ const batchJobsRoutes = new Hono<{ Variables: AppVariables }>();
 // SCHEMAS
 // ============================================================================
 
-const jobTypeSchema = z.enum(['targeted_chat_sync', 'time_based_batch']);
+const jobTypeSchema = z.enum(['targeted_chat_sync', 'time_based_batch', 'media_redownload']);
 const contentTypeSchema = z.enum(['audio', 'image', 'video', 'document']);
 // Job statuses for reference - used in transform below
 const _jobStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -64,7 +64,7 @@ const listQuerySchema = z.object({
   jobType: z
     .string()
     .optional()
-    .transform((v) => v?.split(',') as ('targeted_chat_sync' | 'time_based_batch')[] | undefined),
+    .transform((v) => v?.split(',') as ('targeted_chat_sync' | 'time_based_batch' | 'media_redownload')[] | undefined),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
 });
@@ -89,6 +89,9 @@ batchJobsRoutes.post('/', zValidator('json', createBatchJobSchema), async (c) =>
   }
   if (data.jobType === 'time_based_batch' && data.daysBack === undefined) {
     return c.json({ error: 'daysBack is required for time_based_batch jobs' }, 400);
+  }
+  if (data.jobType === 'media_redownload' && data.daysBack === undefined) {
+    return c.json({ error: 'daysBack is required for media_redownload jobs' }, 400);
   }
 
   const job = await services.batchJobs.create({
