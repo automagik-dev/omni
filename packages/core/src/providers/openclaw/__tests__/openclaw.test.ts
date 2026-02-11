@@ -201,11 +201,11 @@ describe('OpenClawClient', () => {
     // Verify connect frame was sent with minimum scopes (DEC-8)
     const connectFrame = receivedFrames.find((f) => f.method === 'connect');
     expect(connectFrame).toBeDefined();
-    const params = connectFrame!.params as unknown as ConnectParams;
-    expect(params.scopes).toEqual(['chat.send']);
-    expect(params.scopes).not.toContain('operator.admin');
-    expect(params.client.id).toBe('omni-v2');
-    expect(params.client.mode).toBe('omni-dispatch');
+    const params = connectFrame?.params as unknown as ConnectParams;
+    expect(params.role).toBe('operator');
+    expect(params.scopes).toEqual(['operator.admin']);
+    expect(params.client.id).toBe('gateway-client');
+    expect(params.client.mode).toBe('backend');
     expect(params.client.platform).toBe('omni');
 
     client.stop();
@@ -354,7 +354,7 @@ describe('OpenClawClient', () => {
     expect(connectFrame).toBeDefined();
 
     // The actual token IS sent on the wire (it needs to be for auth)
-    const params = connectFrame!.params as unknown as ConnectParams;
+    const params = connectFrame?.params as unknown as ConnectParams;
     expect(params.auth?.token).toBe('test-token');
 
     // But client constructor logs with [REDACTED] — verified by log output (not assertable here)
