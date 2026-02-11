@@ -1,7 +1,7 @@
 /**
  * Video Processor
  *
- * Generates descriptions for videos using Gemini 2.5 Flash.
+ * Generates descriptions for videos using Gemini Flash.
  * Supports video understanding including scene description, action detection,
  * and audio transcription for videos with speech.
  */
@@ -9,6 +9,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 
+import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
@@ -31,7 +32,7 @@ If there is speech in the video, transcribe it accurately.
 Respond in Portuguese if no specific language is detected in the audio.`;
 
 /**
- * Video processor using Gemini 2.5 Flash
+ * Video processor using Gemini Flash
  */
 export class VideoProcessor extends BaseProcessor {
   readonly name = 'video';
@@ -50,13 +51,13 @@ export class VideoProcessor extends BaseProcessor {
   private geminiModel: GenerativeModel | null = null;
 
   /**
-   * Get lazy-initialized Gemini model (2.5 Flash for video)
+   * Get lazy-initialized Gemini model for video
    */
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
-      this.log.info('Gemini 2.5 Flash model initialized for video');
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
+      this.log.info('Gemini model initialized for video');
     }
     return this.geminiModel;
   }
@@ -77,7 +78,7 @@ export class VideoProcessor extends BaseProcessor {
       return this.createFailedResult(
         `Video too large (${fileSizeMb.toFixed(1)}MB). Max: ${MAX_VIDEO_SIZE_MB}MB. Use batch processing for larger files.`,
         'google',
-        'gemini-2.5-flash',
+        GEMINI_MODEL,
       );
     }
 
@@ -108,12 +109,12 @@ export class VideoProcessor extends BaseProcessor {
   }
 
   /**
-   * Describe video using Gemini 2.5 Flash API
+   * Describe video using Gemini Flash API
    */
   private async describeWithGemini(videoData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.5-flash');
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
     }
 
     let lastError: Error | null = null;
@@ -137,7 +138,7 @@ export class VideoProcessor extends BaseProcessor {
         const inputTokens = usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-        const costCents = calculateCost('gemini_video', 'gemini-2.5-flash', {
+        const costCents = calculateCost('gemini_video', GEMINI_MODEL, {
           inputTokens,
           outputTokens,
         });
@@ -148,7 +149,7 @@ export class VideoProcessor extends BaseProcessor {
           contentFormat: 'text',
           processingType: 'description',
           provider: 'google',
-          model: 'gemini-2.5-flash',
+          model: GEMINI_MODEL,
           processingTimeMs: 0,
           inputTokens,
           outputTokens,
@@ -167,7 +168,7 @@ export class VideoProcessor extends BaseProcessor {
       }
     }
 
-    return this.createFailedResult(lastError?.message ?? 'Video description failed', 'google', 'gemini-2.5-flash');
+    return this.createFailedResult(lastError?.message ?? 'Video description failed', 'google', GEMINI_MODEL);
   }
 
   /**

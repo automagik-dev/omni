@@ -1532,7 +1532,7 @@ export type DispatcherCleanup = () => Promise<void>;
 // Smart Response Gate (LLM pre-filter)
 // ============================================================================
 
-const DEFAULT_GATE_MODEL = 'gemini-2.0-flash';
+const DEFAULT_GATE_MODEL = 'gemini-3-flash-preview';
 const GATE_TIMEOUT_MS = 3_000;
 
 const DEFAULT_GATE_PROMPT = `You are a response gate for an AI assistant called "{agentName}".

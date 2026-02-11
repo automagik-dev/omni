@@ -22,5 +22,8 @@ export type {
   MediaContentInput,
 } from './types';
 
+// Models
+export { GEMINI_MODEL, OPENAI_VISION_MODEL, OPENAI_WHISPER_MODEL, GROQ_WHISPER_MODEL } from './models';
+
 // Pricing
 export { calculateCost, getPricingRate, PRICING_REGISTRY } from './pricing';

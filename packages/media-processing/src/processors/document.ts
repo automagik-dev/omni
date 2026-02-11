@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 
+import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
@@ -66,7 +67,7 @@ export class DocumentProcessor extends BaseProcessor {
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
       this.log.info('Gemini model initialized for document OCR');
     }
     return this.geminiModel;
@@ -452,7 +453,7 @@ export class DocumentProcessor extends BaseProcessor {
       const inputTokens = usageMetadata?.promptTokenCount ?? 0;
       const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-      const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
+      const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
         inputTokens,
         outputTokens,
       });
@@ -463,7 +464,7 @@ export class DocumentProcessor extends BaseProcessor {
         contentFormat: 'markdown',
         processingType: 'extraction',
         provider: 'google',
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -472,7 +473,7 @@ export class DocumentProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('Gemini OCR failed', { error: errorMsg });
-      return this.createFailedResult(errorMsg, 'google', 'gemini-2.5-flash');
+      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
     }
   }
 
