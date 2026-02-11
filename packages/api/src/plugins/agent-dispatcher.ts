@@ -1011,6 +1011,10 @@ async function processAgentResponse(
 
   try {
     // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
+    // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
+    // a type mismatch. BufferedMessage doesn't carry the original NATS event envelope.
+    // Providers reading context.event fields (id, type, timestamp) will get undefined.
+    // Fix: either store the full OmniEvent in BufferedMessage, or make AgentTrigger.event optional.
     const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
     let handled = false;
     try {

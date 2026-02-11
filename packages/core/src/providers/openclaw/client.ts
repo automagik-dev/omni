@@ -206,6 +206,9 @@ export class OpenClawClient {
     this.setState(this._state === 'disconnected' ? 'connecting' : 'reconnecting');
 
     try {
+      // TODO: config.origin is accepted but not transmitted — standard WebSocket API
+      // doesn't support custom headers. Bun's WebSocket follows the spec.
+      // For Origin enforcement, the gateway should validate the connect challenge token instead.
       this.ws = new WebSocket(this.config.url);
     } catch (err) {
       log.error('WebSocket construction failed', {
