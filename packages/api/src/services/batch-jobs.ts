@@ -15,7 +15,6 @@
  */
 
 import { join } from 'node:path';
-import { downloadMediaToBuffer } from '@omni/channel-whatsapp';
 import type { BatchJobProgress, BatchJobType, EventBus } from '@omni/core';
 import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -34,7 +33,7 @@ import {
   type ProcessingResult,
   createMediaProcessingService,
 } from '@omni/media-processing';
-import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
@@ -112,15 +111,6 @@ interface JobProcessingState {
 }
 
 /**
- * Item for media re-download from raw event payloads
- */
-interface RedownloadItem {
-  message: Message;
-  rawPayload: Record<string, unknown>;
-  eventInstanceId: string;
-}
-
-/**
  * Batch Job Service
  */
 export class BatchJobService {
@@ -130,8 +120,6 @@ export class BatchJobService {
   private activeJobs = new Map<string, { cancelled: boolean }>();
   /** Average processing time per item in ms (for estimation) */
   private static readonly AVG_PROCESSING_TIME_MS = 3000;
-  /** Average re-download time per item in ms */
-  private static readonly AVG_REDOWNLOAD_TIME_MS = 1500;
   /** Default minimum delay between items in ms */
   private static readonly DEFAULT_DELAY_MIN_MS = 1000;
   /** Default maximum delay between items in ms */
@@ -169,9 +157,6 @@ export class BatchJobService {
     }
     if (jobType === 'time_based_batch' && daysBack === undefined) {
       throw new Error('daysBack is required for time_based_batch jobs');
-    }
-    if (jobType === 'media_redownload' && daysBack === undefined) {
-      throw new Error('daysBack is required for media_redownload jobs');
     }
 
     const requestParams = {
@@ -355,25 +340,22 @@ export class BatchJobService {
    * Estimate cost before starting a job
    */
   async estimate(options: Omit<CreateBatchJobOptions, 'force'>): Promise<CostEstimate> {
-    // media_redownload: zero cost, just download from CDN
-    if (options.jobType === 'media_redownload') {
-      const redownloadItems = await this.queryRedownloadItems(options);
-      const counts = this.countByMimeType(redownloadItems.map((i) => i.message.mediaMimeType));
-      const estimatedDurationMinutes = Math.ceil(
-        (redownloadItems.length * BatchJobService.AVG_REDOWNLOAD_TIME_MS) / 60000,
-      );
-
-      return {
-        totalItems: redownloadItems.length,
-        ...counts,
-        estimatedCostCents: 0,
-        estimatedCostUsd: 0,
-        estimatedDurationMinutes,
-      };
-    }
-
     const items = await this.queryEligibleItems(options);
-    const counts = this.countByMimeType(items.map((i) => i.mediaMimeType));
+
+    const counts = {
+      audioCount: 0,
+      imageCount: 0,
+      videoCount: 0,
+      documentCount: 0,
+    };
+
+    for (const item of items) {
+      const type = this.getContentTypeFromMime(item.mediaMimeType);
+      if (type === 'audio') counts.audioCount++;
+      else if (type === 'image') counts.imageCount++;
+      else if (type === 'video') counts.videoCount++;
+      else if (type === 'document') counts.documentCount++;
+    }
 
     // Rough cost estimates (in cents)
     // Audio: ~$0.04/hour = ~0.1 cents per 10-second clip
@@ -430,11 +412,7 @@ export class BatchJobService {
     this.activeJobs.set(jobId, { cancelled: false });
 
     try {
-      const { eligibleItems, redownloadItems, totalItems, skippedItems } = await this.prepareJobExecution(
-        job,
-        instanceId,
-        params,
-      );
+      const { eligibleItems, totalItems, skippedItems } = await this.prepareJobExecution(job, instanceId, params);
 
       await this.markJobRunning(jobId, instanceId, job.jobType as BatchJobType, totalItems);
 
@@ -451,7 +429,6 @@ export class BatchJobService {
         totalItems,
         skippedItems,
         state,
-        redownloadItems,
         delayMinMs,
         delayMaxMs,
       );
@@ -479,30 +456,9 @@ export class BatchJobService {
     job: BatchJob,
     instanceId: string,
     params: Partial<CreateBatchJobOptions>,
-  ): Promise<{
-    eligibleItems: Message[];
-    redownloadItems?: RedownloadItem[];
-    totalItems: number;
-    skippedItems: number;
-  }> {
-    const jobType = job.jobType as BatchJobType;
-
-    // media_redownload: query from omni_events, filter by missing local path
-    if (jobType === 'media_redownload') {
-      const redownloadItems = await this.queryRedownloadItems({
-        jobType,
-        instanceId,
-        daysBack: params.daysBack,
-        limit: params.limit,
-        contentTypes: params.contentTypes as ProcessableContentType[],
-      });
-      // Extra safety: only items still missing local path
-      const filtered = redownloadItems.filter((item) => !item.message.mediaLocalPath);
-      return { eligibleItems: [], redownloadItems: filtered, totalItems: filtered.length, skippedItems: 0 };
-    }
-
+  ): Promise<{ eligibleItems: Message[]; totalItems: number; skippedItems: number }> {
     const items = await this.queryEligibleItems({
-      jobType,
+      jobType: job.jobType as BatchJobType,
       instanceId,
       chatId: params.chatId,
       daysBack: params.daysBack,
@@ -561,36 +517,9 @@ export class BatchJobService {
     totalItems: number,
     skippedItems: number,
     state: JobProcessingState,
-    redownloadItems: RedownloadItem[] | undefined,
     delayMinMs: number,
     delayMaxMs: number,
   ): Promise<void> {
-    // media_redownload path: process from raw event payloads
-    if (redownloadItems && redownloadItems.length > 0) {
-      for (let i = 0; i < redownloadItems.length; i++) {
-        if (await this.isJobCancelled(jobId)) break;
-
-        const item = redownloadItems[i];
-        if (!item) continue;
-
-        await this.db.update(batchJobs).set({ currentItem: item.message.id }).where(eq(batchJobs.id, jobId));
-        await this.processRedownloadItem(item, jobId, state);
-        await this.updateProgressIfNeeded(
-          jobId,
-          instanceId,
-          i,
-          redownloadItems.length,
-          totalItems,
-          skippedItems,
-          item.message.id,
-          state,
-        );
-        const redownloadDelay = delayMinMs + Math.random() * (delayMaxMs - delayMinMs);
-        await new Promise((resolve) => setTimeout(resolve, redownloadDelay));
-      }
-      return;
-    }
-
     for (let i = 0; i < eligibleItems.length; i++) {
       if (await this.isJobCancelled(jobId)) break;
 
@@ -902,138 +831,6 @@ export class BatchJobService {
   }
 
   /**
-   * Query messages with raw event payloads for re-downloading media from WhatsApp CDN.
-   * Uses DISTINCT ON to get one event per message (most recent).
-   */
-  private async queryRedownloadItems(options: {
-    jobType: BatchJobType;
-    instanceId: string;
-    daysBack?: number;
-    limit?: number;
-    contentTypes?: ProcessableContentType[];
-  }): Promise<RedownloadItem[]> {
-    const { instanceId, daysBack, limit, contentTypes } = options;
-
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - (daysBack ?? 30));
-
-    // Raw SQL for DISTINCT ON joined query
-    const query = sql`
-      SELECT DISTINCT ON (m.id)
-        m.id as message_id,
-        m.chat_id,
-        m.external_id as message_external_id,
-        m.has_media,
-        m.media_mime_type,
-        m.media_local_path,
-        m.media_url,
-        m.text_content,
-        m.platform_timestamp,
-        m.transcription,
-        m.image_description,
-        m.video_description,
-        m.document_extraction,
-        m.created_at as message_created_at,
-        e.raw_payload,
-        e.instance_id as event_instance_id
-      FROM messages m
-      INNER JOIN omni_events e ON e.external_id = m.external_id
-      INNER JOIN chats c ON c.id = m.chat_id
-      WHERE m.has_media = true
-        AND m.media_local_path IS NULL
-        AND e.event_type = 'message.received'
-        AND e.raw_payload IS NOT NULL
-        AND c.instance_id = ${instanceId}
-        AND m.created_at >= ${cutoffDate}
-      ORDER BY m.id, e.created_at DESC
-    `;
-
-    const result = await this.db.execute(query);
-    const rows = result as unknown as Array<Record<string, unknown>>;
-
-    // Map raw rows to RedownloadItem
-    const items: RedownloadItem[] = [];
-    for (const row of rows) {
-      const message: Message = {
-        id: row.message_id as string,
-        chatId: row.chat_id as string,
-        externalId: row.message_external_id as string,
-        hasMedia: row.has_media as boolean,
-        mediaMimeType: row.media_mime_type as string | null,
-        mediaLocalPath: row.media_local_path as string | null,
-        mediaUrl: row.media_url as string | null,
-        textContent: row.text_content as string | null,
-        platformTimestamp: row.platform_timestamp as Date | null,
-        transcription: row.transcription as string | null,
-        imageDescription: row.image_description as string | null,
-        videoDescription: row.video_description as string | null,
-        documentExtraction: row.document_extraction as string | null,
-        createdAt: row.message_created_at as Date,
-      } as Message;
-
-      items.push({
-        message,
-        rawPayload: row.raw_payload as Record<string, unknown>,
-        eventInstanceId: row.event_instance_id as string,
-      });
-    }
-
-    // Filter by content types
-    const allowedTypes = new Set(contentTypes ?? PROCESSABLE_CONTENT_TYPES);
-    const filtered = items.filter((item) => {
-      const type = this.getContentTypeFromMime(item.message.mediaMimeType);
-      return type && allowedTypes.has(type);
-    });
-
-    return limit ? filtered.slice(0, limit) : filtered;
-  }
-
-  /**
-   * Process a single re-download item: reconstruct WAMessage, download from CDN, store locally
-   */
-  private async processRedownloadItem(item: RedownloadItem, jobId: string, state: JobProcessingState): Promise<void> {
-    try {
-      const payload = item.rawPayload;
-
-      // Reconstruct WAMessage-compatible object from raw payload
-      const waMessage = {
-        key: payload.key,
-        message: payload.message,
-        messageTimestamp: payload.messageTimestamp,
-      } as Parameters<typeof downloadMediaToBuffer>[0];
-
-      const result = await downloadMediaToBuffer(waMessage);
-      if (!result) {
-        state.failedItems++;
-        state.errors.push({ itemId: item.message.id, error: 'downloadMediaToBuffer returned null' });
-        return;
-      }
-
-      const stored = await this.mediaStorage.storeFromBuffer(
-        item.eventInstanceId,
-        item.message.id,
-        result.buffer,
-        result.mimeType,
-        item.message.platformTimestamp ?? undefined,
-      );
-
-      await this.mediaStorage.updateMessageLocalPath(item.message.id, stored.localPath);
-      state.processedItems++;
-      // Zero cost, zero tokens for re-download
-    } catch (error) {
-      state.failedItems++;
-      const errorMsg = String(error);
-      // 404/410 = expired CDN link
-      const isExpired = errorMsg.includes('404') || errorMsg.includes('410') || errorMsg.includes('Gone');
-      state.errors.push({
-        itemId: item.message.id,
-        error: isExpired ? 'Media expired on CDN' : errorMsg,
-      });
-      log.warn('Redownload failed', { jobId, messageId: item.message.id, error: errorMsg });
-    }
-  }
-
-  /**
    * Query messages eligible for batch processing
    */
   private async queryEligibleItems(options: {
@@ -1097,26 +894,6 @@ export class BatchJobService {
       message.videoDescription ||
       message.documentExtraction
     );
-  }
-
-  /**
-   * Count items by content type from MIME types
-   */
-  private countByMimeType(mimeTypes: (string | null)[]): {
-    audioCount: number;
-    imageCount: number;
-    videoCount: number;
-    documentCount: number;
-  } {
-    const counts = { audioCount: 0, imageCount: 0, videoCount: 0, documentCount: 0 };
-    for (const mime of mimeTypes) {
-      const type = this.getContentTypeFromMime(mime);
-      if (type === 'audio') counts.audioCount++;
-      else if (type === 'image') counts.imageCount++;
-      else if (type === 'video') counts.videoCount++;
-      else if (type === 'document') counts.documentCount++;
-    }
-    return counts;
   }
 
   /**
