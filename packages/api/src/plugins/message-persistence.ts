@@ -249,12 +249,11 @@ async function postProcessChat(
     });
   }
 
-  // Update chat name if missing or still shows a raw JID
-  // Prefer contact name (address book) over push name (self-set by user)
+  // Update chat name if missing or stale
   const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
-  if (!chatCreated && chatType === 'dm' && (!chat.name || hasStaleJidName)) {
+  if (!chatCreated && (!chat.name || hasStaleJidName)) {
     const chatName = rawPayload?.chatName as string | undefined;
-    const effectiveName = chatName || pushName;
+    const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
     if (effectiveName) {
       await services.chats.update(chat.id, { name: effectiveName });
       chat.name = effectiveName;

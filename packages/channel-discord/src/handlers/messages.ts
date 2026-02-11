@@ -175,6 +175,14 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
   const from = message.author.id;
   const replyToId = getReplyToId(message);
 
+  // Resolve chat name: channel name for servers, recipient name for DMs
+  const isDMChannel = isDM(message);
+  const chatName = isDMChannel
+    ? message.author.displayName || message.author.globalName || message.author.username
+    : 'name' in message.channel
+      ? (message.channel.name ?? undefined)
+      : undefined;
+
   // Build extended content for raw payload
   const extendedPayload: Record<string, unknown> = {
     messageId: message.id,
@@ -184,8 +192,12 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     authorTag: message.author.tag,
     // displayName is used by agent-responder for sender name prefixing
     displayName: message.author.displayName || message.author.globalName || message.author.username,
+    // pushName + chatName used by message-persistence for chat name and message preview
+    pushName: message.author.displayName || message.author.globalName || message.author.username,
+    chatName,
+    isGroup: !isDMChannel,
     createdAt: message.createdTimestamp,
-    isDM: isDM(message),
+    isDM: isDMChannel,
     hasEmbeds: message.embeds.length > 0,
     hasAttachments: message.attachments.size > 0,
     hasStickers: message.stickers.size > 0,
