@@ -141,6 +141,9 @@ export class ChatService {
     // Enrich group chats with names from omni_groups when chat name is missing
     await this.enrichGroupNames(items);
 
+    // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
+    this.deduplicateByCanonicalId(items);
+
     const lastItem = items[items.length - 1];
     return {
       items,
@@ -168,6 +171,68 @@ export class ChatService {
       if (groupName) {
         chat.name = groupName;
       }
+    }
+  }
+
+  /**
+   * Deduplicate chats sharing the same canonicalId (e.g., LID + phone JID).
+   * Keeps the one with the most recent lastMessageAt and sums unread/message counts.
+   * Mutates the array in place.
+   */
+  private deduplicateByCanonicalId(items: Chat[]): void {
+    const canonicalMap = new Map<string, number>();
+    const toRemove = new Set<number>();
+
+    for (let i = 0; i < items.length; i++) {
+      const chat = items[i] as Chat;
+      const canonical = chat.canonicalId;
+      if (!canonical || canonical === chat.externalId) continue;
+
+      const dupIdx = this.findDuplicateIndex(items, canonical, i, canonicalMap, toRemove);
+      if (dupIdx !== undefined) {
+        this.mergeDuplicate(items, dupIdx, chat);
+        toRemove.add(i);
+      } else {
+        canonicalMap.set(canonical, i);
+      }
+    }
+
+    // Remove duplicates in reverse order to preserve indices
+    for (const idx of [...toRemove].sort((a, b) => b - a)) {
+      items.splice(idx, 1);
+    }
+  }
+
+  /** Find an earlier chat that matches the given canonicalId */
+  private findDuplicateIndex(
+    items: Chat[],
+    canonical: string,
+    currentIdx: number,
+    canonicalMap: Map<string, number>,
+    toRemove: Set<number>,
+  ): number | undefined {
+    const fromMap = canonicalMap.get(canonical);
+    if (fromMap !== undefined && !toRemove.has(fromMap)) return fromMap;
+
+    for (let j = 0; j < currentIdx; j++) {
+      if (!toRemove.has(j) && items[j]?.externalId === canonical) return j;
+    }
+    return undefined;
+  }
+
+  /** Merge a duplicate chat into the keeper at the given index */
+  private mergeDuplicate(items: Chat[], keeperIdx: number, duplicate: Chat): void {
+    const keeper = items[keeperIdx] as Chat;
+    const keeperTime = keeper.lastMessageAt?.getTime() ?? 0;
+    const dupTime = duplicate.lastMessageAt?.getTime() ?? 0;
+
+    if (dupTime > keeperTime) {
+      duplicate.unreadCount += keeper.unreadCount;
+      duplicate.messageCount += keeper.messageCount;
+      items[keeperIdx] = duplicate;
+    } else {
+      keeper.unreadCount += duplicate.unreadCount;
+      keeper.messageCount += duplicate.messageCount;
     }
   }
 
