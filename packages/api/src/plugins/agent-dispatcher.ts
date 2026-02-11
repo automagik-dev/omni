@@ -297,8 +297,14 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
 
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
   const ownerJid = instance.ownerIdentifier ?? '';
-  const mentionsBot =
-    mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid)) || rawPayload.isMention === true;
+
+  // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
+  // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
+  // Fallback: in group chats, if mentionedJids is non-empty, treat as mention — WhatsApp UI
+  // only populates mentionedJids when user explicitly @-tags someone from the picker.
+  const jidMatchesOwner = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
+  const isGroupMention = mentionedJids.length > 0 && chatId.includes('@g.us');
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || isGroupMention;
 
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
   const isReplyToBot = quotedParticipant === ownerJid;
