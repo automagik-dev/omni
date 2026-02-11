@@ -1502,6 +1502,122 @@ async function shouldProcessReaction(
  */
 export type DispatcherCleanup = () => Promise<void>;
 
+// ============================================================================
+// Smart Response Gate (LLM pre-filter)
+// ============================================================================
+
+const DEFAULT_GATE_MODEL = 'gemini-2.0-flash';
+const GATE_TIMEOUT_MS = 3_000;
+
+const DEFAULT_GATE_PROMPT = `You are a response gate for an AI assistant called "{agentName}".
+Given the following buffered messages from a {chatType} chat, decide whether the assistant should respond.
+
+Rules:
+- If someone is directly asking the assistant a question or requesting action → respond
+- If someone mentions the assistant's name in passing (e.g. "I told {agentName} yesterday") → skip
+- If the messages are just a conversation between others that doesn't need the assistant → skip
+- When in doubt → respond
+
+Reply with ONLY one word: "respond" or "skip"
+
+Messages:
+{messages}`;
+
+/**
+ * Call a fast LLM to decide whether the agent should respond to buffered messages.
+ * Returns true if the agent should respond, false to skip.
+ * Fail-open: returns true on any error or timeout.
+ */
+async function shouldRespondViaGate(
+  instance: Instance,
+  messages: BufferedMessage[],
+  chatType: 'dm' | 'group' | 'channel',
+  settings: { getSecret: (key: string, envKey?: string) => Promise<string | undefined> },
+): Promise<boolean> {
+  const inst = instance as Record<string, unknown>;
+  if (!inst.agentGateEnabled) return true;
+
+  const agentName = instance.agentId ?? instance.name ?? 'assistant';
+  const model = (inst.agentGateModel as string | null) ?? DEFAULT_GATE_MODEL;
+  const customPrompt = inst.agentGatePrompt as string | null;
+
+  const messagesText = messages
+    .map((m) => {
+      const name = (m.payload.rawPayload as Record<string, unknown>)?.pushName ?? m.payload.from ?? 'Unknown';
+      return `[${name}]: ${m.payload.content?.text ?? '[media]'}`;
+    })
+    .join('\n');
+
+  const prompt = (customPrompt ?? DEFAULT_GATE_PROMPT)
+    .replace(/{agentName}/g, agentName)
+    .replace(/{chatType}/g, chatType)
+    .replace(/{messages}/g, messagesText);
+
+  const traceId = messages[0]?.metadata.traceId ?? 'unknown';
+  const startMs = Date.now();
+
+  try {
+    const apiKey = await settings.getSecret('gemini.api_key', 'GEMINI_API_KEY');
+    if (!apiKey) {
+      log.warn('Gate: no Gemini API key, fail-open', { traceId });
+      return true;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GATE_TIMEOUT_MS);
+
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 10, temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        log.warn('Gate: API error, fail-open', { traceId, status: res.status, durationMs: Date.now() - startMs });
+        return true;
+      }
+
+      const data = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const answer = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase() ?? '';
+      const shouldRespond = !answer.startsWith('skip');
+
+      log.info('Gate decision', {
+        traceId,
+        decision: shouldRespond ? 'respond' : 'skip',
+        rawAnswer: answer,
+        model,
+        chatType,
+        messageCount: messages.length,
+        durationMs: Date.now() - startMs,
+      });
+
+      return shouldRespond;
+    } catch (fetchError) {
+      clearTimeout(timeout);
+      const errName = (fetchError as Error).name;
+      if (errName === 'AbortError') {
+        log.warn('Gate: timeout, fail-open', { traceId, durationMs: Date.now() - startMs });
+      } else {
+        log.warn('Gate: fetch error, fail-open', { traceId, error: String(fetchError) });
+      }
+      return true;
+    }
+  } catch (error) {
+    log.warn('Gate: unexpected error, fail-open', { traceId, error: String(error) });
+    return true;
+  }
+}
+
 /**
  * Set up agent dispatcher - subscribes to message AND reaction events
  * Returns a cleanup function that should be called on shutdown.
@@ -1529,6 +1645,23 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
+
+    // Bypass gate for direct mention/reply. For dm/name_match, evaluate via gate.
+    if (triggerType !== 'mention' && triggerType !== 'reply') {
+      const chatType = determineChatType(firstMsg.payload.chatId, firstMsg.metadata.channelType ?? 'whatsapp');
+      const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
+      if (!shouldRespond) {
+        log.info('Gate skipped response', {
+          instanceId: instance.id,
+          chatId: firstMsg.payload.chatId,
+          triggerType,
+          traceId: firstMsg.metadata.traceId,
+          messageCount: messages.length,
+        });
+        return;
+      }
+    }
+
     await processAgentResponse(services, instance, messages, triggerType);
   });
 
