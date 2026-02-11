@@ -4,7 +4,7 @@
  * Adapted from genie-os reference for server-side Omni dispatch.
  * Changes from reference (DEC-7):
  * - Uses crypto.randomUUID() instead of browser fallback
- * - Sets platform: 'omni', mode: 'omni-dispatch', client.id: 'omni-v2'
+ * - Sets platform: 'omni', mode: 'backend', client.id: 'gateway-client'
  * - Minimum scopes: ['chat.send'] only (DEC-8)
  * - Health ping every 30s (DEC-11)
  * - Reconnect log escalation (WARN→INFO→DEBUG→periodic WARN)
@@ -324,10 +324,10 @@ export class OpenClawClient {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: 'omni-v2',
+        id: 'gateway-client',
         version: '1.0.0',
         platform: 'omni',
-        mode: 'omni-dispatch',
+        mode: 'backend',
       },
       role: 'client',
       scopes: ['chat.send'],
