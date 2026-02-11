@@ -38,6 +38,8 @@ const createBatchJobSchema = z.object({
   limit: z.number().int().positive().optional().describe('Max items to process'),
   contentTypes: z.array(contentTypeSchema).optional().describe('Content types to process (default: all)'),
   force: z.boolean().optional().default(false).describe('Re-process items that already have content'),
+  delayMinMs: z.number().int().min(0).optional().describe('Minimum random delay between items in ms (default: 1000)'),
+  delayMaxMs: z.number().int().min(0).optional().describe('Maximum random delay between items in ms (default: 3000)'),
 });
 
 /**
@@ -102,6 +104,8 @@ batchJobsRoutes.post('/', zValidator('json', createBatchJobSchema), async (c) =>
     limit: data.limit,
     contentTypes: data.contentTypes,
     force: data.force,
+    delayMinMs: data.delayMinMs,
+    delayMaxMs: data.delayMaxMs,
   });
 
   return c.json({ data: job }, 201);

@@ -147,6 +147,10 @@ export interface CreateBatchJobBody {
   limit?: number;
   contentTypes?: ProcessableContentType[];
   force?: boolean;
+  /** Minimum random delay between items in ms (default: 1000) */
+  delayMinMs?: number;
+  /** Maximum random delay between items in ms (default: 3000) */
+  delayMaxMs?: number;
 }
 
 /** Query parameters for listing batch jobs */
