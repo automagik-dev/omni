@@ -1,63 +1,93 @@
 # Wish Index
 
-> Auto-generated inventory of all wish documents. **89 wishes total.**
->
-> Last updated: 2026-02-11
+> Inventory of all wish documents. **89 wishes total.** Last updated: 2026-02-11
 
-## Summary
+## Current Sprint Plan (Sofia-validated, Feb 11)
 
-- **✅ Shipped**: 52
-- **🔨 In Progress**: 3
-- **📝 Draft**: 33
-- **📋 Backlog**: 1
+### 🔴 Sprint 1 — This Week (Feb 12-14)
+| Bead | Wish | Title | Status |
+|------|------|-------|--------|
+| `omni-q01` | [provider-system-refactor](provider-system-refactor/provider-system-refactor-wish.md) | Provider System Refactor (generic IAgentProvider) | READY |
+| `omni-m17` | [telegram-channel-activation](telegram-channel-activation/telegram-channel-activation-wish.md) | Telegram Activation — persist tokens, auto-reconnect, CLI | READY |
+
+### 🟡 Sprint 1.5 — Next Week (Feb 17-21)
+| Bead | Wish | Title | Status |
+|------|------|-------|--------|
+| `omni-v10` | [claude-code-provider](claude-code-provider/claude-code-provider-wish.md) | Claude Code Agent Provider | blocked by q01 |
+| `omni-s8k` | [ag-ui-protocol](ag-ui-protocol/ag-ui-protocol-wish.md) | AG-UI Protocol Support | READY |
+
+### 🟢 Sprint 2 — Feb 24+
+| Bead | Wish | Title | Status |
+|------|------|-------|--------|
+| `omni-3an` | [media-serving](media-serving/media-serving-wish.md) | Media Download & Serving via API | READY |
+| `omni-70d` | [media-auto-processing](media-auto-processing/media-auto-processing-wish.md) | Automatic Media Processing | blocked by 3an |
+| `omni-j5h` | [whatsapp-groups-core-controls](whatsapp-groups-core-controls/whatsapp-groups-core-controls-wish.md) | WhatsApp Groups Core Controls | READY |
 
 ---
 
-## Active Backlog
+## Summary
 
-| Slug | Title | Status | Bead | Priority |
-|------|-------|--------|------|----------|
-| [media-drive-download](media-drive-download/media-drive-download-wish.md) | Media "Drive Mode" - Index first, download on demand | IN_PROGRESS | `omni-16n` | P2 |
-| [medium-features](medium-features/medium-features-wish.md) | Medium Effort Features (C1-C7) | IN_PROGRESS | `omni-1s0` | P2 |
-| [whatsapp-openclaw-integration-test](whatsapp-openclaw-integration-test/whatsapp-openclaw-integration-test-wish.md) | WhatsApp ↔ OpenClaw Integration Test (khal-whatsapp) | IN_PROGRESS | `omni-eke` | P2 |
-| [ag-ui-protocol](ag-ui-protocol/ag-ui-protocol-wish.md) | AG-UI Protocol Support | DRAFT | `omni-s8k` | P1 |
-| [git-history-secret-cleanup](git-history-secret-cleanup/git-history-secret-cleanup-wish.md) | Public Repo Secret Leak Cleanup + Git History Rewrite | DRAFT | `omni-8j6` | P1 |
-| [agent-replay](agent-replay/agent-replay-wish.md) | Agent Auto-Replay on Reconnect | DRAFT | `omni-bkh` | P2 |
-| [agent-routing](agent-routing/agent-routing-wish.md) | Agent Routing | DRAFT | `omni-pyt` | P2 |
-| [api-key-audit](api-key-audit/api-key-audit-wish.md) | API Key Audit Trail | DRAFT | `omni-tth` | P2 |
-| [channel-telegram](channel-telegram/channel-telegram-wish.md) | Telegram Bot API Channel | DRAFT | `omni-gry` | P2 |
-| [ci-pipeline](ci-pipeline/ci-pipeline-wish.md) | CI/CD Pipeline for Fresh-Environment Validation | DRAFT | `omni-gt7` | P2 |
-| [claude-code-provider](claude-code-provider/claude-code-provider-wish.md) | Claude Code Agent Provider | DRAFT | `omni-v10` | P2 |
-| [events-refactor](events-refactor/events-refactor-wish.md) | Refactor omni_events to lean event log | DRAFT | `omni-but` | P2 |
-| [instances-sessions-cli](instances-sessions-cli/instances-sessions-cli-wish.md) | CLI — Instance Sessions Debugging | DRAFT | `omni-b2t` | P2 |
-| [mcp-server](mcp-server/mcp-server-wish.md) | MCP Server | DRAFT | `omni-bsa` | P2 |
-| [media-auto-processing](media-auto-processing/media-auto-processing-wish.md) | Automatic Media Processing on Message Receipt | DRAFT | `omni-70d` | P2 |
-| [media-serving](media-serving/media-serving-wish.md) | Media Download & Serving via API | DRAFT | `omni-3an` | P2 |
-| [media-storage](media-storage/media-storage-wish.md) | Media Storage (S3/R2) | DRAFT | `omni-t4u` | P2 |
-| [message-journey-tracing](message-journey-tracing/message-journey-tracing-wish.md) | Message Journey Tracing | DRAFT | `omni-eef` | P2 |
-| [omni-skill](omni-skill/omni-skill-wish.md) | Omni Skill for AI Assistants | DRAFT | `omni-a8p` | P2 |
-| [provider-schemas-single-source-of-truth](provider-schemas-single-source-of-truth/provider-schemas-single-source-of-truth-wish.md) | Provider Schemas — Single Source of Truth | DRAFT | `omni-3ys` | P2 |
-| [provider-system-refactor](provider-system-refactor/provider-system-refactor-wish.md) | Provider System Refactor | DRAFT | `omni-q01` | P2 |
-| [real-cost-tracking](real-cost-tracking/real-cost-tracking-wish.md) | Real Cost Tracking | DRAFT | `omni-mp2` | P2 |
-| [telegram-channel-activation](telegram-channel-activation/telegram-channel-activation-wish.md) | Telegram Channel Activation + CLI | DRAFT | `omni-m17` | P2 |
-| [trigger-logs-writer](trigger-logs-writer/trigger-logs-writer-wish.md) | trigger_logs Writer | DRAFT | `omni-6ek` | P2 |
-| [whatsapp-groups-core-controls](whatsapp-groups-core-controls/whatsapp-groups-core-controls-wish.md) | WhatsApp Groups Core Controls | DRAFT | `omni-j5h` | P2 |
-| [whatsapp-groups-admin-controls](whatsapp-groups-admin-controls/whatsapp-groups-admin-controls-wish.md) | WhatsApp Groups Admin Controls | DRAFT | `omni-b29` | P2 |
-| [whatsapp-groups-full-parity](whatsapp-groups-full-parity/whatsapp-groups-full-parity-wish.md) | WhatsApp Groups Full Parity | DRAFT | `omni-f99` | P2 |
-| [channel-email-gmail](channel-email-gmail/channel-email-gmail-wish.md) | Gmail Channel via Google OAuth | DRAFT | `omni-89y` | P3 |
-| [channel-whatsapp-cloud](channel-whatsapp-cloud/channel-whatsapp-cloud-wish.md) | WhatsApp Business Cloud API Channel | DRAFT | `omni-c85` | P3 |
-| [enterprise-compliance-blocks](enterprise-compliance-blocks/enterprise-compliance-blocks-wish.md) | Enterprise Compliance & Transform Actions | DRAFT | `omni-dq9` | P3 |
-| [provider-cli-wss-tls-hints](provider-cli-wss-tls-hints/provider-cli-wss-tls-hints-wish.md) | CLI — wss:// TLS/Cert Error Hints | DRAFT | `omni-vq7` | P3 |
-| [session-observatory](session-observatory/session-observatory-wish.md) | Session Observatory & Self-Improvement Loop | DRAFT | `omni-beb` | P3 |
-| [whatsapp-newsletters](whatsapp-newsletters/whatsapp-newsletters-wish.md) | WhatsApp Newsletters | DRAFT | `omni-ucs` | P3 |
-| [pix-button-research](pix-button-research/pix-button-research-wish.md) | PIX Button Research | DRAFT | `omni-rx3` | P4 |
-| [websocket-event-streaming](websocket-event-streaming/websocket-event-streaming-wish.md) | WebSocket Event Streaming | DRAFT | `omni-4ek` | P4 |
-| [omni-native-agent](omni-native-agent/omni-native-agent-wish.md) | Omni as Native Agent (Option A) | BACKLOG | `omni-5ks` | STRATEGIC |
+- **✅ Shipped**: 56
+- **📝 Active Backlog**: 33 (10 ready, 3 blocked, 8 deferred)
+
+---
+
+## Full Active Backlog
+
+### P1 — Critical Path
+| Bead | Title | Sprint | Blocked? |
+|------|-------|--------|----------|
+| `omni-q01` | Provider System Refactor | current | — |
+| `omni-m17` | Telegram Channel Activation + CLI | current | — |
+| `omni-v10` | Claude Code Agent Provider | next | by q01 |
+| `omni-s8k` | AG-UI Protocol Support | next | — |
+| `omni-td4` | Media Processing Pipeline v2 (epic) | — | — |
+| `omni-jja` | LID as first-class identifier | — | — |
+
+### P2 — Important
+| Bead | Title | Sprint | Blocked? |
+|------|-------|--------|----------|
+| `omni-3an` | Media Download & Serving via API | 2 | — |
+| `omni-70d` | Automatic Media Processing | 2 | by 3an |
+| `omni-6ek` | trigger_logs Writer | — | — |
+| `omni-3ys` | Provider Schemas Single Source of Truth | — | — |
+| `omni-eef` | Message Journey Tracing | — | — |
+| `omni-16n` | Media "Drive Mode" | — | — |
+| `omni-bsa` | MCP Server | — | by a8p |
+| `omni-b2t` | CLI Instance Sessions Debugging | — | — |
+| `omni-but` | Refactor omni_events to lean event log | — | — |
+| `omni-gt7` | CI/CD Pipeline | — | — |
+| `omni-a8p` | Omni Skill for AI Assistants | — | — |
+| `omni-tth` | API Key Audit Trail | — | — |
+| `omni-pyt` | Agent Routing | — | — |
+| `omni-bkh` | Agent Auto-Replay on Reconnect | — | — |
+| `omni-73i` | Test isolation: provider cache reset | — | — |
+| `omni-7pf` | Provider cache invalidation | — | — |
+| `omni-0rw` | BufferedMessage full OmniEvent envelope | — | — |
+| `omni-j5h` | WhatsApp Groups Core Controls | 2 | — |
+| `omni-b29` | WhatsApp Groups Admin Controls | — | — |
+| `omni-f99` | WhatsApp Groups Full Parity | — | — |
+| `omni-t4u` | S3 storage backend | — | — |
+| `omni-fu8` | Discord media local download | — | — |
+
+### P3-P4 — Deferred (per Sofia)
+| Bead | Title | Verdict |
+|------|-------|---------|
+| `omni-dq9` | Enterprise Compliance (GDPR/SOC2) | DEFER 6+ months |
+| `omni-rx3` | PIX Button Research | DROP |
+| `omni-4ek` | WebSocket Event Streaming | DEFER |
+| `omni-ucs` | WhatsApp Newsletters | DEFER |
+| `omni-c85` | WhatsApp Business Cloud API | DEFER 3 months |
+| `omni-89y` | Gmail Channel | DEFER |
+| `omni-beb` | Session Observatory | DEFER |
+| `omni-5ks` | Omni as Native Agent | DEFER |
+| `omni-d0o` | S3/R2 cloud storage | DEFER |
+| `omni-vq7` | CLI wss:// TLS hints | DEFER |
 
 ---
 
 <details>
-<summary><strong>✅ Shipped (52 wishes)</strong></summary>
+<summary><strong>✅ Shipped (56 wishes)</strong></summary>
 
 | Slug | Title | Bead |
 |------|-------|------|
@@ -75,6 +105,7 @@
 | channel-discord | Channel Discord | `omni-v2-6zm` |
 | channel-integration | Channel Integration | `omni-v2-d2x` |
 | channel-sdk | Channel SDK | `omni-v2-5v7` |
+| channel-telegram | Telegram Bot API Channel | `omni-gry` |
 | channel-whatsapp | Channel WhatsApp | `omni-v2-aqp` |
 | cli-chat-ux | CLI Chat UX | `omni-ndl` |
 | cli-dx-improvements | CLI DX Improvements (A1-A5) | — |
@@ -88,6 +119,7 @@
 | events-ops | Events Ops | `omni-v2-gwb` |
 | fix-ui-typecheck | Fix UI Typecheck | — |
 | foundation | Project Foundation | `omni-v2-8wd` |
+| git-history-secret-cleanup | Git History Secret Cleanup | `omni-8j6` |
 | group-create | WhatsApp Group Create | — |
 | history-sync | History Sync | `omni-rnc` |
 | humanized-action-delay | Humanized Action Delay | — |
@@ -95,6 +127,7 @@
 | khal-smart-response-gate | Khal Smart Response Gate | — |
 | media-processing-batch | Media Processing Batch | `omni-ap0` |
 | media-processing-realtime | Media Processing Realtime | `omni-1mj` |
+| medium-features | Medium Features (C1-C7) | `omni-1s0` |
 | message-resilience | Message Resilience | `omni-2q2` |
 | nats-events | NATS Events | `omni-v2-6p2` |
 | omnichannel-agent-platform | Omnichannel Agent Platform | `omni-hjx` |
@@ -113,6 +146,7 @@
 | ui-project-setup | UI Project Setup | `omni-j2s` |
 | unified-logging | Unified Logging | `omni-72g` |
 | unified-messages | Unified Messages | `omni-p5c` |
+| whatsapp-openclaw-integration-test | WhatsApp↔OpenClaw Test | `omni-eke` |
 
 </details>
 
@@ -122,18 +156,9 @@
 
 ```
 DRAFT → APPROVED → IN_PROGRESS → REVIEW → SHIPPED
-                              ↓
-                           BLOCKED
 ```
 
-## Creating a Wish
-
-Run `/wish` to start the wish dance.
-
-## Executing a Wish
-
-Run `/forge` with an approved wish to execute.
-
-## Validating a Wish
-
-Run `/review` after forge completes.
+## Commands
+- `/wish` — Plan a new feature
+- `/forge` — Execute an approved wish  
+- `/review` — Validate completed work

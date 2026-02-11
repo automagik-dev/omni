@@ -3,7 +3,7 @@
 > Genericize the agent provider interface, merge duplicate schemas, remove dead stubs
 
 **Beads:** omni-q01
-**Status:** draft
+**Status:** APPROVED
 **Priority:** P2
 **Depends on:** nothing
 **Blocks:** omni-v10 (Claude Code provider)
