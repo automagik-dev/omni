@@ -17,6 +17,7 @@ import {
   chatIdMappings,
   chatParticipants,
   chats,
+  omniGroups,
 } from '@omni/db';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 
@@ -118,12 +119,37 @@ export class ChatService {
       items.pop();
     }
 
+    // Enrich group chats with names from omni_groups when chat name is missing
+    await this.enrichGroupNames(items);
+
     const lastItem = items[items.length - 1];
     return {
       items,
       hasMore,
       cursor: lastItem?.lastMessageAt?.toISOString(),
     };
+  }
+
+  /**
+   * Enrich group/community chats that have no name with names from omni_groups
+   */
+  private async enrichGroupNames(items: Chat[]): Promise<void> {
+    const nameless = items.filter((c) => !c.name && (c.chatType === 'group' || c.chatType === 'community'));
+    if (nameless.length === 0) return;
+
+    const externalIds = nameless.map((c) => c.externalId);
+    const groups = await this.db
+      .select({ externalId: omniGroups.externalId, name: omniGroups.name })
+      .from(omniGroups)
+      .where(inArray(omniGroups.externalId, externalIds));
+
+    const nameMap = new Map(groups.filter((g) => g.name).map((g) => [g.externalId, g.name as string]));
+    for (const chat of nameless) {
+      const groupName = nameMap.get(chat.externalId);
+      if (groupName) {
+        chat.name = groupName;
+      }
+    }
   }
 
   /**
