@@ -58,7 +58,9 @@ export class OpenClawAgentProvider implements IAgentProvider {
   async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
     const startTime = Date.now();
     const agentId = this.config.defaultAgentId;
-    const sessionKey = this.buildSessionKey(agentId, context.source.chatId);
+    // Use context.sessionId (computed from instance's agentSessionStrategy) to preserve
+    // per_user / per_user_per_chat / per_chat isolation. Falls back to chatId if missing.
+    const sessionKey = this.buildSessionKey(agentId, context.sessionId || context.source.chatId);
     const agentTimeoutMs = this.config.agentTimeoutMs ?? 120_000;
     const sendAckTimeoutMs = this.config.sendAckTimeoutMs ?? 10_000;
 
@@ -239,12 +241,13 @@ export class OpenClawAgentProvider implements IAgentProvider {
   }
 
   /** Clear an OpenClaw session (trash emoji reset).
-   *  chatId is preferred — we rebuild the session key in our own format
-   *  (`agent:<agentId>:omni-<chatId>`). Falls back to raw sessionKey if
-   *  chatId is not provided. */
+   *  sessionKey is the strategy-computed sessionId (from computeSessionId).
+   *  We rebuild the OpenClaw key in our format: `agent:<agentId>:omni-<sessionId>`.
+   *  chatId param kept for backwards compatibility but sessionKey is now preferred
+   *  since it encodes the correct session strategy. */
   async resetSession(sessionKey: string, chatId?: string): Promise<void> {
-    // Rebuild the key the same way trigger() does so it actually matches
-    const effectiveKey = chatId ? this.buildSessionKey(this.config.defaultAgentId, chatId) : sessionKey;
+    // Use sessionKey (strategy-computed) to match what trigger() now uses
+    const effectiveKey = this.buildSessionKey(this.config.defaultAgentId, sessionKey);
     try {
       await this.client.waitForReady(5_000);
       await this.client.deleteSession(effectiveKey);
