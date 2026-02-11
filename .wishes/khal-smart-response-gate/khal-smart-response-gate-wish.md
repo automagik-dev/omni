@@ -1,6 +1,6 @@
 # Wish: Khal Smart Response Gate
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETE
 **Slug:** `khal-smart-response-gate`
 **Created:** 2026-02-11
 **Requested by:** Felipe
