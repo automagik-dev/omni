@@ -152,7 +152,7 @@ export class OpenClawClient {
         method,
       });
 
-      this.ws!.send(JSON.stringify(frame));
+      this.ws?.send(JSON.stringify(frame));
     });
   }
 
@@ -252,66 +252,66 @@ export class OpenClawClient {
       return;
     }
 
-    if (!frame || typeof frame !== 'object') return;
+    if (!frame || typeof frame !== 'object' || !('type' in frame)) return;
 
-    // Handle events
-    if ('type' in frame && frame.type === 'event') {
-      const event = frame as EventFrame;
+    if (frame.type === 'event') {
+      this.handleEventFrame(frame as EventFrame);
+    } else if (frame.type === 'res') {
+      this.handleResponseFrame(frame as ResFrame);
+    }
+  }
 
-      // Handle connect challenge
-      if (event.event === 'connect.challenge') {
-        this.sendConnect();
-        return;
-      }
-
-      // DEC-5: Route chat events by runId (O(1) lookup)
-      if (event.event === 'chat' && event.payload) {
-        const chatEvent = event.payload as ChatEvent;
-        if (chatEvent.runId) {
-          const callback = this.accumulationCallbacks.get(chatEvent.runId);
-          if (callback) {
-            try {
-              callback(chatEvent);
-            } catch (err) {
-              log.error('Accumulation callback error', {
-                providerId: this.config.providerId,
-                runId: chatEvent.runId,
-                error: String(err),
-              });
-            }
-          }
-        }
-      }
-
-      // Emit to generic listeners
-      for (const listener of this.eventListeners) {
-        try {
-          listener(event);
-        } catch (err) {
-          log.error('Event listener error', {
-            providerId: this.config.providerId,
-            event: event.event,
-            error: String(err),
-          });
-        }
-      }
+  private handleEventFrame(event: EventFrame): void {
+    if (event.event === 'connect.challenge') {
+      this.sendConnect();
       return;
     }
 
-    // Handle responses
-    if ('type' in frame && frame.type === 'res') {
-      const res = frame as ResFrame;
-      const pending = this.pending.get(res.id);
-      if (!pending) return;
+    // DEC-5: Route chat events by runId (O(1) lookup)
+    if (event.event === 'chat' && event.payload) {
+      this.routeChatEvent(event.payload as ChatEvent);
+    }
 
-      this.pending.delete(res.id);
-      clearTimeout(pending.timeout);
-
-      if (res.ok) {
-        pending.resolve(res.payload);
-      } else {
-        pending.reject(new Error(res.error?.message ?? `Request ${pending.method} failed`));
+    // Emit to generic listeners
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        log.error('Event listener error', {
+          providerId: this.config.providerId,
+          event: event.event,
+          error: String(err),
+        });
       }
+    }
+  }
+
+  private routeChatEvent(chatEvent: ChatEvent): void {
+    if (!chatEvent.runId) return;
+    const callback = this.accumulationCallbacks.get(chatEvent.runId);
+    if (!callback) return;
+    try {
+      callback(chatEvent);
+    } catch (err) {
+      log.error('Accumulation callback error', {
+        providerId: this.config.providerId,
+        runId: chatEvent.runId,
+        error: String(err),
+      });
+    }
+  }
+
+  private handleResponseFrame(res: ResFrame): void {
+    const pending = this.pending.get(res.id);
+    if (!pending) return;
+
+    this.pending.delete(res.id);
+    clearTimeout(pending.timeout);
+
+    if (res.ok) {
+      pending.resolve(res.payload);
+    } else {
+      pending.reject(new Error(res.error?.message ?? `Request ${pending.method} failed`));
     }
   }
 

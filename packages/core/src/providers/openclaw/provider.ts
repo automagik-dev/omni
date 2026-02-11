@@ -26,6 +26,17 @@ function stripControlChars(s: string): string {
   return s.replace(CONTROL_CHAR_RE, '');
 }
 
+interface AccumulationState {
+  runId: string;
+  traceId: string;
+  sendTimestamp: number;
+  accumulated: string;
+  accumulatedBytes: number;
+  deltasReceived: number;
+  lastDeltaReceivedAt: number | null;
+  firstDeltaAt: number | null;
+}
+
 const MAX_MESSAGE_BYTES = 100 * 1024; // 100KB
 const MAX_ACCUMULATION_BYTES = 1 * 1024 * 1024; // 1MB
 const AGENT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
@@ -284,6 +295,35 @@ export class OpenClawAgentProvider implements IAgentProvider {
     return true;
   }
 
+  /** Process a single accumulation event. Returns the outcome for the caller. */
+  private processAccumulationEvent(
+    event: ChatEvent,
+    state: AccumulationState,
+  ): 'continue' | 'final' | 'cap_exceeded' | 'error' {
+    if (event.state === 'error' || event.state === 'aborted') return 'error';
+    if (event.state !== 'delta' && event.state !== 'final') return 'continue';
+
+    const now = Date.now();
+    state.deltasReceived++;
+    state.lastDeltaReceivedAt = now;
+    if (!state.firstDeltaAt) {
+      state.firstDeltaAt = now;
+      const ttfdMs = now - state.sendTimestamp;
+      log.debug('Time-to-first-delta', { traceId: state.traceId, runId: state.runId, ttfdMs, providerId: this.id });
+    }
+
+    // Gateway sends CUMULATIVE snapshots: replace, don't append
+    const text = this.extractText(event);
+    if (text) {
+      const bytes = new TextEncoder().encode(text).length;
+      if (bytes > MAX_ACCUMULATION_BYTES) return 'cap_exceeded';
+      state.accumulated = text;
+      state.accumulatedBytes = bytes;
+    }
+
+    return event.state === 'final' ? 'final' : 'continue';
+  }
+
   private accumulateResponse(
     runId: string,
     timeoutMs: number,
@@ -291,95 +331,49 @@ export class OpenClawAgentProvider implements IAgentProvider {
     sendTimestamp: number,
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      let accumulated = '';
-      let accumulatedBytes = 0;
-      let deltasReceived = 0;
-      let lastDeltaReceivedAt: number | null = null;
-      let firstDeltaAt: number | null = null;
+      const state: AccumulationState = {
+        runId,
+        traceId,
+        sendTimestamp,
+        accumulated: '',
+        accumulatedBytes: 0,
+        deltasReceived: 0,
+        lastDeltaReceivedAt: null,
+        firstDeltaAt: null,
+      };
       let resolved = false;
+
+      const finish = (cb: () => void) => {
+        resolved = true;
+        clearTimeout(timer);
+        this.client.unregisterAccumulation(runId);
+        cb();
+      };
 
       const timer = setTimeout(() => {
         if (resolved) return;
-        resolved = true;
-        this.client.unregisterAccumulation(runId);
-
-        // Distinguish "never responded" from "stalled mid-stream"
-        if (deltasReceived === 0) {
-          log.warn('Dead-response: chat.send acknowledged but no events received', {
-            traceId,
-            runId,
-            providerId: this.id,
-            timeoutMs,
-          });
-        } else {
-          log.warn('Accumulation timeout (stalled mid-stream)', {
-            traceId,
-            runId,
-            providerId: this.id,
-            deltasReceived,
-            lastDeltaReceivedAt,
-            accumulatedBytes,
-            timeoutMs,
-          });
-        }
-
-        reject(new Error(`Accumulation timeout after ${timeoutMs}ms (deltas: ${deltasReceived})`));
+        finish(() => {
+          const kind = state.deltasReceived === 0 ? 'Dead-response' : 'Accumulation timeout (stalled mid-stream)';
+          log.warn(kind, { traceId, runId, providerId: this.id, deltasReceived: state.deltasReceived, timeoutMs });
+          reject(new Error(`Accumulation timeout after ${timeoutMs}ms (deltas: ${state.deltasReceived})`));
+        });
       }, timeoutMs);
 
-      const callback = (event: ChatEvent) => {
+      this.client.registerAccumulation(runId, (event: ChatEvent) => {
         if (resolved) return;
-
-        if (event.state === 'delta' || event.state === 'final') {
-          const now = Date.now();
-          deltasReceived++;
-          lastDeltaReceivedAt = now;
-          if (!firstDeltaAt) {
-            firstDeltaAt = now;
-            const ttfdMs = now - sendTimestamp;
-            log.debug('Time-to-first-delta', { traceId, runId, ttfdMs, providerId: this.id });
-          }
-
-          // Extract text content from message.
-          // Gateway sends CUMULATIVE snapshots: each delta's message.content contains
-          // the full response so far (not just new tokens). Replace, don't append.
-          const text = this.extractText(event);
-          if (text) {
-            const textBytes = new TextEncoder().encode(text).length;
-            if (textBytes > MAX_ACCUMULATION_BYTES) {
-              resolved = true;
-              clearTimeout(timer);
-              this.client.unregisterAccumulation(runId);
-              log.error('Accumulation cap (1MB) exceeded', {
-                traceId,
-                runId,
-                providerId: this.id,
-                accumulatedBytes: textBytes,
-              });
-              reject(new Error('Response too large (1MB cap)'));
-              return;
-            }
-            accumulated = text;
-            accumulatedBytes = textBytes;
-          }
+        const outcome = this.processAccumulationEvent(event, state);
+        if (outcome === 'continue') return;
+        if (outcome === 'final') {
+          finish(() => resolve(state.accumulated));
+        } else if (outcome === 'cap_exceeded') {
+          finish(() => {
+            log.error('Accumulation cap (1MB) exceeded', { traceId, runId, providerId: this.id });
+            reject(new Error('Response too large (1MB cap)'));
+          });
+        } else {
+          finish(() => reject(new Error(event.errorMessage ?? `Agent ${event.state}`)));
         }
-
-        if (event.state === 'final') {
-          resolved = true;
-          clearTimeout(timer);
-          this.client.unregisterAccumulation(runId);
-          resolve(accumulated);
-          return;
-        }
-
-        if (event.state === 'error' || event.state === 'aborted') {
-          resolved = true;
-          clearTimeout(timer);
-          this.client.unregisterAccumulation(runId);
-          reject(new Error(event.errorMessage ?? `Agent ${event.state}`));
-        }
-      };
-
-      this.client.registerAccumulation(runId, callback);
+      });
     });
   }
 
@@ -389,8 +383,8 @@ export class OpenClawAgentProvider implements IAgentProvider {
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
       return content
-        .filter((b) => b.type === 'text' && b.text)
-        .map((b) => b.text!)
+        .filter((b): b is typeof b & { text: string } => b.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text)
         .join('');
     }
     return '';

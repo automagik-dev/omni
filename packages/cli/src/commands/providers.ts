@@ -35,6 +35,36 @@ function validateUrlScheme(schema: string, baseUrl: string): string | null {
   return null;
 }
 
+/** Validate create provider options, returning an error message or null */
+function validateCreateOptions(options: { schema: string; baseUrl: string; defaultAgentId?: string }): string | null {
+  if (!VALID_SCHEMAS.includes(options.schema)) {
+    return `Invalid schema: ${options.schema}. Valid: ${[...VALID_SCHEMAS].join(', ')}`;
+  }
+  const urlError = validateUrlScheme(options.schema, options.baseUrl);
+  if (urlError) return urlError;
+  if (options.schema === 'openclaw' && !options.defaultAgentId) {
+    return 'OpenClaw providers require --default-agent-id.\nExample: omni providers create --schema openclaw --default-agent-id sofia ...';
+  }
+  return null;
+}
+
+/** Get contextual hint for provider health check error */
+function getHealthCheckHint(errorMsg: string): string {
+  if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect ECONNREFUSED')) {
+    return '\nHint: Cannot connect to gateway. Is it running?';
+  }
+  if (errorMsg.includes('401') || errorMsg.includes('auth') || errorMsg.includes('Unauthorized')) {
+    return '\nHint: Gateway rejected the API key. Verify token with: omni providers get <id>';
+  }
+  if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+    return '\nHint: Connection timed out. Check network connectivity and URL.';
+  }
+  if (errorMsg.includes('WebSocket') && errorMsg.includes('state')) {
+    return '\nHint: WebSocket is not connected. The gateway may be unreachable.';
+  }
+  return '';
+}
+
 export function createProvidersCommand(): Command {
   const providers = new Command('providers').description('Manage AI/agent providers');
 
@@ -104,26 +134,9 @@ export function createProvidersCommand(): Command {
         stream?: boolean;
         defaultAgentId?: string;
       }) => {
-        if (!VALID_SCHEMAS.includes(options.schema)) {
-          output.error(`Invalid schema: ${options.schema}`, {
-            validSchemas: [...VALID_SCHEMAS],
-          });
-          return;
-        }
-
-        // URL scheme validation
-        const urlError = validateUrlScheme(options.schema, options.baseUrl);
-        if (urlError) {
-          output.error(urlError);
-          return;
-        }
-
-        // OpenClaw requires --default-agent-id
-        if (options.schema === 'openclaw' && !options.defaultAgentId) {
-          output.error(
-            'OpenClaw providers require --default-agent-id.\n' +
-              'Example: omni providers create --schema openclaw --default-agent-id sofia ...',
-          );
+        const validationError = validateCreateOptions(options);
+        if (validationError) {
+          output.error(validationError);
           return;
         }
 
@@ -176,20 +189,8 @@ export function createProvidersCommand(): Command {
         if (result.healthy) {
           output.success(`Provider is healthy (latency: ${result.latency}ms)`);
         } else {
-          // Contextual error messages for common WS failure modes
           const errorMsg = result.error ?? 'Unknown error';
-          let hint = '';
-
-          if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect ECONNREFUSED')) {
-            hint = '\nHint: Cannot connect to gateway. Is it running?';
-          } else if (errorMsg.includes('401') || errorMsg.includes('auth') || errorMsg.includes('Unauthorized')) {
-            hint = '\nHint: Gateway rejected the API key. Verify token with: omni providers get <id>';
-          } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
-            hint = '\nHint: Connection timed out. Check network connectivity and URL.';
-          } else if (errorMsg.includes('WebSocket') && errorMsg.includes('state')) {
-            hint = '\nHint: WebSocket is not connected. The gateway may be unreachable.';
-          }
-
+          const hint = getHealthCheckHint(errorMsg);
           output.error(`Provider health check failed: ${errorMsg}${hint}`, {
             latency: result.latency,
           });
