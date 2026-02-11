@@ -110,7 +110,17 @@ function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefine
   if (!rawPayload?.messageTimestamp) return new Date(fallback);
 
   const ts = rawPayload.messageTimestamp;
-  const tsNum = typeof ts === 'number' ? ts : typeof ts === 'string' ? Number(ts) : null;
+  let tsNum: number | null = null;
+
+  if (typeof ts === 'number') {
+    tsNum = ts;
+  } else if (typeof ts === 'string') {
+    tsNum = Number(ts);
+  } else if (typeof ts === 'object' && ts !== null && 'low' in ts) {
+    // Protobuf Long format: { low: number, high: number, unsigned: boolean }
+    tsNum = (ts as { low: number }).low;
+  }
+
   if (!tsNum || Number.isNaN(tsNum)) return new Date(fallback);
 
   // WhatsApp timestamps are in seconds, convert to milliseconds
