@@ -264,6 +264,13 @@ interface MessageMetadata {
   channelType?: string;
 }
 
+/** Check if a chat name should be updated given a new incoming name */
+function shouldUpdateChatName(current: string | null | undefined, incoming: string): boolean {
+  if (!current) return true;
+  if (current.endsWith('@s.whatsapp.net') || current.endsWith('@lid')) return true;
+  return incoming !== current; // Name changed (e.g. Discord channel/thread rename)
+}
+
 /**
  * Post-process a chat after findOrCreate: populate canonicalId, persist LID mappings,
  * and fix stale names (raw JIDs).
@@ -291,19 +298,17 @@ async function postProcessChat(
     services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
       log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
     });
-    // Set canonicalId on the chat if it was found via LID mapping (externalId is LID)
     if (!chat.canonicalId) {
       await services.chats.update(chat.id, { canonicalId: chatExternalId });
       chat.canonicalId = chatExternalId;
     }
   }
 
-  // Update chat name if missing or stale
-  const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
-  if (!chatCreated && (!chat.name || hasStaleJidName)) {
+  // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
+  if (!chatCreated) {
     const chatName = rawPayload?.chatName as string | undefined;
     const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
-    if (effectiveName) {
+    if (effectiveName && shouldUpdateChatName(chat.name, effectiveName)) {
       await services.chats.update(chat.id, { name: effectiveName });
       chat.name = effectiveName;
     }

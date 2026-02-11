@@ -176,12 +176,23 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
   const replyToId = getReplyToId(message);
 
   // Resolve chat name: channel name for servers, recipient name for DMs
+  // For threads: "parent-channel → thread-name"
   const isDMChannel = isDM(message);
-  const chatName = isDMChannel
-    ? message.author.displayName || message.author.globalName || message.author.username
-    : 'name' in message.channel
-      ? (message.channel.name ?? undefined)
-      : undefined;
+  const isThread =
+    message.channel.type === ChannelType.PublicThread ||
+    message.channel.type === ChannelType.PrivateThread ||
+    message.channel.type === ChannelType.AnnouncementThread;
+
+  let chatName: string | undefined;
+  if (isDMChannel) {
+    chatName = message.author.displayName || message.author.globalName || message.author.username;
+  } else if (isThread && 'parent' in message.channel && message.channel.parent) {
+    const parentName = message.channel.parent.name;
+    const threadName = message.channel.name;
+    chatName = `${parentName} → ${threadName}`;
+  } else if ('name' in message.channel) {
+    chatName = message.channel.name ?? undefined;
+  }
 
   // Build extended content for raw payload
   const extendedPayload: Record<string, unknown> = {
@@ -196,6 +207,7 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     pushName: message.author.displayName || message.author.globalName || message.author.username,
     chatName,
     isGroup: !isDMChannel,
+    isThread,
     createdAt: message.createdTimestamp,
     isDM: isDMChannel,
     hasEmbeds: message.embeds.length > 0,
