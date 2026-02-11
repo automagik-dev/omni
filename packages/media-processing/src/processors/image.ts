@@ -8,24 +8,13 @@ import { readFileSync } from 'node:fs';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 
+import { GEMINI_MODEL, OPENAI_VISION_MODEL } from '../models';
 import { calculateCost } from '../pricing';
+import { IMAGE_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
 
 const MAX_RETRIES = 3;
-
-/** Default prompt for image description */
-const DEFAULT_PROMPT = `Analyze this image and provide a detailed description that would help someone who cannot see it understand what's in it.
-
-Include:
-1. Main subject(s) and their appearance
-2. Setting/environment
-3. Any text visible in the image
-4. Notable details, colors, or objects
-5. The overall mood or context
-
-Be concise but thorough. If there's text in the image, transcribe it exactly.
-Respond in the same language as any text in the image, or in Portuguese if no text is present.`;
 
 /**
  * Image processor using Gemini Vision with OpenAI fallback
@@ -53,7 +42,7 @@ export class ImageProcessor extends BaseProcessor {
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
       this.log.info('Gemini model initialized');
     }
     return this.geminiModel;
@@ -78,9 +67,8 @@ export class ImageProcessor extends BaseProcessor {
       return this.createFailedResult('No vision API configured (missing Gemini or OpenAI API key)', 'none', 'none');
     }
 
-    const prompt = options?.caption
-      ? `${DEFAULT_PROMPT}\n\nAdditional context (caption): ${options.caption}`
-      : DEFAULT_PROMPT;
+    const basePrompt = options?.prompt ?? IMAGE_DESCRIPTION_PROMPT;
+    const prompt = options?.caption ? `${basePrompt}\n\nAdditional context (caption): ${options.caption}` : basePrompt;
 
     // Read file
     const imageData = readFileSync(filePath);
@@ -117,7 +105,7 @@ export class ImageProcessor extends BaseProcessor {
   private async describeWithGemini(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', 'gemini-2.5-flash');
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
     }
 
     let lastError: Error | null = null;
@@ -141,7 +129,7 @@ export class ImageProcessor extends BaseProcessor {
         const inputTokens = usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
 
-        const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
+        const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
           inputTokens,
           outputTokens,
         });
@@ -152,7 +140,7 @@ export class ImageProcessor extends BaseProcessor {
           contentFormat: 'text',
           processingType: 'description',
           provider: 'google',
-          model: 'gemini-2.5-flash',
+          model: GEMINI_MODEL,
           processingTimeMs: 0,
           inputTokens,
           outputTokens,
@@ -171,7 +159,7 @@ export class ImageProcessor extends BaseProcessor {
       }
     }
 
-    return this.createFailedResult(lastError?.message ?? 'Description failed', 'google', 'gemini-2.5-flash');
+    return this.createFailedResult(lastError?.message ?? 'Description failed', 'google', GEMINI_MODEL);
   }
 
   /**
@@ -180,7 +168,7 @@ export class ImageProcessor extends BaseProcessor {
   private async describeWithOpenAI(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const client = this.getOpenAIClient();
     if (!client) {
-      return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', 'gpt-4o-mini');
+      return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', OPENAI_VISION_MODEL);
     }
 
     try {
@@ -188,7 +176,7 @@ export class ImageProcessor extends BaseProcessor {
       const dataUrl = `data:${mimeType};base64,${base64Data}`;
 
       const response = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: OPENAI_VISION_MODEL,
         messages: [
           {
             role: 'user',
@@ -211,7 +199,7 @@ export class ImageProcessor extends BaseProcessor {
       const inputTokens = response.usage?.prompt_tokens ?? 0;
       const outputTokens = response.usage?.completion_tokens ?? 0;
 
-      const costCents = calculateCost('openai_vision', 'gpt-4o-mini', {
+      const costCents = calculateCost('openai_vision', OPENAI_VISION_MODEL, {
         inputTokens,
         outputTokens,
       });
@@ -222,7 +210,7 @@ export class ImageProcessor extends BaseProcessor {
         contentFormat: 'text',
         processingType: 'description',
         provider: 'openai',
-        model: 'gpt-4o-mini',
+        model: OPENAI_VISION_MODEL,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -232,7 +220,7 @@ export class ImageProcessor extends BaseProcessor {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('OpenAI description error', { error: errorMsg });
 
-      return this.createFailedResult(errorMsg, 'openai', 'gpt-4o-mini');
+      return this.createFailedResult(errorMsg, 'openai', OPENAI_VISION_MODEL);
     }
   }
 

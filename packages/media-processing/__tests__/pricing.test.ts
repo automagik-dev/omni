@@ -18,8 +18,8 @@ describe('pricing', () => {
     });
 
     it('contains Gemini Vision pricing', () => {
-      expect(PRICING_REGISTRY['gemini_vision:gemini-2.5-flash']).toBeDefined();
-      expect(PRICING_REGISTRY['gemini_vision:gemini-2.5-flash']?.unit).toBe('per_million_tokens');
+      expect(PRICING_REGISTRY['gemini_vision:gemini-3-flash-preview']).toBeDefined();
+      expect(PRICING_REGISTRY['gemini_vision:gemini-3-flash-preview']?.unit).toBe('per_million_tokens');
     });
 
     it('contains local processor pricing (free)', () => {
@@ -88,7 +88,7 @@ describe('pricing', () => {
 
     describe('per-million-tokens pricing (Gemini)', () => {
       it('calculates cost for image processing', () => {
-        const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
+        const costCents = calculateCost('gemini_vision', 'gemini-3-flash-preview', {
           inputTokens: 10000,
           outputTokens: 500,
         });
@@ -99,7 +99,7 @@ describe('pricing', () => {
       });
 
       it('calculates cost for larger usage', () => {
-        const costCents = calculateCost('gemini_vision', 'gemini-2.5-flash', {
+        const costCents = calculateCost('gemini_vision', 'gemini-3-flash-preview', {
           inputTokens: 100000,
           outputTokens: 5000,
         });

@@ -1532,22 +1532,24 @@ export type DispatcherCleanup = () => Promise<void>;
 // Smart Response Gate (LLM pre-filter)
 // ============================================================================
 
-const DEFAULT_GATE_MODEL = 'gemini-2.0-flash';
+import { RESPONSE_GATE_PROMPT } from '@omni/media-processing';
+
+const DEFAULT_GATE_MODEL = 'gemini-3-flash-preview';
 const GATE_TIMEOUT_MS = 3_000;
 
-const DEFAULT_GATE_PROMPT = `You are a response gate for an AI assistant called "{agentName}".
-Given the following buffered messages from a {chatType} chat, decide whether the assistant should respond.
+type SettingsReader = {
+  getSecret: (key: string, envKey?: string) => Promise<string | undefined>;
+  getString: (key: string, envFallback?: string, defaultValue?: string) => Promise<string | undefined>;
+};
 
-Rules:
-- If someone is directly asking the assistant a question or requesting action → respond
-- If someone mentions the assistant's name in passing (e.g. "I told {agentName} yesterday") → skip
-- If the messages are just a conversation between others that doesn't need the assistant → skip
-- When in doubt → respond
-
-Reply with ONLY one word: "respond" or "skip"
-
-Messages:
-{messages}`;
+/**
+ * Resolve gate prompt: instance override → globalSettings override → code default
+ */
+async function resolveGatePrompt(instancePrompt: string | null, settings: SettingsReader): Promise<string> {
+  if (instancePrompt) return instancePrompt;
+  const globalOverride = await settings.getString('prompt.response_gate');
+  return globalOverride ?? RESPONSE_GATE_PROMPT;
+}
 
 /**
  * Call a fast LLM to decide whether the agent should respond to buffered messages.
@@ -1558,14 +1560,14 @@ async function shouldRespondViaGate(
   instance: Instance,
   messages: BufferedMessage[],
   chatType: 'dm' | 'group' | 'channel',
-  settings: { getSecret: (key: string, envKey?: string) => Promise<string | undefined> },
+  settings: SettingsReader,
 ): Promise<boolean> {
   const inst = instance as Record<string, unknown>;
   if (!inst.agentGateEnabled) return true;
 
   const agentName = instance.agentId ?? instance.name ?? 'assistant';
   const model = (inst.agentGateModel as string | null) ?? DEFAULT_GATE_MODEL;
-  const customPrompt = inst.agentGatePrompt as string | null;
+  const basePrompt = await resolveGatePrompt(inst.agentGatePrompt as string | null, settings);
 
   const messagesText = messages
     .map((m) => {
@@ -1574,7 +1576,7 @@ async function shouldRespondViaGate(
     })
     .join('\n');
 
-  const prompt = (customPrompt ?? DEFAULT_GATE_PROMPT)
+  const prompt = basePrompt
     .replace(/{agentName}/g, agentName)
     .replace(/{chatType}/g, chatType)
     .replace(/{messages}/g, messagesText);

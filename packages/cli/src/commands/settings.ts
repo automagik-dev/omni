@@ -71,11 +71,23 @@ export function createSettingsCommand(): Command {
   settings
     .command('set <key> <value>')
     .description('Update a setting value')
-    .action(async (key: string, value: string) => {
-      // Note: The SDK doesn't have a settings.set method yet
-      // This is a placeholder for when the API supports it
-      output.warn('Settings update via CLI is not yet supported.');
-      output.info(`To update setting '${key}' to '${value}', use the API directly or dashboard.`);
+    .option('--reason <reason>', 'Reason for change (audit)')
+    .action(async (key: string, value: string, options: { reason?: string }) => {
+      const client = getClient();
+
+      try {
+        const result = await client.settings.set(key, value, options.reason);
+
+        output.data({
+          key: result.key,
+          value: result.isSecret ? '********' : result.value,
+          category: result.category,
+          updatedAt: result.updatedAt,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to set setting: ${message}`);
+      }
     });
 
   return settings;

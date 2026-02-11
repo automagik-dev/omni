@@ -86,6 +86,8 @@ export interface ProcessOptions {
   durationSeconds?: number;
   /** Caption context for images (improves description quality) */
   caption?: string;
+  /** Override prompt for LLM-based processing (description, OCR) */
+  prompt?: string;
 }
 
 /**

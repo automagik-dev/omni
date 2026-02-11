@@ -9,7 +9,7 @@
         kill-ghosts reset sdk-generate \
         cli cli-build cli-link \
         migrate-messages migrate-messages-dry \
-        _init-db-wait
+        _init-db-wait _sync-db
 
 # Default target
 help:
@@ -128,6 +128,13 @@ _init-db-wait: _setup-env
 	done; \
 	echo "⚠️  Could not initialize database (is PostgreSQL running?)" && exit 1
 
+# Quick schema sync — assumes DB is already running (used by test targets)
+_sync-db:
+	@set -a && . ./.env && set +a && \
+	cd packages/db && bun x drizzle-kit push --force >/dev/null 2>&1 && \
+	echo "✓ Schema synced" || \
+	echo "⚠️  Schema sync skipped (is PostgreSQL running?)"
+
 # Check dependencies
 check-deps:
 	@./scripts/check-dependencies.sh
@@ -203,7 +210,7 @@ lint-core:
 format:
 	bunx biome format --write .
 
-test: _build-dist
+test: _build-dist _sync-db
 	bun test --env-file=.env
 
 test-watch: _build-dist
@@ -221,7 +228,7 @@ _build-dist:
 	fi
 
 # Run tests for specific packages (load .env from root)
-test-api:
+test-api: _sync-db
 	bun test --env-file=.env packages/api/src
 
 test-db:

@@ -10,6 +10,7 @@ import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import type { Uploadable } from 'openai/uploads';
 
+import { GROQ_WHISPER_MODEL, OPENAI_WHISPER_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
@@ -105,7 +106,7 @@ export class AudioProcessor extends BaseProcessor {
   private async transcribeWithGroq(filePath: string, language: string): Promise<ProcessingResult> {
     const client = this.getGroqClient();
     if (!client) {
-      return this.createFailedResult('Groq client not configured (missing API key)', 'groq', 'whisper-large-v3-turbo');
+      return this.createFailedResult('Groq client not configured (missing API key)', 'groq', GROQ_WHISPER_MODEL);
     }
 
     let lastError: Error | null = null;
@@ -117,7 +118,7 @@ export class AudioProcessor extends BaseProcessor {
 
         const transcription = await client.audio.transcriptions.create({
           file: fileStream as unknown as Uploadable,
-          model: 'whisper-large-v3-turbo',
+          model: GROQ_WHISPER_MODEL,
           language,
           response_format: 'text',
         });
@@ -132,7 +133,7 @@ export class AudioProcessor extends BaseProcessor {
           contentFormat: 'text',
           processingType: 'transcription',
           provider: 'groq',
-          model: 'whisper-large-v3-turbo',
+          model: GROQ_WHISPER_MODEL,
           processingTimeMs: 0,
           language,
           costCents: 0,
@@ -151,7 +152,7 @@ export class AudioProcessor extends BaseProcessor {
       }
     }
 
-    return this.createFailedResult(lastError?.message ?? 'Transcription failed', 'groq', 'whisper-large-v3-turbo');
+    return this.createFailedResult(lastError?.message ?? 'Transcription failed', 'groq', GROQ_WHISPER_MODEL);
   }
 
   /**
@@ -160,7 +161,7 @@ export class AudioProcessor extends BaseProcessor {
   private async transcribeWithOpenAI(filePath: string, language: string): Promise<ProcessingResult> {
     const client = this.getOpenAIClient();
     if (!client) {
-      return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', 'whisper-1');
+      return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', OPENAI_WHISPER_MODEL);
     }
 
     try {
@@ -169,7 +170,7 @@ export class AudioProcessor extends BaseProcessor {
 
       const transcription = await client.audio.transcriptions.create({
         file: fileStream,
-        model: 'whisper-1',
+        model: OPENAI_WHISPER_MODEL,
         language,
         response_format: 'text',
       });
@@ -183,7 +184,7 @@ export class AudioProcessor extends BaseProcessor {
         contentFormat: 'text',
         processingType: 'transcription',
         provider: 'openai',
-        model: 'whisper-1',
+        model: OPENAI_WHISPER_MODEL,
         processingTimeMs: 0,
         language,
         costCents: 0,
@@ -192,7 +193,7 @@ export class AudioProcessor extends BaseProcessor {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('OpenAI transcription error', { error: errorMsg });
 
-      return this.createFailedResult(errorMsg, 'openai', 'whisper-1');
+      return this.createFailedResult(errorMsg, 'openai', OPENAI_WHISPER_MODEL);
     }
   }
 

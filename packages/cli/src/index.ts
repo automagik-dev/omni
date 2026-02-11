@@ -26,6 +26,7 @@ import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
+import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
@@ -142,6 +143,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Core',
     helpDescription: 'Browse and download media items',
+  },
+  {
+    create: createPromptsCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Manage LLM prompt overrides',
   },
   {
     create: createResyncCommand,

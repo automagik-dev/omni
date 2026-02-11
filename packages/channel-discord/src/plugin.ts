@@ -701,6 +701,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * @returns Promise that resolves with fetched messages
    */
   async fetchHistory(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    if (!options.channelId) {
+      throw new DiscordError(
+        ErrorCode.NOT_FOUND,
+        'channelId is required for Discord history fetch — Discord sync must target a specific channel',
+      );
+    }
+
     const client = this.getClient(instanceId);
     const limit = Math.min(options.limit ?? 100, 1000); // Max 1000 messages
 
