@@ -9,6 +9,7 @@
  * @see /home/cezar/dev/omni/src/db/models.py (v1 reference)
  */
 
+import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { relations } from 'drizzle-orm';
 import {
   boolean,
@@ -231,7 +232,7 @@ export const providerSchemas = [
   'webhook',
   'openclaw',
   'custom',
-] as const;
+] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**

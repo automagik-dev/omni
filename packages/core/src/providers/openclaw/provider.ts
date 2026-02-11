@@ -17,6 +17,14 @@ import type { ChatEvent, OpenClawClientConfig, OpenClawProviderConfig } from './
 
 const log = createLogger('openclaw:provider');
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional — strip C0 control chars from untrusted input
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/g;
+
+/** Strip C0 control characters from a string */
+function stripControlChars(s: string): string {
+  return s.replace(CONTROL_CHAR_RE, '');
+}
+
 const MAX_MESSAGE_BYTES = 100 * 1024; // 100KB
 const MAX_ACCUMULATION_BYTES = 1 * 1024 * 1024; // 1MB
 const AGENT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
@@ -122,11 +130,14 @@ export class OpenClawAgentProvider implements IAgentProvider {
       // Phase 1: Wait for connection + send chat.send
       await this.client.waitForReady(sendAckTimeoutMs);
 
-      const sendResult = await this.client.chatSend({
-        sessionKey,
-        message,
-        deliver: true,
-      });
+      const sendResult = await this.client.chatSend(
+        {
+          sessionKey,
+          message,
+          deliver: true,
+        },
+        sendAckTimeoutMs,
+      );
 
       const runId = sendResult.runId;
 
@@ -140,7 +151,8 @@ export class OpenClawAgentProvider implements IAgentProvider {
       });
 
       // Phase 2: Accumulate response by runId
-      const accumulated = await this.accumulateResponse(runId, agentTimeoutMs, context.traceId);
+      const sendTimestamp = Date.now();
+      const accumulated = await this.accumulateResponse(runId, agentTimeoutMs, context.traceId, sendTimestamp);
 
       // Success — reset circuit breaker
       this.consecutiveFailures = 0;
@@ -245,8 +257,10 @@ export class OpenClawAgentProvider implements IAgentProvider {
   // === Private ===
 
   private buildSessionKey(agentId: string, chatId: string): string {
-    // Sanitize chatId — remove characters that could break session key format
-    const safeChatId = chatId.replace(/[:/\\]/g, '-');
+    // Sanitize chatId — strip C0 control chars, dangerous path chars, and cap length
+    const safeChatId = stripControlChars(chatId)
+      .replace(/[:/\\]/g, '-')
+      .slice(0, 256);
     return `agent:${agentId}:omni-${safeChatId}`;
   }
 
@@ -262,7 +276,12 @@ export class OpenClawAgentProvider implements IAgentProvider {
     return true;
   }
 
-  private accumulateResponse(runId: string, timeoutMs: number, traceId: string): Promise<string> {
+  private accumulateResponse(
+    runId: string,
+    timeoutMs: number,
+    traceId: string,
+    sendTimestamp: number,
+  ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       let accumulated = '';
       let accumulatedBytes = 0;
@@ -308,7 +327,7 @@ export class OpenClawAgentProvider implements IAgentProvider {
           lastDeltaReceivedAt = now;
           if (!firstDeltaAt) {
             firstDeltaAt = now;
-            const ttfdMs = now - (Date.now() - timeoutMs); // approximate from send time
+            const ttfdMs = now - sendTimestamp;
             log.debug('Time-to-first-delta', { traceId, runId, ttfdMs, providerId: this.id });
           }
 

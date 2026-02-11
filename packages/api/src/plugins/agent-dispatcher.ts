@@ -847,11 +847,16 @@ async function dispatchViaProvider(
   const provider = await getAgentProvider(services, instance);
   if (!provider) return false;
 
-  const { messageTexts } = await prepareAgentContent(services, instance, messages);
+  const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
 
-  if (!messageTexts.length) {
-    log.debug('No text content for provider trigger, skipping');
+  if (!messageTexts.length && !mediaFiles.length) {
+    log.debug('No text or media content for provider trigger, skipping');
     return false;
+  }
+
+  // Ensure provider always gets at least a placeholder for media-only messages
+  if (!messageTexts.length && mediaFiles.length) {
+    messageTexts.push('[Media message]');
   }
 
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
@@ -1007,24 +1012,35 @@ async function processAgentResponse(
   try {
     // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
     const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
-    const handled = await dispatchViaProvider(
-      services,
-      instance,
-      messages,
-      triggerType,
-      channel,
-      chatId,
-      senderId,
-      personId,
-      senderName,
-      traceId,
-      rawEvent,
-    );
+    let handled = false;
+    try {
+      handled = await dispatchViaProvider(
+        services,
+        instance,
+        messages,
+        triggerType,
+        channel,
+        chatId,
+        senderId,
+        personId,
+        senderName,
+        traceId,
+        rawEvent,
+      );
+    } catch (providerError) {
+      log.error('Provider dispatch failed, falling back to legacy', {
+        instanceId: instance.id,
+        chatId,
+        error: String(providerError),
+        traceId,
+      });
+      // Fall through to legacy path
+    }
 
     if (handled) return;
 
     // Fallback: legacy agentRunner.run() path
-    log.debug('No IAgentProvider resolved, using legacy agentRunner path', {
+    log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
       instanceId: instance.id,
     });
 
@@ -1717,17 +1733,32 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
         );
       }
     }
-    await Promise.all(disposePromises);
-    providerCache.clear();
 
     // Stop all shared OpenClaw WS clients
+    const clientStopPromises: Promise<void>[] = [];
     for (const [id, client] of openclawClientPool.entries()) {
-      try {
-        client.stop();
-      } catch (err) {
-        log.warn('Error stopping OpenClaw client', { providerId: id, error: String(err) });
-      }
+      clientStopPromises.push(
+        Promise.resolve().then(() => {
+          try {
+            client.stop();
+          } catch (err) {
+            log.warn('Error stopping OpenClaw client', { providerId: id, error: String(err) });
+          }
+        }),
+      );
     }
+
+    // Use allSettled + 5s top-level timeout so one stuck provider can't block shutdown
+    const allCleanup = Promise.allSettled([...disposePromises, ...clientStopPromises]);
+    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) =>
+      setTimeout(() => {
+        log.warn('Dispatcher shutdown timed out after 5s, proceeding');
+        resolve([]);
+      }, 5_000),
+    );
+    await Promise.race([allCleanup, timeoutGuard]);
+
+    providerCache.clear();
     openclawClientPool.clear();
 
     log.info('Agent dispatcher shutdown complete');
