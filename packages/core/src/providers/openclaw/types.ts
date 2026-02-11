@@ -104,7 +104,8 @@ export interface ChatSendParams {
   sessionKey: string;
   message: string;
   deliver?: boolean;
-  idempotencyKey?: string;
+  /** Required by OpenClaw gateway — UUID for deduplication */
+  idempotencyKey: string;
 }
 
 export interface ChatSendResult {

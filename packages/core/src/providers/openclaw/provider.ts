@@ -10,6 +10,7 @@
  * - Sender name prefix support
  */
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../logger';
 import type { AgentTrigger, AgentTriggerResult, IAgentProvider } from '../types';
 import { OpenClawClient } from './client';
@@ -137,6 +138,7 @@ export class OpenClawAgentProvider implements IAgentProvider {
           sessionKey,
           message,
           deliver: true,
+          idempotencyKey: randomUUID(),
         },
         sendAckTimeoutMs,
       );

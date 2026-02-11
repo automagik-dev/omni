@@ -227,6 +227,7 @@ describe('OpenClawClient', () => {
       sessionKey: 'agent:sofia:omni-chat-123',
       message: 'Hello!',
       deliver: true,
+      idempotencyKey: 'test-idem-key',
     });
 
     expect(result.runId).toBe('run-abc');
