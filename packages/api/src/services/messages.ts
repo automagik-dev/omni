@@ -76,6 +76,43 @@ export interface CreateMessageOptions {
   originalEventId?: string;
 }
 
+/** Media type badges for message previews */
+const MEDIA_BADGES: Record<string, string> = {
+  image: '[Image]',
+  audio: '[Audio]',
+  video: '[Video]',
+  document: '[Document]',
+  sticker: '[Sticker]',
+  contact: '[Contact]',
+  location: '[Location]',
+  poll: '[Poll]',
+};
+
+/** Build a rich preview string for the chat's lastMessagePreview */
+function buildMessagePreview(options: CreateMessageOptions): string {
+  const sender = options.isFromMe ? 'You' : (options.senderDisplayName ?? null);
+
+  // Build content part
+  let content: string;
+  const mediaDesc =
+    options.transcription ?? options.imageDescription ?? options.videoDescription ?? options.documentExtraction;
+  const badge = MEDIA_BADGES[options.messageType];
+
+  if (options.textContent && !badge) {
+    // Pure text message
+    content = options.textContent;
+  } else if (badge) {
+    // Media message — show badge + description or caption
+    content = mediaDesc ? `${badge} ${mediaDesc}` : options.textContent ? `${badge} ${options.textContent}` : badge;
+  } else {
+    content = options.textContent ?? '[Media]';
+  }
+
+  // Prefix with sender name
+  const preview = sender ? `${sender}: ${content}` : content;
+  return preview.substring(0, 500);
+}
+
 export class MessageService {
   constructor(
     private db: Database,
@@ -357,11 +394,12 @@ export class MessageService {
     }
 
     // Update chat's last message and stats
+    const preview = buildMessagePreview(options);
     await this.db
       .update(chats)
       .set({
         lastMessageAt: options.platformTimestamp,
-        lastMessagePreview: (options.textContent ?? '[Media]').substring(0, 500),
+        lastMessagePreview: preview,
         messageCount: sql`${chats.messageCount} + 1`,
         // Incoming: increment unread; Sent: reset unread (sending implies reading)
         ...(options.isFromMe ? { unreadCount: 0 } : { unreadCount: sql`${chats.unreadCount} + 1` }),
