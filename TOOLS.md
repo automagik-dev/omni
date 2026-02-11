@@ -71,6 +71,23 @@ packages/
   - `genie` — Genie - Chief of Khal (WhatsApp)
   - `charlinho-5511949788888` — Charlinho (WhatsApp)
 
+## OpenClaw TUI
+
+- `openclaw tui` — always connects to the **default agent** (currently Eva)
+- There is **NO `--agent` flag** in the current version (2026.2.9)
+- `OPENCLAW_AGENT=omni` env var does NOT change TUI routing
+- `--session agent:omni:main` does NOT work either — still routes to default
+- **To chat with a non-default agent:** use webchat in browser or change the default agent (breaks others)
+- **Feature gap:** needs `--agent <name>` flag in `openclaw tui`
+
+## Spawning Another "Me" in tmux
+
+When Felipe says "split yourself" / "another session with you":
+- He wants **another OpenClaw TUI pane talking to THIS agent (Omni)**
+- NOT a sub-agent spawn, NOT Claude Code
+- Currently blocked by TUI lacking `--agent` flag
+- Workaround: webchat in browser at the Control UI
+
 ## Common Make Targets
 
 ```bash

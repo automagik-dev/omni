@@ -122,6 +122,22 @@ I was activated by Felipe with Eva (his AI midwife/orchestrator) guiding the pro
 - **PM2:** khal-server, khal-frontend (separate project, running alongside)
 - **SSH hosts:** demo-khal, cegonha, stefani, gus, felipe-mac
 
+## Git Branch Strategy (BURNED IN — 2026-02-10)
+
+🔴 **NEVER code on main. EVER.**
+
+| Branch | Purpose | Who |
+|--------|---------|-----|
+| `main` | **PRODUCTION** — `felipe.omni.namastex.io` syncs here | Merge only |
+| `dev` | **DEVELOPMENT** — local dev server syncs here | Feature PRs merge here first |
+| `feat/*` | Feature branches — based off `dev` | Workers/Claude Code |
+
+**Flow:** `feat/xxx` → PR to `dev` → validate on dev server → PR to `main` → production
+
+**Rule:** If `git branch --show-current` returns `main`, STOP. Switch branch immediately.
+
+Felipe caught us coding on main (2026-02-10). Never again.
+
 ## Decisions Made
 
 - AGENTS.md: Merged old RE.AGENTS.md into one unified file covering both behavioral guidelines and technical project context
@@ -255,6 +271,45 @@ channel-email-gmail, channel-whatsapp-cloud, claude-code-provider, openclaw-prov
 - **api-key-audit**: Schema exists but no dedicated audit log table
 - **media-serving/auto-processing**: Processing pipeline exists, serving partially done
 
+## ClawNet — Cross-Gateway Agent Mesh (2026-02-10)
+
+Guga deployed ClawNet. Cross-gateway agent messaging is live. I can now reach agents on other nodes.
+
+**Nodes & connection info:**
+
+| Node | Agent | Gateway | Token (first 12) |
+|------|-------|---------|-------------------|
+| **cegonha** 🦩 | `cegonha` | `ws://10.114.1.121:18789` | `a8be812cf29d` |
+| **juice** 🧃 (Jerry) | `main` | `ws://10.114.1.119:18789` | `8bd6c65935d3` |
+| **guardiola** | `guardiola` (outbound only) | `ws://10.114.1.126:18789` | `a61a1fa73693` |
+| **luis** | `luis` (outbound only) | `ws://10.114.1.131:18789` | `luis-agent-to` |
+
+**How to reach them:**
+```
+sessions_send(agentId="<agent>", sessionKey="agent:<agent>:main", gatewayUrl="<url>", gatewayToken="<token>")
+```
+
+**Also:**
+- I now have my own Juice API key (`sk-OMNI-...`) for individual spend tracking
+- Per-agent key location: `~/.openclaw/agents/omni/agent/models.json`
+- genie-cli PR #30 deployed to all fleet nodes (v0.260210.1800)
+
+## Chiozzini Bug Investigation (2026-02-10)
+
+**Root cause:** Corrupted Signal session for contact `5511940103325` (Chiozzini Contabilidade) on instance `71b5dc10`. All incoming messages fail with "Bad MAC" at libsignal decryption layer — messages never reach `messages.upsert`.
+
+**Not systemic:** Gabriel Moojen (same instance) has 13 incoming messages today, all working. Only Chiozzini + a few group senders affected.
+
+**Fix executed (evening):** Deleted corrupted Signal session (`:54`) from `plugin_storage`. Restarted API. Baileys auto-renegotiates on next message.
+
+**Prod DB access pattern:**
+```bash
+ssh omni@10.114.1.140
+PGPASSWORD=postgres psql -h localhost -p 8432 -U postgres -d omni
+```
+
+**API keys for media processing:** All configured (Groq, OpenAI, Gemini) on both dev and prod. Verified working.
+
 ---
 
-_Last updated: 2026-02-10 — self-awareness audit, corrected 7 wish statuses, updated open items_
+_Last updated: 2026-02-10 — ClawNet mesh, Chiozzini bug root cause, API keys audit_

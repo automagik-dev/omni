@@ -42,3 +42,6 @@
 - [x] Fix NATS "consumer already exists" errors on restart (df31c0a)
 - [x] Baileys Quick Wins B1-B6 (merged ff68219)
 - [x] CLI DX Improvements A1-A5 (merged d8ecb90)
+- [x] Fix Chiozzini Signal session corruption (deleted :54 from plugin_storage, API restarted)
+- [x] Configure media processing API keys on dev + prod (Groq, OpenAI, Gemini)
+- [x] ClawNet cross-gateway mesh deployed (cegonha, juice, guardiola, luis)
