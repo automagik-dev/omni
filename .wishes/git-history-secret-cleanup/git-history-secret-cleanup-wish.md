@@ -1,6 +1,7 @@
 # Wish: Public Repo Secret Leak Cleanup + Git History Rewrite
 
 **Status:** DRAFT
+**Beads:** omni-8j6
 **Slug:** `git-history-secret-cleanup`
 **Created:** 2026-02-11
 **Requested by:** Felipe

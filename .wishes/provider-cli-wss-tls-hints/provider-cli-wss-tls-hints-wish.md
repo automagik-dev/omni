@@ -1,6 +1,7 @@
 # Wish: CLI — Add `wss://` TLS/Cert Error Hints for Provider Tests
 
 **Status:** DRAFT
+**Beads:** omni-vq7
 **Slug:** `provider-cli-wss-tls-hints`
 **Created:** 2026-02-10
 

@@ -5,7 +5,7 @@
 **Status:** IN_PROGRESS
 **Created:** 2026-02-10
 **Author:** Omni (OpenClaw)
-**Beads:** TBD
+**Beads:** omni-16n
 
 ---
 

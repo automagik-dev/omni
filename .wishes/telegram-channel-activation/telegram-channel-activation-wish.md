@@ -3,6 +3,7 @@
 > Make adding a Telegram bot as easy as `omni channels add telegram <token>`. One command, 30 seconds, done.
 
 **Status:** DRAFT
+**Beads:** omni-m17
 **Created:** 2026-02-10
 **Author:** WISH Agent + Felipe
 **Reviewed by:** Council (7 members, 2 APPROVE / 5 MODIFY → revised)

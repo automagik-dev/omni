@@ -1,6 +1,7 @@
 # Wish: Session Observatory & Self-Improvement Loop
 
 **Status:** DRAFT
+**Beads:** omni-beb
 **Slug:** `session-observatory`
 **Created:** 2026-02-10
 **Depends on:** `openclaw-provider-integration` (Phase 1 must ship first)

@@ -3,6 +3,7 @@
 > Seven medium-effort features: chat modifications, profile picture, group invites, privacy settings, call rejection, message editing.
 
 **Status:** IN_PROGRESS
+**Beads:** omni-1s0
 **Created:** 2026-02-08
 **Author:** Omni + Guga
 **Branch:** `feat/medium-features`

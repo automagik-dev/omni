@@ -5,7 +5,7 @@
 **Status:** DRAFT
 **Created:** 2026-02-07
 **Author:** WISH Agent (with Felipe + Cezar input, 2 council rounds)
-**Beads:** TBD
+**Beads:** omni-dq9
 
 ---
 

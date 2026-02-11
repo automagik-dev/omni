@@ -1,6 +1,7 @@
 # Wish: OpenClaw Provider Integration
 
 **Status:** SHIPPED (Review 2026-02-10 — SHIP verdict, trigger_logs INSERT deferred to follow-up)
+**Beads:** omni-6vk
 **Slug:** `openclaw-provider-integration`
 **Created:** 2026-02-10
 **Council:** R1: 1/9/0 → R2: 0/10/0 → R3: 10 APPROVE Phase 1 (Phase 2 split to `session-observatory`) + Sofia PM APPROVE

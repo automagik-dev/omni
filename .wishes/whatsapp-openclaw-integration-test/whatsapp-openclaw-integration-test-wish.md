@@ -1,6 +1,7 @@
 # Wish: WhatsApp ↔ OpenClaw Integration Test (khal-whatsapp)
 
 **Status:** IN_PROGRESS
+**Beads:** omni-eke
 **Slug:** `whatsapp-openclaw-integration-test`
 **Created:** 2026-02-11
 **Requested by:** Felipe
