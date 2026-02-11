@@ -685,4 +685,80 @@ chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), as
   });
 });
 
+// ============================================================================
+// SYNC CONTACT NAMES
+// ============================================================================
+
+const syncNamesSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID'),
+});
+
+/**
+ * POST /chats/sync-names - Backfill DM chat names from WhatsApp contacts cache
+ *
+ * Reads the in-memory contacts from the WhatsApp plugin and updates any DM chats
+ * that are missing a name (or have a stale JID as name).
+ */
+chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) => {
+  const { instanceId } = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const { plugin } = await getPluginForInstance(services, channelRegistry, instanceId);
+
+  if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: 'Plugin does not support fetchContacts',
+      recoverable: false,
+    });
+  }
+
+  const pluginWithContacts = plugin as typeof plugin & {
+    fetchContacts: (
+      id: string,
+      opts?: Record<string, unknown>,
+    ) => Promise<{ contacts: Array<{ platformUserId: string; name?: string; isGroup: boolean }> }>;
+  };
+  const { contacts } = await pluginWithContacts.fetchContacts(instanceId);
+
+  // Build a map of JID → contact name (DMs only)
+  const contactNames = new Map<string, string>();
+  for (const contact of contacts) {
+    if (!contact.isGroup && contact.name) {
+      contactNames.set(contact.platformUserId, contact.name);
+    }
+  }
+
+  // Get all DM chats for this instance that are missing names or have stale JID names
+  const allChats = await services.chats.list({
+    instanceId,
+    chatType: ['dm'],
+    limit: 1000,
+  });
+
+  let updated = 0;
+  for (const chat of allChats.items) {
+    const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
+    if (!chat.name || hasStaleJidName) {
+      const contactName = contactNames.get(chat.externalId);
+      if (contactName) {
+        await services.chats.update(chat.id, { name: contactName });
+        updated++;
+      }
+    }
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      instanceId,
+      contactsLoaded: contactNames.size,
+      chatsUpdated: updated,
+    },
+  });
+});
+
 export { chatsRoutes };

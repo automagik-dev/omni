@@ -7,8 +7,8 @@
 
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
-import { chatIdMappings, instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { chatIdMappings, chats, instances } from '@omni/db';
+import { and, eq } from 'drizzle-orm';
 import { clearQrCode } from './qr-store';
 
 const instanceLog = createLogger('instance');
@@ -145,5 +145,54 @@ export async function setupLidMappingListener(eventBus: EventBus, db?: Database)
     lidLog.info('Listening for custom.lid-mapping.batch events');
   } catch (error) {
     lidLog.warn('Failed to set up LID mapping listener', { error: String(error) });
+  }
+}
+
+const contactsLog = createLogger('contacts-sync');
+
+/** Update a single chat name if it's missing or stale */
+async function updateChatName(db: Database, instanceId: string, jid: string, name: string): Promise<boolean> {
+  const [chat] = await db
+    .select({ id: chats.id, name: chats.name })
+    .from(chats)
+    .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, jid)))
+    .limit(1);
+  if (!chat) return false;
+
+  const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
+  if (!chat.name || hasStaleJidName) {
+    await db.update(chats).set({ name, updatedAt: new Date() }).where(eq(chats.id, chat.id));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Set up event listener for custom.contacts.names events
+ * Persists contact names to DM chats that are missing names
+ */
+export async function setupContactNamesListener(eventBus: EventBus, db?: Database): Promise<void> {
+  if (!db) return;
+
+  try {
+    await eventBus.subscribePattern('custom.contacts.names', async (event) => {
+      const instanceId = event.metadata.instanceId;
+      const names = (event.payload as { names: { jid: string; name: string }[] }).names;
+      if (!instanceId || !names?.length) return;
+
+      let updated = 0;
+      for (const { jid, name } of names) {
+        try {
+          if (await updateChatName(db, instanceId, jid, name)) updated++;
+        } catch {
+          // Skip individual failures
+        }
+      }
+
+      contactsLog.info('Contact names persisted to chats', { instanceId, total: names.length, updated });
+    });
+    contactsLog.info('Listening for custom.contacts.names events');
+  } catch (error) {
+    contactsLog.warn('Failed to set up contact names listener', { error: String(error) });
   }
 }

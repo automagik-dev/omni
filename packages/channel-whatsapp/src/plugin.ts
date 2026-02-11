@@ -1257,27 +1257,62 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Validate instance is connected
     this.getSocket(instanceId);
 
-    // Get cached contacts for this instance
-    const instanceContacts = this.contactsCache.get(instanceId);
     const contacts: SyncContact[] = [];
+    const seenIds = new Set<string>();
 
-    if (instanceContacts) {
-      for (const contact of instanceContacts.values()) {
-        contacts.push(contact);
-        options.onContact?.(contact);
-      }
-      options.onProgress?.(contacts.length);
-    }
+    // Get cached contacts (from contacts.upsert events)
+    this.collectFromContactsCache(instanceId, contacts, seenIds, options);
+    // Supplement with chat names (from chats.upsert events, fires on reconnect)
+    this.collectFromChatNamesCache(instanceId, contacts, seenIds, options);
+
+    options.onProgress?.(contacts.length);
 
     this.logger.info('Contacts fetch complete', {
       instanceId,
       totalContacts: contacts.length,
     });
 
-    return {
-      totalFetched: contacts.length,
-      contacts,
-    };
+    return { totalFetched: contacts.length, contacts };
+  }
+
+  /** Collect contacts from contactsCache into the output array */
+  private collectFromContactsCache(
+    instanceId: string,
+    contacts: SyncContact[],
+    seenIds: Set<string>,
+    options: FetchContactsOptions,
+  ): void {
+    const cache = this.contactsCache.get(instanceId);
+    if (!cache) return;
+    for (const contact of cache.values()) {
+      contacts.push(contact);
+      seenIds.add(contact.platformUserId);
+      options.onContact?.(contact);
+    }
+  }
+
+  /** Collect DM contacts from chatNamesCache that aren't already in contactsCache */
+  private collectFromChatNamesCache(
+    instanceId: string,
+    contacts: SyncContact[],
+    seenIds: Set<string>,
+    options: FetchContactsOptions,
+  ): void {
+    const chatNames = this.chatNamesCache.get(instanceId);
+    if (!chatNames) return;
+    for (const [jid, name] of chatNames) {
+      if (seenIds.has(jid) || jid.includes('@g.us') || jid.includes('@broadcast') || jid.includes('@newsletter'))
+        continue;
+      const contact: SyncContact = {
+        platformUserId: jid,
+        name,
+        phone: jid.includes('@s.whatsapp.net') ? `+${jid.split('@')[0]}` : undefined,
+        isGroup: false,
+      };
+      contacts.push(contact);
+      seenIds.add(jid);
+      options.onContact?.(contact);
+    }
   }
 
   /**
@@ -1816,6 +1851,36 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
     this.publishLidMappings(instanceId);
+    this.publishContactNames(instanceId);
+  }
+
+  /**
+   * Publish cached contact names for an instance to the event bus for chat name persistence
+   */
+  private publishContactNames(instanceId: string): void {
+    const contactCache = this.contactsCache.get(instanceId);
+    if (!contactCache || contactCache.size === 0) return;
+
+    const names: Array<{ jid: string; name: string }> = [];
+    for (const [jid, contact] of contactCache) {
+      if (contact.name && !jid.includes('@g.us') && !jid.includes('@broadcast')) {
+        names.push({ jid, name: contact.name });
+      }
+    }
+    if (names.length === 0) return;
+
+    this.eventBus
+      .publishGeneric(
+        'custom.contacts.names',
+        { names },
+        {
+          instanceId,
+          channelType: this.id,
+          source: `channel:${this.id}`,
+          correlationId: `contacts-names-${instanceId}`,
+        },
+      )
+      .catch((err) => this.logger.warn('Failed to publish contact names', { error: String(err) }));
   }
 
   /**

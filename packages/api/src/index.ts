@@ -30,6 +30,7 @@ import {
   reconnectWithPool,
   setupAgentResponder,
   setupConnectionListener,
+  setupContactNamesListener,
   setupEventPersistence,
   setupLidMappingListener,
   setupMediaProcessor,
@@ -92,6 +93,7 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     await setupQrCodeListener(eventBus);
     await setupConnectionListener(eventBus, db);
     await setupLidMappingListener(eventBus, db);
+    await setupContactNamesListener(eventBus, db);
     await setupMessageListener(eventBus);
     await setupEventPersistence(eventBus, db);
 

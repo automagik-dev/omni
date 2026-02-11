@@ -410,6 +410,20 @@ function mapContentType(
   }
 }
 
+/** Update a DM chat's name if it's missing or stale */
+async function updateDmChatName(services: Services, instanceId: string, jid: string, name: string): Promise<void> {
+  try {
+    const chat = await services.chats.getByExternalId(instanceId, jid);
+    if (!chat) return;
+    const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
+    if (!chat.name || hasStaleJidName) {
+      await services.chats.update(chat.id, { name });
+    }
+  } catch {
+    // Chat may not exist yet — that's fine
+  }
+}
+
 /**
  * Process contacts sync
  */
@@ -488,6 +502,11 @@ async function processContactsSync(
 
         if (result.isNew) stored++;
         if (result.wasLinked) linked++;
+
+        // Update DM chat name if missing or stale
+        if (c.name && !c.isGroup) {
+          await updateDmChatName(services, instanceId, c.platformUserId, c.name);
+        }
       } catch (error) {
         log.warn('Failed to store synced contact', {
           platformUserId: c.platformUserId,
