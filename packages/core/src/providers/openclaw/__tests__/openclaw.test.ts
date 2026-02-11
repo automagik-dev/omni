@@ -500,6 +500,7 @@ describe('OpenClawAgentProvider', () => {
     await provider.trigger(
       createMockTrigger({
         source: { chatId: 'chat-456', instanceId: 'inst-1', channelType: 'telegram', messageId: 'msg-1' },
+        sessionId: '', // empty to test chatId fallback path
       }),
     );
 
