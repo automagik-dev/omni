@@ -238,16 +238,21 @@ export class OpenClawAgentProvider implements IAgentProvider {
     });
   }
 
-  /** Clear an OpenClaw session (trash emoji reset) */
-  async resetSession(sessionKey: string): Promise<void> {
+  /** Clear an OpenClaw session (trash emoji reset).
+   *  chatId is preferred — we rebuild the session key in our own format
+   *  (`agent:<agentId>:omni-<chatId>`). Falls back to raw sessionKey if
+   *  chatId is not provided. */
+  async resetSession(sessionKey: string, chatId?: string): Promise<void> {
+    // Rebuild the key the same way trigger() does so it actually matches
+    const effectiveKey = chatId ? this.buildSessionKey(this.config.defaultAgentId, chatId) : sessionKey;
     try {
       await this.client.waitForReady(5_000);
-      await this.client.deleteSession(sessionKey);
-      log.info('Session reset', { providerId: this.id, sessionKey });
+      await this.client.deleteSession(effectiveKey);
+      log.info('Session reset', { providerId: this.id, sessionKey: effectiveKey, originalKey: sessionKey, chatId });
     } catch (err) {
       log.error('Session reset failed', {
         providerId: this.id,
-        sessionKey,
+        sessionKey: effectiveKey,
         error: String(err),
       });
       throw err;

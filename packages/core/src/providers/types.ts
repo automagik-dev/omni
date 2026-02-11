@@ -257,8 +257,10 @@ export interface IAgentProvider {
   /** Optional: Gracefully dispose resources (WS connections, timers, etc.) */
   dispose?(): Promise<void>;
 
-  /** Optional: Reset/clear a session by session key */
-  resetSession?(sessionKey: string): Promise<void>;
+  /** Optional: Reset/clear a session by session key.
+   *  chatId is provided so providers that build their own key format (e.g. OpenClaw)
+   *  can reconstruct the correct session key. */
+  resetSession?(sessionKey: string, chatId?: string): Promise<void>;
 }
 
 /**
