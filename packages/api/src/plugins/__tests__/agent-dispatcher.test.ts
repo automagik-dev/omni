@@ -776,6 +776,51 @@ describe('agent-dispatcher', () => {
       expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
     });
 
+    it('uses group debounce window when chatId is a group and messageDebounceGroupMs is set', async () => {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () =>
+          createMockInstance({
+            messageDebounceMode: 'fixed',
+            messageDebounceMinMs: 50,
+            messageDebounceGroupMs: 200,
+            messageDebounceMaxMs: 50,
+            // Ensure group messages pass reply filter (default is onNameMatch=false)
+            agentReplyFilter: {
+              mode: 'all' as const,
+              conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: true },
+            },
+          }),
+        ),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+
+      await eventBus.fire(
+        'message.received',
+        createMessageEvent({
+          payload: {
+            chatId: '12345@g.us',
+            content: { type: 'text', text: 'hello group' },
+          },
+        }),
+      );
+
+      // Wait less than group debounce (200ms) — should not flush yet
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(agentRunner.getSenderName).not.toHaveBeenCalled();
+
+      // Wait enough for group debounce to flush
+      await new Promise((resolve) => setTimeout(resolve, 140));
+      expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
+    });
+
     it('flushes immediately when debounce mode is disabled', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();

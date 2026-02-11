@@ -74,6 +74,7 @@ interface DebounceConfig {
   minMs: number;
   maxMs: number;
   restartOnTyping: boolean;
+  groupMs: number | null;
 }
 
 // ============================================================================
@@ -280,6 +281,7 @@ function getDebounceConfig(instance: Instance): DebounceConfig {
     minMs: instance.messageDebounceMinMs ?? 0,
     maxMs: instance.messageDebounceMaxMs ?? 0,
     restartOnTyping: instance.messageDebounceRestartOnTyping ?? false,
+    groupMs: (instance as Record<string, unknown>).messageDebounceGroupMs as number | null,
   };
 }
 
@@ -1547,6 +1549,19 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
           const debounceConfig = getDebounceConfig(instance);
 
+          // Group chats (WhatsApp: @g.us) can use a different debounce window.
+          // If configured, use groupMs instead of minMs for the timer delay.
+          const isGroupChat = payload.chatId.includes('@g.us');
+          const effectiveDebounceConfig: DebounceConfig =
+            isGroupChat && debounceConfig.groupMs != null
+              ? {
+                  ...debounceConfig,
+                  minMs: debounceConfig.groupMs,
+                  // Safety: keep randomized ranges non-negative if maxMs < groupMs
+                  maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
+                }
+              : debounceConfig;
+
           debouncer.buffer(
             instance.id,
             payload.chatId,
@@ -1561,7 +1576,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
               },
               timestamp: event.timestamp,
             },
-            debounceConfig,
+            effectiveDebounceConfig,
           );
         } catch (error) {
           log.error('Error processing message for dispatch', {
