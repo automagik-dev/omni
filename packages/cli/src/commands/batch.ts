@@ -128,7 +128,7 @@ async function handleList(client: OmniClient, options: ListOptions): Promise<voi
   const result = await client.batchJobs.list({
     instanceId: options.instance,
     status: options.status?.split(',') as ('pending' | 'running' | 'completed' | 'failed' | 'cancelled')[] | undefined,
-    jobType: options.type?.split(',') as ('targeted_chat_sync' | 'time_based_batch')[] | undefined,
+    jobType: options.type?.split(',') as ('targeted_chat_sync' | 'time_based_batch' | 'media_redownload')[] | undefined,
     limit: options.limit ?? 20,
   });
 
@@ -172,6 +172,9 @@ async function handleCreate(client: OmniClient, options: CreateOptions): Promise
   }
   if (options.type === 'time_based_batch' && options.days === undefined) {
     output.error('--days is required for time_based_batch jobs');
+  }
+  if (options.type === 'media_redownload' && options.days === undefined) {
+    output.error('--days is required for media_redownload jobs');
   }
 
   const contentTypes = parseContentTypes(options.contentTypes);
@@ -291,6 +294,9 @@ async function handleEstimate(client: OmniClient, options: CreateOptions): Promi
   if (options.type === 'time_based_batch' && options.days === undefined) {
     output.error('--days is required for time_based_batch jobs');
   }
+  if (options.type === 'media_redownload' && options.days === undefined) {
+    output.error('--days is required for media_redownload jobs');
+  }
 
   const contentTypes = parseContentTypes(options.contentTypes);
 
@@ -320,7 +326,7 @@ export function createBatchCommand(): Command {
     .description('List batch jobs')
     .option('--instance <id>', 'Filter by instance ID')
     .option('--status <status>', 'Filter by status (comma-separated: pending,running,completed,failed,cancelled)')
-    .option('--type <type>', 'Filter by job type (targeted_chat_sync,time_based_batch)')
+    .option('--type <type>', 'Filter by job type (targeted_chat_sync,time_based_batch,media_redownload)')
     .option('--limit <n>', 'Max results', Number.parseInt)
     .action(async (options: ListOptions) => {
       const client = getClient();
@@ -337,9 +343,9 @@ export function createBatchCommand(): Command {
     .command('create')
     .description('Create a batch processing job')
     .requiredOption('--instance <id>', 'Instance ID')
-    .requiredOption('--type <type>', 'Job type: targeted_chat_sync or time_based_batch')
+    .requiredOption('--type <type>', 'Job type: targeted_chat_sync, time_based_batch, or media_redownload')
     .option('--chat <id>', 'Chat ID (required for targeted_chat_sync)')
-    .option('--days <n>', 'Days to look back (required for time_based_batch)', Number.parseInt)
+    .option('--days <n>', 'Days to look back (required for time_based_batch and media_redownload)', Number.parseInt)
     .option('--limit <n>', 'Max items to process', Number.parseInt)
     .option('--content-types <types>', 'Content types: audio,image,video,document')
     .option('--force', 'Re-process items that already have content')
@@ -389,9 +395,9 @@ export function createBatchCommand(): Command {
     .command('estimate')
     .description('Estimate job scope and cost without creating')
     .requiredOption('--instance <id>', 'Instance ID')
-    .requiredOption('--type <type>', 'Job type: targeted_chat_sync or time_based_batch')
+    .requiredOption('--type <type>', 'Job type: targeted_chat_sync, time_based_batch, or media_redownload')
     .option('--chat <id>', 'Chat ID (required for targeted_chat_sync)')
-    .option('--days <n>', 'Days to look back (required for time_based_batch)', Number.parseInt)
+    .option('--days <n>', 'Days to look back (required for time_based_batch and media_redownload)', Number.parseInt)
     .option('--limit <n>', 'Max items to process', Number.parseInt)
     .option('--content-types <types>', 'Content types: audio,image,video,document')
     .action(async (options: CreateOptions) => {

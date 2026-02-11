@@ -92,7 +92,7 @@ export interface PaginatedResponse<T> {
 // ============================================================================
 
 /** Batch job type */
-export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch';
+export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch' | 'media_redownload';
 
 /** Job status */
 export type BatchJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
