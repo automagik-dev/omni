@@ -334,6 +334,36 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       return null; // Can't extract inner content
     },
   },
+  // Ephemeral message (disappearing messages wrapper - FutureProofMessage)
+  {
+    check: (m) => !!m.ephemeralMessage,
+    extract: (m) => {
+      const innerMsg = m.ephemeralMessage?.message as MessageContent | undefined;
+      if (innerMsg) {
+        for (const { check, extract } of contentExtractors.slice(0, -1)) {
+          if (check(innerMsg)) {
+            return extract(innerMsg);
+          }
+        }
+      }
+      return null;
+    },
+  },
+  // View-once message (FutureProofMessage wrapper)
+  {
+    check: (m) => !!m.viewOnceMessage,
+    extract: (m) => {
+      const innerMsg = m.viewOnceMessage?.message as MessageContent | undefined;
+      if (innerMsg) {
+        for (const { check, extract } of contentExtractors.slice(0, -1)) {
+          if (check(innerMsg)) {
+            return extract(innerMsg);
+          }
+        }
+      }
+      return null;
+    },
+  },
 ];
 
 /**
