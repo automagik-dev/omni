@@ -9,6 +9,7 @@
  * @see /home/cezar/dev/omni/src/db/models.py (v1 reference)
  */
 
+import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { relations } from 'drizzle-orm';
 import {
   boolean,
@@ -222,7 +223,16 @@ export type JobStatus = (typeof jobStatuses)[number];
 // AGENT PROVIDERS
 // ============================================================================
 
-export const providerSchemas = ['agnoos', 'agno', 'a2a', 'openai', 'anthropic', 'webhook', 'custom'] as const;
+export const providerSchemas = [
+  'agnoos',
+  'agno',
+  'a2a',
+  'openai',
+  'anthropic',
+  'webhook',
+  'openclaw',
+  'custom',
+] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**
@@ -491,9 +501,16 @@ export const instances = pgTable(
       .default('disabled')
       .$type<DebounceMode>(),
     messageDebounceMinMs: integer('message_debounce_min_ms').notNull().default(0),
+    /** Optional debounce override for group chats (WhatsApp: @g.us). Null = use messageDebounceMinMs */
+    messageDebounceGroupMs: integer('message_debounce_group_ms'),
     messageDebounceMaxMs: integer('message_debounce_max_ms').notNull().default(0),
     /** Restart debounce timer when user is typing (requires channel support) */
     messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing').notNull().default(false),
+
+    // ---- Smart Response Gate ----
+    agentGateEnabled: boolean('agent_gate_enabled').notNull().default(false),
+    agentGateModel: varchar('agent_gate_model', { length: 120 }),
+    agentGatePrompt: text('agent_gate_prompt'),
 
     // ---- Message Split Delay ----
     messageSplitDelayMode: varchar('message_split_delay_mode', { length: 20 })

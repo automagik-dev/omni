@@ -195,10 +195,23 @@ export async function autoReconnectInstances(db: Database): Promise<{
       }
 
       // Reconnect the instance (uses stored auth state from database)
+      // Pass channel-specific tokens from DB for reconnection
+      const credentials: Record<string, unknown> = {};
+      const options: Record<string, unknown> = {};
+
+      // Telegram needs bot token
+      if (instance.telegramBotToken) {
+        options.token = instance.telegramBotToken;
+      }
+      // Discord needs bot token
+      if (instance.discordBotToken) {
+        options.token = instance.discordBotToken;
+      }
+
       await plugin.connect(instance.id, {
         instanceId: instance.id,
-        credentials: {}, // Auth state loaded from database storage
-        options: {},
+        credentials,
+        options,
       });
 
       logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });

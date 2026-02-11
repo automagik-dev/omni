@@ -18,6 +18,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@omni/core": "workspace:*",
     "@omni/sdk": "workspace:*",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",

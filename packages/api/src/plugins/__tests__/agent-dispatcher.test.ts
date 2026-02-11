@@ -79,6 +79,12 @@ mock.module('@omni/core', () => {
     }
   }
 
+  // NOTE: OpenClawAgentProvider and OpenClawClient are NOT mocked here.
+  // Bun's mock.module merges with the real module, so real classes pass through.
+  // Mocking them would contaminate openclaw.test.ts (which imports from relative
+  // paths but shares the module graph via Bun's deduplication).
+  // No dispatcher test exercises the OpenClaw code path (all use schema: 'agno').
+
   // createLogger is NOT mocked — the real implementation passes through via
   // bun's merge behavior, keeping logger.test.ts and other test files working.
   return {
@@ -359,8 +365,8 @@ describe('agent-dispatcher', () => {
       // Wait for the setTimeout(0) to flush
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // agentRunner.run should have been called
-      expect(services.agentRunner.run).toHaveBeenCalledTimes(1);
+      // B-1: IAgentProvider handles dispatch; getSenderName proves message reached processAgentResponse
+      expect(services.agentRunner.getSenderName).toHaveBeenCalledTimes(1);
     });
 
     it('skips messages from the bot itself (from === platformIdentityId)', async () => {
@@ -460,14 +466,10 @@ describe('agent-dispatcher', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Only 2 should have been processed (the debouncer batches, but rate limiter runs first)
-      // Because debounce is disabled, each fires independently.
-      // After rate limiting, only 2 get through. But since they share the same chatKey,
-      // the debouncer may merge them. Let's just verify run was called at least once
-      // and rate limiter blocked the 3rd.
-      const runCalls = agentRunner.run.mock.calls.length;
-      // The debouncer merges messages to the same chatKey, so we may see 1 call with 2 messages
-      expect(runCalls).toBeGreaterThanOrEqual(1);
+      // B-1: IAgentProvider handles dispatch; getSenderName proves message reached processAgentResponse.
+      // Rate limiter blocks the 3rd message. Debouncer merges same-chatKey, so 1 flush = 1 call.
+      const senderNameCalls = agentRunner.getSenderName.mock.calls.length;
+      expect(senderNameCalls).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -764,14 +766,59 @@ describe('agent-dispatcher', () => {
         }),
       );
 
-      // Not yet flushed
-      expect(agentRunner.run).not.toHaveBeenCalled();
+      // Not yet flushed — processAgentResponse not called yet
+      expect(agentRunner.getSenderName).not.toHaveBeenCalled();
 
       // Wait for debounce to flush (100ms + buffer)
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      // Should have been called once with batched messages
-      expect(agentRunner.run).toHaveBeenCalledTimes(1);
+      // B-1: IAgentProvider handles dispatch; getSenderName proves batched flush reached processAgentResponse
+      expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses group debounce window when chatId is a group and messageDebounceGroupMs is set', async () => {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () =>
+          createMockInstance({
+            messageDebounceMode: 'fixed',
+            messageDebounceMinMs: 50,
+            messageDebounceGroupMs: 200,
+            messageDebounceMaxMs: 50,
+            // Ensure group messages pass reply filter (default is onNameMatch=false)
+            agentReplyFilter: {
+              mode: 'all' as const,
+              conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: true },
+            },
+          }),
+        ),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+
+      await eventBus.fire(
+        'message.received',
+        createMessageEvent({
+          payload: {
+            chatId: '12345@g.us',
+            content: { type: 'text', text: 'hello group' },
+          },
+        }),
+      );
+
+      // Wait less than group debounce (200ms) — should not flush yet
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(agentRunner.getSenderName).not.toHaveBeenCalled();
+
+      // Wait enough for group debounce to flush
+      await new Promise((resolve) => setTimeout(resolve, 140));
+      expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
     });
 
     it('flushes immediately when debounce mode is disabled', async () => {
@@ -785,7 +832,8 @@ describe('agent-dispatcher', () => {
       // With disabled debounce, setTimeout(0) fires almost immediately
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(services.agentRunner.run).toHaveBeenCalled();
+      // B-1: IAgentProvider handles dispatch; getSenderName proves immediate flush reached processAgentResponse
+      expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
     it('restarts debounce timer on typing event when restartOnTyping is true', async () => {
@@ -793,7 +841,7 @@ describe('agent-dispatcher', () => {
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>
           createMockInstance({
-            messageDebounceMode: 'fixed',
+            messageDebounceMode: 'randomized',
             messageDebounceMinMs: 150,
             messageDebounceMaxMs: 150,
             messageDebounceRestartOnTyping: true,
@@ -828,12 +876,13 @@ describe('agent-dispatcher', () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       // Should NOT have flushed yet (timer was restarted at 80ms, so 80+80=160ms < 80+150=230ms)
-      expect(agentRunner.run).not.toHaveBeenCalled();
+      expect(agentRunner.getSenderName).not.toHaveBeenCalled();
 
       // Wait another 100ms for the restarted timer to fire (total ~240ms from typing restart)
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      expect(agentRunner.run).toHaveBeenCalledTimes(1);
+      // B-1: IAgentProvider handles dispatch; getSenderName proves debounce-restart worked
+      expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -906,12 +955,9 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // But with empty triggerEvents, instanceTriggersOnEvent returns false
-      // for message.received too (only returns true for empty/undefined when eventType is 'message.received')
-      // Actually looking at the code: if triggerEvents.length === 0, it returns eventType === 'message.received'
-      // Wait, no: `if (!triggerEvents || triggerEvents.length === 0) return eventType === 'message.received'`
-      // So empty array → still triggers on message.received
-      expect(agentRunner.run).toHaveBeenCalled();
+      // Empty triggerEvents defaults to message.received: `if (triggerEvents.length === 0) return eventType === 'message.received'`
+      // B-1: IAgentProvider handles dispatch; getSenderName proves default trigger config works
+      expect(agentRunner.getSenderName).toHaveBeenCalled();
     });
 
     it('respects triggerEvents for reaction events', async () => {
@@ -1039,7 +1085,8 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', event);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(agentRunner.run).toHaveBeenCalled();
+      // B-1: IAgentProvider handles dispatch; getSenderName proves DM filter passed correctly
+      expect(agentRunner.getSenderName).toHaveBeenCalled();
     });
 
     it('skips messages when reply filter is null (no agent response)', async () => {
@@ -1110,7 +1157,13 @@ describe('agent-dispatcher', () => {
           throw new Error('Agent execution failed');
         }),
       };
-      const services = createMockServices({ agentRunner });
+      // B-1: Provider lookup fails → falls through to legacy path → agentRunner.run throws → caught
+      const providers = {
+        getById: mock(async () => {
+          throw new Error('Provider DB error');
+        }),
+      };
+      const services = createMockServices({ agentRunner, providers });
 
       cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
 
@@ -1118,6 +1171,7 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 100));
 
+      // Legacy path was attempted (provider failed, fell through) and error was caught gracefully
       expect(agentRunner.run).toHaveBeenCalled();
     });
 
@@ -1190,7 +1244,8 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', event);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(agentRunner.run).toHaveBeenCalled();
+      // B-1: IAgentProvider handles dispatch; getSenderName proves multi-channel processing works
+      expect(agentRunner.getSenderName).toHaveBeenCalled();
     });
   });
 });
