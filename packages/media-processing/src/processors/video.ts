@@ -11,25 +11,12 @@ import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai'
 
 import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
+import { VIDEO_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
 
 const MAX_RETRIES = 3;
 const MAX_VIDEO_SIZE_MB = 20; // Gemini inline limit
-
-/** Default prompt for video description */
-const DEFAULT_PROMPT = `Analyze this video and provide a comprehensive description.
-
-Include:
-1. Main subjects and what they're doing
-2. Setting/environment
-3. Key actions or events that occur
-4. Any speech or dialogue (transcribe if present)
-5. Text visible in the video
-6. Overall context and purpose
-
-If there is speech in the video, transcribe it accurately.
-Respond in Portuguese if no specific language is detected in the audio.`;
 
 /**
  * Video processor using Gemini Flash
@@ -82,7 +69,8 @@ export class VideoProcessor extends BaseProcessor {
       );
     }
 
-    const prompt = options?.caption ? `${DEFAULT_PROMPT}\n\nAdditional context: ${options.caption}` : DEFAULT_PROMPT;
+    const basePrompt = options?.prompt ?? VIDEO_DESCRIPTION_PROMPT;
+    const prompt = options?.caption ? `${basePrompt}\n\nAdditional context: ${options.caption}` : basePrompt;
 
     // Read video file
     const videoData = readFileSync(filePath);

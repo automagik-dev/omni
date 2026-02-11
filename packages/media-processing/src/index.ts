@@ -25,5 +25,14 @@ export type {
 // Models
 export { GEMINI_MODEL, OPENAI_VISION_MODEL, OPENAI_WHISPER_MODEL, GROQ_WHISPER_MODEL } from './models';
 
+// Prompts
+export {
+  IMAGE_DESCRIPTION_PROMPT,
+  VIDEO_DESCRIPTION_PROMPT,
+  DOCUMENT_OCR_PROMPT,
+  RESPONSE_GATE_PROMPT,
+  PROMPT_KEYS,
+} from './prompts';
+
 // Pricing
 export { calculateCost, getPricingRate, PRICING_REGISTRY } from './pricing';

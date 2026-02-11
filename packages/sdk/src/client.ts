@@ -1767,6 +1767,32 @@ export function createOmniClient(config: OmniClientConfig) {
         throwIfError(response, error);
         return data?.items ?? [];
       },
+
+      /**
+       * Get a single setting by key
+       */
+      async get(key: string): Promise<Setting> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/settings/${encodeURIComponent(key)}`, {});
+        const json = (await resp.json()) as { data?: Setting };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Setting not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * Set a setting value
+       */
+      async set(key: string, value: unknown, reason?: string): Promise<Setting> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/settings/${encodeURIComponent(key)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value, reason }),
+        });
+        const json = (await resp.json()) as { data?: Setting };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Failed to set setting', 'UPDATE_FAILED', undefined, resp.status);
+        return json.data;
+      },
     },
 
     // ========================================================================

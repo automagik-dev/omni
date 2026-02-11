@@ -10,23 +10,11 @@ import OpenAI from 'openai';
 
 import { GEMINI_MODEL, OPENAI_VISION_MODEL } from '../models';
 import { calculateCost } from '../pricing';
+import { IMAGE_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
 
 const MAX_RETRIES = 3;
-
-/** Default prompt for image description */
-const DEFAULT_PROMPT = `Analyze this image and provide a detailed description that would help someone who cannot see it understand what's in it.
-
-Include:
-1. Main subject(s) and their appearance
-2. Setting/environment
-3. Any text visible in the image
-4. Notable details, colors, or objects
-5. The overall mood or context
-
-Be concise but thorough. If there's text in the image, transcribe it exactly.
-Respond in the same language as any text in the image, or in Portuguese if no text is present.`;
 
 /**
  * Image processor using Gemini Vision with OpenAI fallback
@@ -79,9 +67,8 @@ export class ImageProcessor extends BaseProcessor {
       return this.createFailedResult('No vision API configured (missing Gemini or OpenAI API key)', 'none', 'none');
     }
 
-    const prompt = options?.caption
-      ? `${DEFAULT_PROMPT}\n\nAdditional context (caption): ${options.caption}`
-      : DEFAULT_PROMPT;
+    const basePrompt = options?.prompt ?? IMAGE_DESCRIPTION_PROMPT;
+    const prompt = options?.caption ? `${basePrompt}\n\nAdditional context (caption): ${options.caption}` : basePrompt;
 
     // Read file
     const imageData = readFileSync(filePath);

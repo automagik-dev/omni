@@ -16,6 +16,7 @@ import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai'
 
 import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
+import { DOCUMENT_OCR_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { BaseProcessor } from './base';
 
@@ -27,19 +28,6 @@ const JSON_SUMMARIZE_THRESHOLD = 2 * 1024;
 
 /** Max array examples to show in JSON summary */
 const JSON_MAX_ARRAY_EXAMPLES = 3;
-
-/** Gemini prompt for document OCR */
-const GEMINI_OCR_PROMPT = `Extract and transcribe all text content from this document image.
-
-Instructions:
-1. Transcribe ALL visible text exactly as written
-2. Preserve the document structure (headings, paragraphs, lists)
-3. Use markdown formatting for structure
-4. If there are tables, format them as markdown tables
-5. If there are images with captions, note them as [Image: caption]
-6. Maintain the reading order (top to bottom, left to right)
-
-Output the complete text content in markdown format.`;
 
 /**
  * Document processor using local libs with Gemini OCR fallback
@@ -73,15 +61,16 @@ export class DocumentProcessor extends BaseProcessor {
     return this.geminiModel;
   }
 
-  async process(filePath: string, mimeType: string, _options?: ProcessOptions): Promise<ProcessingResult> {
+  async process(filePath: string, mimeType: string, options?: ProcessOptions): Promise<ProcessingResult> {
     const startTime = performance.now();
     const normalizedMime = mimeType.toLowerCase();
+    const ocrPrompt = options?.prompt ?? DOCUMENT_OCR_PROMPT;
 
     let result: ProcessingResult;
 
     // Route to appropriate processor based on MIME type
     if (normalizedMime === 'application/pdf') {
-      result = await this.processPdf(filePath);
+      result = await this.processPdf(filePath, ocrPrompt);
     } else if (
       normalizedMime === 'application/msword' ||
       normalizedMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -122,7 +111,7 @@ export class DocumentProcessor extends BaseProcessor {
   /**
    * Process PDF using pdf-parse with Gemini OCR fallback
    */
-  private async processPdf(filePath: string): Promise<ProcessingResult> {
+  private async processPdf(filePath: string, ocrPrompt: string): Promise<ProcessingResult> {
     try {
       // Dynamic import for pdf-parse
       const pdfParse = (await import('pdf-parse')).default;
@@ -135,7 +124,7 @@ export class DocumentProcessor extends BaseProcessor {
       // If text is too short, assume scanned PDF and use OCR
       if (text.length < MIN_TEXT_LENGTH) {
         this.log.info('PDF appears to be scanned, trying OCR fallback...');
-        return this.processWithGeminiOcr(filePath);
+        return this.processWithGeminiOcr(filePath, ocrPrompt);
       }
 
       return {
@@ -155,7 +144,7 @@ export class DocumentProcessor extends BaseProcessor {
       // Try OCR fallback on error
       if (this.config.geminiApiKey) {
         this.log.info('PDF extraction failed, trying OCR fallback...');
-        return this.processWithGeminiOcr(filePath);
+        return this.processWithGeminiOcr(filePath, ocrPrompt);
       }
 
       return this.createFailedResult(errorMsg, 'local', 'pdf-parse');
@@ -427,7 +416,7 @@ export class DocumentProcessor extends BaseProcessor {
   /**
    * Process document with Gemini OCR (for scanned PDFs)
    */
-  private async processWithGeminiOcr(filePath: string): Promise<ProcessingResult> {
+  private async processWithGeminiOcr(filePath: string, ocrPrompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
       return this.createFailedResult('Gemini not configured for OCR fallback (missing API key)', 'local', 'pdf-parse');
@@ -443,7 +432,7 @@ export class DocumentProcessor extends BaseProcessor {
             data: pdfData.toString('base64'),
           },
         },
-        { text: GEMINI_OCR_PROMPT },
+        { text: ocrPrompt },
       ]);
 
       const response = result.response;

@@ -109,6 +109,8 @@ const CLI_COMMANDS: Record<string, string> = {
   // SETTINGS
   // ============================================================================
   'settings.list': 'settings list',
+  'settings.get': 'settings get',
+  'settings.set': 'settings set',
 
   // ============================================================================
   // PROVIDERS (AI/Agent providers)

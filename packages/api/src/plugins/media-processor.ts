@@ -107,6 +107,11 @@ interface MediaProcessorContext {
   services: Services;
   mediaService: MediaProcessingService;
   mediaStorage: MediaStorageService;
+  promptOverrides: {
+    image?: string;
+    video?: string;
+    document?: string;
+  };
 }
 
 /**
@@ -234,6 +239,16 @@ async function persistProcessingResult(
 }
 
 /**
+ * Resolve the prompt override for a given content type
+ */
+function getPromptOverride(ctx: MediaProcessorContext, contentType: string | undefined): string | undefined {
+  if (contentType === 'image') return ctx.promptOverrides.image;
+  if (contentType === 'video') return ctx.promptOverrides.video;
+  if (contentType === 'document') return ctx.promptOverrides.document;
+  return undefined;
+}
+
+/**
  * Process media for a received message
  */
 async function processMessageMedia(
@@ -258,6 +273,7 @@ async function processMessageMedia(
   const result = await ctx.mediaService.process(media.fullPath, mimeType, {
     language: 'pt',
     caption: content.text,
+    prompt: getPromptOverride(ctx, content.type),
   });
 
   if (!result.success) {
@@ -308,13 +324,17 @@ async function processMessageMedia(
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
-  // Read API keys from settings DB with env var fallback
-  const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage] = await Promise.all([
-    services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
-    services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
-    services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
-    services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
-  ]);
+  // Read API keys and prompt overrides from settings DB with env var fallback
+  const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, imagePrompt, videoPrompt, documentPrompt] =
+    await Promise.all([
+      services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+      services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+      services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+      services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+      services.settings.getString('prompt.image_description'),
+      services.settings.getString('prompt.video_description'),
+      services.settings.getString('prompt.document_ocr'),
+    ]);
 
   const mediaService = createMediaProcessingService({
     groqApiKey,
@@ -330,6 +350,11 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services,
     mediaService,
     mediaStorage,
+    promptOverrides: {
+      image: imagePrompt,
+      video: videoPrompt,
+      document: documentPrompt,
+    },
   };
 
   // Subscribe to message.received with durable consumer

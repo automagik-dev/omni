@@ -73,6 +73,35 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Default language for media processing',
     defaultValue: 'pt',
   },
+  // Prompt overrides (null = use code default from @omni/media-processing)
+  {
+    key: 'prompt.image_description',
+    category: 'prompts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Override prompt for image description (null = code default)',
+  },
+  {
+    key: 'prompt.video_description',
+    category: 'prompts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Override prompt for video description (null = code default)',
+  },
+  {
+    key: 'prompt.document_ocr',
+    category: 'prompts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Override prompt for document OCR (null = code default)',
+  },
+  {
+    key: 'prompt.response_gate',
+    category: 'prompts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Override prompt for response gate (null = code default)',
+  },
 ];
 
 export interface SettingWithHistory extends GlobalSetting {
