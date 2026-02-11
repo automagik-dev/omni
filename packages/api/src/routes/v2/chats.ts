@@ -693,6 +693,21 @@ const syncNamesSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
 });
 
+/** Resolve a contact name for a chat, handling LID→phone resolution */
+function resolveContactName(
+  chat: { externalId: string; canonicalId?: string | null },
+  contactNames: Map<string, string>,
+): string | undefined {
+  // Direct match by externalId
+  const direct = contactNames.get(chat.externalId);
+  if (direct) return direct;
+  // LID→phone resolution via canonicalId
+  if (chat.externalId.endsWith('@lid') && chat.canonicalId?.endsWith('@s.whatsapp.net')) {
+    return contactNames.get(chat.canonicalId);
+  }
+  return undefined;
+}
+
 /**
  * POST /chats/sync-names - Backfill DM chat names from WhatsApp contacts cache
  *
@@ -733,17 +748,13 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
   }
 
   // Get all DM chats for this instance that are missing names or have stale JID names
-  const allChats = await services.chats.list({
-    instanceId,
-    chatType: ['dm'],
-    limit: 1000,
-  });
+  const allChats = await services.chats.list({ instanceId, chatType: ['dm'], limit: 1000 });
 
   let updated = 0;
   for (const chat of allChats.items) {
     const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
     if (!chat.name || hasStaleJidName) {
-      const contactName = contactNames.get(chat.externalId);
+      const contactName = resolveContactName(chat, contactNames);
       if (contactName) {
         await services.chats.update(chat.id, { name: contactName });
         updated++;

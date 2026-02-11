@@ -152,11 +152,29 @@ const contactsLog = createLogger('contacts-sync');
 
 /** Update a single chat name if it's missing or stale */
 async function updateChatName(db: Database, instanceId: string, jid: string, name: string): Promise<boolean> {
-  const [chat] = await db
+  // Primary: exact externalId match
+  let [chat] = await db
     .select({ id: chats.id, name: chats.name })
     .from(chats)
     .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, jid)))
     .limit(1);
+
+  // Secondary: if jid is a phone JID, check if a LID chat maps to it
+  if (!chat && jid.endsWith('@s.whatsapp.net')) {
+    const [mapping] = await db
+      .select({ lidId: chatIdMappings.lidId })
+      .from(chatIdMappings)
+      .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, jid)))
+      .limit(1);
+    if (mapping) {
+      [chat] = await db
+        .select({ id: chats.id, name: chats.name })
+        .from(chats)
+        .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, mapping.lidId)))
+        .limit(1);
+    }
+  }
+
   if (!chat) return false;
 
   const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');

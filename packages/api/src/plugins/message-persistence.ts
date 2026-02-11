@@ -118,6 +118,39 @@ function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefine
 }
 
 /**
+ * Build a chat preview string from a message payload.
+ * For groups, prefixes with sender name. Includes media type badges.
+ */
+function buildChatPreview(payload: MessageReceivedPayload, rawPayload: Record<string, unknown> | undefined): string {
+  const isGroup = payload.chatId.endsWith('@g.us') || rawPayload?.isGroup === true;
+  const isFromMe = rawPayload?.isFromMe === true;
+
+  const text = payload.content.text ?? '';
+  const badge =
+    payload.content.type !== 'text' ? (MEDIA_BADGES[payload.content.type] ?? `[${payload.content.type}]`) : '';
+  let preview = badge ? (text ? `${badge} ${text}` : badge) : text;
+
+  // Prefix with sender name for groups (not from self)
+  if (isGroup && !isFromMe) {
+    const sender = (rawPayload?.pushName as string) || (rawPayload?.displayName as string) || '';
+    if (sender) preview = `${sender}: ${preview}`;
+  }
+
+  return preview.substring(0, 500);
+}
+
+const MEDIA_BADGES: Record<string, string> = {
+  image: '[Image]',
+  audio: '[Audio]',
+  video: '[Video]',
+  document: '[Document]',
+  sticker: '[Sticker]',
+  contact: '[Contact]',
+  location: '[Location]',
+  poll: '[Poll]',
+};
+
+/**
  * Extract phone number from WhatsApp JID.
  * Returns undefined for @lid JIDs (the numeric part is NOT a phone number).
  */
@@ -242,11 +275,17 @@ async function postProcessChat(
   }
 
   // Persist LID→phone mapping if the message was resolved from a LID
+  // Also set canonicalId on the chat so LID chats point to their phone JID
   const originalLidJid = rawPayload?.originalLidJid as string | undefined;
   if (originalLidJid && chatExternalId.endsWith('@s.whatsapp.net')) {
     services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
       log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
     });
+    // Set canonicalId on the chat if it was found via LID mapping (externalId is LID)
+    if (!chat.canonicalId) {
+      await services.chats.update(chat.id, { canonicalId: chatExternalId });
+      chat.canonicalId = chatExternalId;
+    }
   }
 
   // Update chat name if missing or stale
@@ -350,9 +389,15 @@ async function handleMessageReceived(
     await services.chats.recordParticipantActivity(chat.id, activityUserId);
   }
 
-  // Step 6: Update lastMessageAt on instance (for reconnect gap detection)
+  // Step 6: Update chat lastMessageAt and preview
+  const preview = buildChatPreview(payload, rawPayload);
+  services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
+    log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
+  });
+
+  // Step 7: Update lastMessageAt on instance (for reconnect gap detection)
   services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
-    log.debug('Failed to update lastMessageAt (non-critical)', { error: String(error) });
+    log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
   });
 }
 

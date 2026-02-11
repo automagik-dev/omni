@@ -306,13 +306,14 @@ function displayChatList(
     const showInstance = !options.instance && instanceNames.size > 0;
     const items = chatItems.map((c) => {
       const row: Record<string, string | number> = {
+        id: c.id.slice(0, 8),
         name: truncate(formatChatName(c), 30),
       };
       if (showInstance) {
         row.instance = instanceNames.get(c.instanceId) ?? c.instanceId.slice(0, 8);
       }
       row.unread = c.unreadCount ?? 0;
-      row['last message'] = truncate(c.lastMessagePreview?.replace(/\n/g, ' '), 60) ?? '-';
+      row['last message'] = truncate(c.lastMessagePreview?.replace(/\n/g, ' '), 50) ?? '-';
       row.time = formatRelativeTime(c.lastMessageAt);
       return row;
     });

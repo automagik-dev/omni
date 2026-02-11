@@ -313,19 +313,31 @@ export class ChatService {
       return { chat: byCanonical, created: false };
     }
 
-    // Secondary lookup: check chatIdMappings for a LID→phone mapping
-    // If the externalId is a phone JID, check if any LID maps to it
+    // Secondary lookup: check chatIdMappings for LID↔phone mappings
     if (externalId.endsWith('@s.whatsapp.net')) {
+      // Phone JID arrived — check if a LID chat exists for it
       const [mapping] = await this.db
         .select()
         .from(chatIdMappings)
         .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
         .limit(1);
       if (mapping) {
-        // A LID chat exists for this phone — find it
         const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
         if (lidChat) {
           return { chat: lidChat, created: false };
+        }
+      }
+    } else if (externalId.endsWith('@lid')) {
+      // LID arrived — check if a phone chat exists for it
+      const [mapping] = await this.db
+        .select()
+        .from(chatIdMappings)
+        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
+        .limit(1);
+      if (mapping) {
+        const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
+        if (phoneChat) {
+          return { chat: phoneChat, created: false };
         }
       }
     }
