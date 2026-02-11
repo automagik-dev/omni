@@ -173,11 +173,9 @@ export class OpenClawAgentProvider implements IAgentProvider {
         responseBytes: accumulated.length,
       });
 
-      // Split on double newlines like Agno provider
-      const parts = accumulated
-        .split('\n\n')
-        .map((p) => p.trim())
-        .filter(Boolean);
+      // Return a single message part to avoid multi-message burst/loop perception in chat channels
+      const normalized = accumulated.trim();
+      const parts = normalized ? [normalized] : [];
 
       return {
         parts,
