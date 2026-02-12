@@ -3066,7 +3066,19 @@ export interface components {
             baseUrl: string;
             /** @description API key (masked) */
             apiKey: string | null;
-            /** @description Schema config */
+            /**
+             * @description Schema-specific configuration. Shape depends on schema type:
+             *     - **agno**: `{ agentId, teamId?, timeout? }`
+             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+             *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
+             *       - `apiKey` in schemaConfig overrides the provider-level apiKey
+             *     - **webhook**: `{ mode?, retries? }`
+             * @example {
+             *       "projectPath": "/home/user/my-project",
+             *       "model": "claude-haiku-4-5-20251001",
+             *       "maxTurns": 5
+             *     }
+             */
             schemaConfig: {
                 [key: string]: unknown;
             } | null;
@@ -3104,7 +3116,7 @@ export interface components {
             name: string;
             /**
              * @description Schema type
-             * @default agnoos
+             * @default agno
              * @enum {string}
              */
             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
@@ -3115,7 +3127,19 @@ export interface components {
             baseUrl: string;
             /** @description API key (encrypted) */
             apiKey?: string;
-            /** @description Schema config */
+            /**
+             * @description Schema-specific configuration. Required fields vary by schema:
+             *     - **agno**: `{ agentId }` (required)
+             *     - **openclaw**: `{ defaultAgentId }` (required)
+             *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
+             *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
+             *     - **webhook**: optional `{ mode, retries }`
+             * @example {
+             *       "projectPath": "/home/user/my-project",
+             *       "model": "claude-haiku-4-5-20251001",
+             *       "maxTurns": 5
+             *     }
+             */
             schemaConfig?: {
                 [key: string]: unknown;
             };
@@ -9123,7 +9147,19 @@ export interface operations {
                             baseUrl: string;
                             /** @description API key (masked) */
                             apiKey: string | null;
-                            /** @description Schema config */
+                            /**
+                             * @description Schema-specific configuration. Shape depends on schema type:
+                             *     - **agno**: `{ agentId, teamId?, timeout? }`
+                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
+                             *       - `apiKey` in schemaConfig overrides the provider-level apiKey
+                             *     - **webhook**: `{ mode?, retries? }`
+                             * @example {
+                             *       "projectPath": "/home/user/my-project",
+                             *       "model": "claude-haiku-4-5-20251001",
+                             *       "maxTurns": 5
+                             *     }
+                             */
                             schemaConfig: {
                                 [key: string]: unknown;
                             } | null;
@@ -9175,7 +9211,7 @@ export interface operations {
                     name: string;
                     /**
                      * @description Schema type
-                     * @default agnoos
+                     * @default agno
                      * @enum {string}
                      */
                     schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
@@ -9186,7 +9222,19 @@ export interface operations {
                     baseUrl: string;
                     /** @description API key (encrypted) */
                     apiKey?: string;
-                    /** @description Schema config */
+                    /**
+                     * @description Schema-specific configuration. Required fields vary by schema:
+                     *     - **agno**: `{ agentId }` (required)
+                     *     - **openclaw**: `{ defaultAgentId }` (required)
+                     *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
+                     *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
+                     *     - **webhook**: optional `{ mode, retries }`
+                     * @example {
+                     *       "projectPath": "/home/user/my-project",
+                     *       "model": "claude-haiku-4-5-20251001",
+                     *       "maxTurns": 5
+                     *     }
+                     */
                     schemaConfig?: {
                         [key: string]: unknown;
                     };
@@ -9255,7 +9303,19 @@ export interface operations {
                             baseUrl: string;
                             /** @description API key (masked) */
                             apiKey: string | null;
-                            /** @description Schema config */
+                            /**
+                             * @description Schema-specific configuration. Shape depends on schema type:
+                             *     - **agno**: `{ agentId, teamId?, timeout? }`
+                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
+                             *       - `apiKey` in schemaConfig overrides the provider-level apiKey
+                             *     - **webhook**: `{ mode?, retries? }`
+                             * @example {
+                             *       "projectPath": "/home/user/my-project",
+                             *       "model": "claude-haiku-4-5-20251001",
+                             *       "maxTurns": 5
+                             *     }
+                             */
                             schemaConfig: {
                                 [key: string]: unknown;
                             } | null;
@@ -9352,7 +9412,19 @@ export interface operations {
                             baseUrl: string;
                             /** @description API key (masked) */
                             apiKey: string | null;
-                            /** @description Schema config */
+                            /**
+                             * @description Schema-specific configuration. Shape depends on schema type:
+                             *     - **agno**: `{ agentId, teamId?, timeout? }`
+                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
+                             *       - `apiKey` in schemaConfig overrides the provider-level apiKey
+                             *     - **webhook**: `{ mode?, retries? }`
+                             * @example {
+                             *       "projectPath": "/home/user/my-project",
+                             *       "model": "claude-haiku-4-5-20251001",
+                             *       "maxTurns": 5
+                             *     }
+                             */
                             schemaConfig: {
                                 [key: string]: unknown;
                             } | null;
@@ -9475,7 +9547,7 @@ export interface operations {
                     name?: string;
                     /**
                      * @description Schema type
-                     * @default agnoos
+                     * @default agno
                      * @enum {string}
                      */
                     schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
@@ -9486,7 +9558,19 @@ export interface operations {
                     baseUrl?: string;
                     /** @description API key (encrypted) */
                     apiKey?: string;
-                    /** @description Schema config */
+                    /**
+                     * @description Schema-specific configuration. Required fields vary by schema:
+                     *     - **agno**: `{ agentId }` (required)
+                     *     - **openclaw**: `{ defaultAgentId }` (required)
+                     *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
+                     *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
+                     *     - **webhook**: optional `{ mode, retries }`
+                     * @example {
+                     *       "projectPath": "/home/user/my-project",
+                     *       "model": "claude-haiku-4-5-20251001",
+                     *       "maxTurns": 5
+                     *     }
+                     */
                     schemaConfig?: {
                         [key: string]: unknown;
                     };
@@ -9555,7 +9639,19 @@ export interface operations {
                             baseUrl: string;
                             /** @description API key (masked) */
                             apiKey: string | null;
-                            /** @description Schema config */
+                            /**
+                             * @description Schema-specific configuration. Shape depends on schema type:
+                             *     - **agno**: `{ agentId, teamId?, timeout? }`
+                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
+                             *       - `apiKey` in schemaConfig overrides the provider-level apiKey
+                             *     - **webhook**: `{ mode?, retries? }`
+                             * @example {
+                             *       "projectPath": "/home/user/my-project",
+                             *       "model": "claude-haiku-4-5-20251001",
+                             *       "maxTurns": 5
+                             *     }
+                             */
                             schemaConfig: {
                                 [key: string]: unknown;
                             } | null;

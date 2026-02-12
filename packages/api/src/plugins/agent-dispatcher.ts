@@ -1170,7 +1170,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
     provider.name,
     {
       projectPath,
-      apiKey: provider.apiKey ?? undefined,
+      apiKey: (schemaConfig.apiKey as string | undefined) ?? provider.apiKey ?? undefined,
       allowedTools: schemaConfig.allowedTools as string[] | undefined,
       permissionMode: schemaConfig.permissionMode as string | undefined as
         | 'default'

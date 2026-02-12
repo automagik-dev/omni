@@ -27,8 +27,9 @@ const createProviderSchema = z.object({
     .describe(
       'Schema-specific config. Required fields by schema: ' +
         'agno: { agentId }, openclaw: { defaultAgentId }, ' +
-        'claude-code: { projectPath, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
-        'webhook: { mode?, retries? }',
+        'claude-code: { projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
+        'webhook: { mode?, retries? }. ' +
+        'Note: apiKey in schemaConfig overrides the provider-level apiKey.',
     ),
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
   defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
