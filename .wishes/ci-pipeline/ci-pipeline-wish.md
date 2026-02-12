@@ -2,7 +2,7 @@
 
 > GitHub Actions workflows that catch "works on my machine" bugs by running setup, build, and quality checks on every push and PR.
 
-**Status:** APPROVED
+**Status:** SHIPPED
 **Created:** 2026-02-10
 **Updated:** 2026-02-12
 **Author:** WISH Agent
@@ -120,7 +120,7 @@ Updates the existing job to include a database and verify build outputs.
 6. Download NATS: `./scripts/ensure-nats.sh`
 7. Start pgserve: `bunx pgserve --port 8432 --data .pgserve-data --no-cluster &`
 8. Start NATS: `./bin/nats-server -js -p 4222 &`
-9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 1s sleep
+9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 2s sleep
 10. `bun run build` (turbo build — all packages)
 11. Verify `packages/sdk/dist` exists
 12. Verify `packages/cli/dist` exists
@@ -148,14 +148,14 @@ Validates the full `make setup` → health check flow in a clean environment. Th
 6. Download NATS: `./scripts/ensure-nats.sh`
 7. Start pgserve: `bunx pgserve --port 8432 --data .pgserve-data --no-cluster &`
 8. Start NATS: `./bin/nats-server -js -p 4222 &`
-9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 1s sleep
+9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 2s sleep
 10. Build all: `bun run build`
 11. Start API in background:
     ```bash
     OMNI_PACKAGES_DIR=$PWD/packages bun packages/api/src/index.ts &
     ```
-12. Wait for API: retry `curl --fail http://localhost:8882/api/v2/health` up to 15 times
-13. Verify health response is valid JSON with `status: "ok"` or similar
+12. Wait for API: retry `curl --fail http://localhost:8882/api/v2/health` up to 15 times with 2s sleep
+13. Verify health response is valid JSON with `status: "healthy"`
 14. Verify single process on port 8882: `lsof -ti:8882 | wc -l` equals 1 (catches #14)
 
 ---
@@ -173,7 +173,7 @@ Validates the full `make setup` → health check flow in a clean environment. Th
 - uses: actions/cache@v4
   with:
     path: bin/
-    key: nats-${{ runner.os }}-v2.10.24
+    key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
 ```
 
 ---
@@ -230,7 +230,7 @@ After the workflow is green:
 
 ## Reference: CI vs Local Dev
 
-```
+```text
 Local (make dev):                    CI Quality Gate:
   dev-services (PM2)                   pgserve & (background)
     ├── pgserve                        nats-server & (background)
