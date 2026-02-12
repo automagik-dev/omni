@@ -301,6 +301,7 @@ async function postProcessChat(
   pushName: string | undefined,
   instanceId: string,
   rawPayload: Record<string, unknown> | undefined,
+  isFromMe: boolean,
 ): Promise<void> {
   // Populate canonicalId for phone-based chats (enables search by phone number)
   if (chatExternalId.endsWith('@s.whatsapp.net') && !chat.canonicalId) {
@@ -322,9 +323,10 @@ async function postProcessChat(
   }
 
   // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
+  // For DMs: only update from incoming messages (not sent by us) to prevent flip-flopping
   if (!chatCreated) {
     const chatName = rawPayload?.chatName as string | undefined;
-    const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
+    const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
     if (effectiveName && shouldUpdateChatName(chat.name, effectiveName)) {
       await services.chats.update(chat.id, { name: effectiveName });
       chat.name = effectiveName;
@@ -351,11 +353,14 @@ async function handleMessageReceived(
 
   // Step 1: Find or create chat
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
-  // For DMs, use pushName as chat name since it's the contact's WhatsApp display name
-  // For groups, chatName would come from group subject (handled separately)
+  const isFromMe = rawPayload?.isFromMe === true;
+
+  // For DMs: only use pushName if message is FROM the other person (not sent by us)
+  // This prevents the chat name from flip-flopping between sender names
+  // For groups: always use chatName (group subject)
   const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
-  const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
+  const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
 
   const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
     chatType,
@@ -373,6 +378,7 @@ async function handleMessageReceived(
     pushName,
     metadata.instanceId,
     rawPayload,
+    isFromMe,
   );
 
   // Step 2: Process sender identity (before participant, so we have IDs)
