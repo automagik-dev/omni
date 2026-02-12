@@ -164,14 +164,28 @@ const MEDIA_BADGES: Record<string, string> = {
 };
 
 /**
- * Extract phone number from WhatsApp JID.
- * Returns undefined for @lid JIDs (the numeric part is NOT a phone number).
+ * Extract and validate phone from sender ID.
+ * Returns E.164 phone (+digits) or undefined for non-phone IDs.
+ *
+ * Filters out:
+ * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
+ * - LID references (numeric but not phone numbers)
+ * - Meta IDs (non-numeric platform identifiers)
+ * - IDs that are too short (<7 digits) or too long (>15 digits)
  */
-function extractPhoneFromJid(jid: string, channel: string): string | undefined {
+function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
   if (!channel.startsWith('whatsapp')) return undefined;
-  // @lid JIDs contain a Linked Device ID, not a phone number — skip them
-  if (jid.endsWith('@lid')) return undefined;
-  return jid.split('@')[0]?.replace(/\D/g, '');
+
+  // Strip @suffix if still present (defensive)
+  const bare = senderId.split('@')[0] || senderId;
+
+  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
+  if (!/^\d+$/.test(bare)) return undefined;
+
+  // E.164 validation: 7-15 digits
+  if (bare.length < 7 || bare.length > 15) return undefined;
+
+  return `+${bare}`;
 }
 
 // ============================================================================
@@ -203,7 +217,7 @@ async function processSenderIdentity(
 
   const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
-  const phoneNumber = extractPhoneFromJid(platformUserId, channel);
+  const phoneNumber = extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
@@ -287,6 +301,7 @@ async function postProcessChat(
   pushName: string | undefined,
   instanceId: string,
   rawPayload: Record<string, unknown> | undefined,
+  isFromMe: boolean,
 ): Promise<void> {
   // Populate canonicalId for phone-based chats (enables search by phone number)
   if (chatExternalId.endsWith('@s.whatsapp.net') && !chat.canonicalId) {
@@ -308,9 +323,10 @@ async function postProcessChat(
   }
 
   // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
+  // For DMs: only update from incoming messages (not sent by us) to prevent flip-flopping
   if (!chatCreated) {
     const chatName = rawPayload?.chatName as string | undefined;
-    const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
+    const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
     if (effectiveName && shouldUpdateChatName(chat.name, effectiveName)) {
       await services.chats.update(chat.id, { name: effectiveName });
       chat.name = effectiveName;
@@ -337,11 +353,14 @@ async function handleMessageReceived(
 
   // Step 1: Find or create chat
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
-  // For DMs, use pushName as chat name since it's the contact's WhatsApp display name
-  // For groups, chatName would come from group subject (handled separately)
+  const isFromMe = rawPayload?.isFromMe === true;
+
+  // For DMs: only use pushName if message is FROM the other person (not sent by us)
+  // This prevents the chat name from flip-flopping between sender names
+  // For groups: always use chatName (group subject)
   const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
-  const effectiveName = chatName || (chatType === 'dm' ? pushName : undefined);
+  const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
 
   const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
     chatType,
@@ -359,6 +378,7 @@ async function handleMessageReceived(
     pushName,
     metadata.instanceId,
     rawPayload,
+    isFromMe,
   );
 
   // Step 2: Process sender identity (before participant, so we have IDs)
@@ -590,8 +610,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
 
-          // Find the chat
-          const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
+          // Find the chat (use smart lookup to handle LID/phone JID resolution)
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
           if (!chat) {
             log.debug('Chat not found for message.delivered', { chatId: payload.chatId });
             return;
@@ -639,8 +659,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
 
-          // Find the chat
-          const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
+          // Find the chat (use smart lookup to handle LID/phone JID resolution)
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
           if (!chat) {
             log.debug('Chat not found for message.read', { chatId: payload.chatId });
             return;

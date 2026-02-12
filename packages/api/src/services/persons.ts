@@ -206,6 +206,14 @@ export class PersonService {
   }
 
   /**
+   * Find existing person by phone (used for conflict resolution)
+   */
+  private async findPersonByPhone(phone: string): Promise<{ personId: string; wasLinked: true } | null> {
+    const [existing] = await this.db.select().from(persons).where(eq(persons.primaryPhone, phone)).limit(1);
+    return existing ? { personId: existing.id, wasLinked: true } : null;
+  }
+
+  /**
    * Link options for identity creation
    */
   private async findPersonToLink(linkOptions: {
@@ -216,14 +224,8 @@ export class PersonService {
   }): Promise<{ personId?: string; wasLinked: boolean }> {
     // Try matching by phone
     if (linkOptions.matchByPhone) {
-      const [matchedPerson] = await this.db
-        .select()
-        .from(persons)
-        .where(eq(persons.primaryPhone, linkOptions.matchByPhone))
-        .limit(1);
-      if (matchedPerson) {
-        return { personId: matchedPerson.id, wasLinked: true };
-      }
+      const found = await this.findPersonByPhone(linkOptions.matchByPhone);
+      if (found) return found;
     }
 
     // Try matching by email if not matched by phone
@@ -239,7 +241,21 @@ export class PersonService {
     }
 
     // Create a new person if requested and no match found
-    if (linkOptions.createPerson) {
+    if (!linkOptions.createPerson) return { wasLinked: false };
+
+    return this.createPersonWithConflictHandling(linkOptions);
+  }
+
+  /**
+   * Create a person with conflict handling for the UNIQUE phone constraint.
+   * If insert conflicts (phone already exists), find and return the existing person.
+   */
+  private async createPersonWithConflictHandling(linkOptions: {
+    matchByPhone?: string;
+    matchByEmail?: string;
+    displayName?: string;
+  }): Promise<{ personId?: string; wasLinked: boolean }> {
+    try {
       const [newPerson] = await this.db
         .insert(persons)
         .values({
@@ -247,9 +263,19 @@ export class PersonService {
           primaryPhone: linkOptions.matchByPhone,
           primaryEmail: linkOptions.matchByEmail,
         })
+        .onConflictDoNothing() // If phone already exists (UNIQUE constraint), skip insert
         .returning();
-      if (newPerson) {
-        return { personId: newPerson.id, wasLinked: false };
+
+      if (newPerson) return { personId: newPerson.id, wasLinked: false };
+
+      // Insert was skipped due to conflict — find and return existing person by phone
+      if (linkOptions.matchByPhone) {
+        return (await this.findPersonByPhone(linkOptions.matchByPhone)) ?? { wasLinked: false };
+      }
+    } catch {
+      // Fallback: re-query on any insert error (race condition safety)
+      if (linkOptions.matchByPhone) {
+        return (await this.findPersonByPhone(linkOptions.matchByPhone)) ?? { wasLinked: false };
       }
     }
 

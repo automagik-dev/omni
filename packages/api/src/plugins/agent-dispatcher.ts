@@ -534,7 +534,8 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  // Use smart lookup to handle LID/phone JID resolution
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
@@ -617,7 +618,8 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    // Use smart lookup to handle LID/phone JID resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -836,7 +838,8 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    // Use smart lookup to handle LID/phone JID resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -1170,7 +1173,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
     provider.name,
     {
       projectPath,
-      apiKey: provider.apiKey ?? undefined,
+      apiKey: (schemaConfig.apiKey as string | undefined) ?? provider.apiKey ?? undefined,
       allowedTools: schemaConfig.allowedTools as string[] | undefined,
       permissionMode: schemaConfig.permissionMode as string | undefined as
         | 'default'
@@ -1268,69 +1271,13 @@ async function getAgentProvider(services: Services, instance: Instance): Promise
   }
 }
 
-/**
- * Resolve agent route and merge with instance defaults.
- * Returns an "effective instance" with route overrides applied.
- *
- * Resolution order: chat route > user route > instance default
- *
- * @see agent-routing wish
- */
-async function resolveEffectiveInstance(
-  services: Services,
-  instance: Instance,
-  chatId: string,
-  personId?: string,
-): Promise<{ instance: Instance; routeId: string | null }> {
-  // Resolve route (chat > user > null)
-  const route = await services.routeResolver.resolve(instance.id, chatId, personId);
-
-  if (!route) {
-    // No route matched - use instance defaults
-    return { instance, routeId: null };
-  }
-
-  // Merge route overrides with instance defaults
-  const effectiveInstance: Instance = {
-    ...instance,
-    // Override provider and agent ID
-    agentProviderId: route.agentProviderId,
-    agentId: route.agentId,
-    agentType: route.agentType,
-    // Override behavior (null = inherit from instance)
-    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
-    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
-    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
-    agentSessionStrategy:
-      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
-    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
-    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
-    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
-    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
-    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
-    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
-  };
-
-  log.debug('Route resolved and merged', {
-    instanceId: instance.id,
-    chatId,
-    personId,
-    routeId: route.id,
-    routeScope: route.scope,
-    agentProviderId: route.agentProviderId,
-    agentId: route.agentId,
-  });
-
-  return { instance: effectiveInstance, routeId: route.id };
-}
-
 // ============================================================================
 // Reaction Trigger Handler
 // ============================================================================
 
 async function processReactionTrigger(
   services: Services,
-  baseInstance: Instance,
+  instance: Instance,
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
   rawEvent: AgentTrigger['event'],
@@ -1338,16 +1285,12 @@ async function processReactionTrigger(
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const chatId = payload.chatId;
 
-  // Resolve agent route and merge with instance defaults
-  const { instance, routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, metadata.personId);
-
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
     chatId,
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
-    routeId,
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
@@ -1501,17 +1444,16 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
 }
 
 /**
- * Check access with LID fallback support.
- * Baileys LID addressing: payload.from may be a LID (e.g. "54958418317348") while
- * access rules use phone patterns (e.g. "5511986780008"). Try both the LID and the
- * phone JID from rawPayload.key.participantAlt for access matching.
+ * Check access for a message sender, with LID fallback.
+ * Baileys LID addressing means payload.from may be a LID while access rules use phone patterns.
+ * Returns true if access is allowed.
  */
-async function checkAccessWithFallback(
+async function checkMessageAccess(
   accessService: Services['access'],
   instance: Instance,
   payload: MessageReceivedPayload,
   channel: ChannelType,
-) {
+): Promise<boolean> {
   const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
   const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
   const primaryId = payload.from ?? '';
@@ -1521,21 +1463,19 @@ async function checkAccessWithFallback(
     accessResult = await accessService.checkAccess(instance, participantAlt, channel);
   }
 
-  return { ...accessResult, participantAlt };
-}
+  if (accessResult.allowed) return true;
 
-/**
- * Send block message if applicable (not silent block and has message configured)
- */
-function handleAccessDenied(
-  accessResult: Awaited<ReturnType<typeof checkAccessWithFallback>>,
-  channel: ChannelType,
-  instanceId: string,
-  chatId: string,
-): void {
+  log.info('Access denied', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    from: payload.from,
+    participantAlt,
+    reason: accessResult.reason,
+  });
   if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
-    sendTextMessage(channel, instanceId, chatId, accessResult.rule.blockMessage).catch(() => {});
+    sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
   }
+  return false;
 }
 
 async function shouldProcessMessage(
@@ -1575,18 +1515,7 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const accessResult = await checkAccessWithFallback(accessService, instance, payload, channel);
-  if (!accessResult.allowed) {
-    log.info('Access denied', {
-      instanceId: instance.id,
-      chatId: payload.chatId,
-      from: payload.from,
-      participantAlt: accessResult.participantAlt,
-      reason: accessResult.reason,
-    });
-    handleAccessDenied(accessResult, channel, instance.id, payload.chatId);
-    return null;
-  }
+  if (!(await checkMessageAccess(accessService, instance, payload, channel))) return null;
 
   return instance;
 }
@@ -1797,16 +1726,11 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     if (!firstMsg) return;
 
     const instanceId = firstMsg.metadata.instanceId;
-    const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
-    if (!baseInstance) {
+    const instance = await agentRunner.getInstanceWithProvider(instanceId);
+    if (!instance) {
       log.warn('Instance not found for debounced messages', { instanceId });
       return;
     }
-
-    // Resolve agent route and merge with instance defaults
-    const chatId = firstMsg.payload.chatId;
-    const personId = firstMsg.metadata.personId;
-    const { instance, routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, personId);
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
@@ -1822,7 +1746,6 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
           triggerType,
           traceId: firstMsg.metadata.traceId,
           messageCount: messages.length,
-          routeId,
         });
         return;
       }

@@ -19,7 +19,7 @@ import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
-import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
+import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
@@ -346,6 +346,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Get the bot's own JID for an instance (e.g., "5511999990000@s.whatsapp.net")
+   */
+  getMeJid(instanceId: string): string | undefined {
+    return this.sockets.get(instanceId)?.user?.id;
+  }
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -398,6 +405,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Storage-backed auth state
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
+
+    // If this instance already has credentials (me.id populated), seed the
+    // in-memory authenticatedInstances set so the connection handler knows to
+    // auto-reconnect on disconnect instead of falling into the QR-scan path.
+    // This is critical after PM2 restarts where the in-memory Set is empty
+    // but the instance was previously paired.
+    if (state.creds?.me?.id) {
+      seedAuthenticated(instanceId);
+    }
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
@@ -530,13 +546,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Build quoted message options for replies.
+   * Build quoted message options for reply-to messages.
    * Baileys requires key.fromMe and a message object for quoted messages.
    */
   private buildQuotedOptions(message: OutgoingMessage, jid: string): { quoted: unknown } | undefined {
     if (!message.replyTo) return undefined;
 
-    // Get fromMe, rawPayload, and text from metadata (looked up by API)
     const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
     const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
     const replyToText = message.metadata?.replyToText as string | undefined;
@@ -550,18 +565,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     });
 
     // If we have the full rawPayload, use it directly (this is a WAMessage)
-    if (replyToRawPayload) {
-      return { quoted: replyToRawPayload };
-    }
+    if (replyToRawPayload) return { quoted: replyToRawPayload };
 
     // Fallback: construct quoted object with text content for preview
     return {
       quoted: {
-        key: {
-          id: message.replyTo,
-          remoteJid: jid,
-          fromMe: replyToFromMe,
-        },
+        key: { id: message.replyTo, remoteJid: jid, fromMe: replyToFromMe },
         message: replyToText ? { conversation: replyToText } : {},
       },
     };
@@ -592,8 +601,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       // Build message content based on type
       const content = this.buildContent(processedMessage);
-
-      // Build quoted options if this is a reply
       const quotedOptions = this.buildQuotedOptions(message, jid);
 
       this.logger.debug('Sending message', { jid, content: summarizeContent(content), hasQuoted: !!quotedOptions });

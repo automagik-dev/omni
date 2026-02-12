@@ -69,8 +69,24 @@ const CONNECTION_TIMEOUT_MS = 45_000; // 45 seconds after QR to connect
 /**
  * Track if instance has ever been authenticated (had successful connection)
  * If not authenticated, we DON'T auto-reconnect on errors - user needs to scan QR
+ *
+ * NOTE: This is populated at startup via seedAuthenticated() using ownerIdentifier
+ * from the database. Without this, every PM2 restart would treat all instances as
+ * "never authenticated", causing them to refuse auto-reconnect on the first
+ * disconnect and instead follow the QR-scan path — leading to rapid
+ * disconnect→reconnect churn that WhatsApp flags as bot activity.
  */
 const authenticatedInstances = new Set<string>();
+
+/**
+ * Seed the authenticated set from DB at startup.
+ * Call this ONCE during plugin initialization for every instance
+ * that has a non-null ownerIdentifier (i.e., was previously paired).
+ * This prevents the "auth handshake" false path after PM2 restarts.
+ */
+export function seedAuthenticated(instanceId: string): void {
+  authenticatedInstances.add(instanceId);
+}
 
 /**
  * Calculate exponential backoff delay

@@ -75,7 +75,13 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
 // ============================================================================
 
 /**
- * Check if an instance needs reconnection based on its status
+ * Check if an instance needs reconnection based on its status.
+ *
+ * IMPORTANT: Do NOT reconnect instances in 'reconnecting' state — the
+ * Baileys connection handler is already managing the reconnect with its
+ * own exponential backoff. Having two systems reconnect the same instance
+ * creates duplicate sockets and rapid connect/disconnect churn that
+ * WhatsApp interprets as bot activity (leading to temp bans).
  */
 function needsReconnect(state: string): boolean {
   return state === 'disconnected' || state === 'error';
@@ -308,7 +314,11 @@ export class InstanceMonitor {
   }
 
   /**
-   * Schedule a reconnection attempt with exponential backoff
+   * Schedule a reconnection attempt with exponential backoff.
+   *
+   * If the instance is already queued and waiting for its next attempt,
+   * we do NOT bump the counter — repeated health-check calls should not
+   * accelerate the backoff or create duplicate attempts.
    */
   scheduleReconnect(instanceId: string, _channel: string, error?: string): void {
     const existing = this.reconnectQueue.get(instanceId);
@@ -317,6 +327,13 @@ export class InstanceMonitor {
       logger.error('Max reconnect attempts reached', { instanceId, attempts: existing.attempts });
       this.markInstanceInactive(instanceId).catch(() => {});
       this.reconnectQueue.delete(instanceId);
+      return;
+    }
+
+    // If already queued and not yet due, don't re-schedule — let the
+    // existing backoff timer play out.  This prevents the 30s health
+    // check from bumping attempts on every tick.
+    if (existing && existing.nextAttempt > new Date()) {
       return;
     }
 

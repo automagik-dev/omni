@@ -118,7 +118,7 @@ const LATENCY_PAIRS: Array<{
 ];
 
 /** Default configuration */
-const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DEFAULT_SAMPLE_RATE = 1.0; // 100%
 const DEFAULT_MAX_ENTRIES = 50_000;
 const CLEANUP_INTERVAL_MS = 60_000; // 60 seconds
