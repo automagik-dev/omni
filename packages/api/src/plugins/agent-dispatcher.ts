@@ -967,8 +967,10 @@ async function dispatchViaStreamingProvider(
 
   try {
     generator = resolved.provider.triggerStream(trigger);
+    let hadError = false;
 
     for await (const delta of generator) {
+      if (delta.phase === 'error') hadError = true;
       await routeStreamDelta(sender, delta);
     }
 
@@ -976,10 +978,14 @@ async function dispatchViaStreamingProvider(
       instanceId: instance.id,
       chatId,
       durationMs: Date.now() - startTime,
+      hadError,
       traceId,
     });
 
-    return true;
+    // Error deltas (timeout, circuit-breaker) are not exceptions — they just
+    // clean up the placeholder.  Return false so the caller falls back to the
+    // accumulate-then-reply path and the user still gets a response.
+    return !hadError;
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,

@@ -115,7 +115,10 @@ export class TelegramStreamSender implements StreamSender {
     }
 
     const thinkingBlock = this.buildFinalThinkingBlock(delta.thinking, delta.thinkingDurationMs);
-    const fullText = thinkingBlock ? `${thinkingBlock}\n\n${finalContent}` : finalContent;
+    // When mixing HTML thinking block with content, escape the content to prevent
+    // Telegram HTML parse errors from <, >, & in assistant output
+    const safeContent = thinkingBlock ? escapeHtml(finalContent) : finalContent;
+    const fullText = thinkingBlock ? `${thinkingBlock}\n\n${safeContent}` : safeContent;
     const chunks = splitMessage(fullText, TELEGRAM_MAX_LENGTH);
     const hasHtml = !!thinkingBlock;
 
