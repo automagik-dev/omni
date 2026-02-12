@@ -1,0 +1,10 @@
+{
+  "name": "audio-decode",
+  "version": "2.2.3",
+  "description": "Bun-compatible audio-decode shim using ffmpeg (for Baileys waveform generation)",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  }
+}
