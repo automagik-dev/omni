@@ -1,0 +1,34 @@
+language: en-US
+tone_instructions: "Be direct and concise. Focus on bugs, security, and correctness over style."
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+  path_filters:
+    - "!.wishes/**"
+    - "!.beads/**"
+    - "!memory/**"
+    - "!.claude/**"
+    - "!*.md"
+    - "!dist/**"
+    - "!.pgserve-data/**"
+  path_instructions:
+    - path: "packages/core/**"
+      instructions: "This is the shared core package. Changes here affect all other packages. Check for breaking changes to exported types and schemas."
+    - path: "packages/api/**"
+      instructions: "Hono + tRPC API. Verify OpenAPI docs are updated for route changes. Check Zod validation on external inputs. Events must be published for state changes."
+    - path: "packages/channel-*/**"
+      instructions: "Channel plugins must be isolated — no core logic here. Verify they implement the ChannelPlugin interface and emit proper events."
+    - path: "packages/db/**"
+      instructions: "Drizzle ORM only — no raw SQL. Check schema changes have proper migrations."
+    - path: ".github/workflows/**"
+      instructions: "CI workflows. Check for hardcoded secrets, proper caching keys, and timeout settings."
+
+tools:
+  shellcheck:
+    enabled: true
+  biome:
+    enabled: true
