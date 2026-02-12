@@ -264,7 +264,10 @@ export function registerRouteSchemas(registry: OpenAPIRegistry): void {
       }),
     },
     responses: {
-      204: { description: 'Route deleted' },
+      200: {
+        description: 'Route deleted',
+        content: { 'application/json': { schema: z.object({ success: z.boolean() }) } },
+      },
       403: { description: 'Access denied', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Route not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
