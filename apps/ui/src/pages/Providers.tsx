@@ -289,11 +289,9 @@ function CreateProviderModal({ open, onClose }: { open: boolean; onClose: () => 
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder={
-                    schema === 'openai'
-                      ? 'https://api.openai.com/v1'
-                      : schema === 'anthropic'
-                        ? 'https://api.anthropic.com'
-                        : 'https://...'
+                    schema === 'openclaw'
+                      ? 'ws://127.0.0.1:18789'
+                      : 'https://...'
                   }
                 />
                 <p className="text-xs text-muted-foreground">Leave empty to use the default endpoint</p>
