@@ -334,6 +334,7 @@ export const appRouter = t.router({
           schema: ProviderSchemaEnum.default('agno'),
           baseUrl: z.string().url(),
           apiKey: z.string().optional(),
+          schemaConfig: z.record(z.string(), z.unknown()).optional(),
           defaultStream: z.boolean().default(true),
           defaultTimeout: z.number().int().positive().default(60),
         }),

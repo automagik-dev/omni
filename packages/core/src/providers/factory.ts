@@ -7,6 +7,7 @@
 
 import type { ProviderSchema } from '../types/agent';
 import { createAgnoClient } from './agno-client';
+import { type ClaudeCodeConfig, createClaudeCodeClient } from './claude-code-client';
 import { type IAgentClient, ProviderError } from './types';
 
 /**
@@ -17,6 +18,8 @@ export interface ProviderClientConfig {
   baseUrl: string;
   apiKey: string;
   defaultTimeoutMs?: number;
+  /** Schema-specific config (required for claude-code) */
+  schemaConfig?: Record<string, unknown>;
 }
 
 /**
@@ -61,10 +64,18 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
     case 'ag-ui':
       throw new ProviderError('AG-UI provider not yet implemented', 'NOT_FOUND', 501, { schema: 'ag-ui' });
 
-    case 'claude-code':
-      throw new ProviderError('Claude Code provider not yet implemented', 'NOT_FOUND', 501, {
-        schema: 'claude-code',
+    case 'claude-code': {
+      const ccConfig = config.schemaConfig as ClaudeCodeConfig | undefined;
+      if (!ccConfig?.projectPath) {
+        throw new ProviderError('Claude Code provider requires schemaConfig.projectPath', 'INVALID_RESPONSE', 400, {
+          schema: 'claude-code',
+        });
+      }
+      return createClaudeCodeClient({
+        ...ccConfig,
+        apiKey: ccConfig.apiKey ?? config.apiKey,
       });
+    }
 
     default:
       throw new ProviderError(`Unknown provider schema: ${config.schema}`, 'NOT_FOUND', 400, {
@@ -77,12 +88,12 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
  * Check if a provider schema is currently supported
  */
 export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
-  return schema === 'agno' || schema === 'webhook' || schema === 'openclaw';
+  return schema === 'agno' || schema === 'webhook' || schema === 'openclaw' || schema === 'claude-code';
 }
 
 /**
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agno', 'webhook', 'openclaw'];
+  return ['agno', 'webhook', 'openclaw', 'claude-code'];
 }

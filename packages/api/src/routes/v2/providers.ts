@@ -21,7 +21,15 @@ const createProviderSchema = z.object({
   schema: ProviderSchemaEnum.default('agno').describe('Provider schema type'),
   baseUrl: z.string().url().describe('Base URL for provider API'),
   apiKey: z.string().optional().describe('API key (stored encrypted)'),
-  schemaConfig: z.record(z.string(), z.unknown()).optional().describe('Schema-specific configuration'),
+  schemaConfig: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      'Schema-specific config. Required fields by schema: ' +
+        'agno: { agentId }, openclaw: { defaultAgentId }, ' +
+        'claude-code: { projectPath, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
+        'webhook: { mode?, retries? }',
+    ),
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
   defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
   supportsStreaming: z.boolean().default(true).describe('Provider supports streaming'),

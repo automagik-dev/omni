@@ -15,7 +15,18 @@ export const ProviderSchema = z.object({
     .openapi({ description: 'Provider schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
-  schemaConfig: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Schema config' }),
+  schemaConfig: z
+    .record(z.string(), z.unknown())
+    .nullable()
+    .openapi({
+      description:
+        'Schema-specific configuration. Shape depends on schema type:\n' +
+        '- **agno**: `{ agentId, teamId?, timeout? }`\n' +
+        '- **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`\n' +
+        '- **claude-code**: `{ projectPath, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
+        '- **webhook**: `{ mode?, retries? }`',
+      example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
+    }),
   defaultStream: z.boolean().openapi({ description: 'Default streaming' }),
   defaultTimeout: z.number().int().openapi({ description: 'Default timeout (seconds)' }),
   supportsStreaming: z.boolean().openapi({ description: 'Supports streaming' }),
@@ -38,7 +49,18 @@ export const CreateProviderSchema = z.object({
     .openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().optional().openapi({ description: 'API key (encrypted)' }),
-  schemaConfig: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Schema config' }),
+  schemaConfig: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .openapi({
+      description:
+        'Schema-specific configuration. Required fields vary by schema:\n' +
+        '- **agno**: `{ agentId }` (required)\n' +
+        '- **openclaw**: `{ defaultAgentId }` (required)\n' +
+        '- **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md\n' +
+        '- **webhook**: optional `{ mode, retries }`',
+      example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
+    }),
   defaultStream: z.boolean().default(true).openapi({ description: 'Default streaming' }),
   defaultTimeout: z.number().int().positive().default(60).openapi({ description: 'Default timeout' }),
   supportsStreaming: z.boolean().default(true).openapi({ description: 'Supports streaming' }),

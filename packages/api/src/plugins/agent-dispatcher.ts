@@ -22,6 +22,7 @@ import {
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
+  ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
   JOURNEY_STAGES,
@@ -1154,6 +1155,44 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
   });
 }
 
+/** Create a Claude Code agent provider */
+function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const projectPath = schemaConfig.projectPath as string;
+
+  if (!projectPath) {
+    log.error('Claude Code provider missing projectPath', { providerId: provider.id });
+    throw new Error('Claude Code provider requires schemaConfig.projectPath');
+  }
+
+  return new ClaudeCodeAgentProvider(
+    provider.id,
+    provider.name,
+    {
+      projectPath,
+      apiKey: provider.apiKey ?? undefined,
+      allowedTools: schemaConfig.allowedTools as string[] | undefined,
+      permissionMode: schemaConfig.permissionMode as string | undefined as
+        | 'default'
+        | 'acceptEdits'
+        | 'bypassPermissions'
+        | 'plan'
+        | undefined,
+      model: schemaConfig.model as string | undefined,
+      systemPrompt: schemaConfig.systemPrompt as string | undefined,
+      mcpServers: schemaConfig.mcpServers as
+        | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
+        | undefined,
+      maxTurns: schemaConfig.maxTurns as number | undefined,
+    },
+    {
+      timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+      enableAutoSplit: instance.enableAutoSplit ?? true,
+      prefixSenderName: instance.agentPrefixSenderName ?? true,
+    },
+  );
+}
+
 /** Create a webhook-based agent provider */
 function createWebhookProvider(provider: AgentProvider): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -1189,6 +1228,9 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
       break;
     case 'openclaw':
       agentProvider = createOpenClawProviderInstance(provider, instance);
+      break;
+    case 'claude-code':
+      agentProvider = createClaudeCodeProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
