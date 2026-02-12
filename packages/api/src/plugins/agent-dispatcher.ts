@@ -347,6 +347,13 @@ function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'c
     return 'dm'; // fallback
   }
 
+  if (channel === 'telegram') {
+    // Telegram: negative chatId = group/supergroup, positive = DM
+    const numId = Number(chatId);
+    if (!Number.isNaN(numId) && numId < 0) return 'group';
+    return 'dm';
+  }
+
   if (channel === 'discord') {
     // Discord group detection logic (based on chatId format or instance metadata)
     // For now, assume DM unless proven otherwise
@@ -872,7 +879,12 @@ async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promi
 
 interface StreamCapabilities {
   provider: IAgentProvider & { triggerStream: (ctx: AgentTrigger) => AsyncGenerator<StreamDelta> };
-  createSender: (instanceId: string, chatId: string, replyToMessageId?: string) => StreamSender;
+  createSender: (
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ) => StreamSender;
 }
 
 /** Check all preconditions for streaming dispatch. Returns null if any guard fails. */
@@ -905,6 +917,33 @@ async function resolveStreamingCapabilities(
     provider: provider as StreamCapabilities['provider'],
     createSender: plugin.createStreamSender.bind(plugin),
   };
+}
+
+/** Consume a streaming generator, routing each delta to the sender. Returns true if no error deltas. */
+async function consumeStream(
+  generator: AsyncGenerator<StreamDelta>,
+  sender: StreamSender,
+  instanceId: string,
+  chatId: string,
+  traceId: string,
+): Promise<boolean> {
+  const startTime = Date.now();
+  let hadError = false;
+
+  for await (const delta of generator) {
+    if (delta.phase === 'error') hadError = true;
+    await routeStreamDelta(sender, delta);
+  }
+
+  log.info('Streaming response complete', {
+    instanceId,
+    chatId,
+    durationMs: Date.now() - startTime,
+    hadError,
+    traceId,
+  });
+
+  return !hadError;
 }
 
 /**
@@ -955,34 +994,18 @@ async function dispatchViaStreamingProvider(
     sessionId,
   };
 
-  const sender = resolved.createSender(instance.id, chatId, replyToId);
+  const chatType = determineChatType(chatId, channel);
+  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType);
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
-  const startTime = Date.now();
-  let generator: AsyncGenerator<StreamDelta> | null = null;
-
   try {
-    generator = resolved.provider.triggerStream(trigger);
-    let hadError = false;
-
-    for await (const delta of generator) {
-      if (delta.phase === 'error') hadError = true;
-      await routeStreamDelta(sender, delta);
-    }
-
-    log.info('Streaming response complete', {
-      instanceId: instance.id,
-      chatId,
-      durationMs: Date.now() - startTime,
-      hadError,
-      traceId,
-    });
+    const generator = resolved.provider.triggerStream(trigger);
 
     // Error deltas (timeout, circuit-breaker) are not exceptions — they just
     // clean up the placeholder.  Return false so the caller falls back to the
     // accumulate-then-reply path and the user still gets a response.
-    return !hadError;
+    return await consumeStream(generator, sender, instance.id, chatId, traceId);
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,
@@ -998,13 +1021,6 @@ async function dispatchViaStreamingProvider(
     return false;
   } finally {
     activeStreams.delete(streamKey);
-    if (generator) {
-      try {
-        await generator.return(undefined as never);
-      } catch {
-        // Generator may already be closed
-      }
-    }
   }
 }
 

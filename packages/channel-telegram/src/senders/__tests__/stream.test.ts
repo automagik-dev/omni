@@ -258,6 +258,58 @@ describe('TelegramStreamSender', () => {
     expect(mockBot.edited.length).toBe(0);
   });
 
+  test('uses 900ms throttle for DMs (default)', async () => {
+    // Default sender (no chatType) should use DM throttle
+    const dmSender = new TelegramStreamSender(mockBot.bot, '12345');
+    const delta1: StreamDelta & { phase: 'content' } = {
+      phase: 'content',
+      content: 'First',
+      thinking: undefined,
+      thinkingDurationMs: undefined,
+    };
+    const delta2: StreamDelta & { phase: 'content' } = {
+      phase: 'content',
+      content: 'Second',
+      thinking: undefined,
+      thinkingDurationMs: undefined,
+    };
+
+    await dmSender.onContentDelta(delta1);
+    await tick(500); // 500ms < 900ms DM throttle
+    await dmSender.onContentDelta(delta2);
+
+    // Only first edit should have fired (second is throttled)
+    expect(mockBot.sent.length).toBe(1);
+  });
+
+  test('uses 3000ms throttle for groups', async () => {
+    const groupSender = new TelegramStreamSender(mockBot.bot, '-100123456', undefined, 'group');
+    const delta1: StreamDelta & { phase: 'content' } = {
+      phase: 'content',
+      content: 'First',
+      thinking: undefined,
+      thinkingDurationMs: undefined,
+    };
+    const delta2: StreamDelta & { phase: 'content' } = {
+      phase: 'content',
+      content: 'Second update',
+      thinking: undefined,
+      thinkingDurationMs: undefined,
+    };
+
+    await groupSender.onContentDelta(delta1);
+    await tick(1500); // 1500ms < 3000ms group throttle
+    await groupSender.onContentDelta(delta2);
+
+    // Only first edit should have fired (second is still throttled at 3s)
+    expect(mockBot.sent.length).toBe(1);
+
+    // Wait past group throttle
+    await tick(2000); // total ~3500ms > 3000ms
+    // Pending edit should have fired by now
+    expect(mockBot.sent.length + mockBot.edited.length).toBeGreaterThanOrEqual(2);
+  });
+
   test('onFinal with empty content deletes placeholder', async () => {
     // Create placeholder
     const contentDelta: StreamDelta & { phase: 'content' } = {

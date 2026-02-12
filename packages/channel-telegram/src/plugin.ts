@@ -277,12 +277,17 @@ export class TelegramPlugin extends BaseChannelPlugin {
   // Typing indicator
   // ────────────────────────────────────────────────────────────
 
-  createStreamSender(instanceId: string, chatId: string, replyToMessageId?: string): StreamSender {
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ): StreamSender {
     const bot = getBot(instanceId);
     if (!bot) {
       throw new Error(`No bot for instance ${instanceId}`);
     }
-    return new TelegramStreamSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined);
+    return new TelegramStreamSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined, chatType);
   }
 
   async sendTyping(instanceId: string, chatId: string): Promise<void> {
