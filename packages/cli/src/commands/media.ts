@@ -12,6 +12,7 @@
 import { Command } from 'commander';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { resolveChatId, resolveInstanceId, resolveMessageId } from '../resolve.js';
 
 // ============================================================================
 // TYPES
@@ -212,14 +213,18 @@ function applyFilters(items: MediaMessage[], options: LsOptions): MediaMessage[]
 async function handleLs(options: LsOptions): Promise<void> {
   const limit = Math.min(options.limit ?? 20, 100);
 
+  // Resolve IDs
+  const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+  const chatId = options.chat ? await resolveChatId(options.chat) : undefined;
+
   // Build query params for GET /messages with hasMedia=true
   const query: Record<string, string | number | boolean | undefined> = {
     hasMedia: true,
     limit,
   };
 
-  if (options.instance) query.instanceId = options.instance;
-  if (options.chat) query.chatId = options.chat;
+  if (instanceId) query.instanceId = instanceId;
+  if (chatId) query.chatId = chatId;
   if (options.since) query.since = options.since;
   if (options.until) query.until = options.until;
 
@@ -268,7 +273,15 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
     output.error('Provide either --message or --chat/--external, not both');
   }
 
-  const body = buildMessageRef(options);
+  // Resolve IDs
+  const messageId = options.message ? await resolveMessageId(options.message, options.chat) : undefined;
+  const chatId = options.chat ? await resolveChatId(options.chat) : undefined;
+
+  const body = buildMessageRef({
+    message: messageId,
+    chat: chatId,
+    external: options.external,
+  });
   const response = (await apiCall('messages/media/download', 'POST', body)) as { data: DownloadResponse };
   const result = response.data;
 

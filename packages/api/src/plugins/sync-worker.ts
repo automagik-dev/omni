@@ -413,7 +413,8 @@ function mapContentType(
 /** Update a DM chat's name if it's missing or stale */
 async function updateDmChatName(services: Services, instanceId: string, jid: string, name: string): Promise<void> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, jid);
+    // Use smart lookup to handle LID/phone JID resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
     if (!chat) return;
     const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
     if (!chat.name || hasStaleJidName) {

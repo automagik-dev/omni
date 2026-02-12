@@ -141,10 +141,11 @@ async function resolveMediaPath(
   const pollMs = 250;
   const deadline = Date.now() + maxWaitMs;
 
-  let chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+  // Use smart lookup to handle LID/phone JID resolution
+  let chat = await ctx.services.chats.findByExternalIdSmart(instanceId, chatId);
   while (!chat && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
-    chat = await ctx.services.chats.getByExternalId(instanceId, chatId);
+    chat = await ctx.services.chats.findByExternalIdSmart(instanceId, chatId);
   }
   if (!chat) {
     log.debug('Chat not found, cannot process media', { chatId, externalId });

@@ -23,7 +23,8 @@ export const ProviderSchema = z.object({
         'Schema-specific configuration. Shape depends on schema type:\n' +
         '- **agno**: `{ agentId, teamId?, timeout? }`\n' +
         '- **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`\n' +
-        '- **claude-code**: `{ projectPath, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
+        '- **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
+        '  - `apiKey` in schemaConfig overrides the provider-level apiKey\n' +
         '- **webhook**: `{ mode?, retries? }`',
       example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
     }),
@@ -58,6 +59,7 @@ export const CreateProviderSchema = z.object({
         '- **agno**: `{ agentId }` (required)\n' +
         '- **openclaw**: `{ defaultAgentId }` (required)\n' +
         '- **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md\n' +
+        '  - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`\n' +
         '- **webhook**: optional `{ mode, retries }`',
       example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
     }),

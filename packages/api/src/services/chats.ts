@@ -280,6 +280,64 @@ export class ChatService {
   }
 
   /**
+   * Find chat by external ID with smart lookup.
+   * Performs secondary lookups via canonicalId and chatIdMappings
+   * to handle LID/phone JID resolution (same logic as findOrCreate but without creating).
+   *
+   * This should be used instead of getByExternalId when you need to handle
+   * WhatsApp LID-to-phone JID mappings (e.g., media processing, status updates).
+   */
+  async findByExternalIdSmart(instanceId: string, externalId: string): Promise<Chat | null> {
+    // Primary lookup: exact externalId match
+    const existing = await this.getByExternalId(instanceId, externalId);
+    if (existing) {
+      return existing;
+    }
+
+    // Secondary lookup: check if another chat has this as its canonicalId
+    // (e.g., an @lid chat that was previously resolved to this phone JID)
+    const [byCanonical] = await this.db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
+      .limit(1);
+    if (byCanonical) {
+      return byCanonical;
+    }
+
+    // Secondary lookup: check chatIdMappings for LID↔phone mappings
+    if (externalId.endsWith('@s.whatsapp.net')) {
+      // Phone JID arrived — check if a LID chat exists for it
+      const [mapping] = await this.db
+        .select()
+        .from(chatIdMappings)
+        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
+        .limit(1);
+      if (mapping) {
+        const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
+        if (lidChat) {
+          return lidChat;
+        }
+      }
+    } else if (externalId.endsWith('@lid')) {
+      // LID arrived — check if a phone chat exists for it
+      const [mapping] = await this.db
+        .select()
+        .from(chatIdMappings)
+        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
+        .limit(1);
+      if (mapping) {
+        const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
+        if (phoneChat) {
+          return phoneChat;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Get chat with all participants
    */
   async getWithParticipants(id: string): Promise<ChatWithParticipants> {

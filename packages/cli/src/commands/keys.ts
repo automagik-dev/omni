@@ -8,6 +8,7 @@ import type { ApiKeyRecord, ApiKeyStatus, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveKeyId } from '../resolve.js';
 
 // ============================================================================
 // TYPES
@@ -111,11 +112,13 @@ async function handleList(client: OmniClient, options: ListOptions): Promise<voi
 }
 
 async function handleGet(client: OmniClient, id: string): Promise<void> {
-  const key = await client.keys.get(id);
+  const keyId = await resolveKeyId(id);
+  const key = await client.keys.get(keyId);
   output.data(key);
 }
 
 async function handleUpdate(client: OmniClient, id: string, options: UpdateOptions): Promise<void> {
+  const keyId = await resolveKeyId(id);
   const body: Record<string, unknown> = {};
   if (options.name !== undefined) body.name = options.name;
   if (options.description !== undefined) body.description = options.description;
@@ -131,13 +134,14 @@ async function handleUpdate(client: OmniClient, id: string, options: UpdateOptio
     return;
   }
 
-  const updated = await client.keys.update(id, body);
+  const updated = await client.keys.update(keyId, body);
   output.success(`API key updated: ${updated.name}`);
   output.data(updated);
 }
 
 async function handleRevoke(client: OmniClient, id: string, options: RevokeOptions): Promise<void> {
-  const revoked = await client.keys.revoke(id, {
+  const keyId = await resolveKeyId(id);
+  const revoked = await client.keys.revoke(keyId, {
     reason: options.reason,
   });
   output.success(`API key revoked: ${revoked.name}`);
@@ -147,8 +151,9 @@ async function handleRevoke(client: OmniClient, id: string, options: RevokeOptio
 }
 
 async function handleDelete(client: OmniClient, id: string): Promise<void> {
-  await client.keys.delete(id);
-  output.success(`API key deleted: ${id}`);
+  const keyId = await resolveKeyId(id);
+  await client.keys.delete(keyId);
+  output.success(`API key deleted: ${keyId}`);
 }
 
 // ============================================================================
