@@ -19,7 +19,7 @@ import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
-import { resetConnectionState, setupConnectionHandlers } from './handlers/connection';
+import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
@@ -405,6 +405,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Storage-backed auth state
     const { state, saveCreds } = await createStorageAuthState(this.storage, instanceId);
+
+    // If this instance already has credentials (me.id populated), seed the
+    // in-memory authenticatedInstances set so the connection handler knows to
+    // auto-reconnect on disconnect instead of falling into the QR-scan path.
+    // This is critical after PM2 restarts where the in-memory Set is empty
+    // but the instance was previously paired.
+    if (state.creds?.me?.id) {
+      seedAuthenticated(instanceId);
+    }
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
