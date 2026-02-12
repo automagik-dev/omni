@@ -4,9 +4,15 @@ tone_instructions: "Be direct and concise. Focus on bugs, security, and correctn
 reviews:
   profile: assertive
   high_level_summary: true
+  poem: false
+  in_progress_fortune: false
   auto_review:
     enabled: true
     auto_incremental_review: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "wip"
   path_filters:
     - "!.wishes/**"
     - "!.beads/**"
@@ -31,4 +37,10 @@ tools:
   shellcheck:
     enabled: true
   biome:
+    enabled: true
+  actionlint:
+    enabled: true
+  gitleaks:
+    enabled: true
+  yamllint:
     enabled: true
