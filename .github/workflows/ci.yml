@@ -23,11 +23,51 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Cache NATS binary
+        uses: actions/cache@v4
+        with:
+          path: bin/
+          key: nats-${{ runner.os }}-v2.10.24
+
       - name: Install dependencies
         run: bun install
 
-      - name: Build (dependency packages)
+      - name: Setup environment
+        run: cp .env.example .env
+
+      - name: Download NATS
+        run: ./scripts/ensure-nats.sh
+
+      - name: Start pgserve
+        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+
+      - name: Start NATS
+        run: ./bin/nats-server -js -p 4222 &
+
+      - name: Wait for database
+        run: |
+          for i in $(seq 1 15); do
+            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 2
+          done
+          echo "Database failed to start" && exit 1
+
+      - name: Build
         run: bun run build
+
+      - name: Verify build outputs
+        run: |
+          test -d packages/sdk/dist || (echo "Missing packages/sdk/dist" && exit 1)
+          test -d packages/cli/dist || (echo "Missing packages/cli/dist" && exit 1)
+          echo "Build outputs verified"
 
       - name: Typecheck
         run: bun run typecheck
@@ -36,6 +76,90 @@ jobs:
         run: bunx biome check .
 
       - name: Test
-        run: bun run test
+        run: bun test --env-file=.env
         env:
           NODE_ENV: test
+
+  smoke-test:
+    name: Smoke Test (Fresh Environment)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Cache NATS binary
+        uses: actions/cache@v4
+        with:
+          path: bin/
+          key: nats-${{ runner.os }}-v2.10.24
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup environment
+        run: cp .env.example .env
+
+      - name: Download NATS
+        run: ./scripts/ensure-nats.sh
+
+      - name: Start pgserve
+        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+
+      - name: Start NATS
+        run: ./bin/nats-server -js -p 4222 &
+
+      - name: Wait for database
+        run: |
+          for i in $(seq 1 15); do
+            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 2
+          done
+          echo "Database failed to start" && exit 1
+
+      - name: Build all packages
+        run: bun run build
+
+      - name: Start API
+        run: bun packages/api/src/index.ts &
+        env:
+          OMNI_PACKAGES_DIR: ${{ github.workspace }}/packages
+
+      - name: Wait for API
+        run: |
+          for i in $(seq 1 15); do
+            curl --fail --silent http://localhost:8882/api/v2/health > /dev/null 2>&1 && \
+              echo "API is healthy" && exit 0 || sleep 2
+          done
+          echo "API failed to start" && exit 1
+
+      - name: Verify health response
+        run: |
+          HEALTH=$(curl --fail --silent http://localhost:8882/api/v2/health)
+          echo "$HEALTH" | jq .
+          STATUS=$(echo "$HEALTH" | jq -r '.status')
+          if [ "$STATUS" != "healthy" ]; then
+            echo "Health check returned status: $STATUS (expected: healthy)"
+            exit 1
+          fi
+
+      - name: Verify single API process
+        run: |
+          PROC_COUNT=$(lsof -ti:8882 | wc -l)
+          echo "Processes on port 8882: $PROC_COUNT"
+          if [ "$PROC_COUNT" -ne 1 ]; then
+            echo "Expected 1 process on port 8882, found $PROC_COUNT"
+            exit 1
+          fi

@@ -2,7 +2,7 @@
 
 > GitHub Actions workflows that catch "works on my machine" bugs by running setup, build, and quality checks on every push and PR.
 
-**Status:** APPROVED
+**Status:** REVIEW
 **Created:** 2026-02-10
 **Updated:** 2026-02-12
 **Author:** WISH Agent
