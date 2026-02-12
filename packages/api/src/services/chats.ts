@@ -690,7 +690,12 @@ export class ChatService {
       // Update identity links if provided and missing on existing record
       const hasNewIdentity = defaults.personId || defaults.platformIdentityId;
       const missingIdentity = !existing.personId || !existing.platformIdentityId;
-      if (hasNewIdentity && missingIdentity) {
+
+      // Update displayName if provided and currently missing
+      const hasNewDisplayName = defaults.displayName && defaults.displayName !== existing.displayName;
+      const missingDisplayName = !existing.displayName;
+
+      if ((hasNewIdentity && missingIdentity) || (hasNewDisplayName && missingDisplayName)) {
         const updated = await this.updateParticipantIdentity(existing, defaults);
         return { participant: updated, created: false };
       }
