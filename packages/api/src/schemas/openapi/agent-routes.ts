@@ -64,11 +64,15 @@ export const AgentRouteSchema = z.object({
   agentWaitForMedia: z.boolean().nullable().openapi({ description: 'Wait for media override' }),
   agentSendMediaPath: z.boolean().nullable().openapi({ description: 'Send media path override' }),
   agentGateEnabled: z.boolean().nullable().openapi({ description: 'Response gate enabled override' }),
-  agentGateModel: z.string().nullable().openapi({ description: 'Response gate model override' }),
+  agentGateModel: z.string().max(120).nullable().openapi({ description: 'Response gate model override' }),
   agentGatePrompt: z.string().nullable().openapi({ description: 'Response gate prompt override' }),
 
   // Metadata
-  label: z.string().nullable().openapi({ description: 'Human-readable label for this route (e.g., "VIP Support")' }),
+  label: z
+    .string()
+    .max(255)
+    .nullable()
+    .openapi({ description: 'Human-readable label for this route (e.g., "VIP Support")' }),
   priority: z.number().int().openapi({ description: 'Priority (higher = higher priority, default: 0)' }),
   isActive: z.boolean().openapi({ description: 'Whether this route is active' }),
 
