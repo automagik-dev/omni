@@ -197,6 +197,17 @@ export interface WhatsAppConfig extends WhatsAppConnectionOptions {}
  * - Read receipts and delivery confirmations
  * - Automatic reconnection with exponential backoff
  */
+/** Summarize message content for debug logging, replacing raw buffers with size descriptions. */
+function summarizeContent(content: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = { ...content };
+  for (const key of ['audio', 'image', 'video', 'document', 'sticker'] as const) {
+    if (Buffer.isBuffer(summary[key])) {
+      summary[key] = `<Buffer ${(summary[key] as Buffer).length} bytes>`;
+    }
+  }
+  return summary;
+}
+
 export class WhatsAppPlugin extends BaseChannelPlugin {
   readonly id: ChannelType = 'whatsapp-baileys';
   readonly name = 'WhatsApp (Baileys)';
@@ -578,35 +589,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         }
       }
 
-      // Log content summary without raw buffer data to avoid flooding logs
-      const contentSummary = {
-        ...content,
-        ...(Buffer.isBuffer((content as Record<string, unknown>).audio)
-          ? { audio: `<Buffer ${((content as Record<string, unknown>).audio as Buffer).length} bytes>` }
-          : {}),
-        ...(Buffer.isBuffer((content as Record<string, unknown>).image)
-          ? { image: `<Buffer ${((content as Record<string, unknown>).image as Buffer).length} bytes>` }
-          : {}),
-        ...(Buffer.isBuffer((content as Record<string, unknown>).video)
-          ? { video: `<Buffer ${((content as Record<string, unknown>).video as Buffer).length} bytes>` }
-          : {}),
-        ...(Buffer.isBuffer((content as Record<string, unknown>).document)
-          ? { document: `<Buffer ${((content as Record<string, unknown>).document as Buffer).length} bytes>` }
-          : {}),
-        ...(Buffer.isBuffer((content as Record<string, unknown>).sticker)
-          ? { sticker: `<Buffer ${((content as Record<string, unknown>).sticker as Buffer).length} bytes>` }
-          : {}),
-      };
-      this.logger.debug('Sending message', { jid, content: contentSummary, hasQuoted: !!quotedOptions });
+      this.logger.debug('Sending message', { jid, content: summarizeContent(content), hasQuoted: !!quotedOptions });
 
-      // Journey timing: T10 (pluginSentAt) before platform call
+      // Journey timing: T10 before platform call, T11 after
       const correlationId = message.metadata?.correlationId as string | undefined;
-      if (correlationId) this.captureT10(correlationId);
-
+      correlationId && this.captureT10(correlationId);
       const result = await sock.sendMessage(jid, content, quotedOptions as never);
-
-      // Journey timing: T11 (platformDeliveredAt) after platform confirms
-      if (correlationId) this.captureT11(correlationId);
+      correlationId && this.captureT11(correlationId);
 
       const externalId = result?.key?.id || '';
 
