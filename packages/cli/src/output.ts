@@ -126,13 +126,13 @@ export function setMaxCellWidth(width: number): void {
   maxCellWidth = width;
 }
 
-/** Output list of items */
-export function list<T>(items: T[], options?: { emptyMessage?: string }): void {
+/** Output list of items. When rawData is provided, JSON mode outputs rawData instead of formatted items. */
+export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?: unknown[] }): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
     // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(items, null, 2));
+    console.log(JSON.stringify(options?.rawData ?? items, null, 2));
     return;
   }
 

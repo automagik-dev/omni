@@ -274,7 +274,7 @@ export function createMessagesCommand(): Command {
           const chatMap = await fetchChatMap(client, chatIds);
           const items = formatSearchResults(searchResults, chatMap);
 
-          output.list(items, { emptyMessage: 'No messages found.' });
+          output.list(items, { emptyMessage: 'No messages found.', rawData: searchResults });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Search failed: ${message}`);

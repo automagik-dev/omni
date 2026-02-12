@@ -301,7 +301,7 @@ function displayChatList(
       messages: c.messageCount ?? 0,
       archived: c.isArchived ? 'yes' : 'no',
     }));
-    output.list(items, { emptyMessage: 'No chats found.' });
+    output.list(items, { emptyMessage: 'No chats found.', rawData: chatItems });
   } else {
     const showInstance = !options.instance && instanceNames.size > 0;
     const items = chatItems.map((c) => {
@@ -317,7 +317,7 @@ function displayChatList(
       row.time = formatRelativeTime(c.lastMessageAt);
       return row;
     });
-    output.list(items, { emptyMessage: 'No chats found.' });
+    output.list(items, { emptyMessage: 'No chats found.', rawData: chatItems });
   }
 }
 
@@ -706,10 +706,10 @@ export function createChatsCommand(): Command {
 
           if (options.rich) {
             const items = formatRichMessages(messages);
-            output.list(items, { emptyMessage: 'No messages found.' });
+            output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
           } else {
             const items = formatStandardMessages(messages);
-            output.list(items, { emptyMessage: 'No messages found.' });
+            output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

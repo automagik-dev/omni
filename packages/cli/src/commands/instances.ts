@@ -105,7 +105,7 @@ export function createInstancesCommand(): Command {
           phone: statusMap.get(i.id) ?? '-',
         }));
 
-        output.list(items, { emptyMessage: 'No instances found.' });
+        output.list(items, { emptyMessage: 'No instances found.', rawData: result.items });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to list instances: ${message}`);
@@ -578,7 +578,7 @@ export function createInstancesCommand(): Command {
             isBusiness: c.isBusiness ? 'yes' : 'no',
           }));
 
-          output.list(items, { emptyMessage: 'No contacts found.' });
+          output.list(items, { emptyMessage: 'No contacts found.', rawData: result.items });
 
           if (result.meta.hasMore) {
             output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
@@ -619,7 +619,7 @@ export function createInstancesCommand(): Command {
             : '-',
         }));
 
-        output.list(items, { emptyMessage: 'No groups found.' });
+        output.list(items, { emptyMessage: 'No groups found.', rawData: result.items });
 
         if (result.meta.hasMore) {
           output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
