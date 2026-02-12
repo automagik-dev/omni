@@ -1440,6 +1440,41 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
+/**
+ * Check access for a message sender, with LID fallback.
+ * Baileys LID addressing means payload.from may be a LID while access rules use phone patterns.
+ * Returns true if access is allowed.
+ */
+async function checkMessageAccess(
+  accessService: Services['access'],
+  instance: Instance,
+  payload: MessageReceivedPayload,
+  channel: ChannelType,
+): Promise<boolean> {
+  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
+  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  const primaryId = payload.from ?? '';
+
+  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
+  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
+    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+  }
+
+  if (accessResult.allowed) return true;
+
+  log.info('Access denied', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    from: payload.from,
+    participantAlt,
+    reason: accessResult.reason,
+  });
+  if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
+    sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
+  }
+  return false;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -1477,31 +1512,7 @@ async function shouldProcessMessage(
     return null;
   }
 
-  // Baileys LID addressing: payload.from may be a LID (e.g. "54958418317348") while
-  // access rules use phone patterns (e.g. "5511986780008"). Try both the LID and the
-  // phone JID from rawPayload.key.participantAlt for access matching.
-  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
-  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
-  const primaryId = payload.from ?? '';
-
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
-  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
-  }
-  if (!accessResult.allowed) {
-    log.info('Access denied', {
-      instanceId: instance.id,
-      chatId: payload.chatId,
-      from: payload.from,
-      participantAlt,
-      reason: accessResult.reason,
-    });
-    // Send block message if applicable
-    if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
-      sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
-    }
-    return null;
-  }
+  if (!(await checkMessageAccess(accessService, instance, payload, channel))) return null;
 
   return instance;
 }
