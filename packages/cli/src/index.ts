@@ -33,9 +33,17 @@ import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
-import type { CommandCategory } from './config.js';
+import { type CommandCategory, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors } from './output.js';
+
+// Handle --json flag early (before Commander) so it works anywhere in argv
+if (process.argv.includes('--json')) {
+  setRuntimeFormat('json');
+  // Remove --json from argv so Commander doesn't choke on it in subcommands
+  const idx = process.argv.indexOf('--json');
+  process.argv.splice(idx, 1);
+}
 import { getConfigSummary, getInlineStatus } from './status.js';
 
 const VERSION = '0.0.1';
@@ -184,7 +192,6 @@ program
   .passThroughOptions()
   .option('--no-color', 'Disable colored output')
   .hook('preAction', (_thisCommand, actionCommand) => {
-    // Handle --no-color flag
     const opts = actionCommand.optsWithGlobals();
     if (opts.color === false) {
       disableColors();

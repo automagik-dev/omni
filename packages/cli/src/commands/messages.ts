@@ -206,6 +206,39 @@ async function handleSingleRead(client: OmniClient, messageId: string, instanceI
 export function createMessagesCommand(): Command {
   const messages = new Command('messages').description('Manage messages');
 
+  // omni messages get <id>
+  messages
+    .command('get <messageId>')
+    .description('Get a single message by ID')
+    .action(async (messageId: string) => {
+      const client = getClient();
+
+      try {
+        const message = (await client.messages.get(messageId)) as ExtendedMessage;
+
+        const items = {
+          id: message.id,
+          chatId: message.chatId,
+          externalId: message.externalId,
+          type: message.messageType,
+          source: message.source,
+          isFromMe: message.isFromMe ?? false,
+          timestamp: formatDate(message.platformTimestamp),
+          content: message.textContent ?? '-',
+          hasMedia: message.hasMedia ?? false,
+          transcription: message.transcription ?? '-',
+          imageDescription: message.imageDescription ?? '-',
+          videoDescription: message.videoDescription ?? '-',
+          documentExtraction: message.documentExtraction ?? '-',
+        };
+
+        output.data(items);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get message: ${message}`);
+      }
+    });
+
   // omni messages search <query>
   messages
     .command('search <query>')

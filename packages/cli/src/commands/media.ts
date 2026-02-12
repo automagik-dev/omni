@@ -242,7 +242,8 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
   }
 
   const body = buildMessageRef(options);
-  const result = (await apiCall('messages/media/download', 'POST', body)) as DownloadResponse;
+  const response = (await apiCall('messages/media/download', 'POST', body)) as { data: DownloadResponse };
+  const result = response.data;
 
   output.success(`Downloaded: ${result.mediaMimeType}`);
   output.info(`Local path: ${result.mediaLocalPath}`);

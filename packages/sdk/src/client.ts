@@ -1461,6 +1461,16 @@ export function createOmniClient(config: OmniClientConfig) {
      */
     messages: {
       /**
+       * Get a message by ID
+       */
+      async get(messageId: string): Promise<Message> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/${messageId}`, {});
+        const json = (await resp.json()) as { data?: Message };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as Message;
+      },
+
+      /**
        * Send a text message
        */
       async send(body: SendMessageBody): Promise<{ messageId: string; status: string }> {
