@@ -666,14 +666,15 @@ export function createChatsCommand(): Command {
   // omni chats messages <id>
   chats
     .command('messages <id>')
-    .description('Get chat messages')
+    .description('List chat messages (use "omni messages get <id>" for full single message)')
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
     .option('--rich', 'Show rich format with transcriptions/descriptions')
     .option('--media-only', 'Only show media messages')
-    .option('--full', 'Show full text without truncation')
-    .option('--no-truncate', 'Alias for --full')
+    .option('--truncate <n>', 'Truncate text to N chars (0 = no truncation, default: no truncation)', (v) =>
+      Number.parseInt(v, 10),
+    )
     .action(
       async (
         id: string,
@@ -683,12 +684,13 @@ export function createChatsCommand(): Command {
           after?: string;
           rich?: boolean;
           mediaOnly?: boolean;
-          full?: boolean;
-          truncate?: boolean;
+          truncate?: number;
         },
       ) => {
-        // Set module-level truncation: --full or --no-truncate disables it
-        _truncateMax = options.full || options.truncate === false ? 0 : 200;
+        // No truncation by default (user already scoped to a specific chat)
+        _truncateMax = options.truncate ?? 0;
+        // Also disable table cell truncation when showing full content
+        if (_truncateMax === 0) output.setMaxCellWidth(0);
         const client = getClient();
 
         try {

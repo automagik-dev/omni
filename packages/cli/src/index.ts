@@ -282,6 +282,10 @@ ${c().bold('Quick Start')}:
   omni send --to +5511999999999 --text "Hello"
   omni chats list
   omni events list --limit 10
+
+${c().bold('Global Flags')}:
+  --json         Output in JSON format (works with any command)
+  --no-color     Disable colored output
 `;
   return quickStart;
 });

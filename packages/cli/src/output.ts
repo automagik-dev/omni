@@ -118,6 +118,14 @@ export function data(value: unknown): void {
   }
 }
 
+/** Maximum cell width for table display (0 = unlimited) */
+let maxCellWidth = 50;
+
+/** Set max cell width for table rendering (0 = unlimited) */
+export function setMaxCellWidth(width: number): void {
+  maxCellWidth = width;
+}
+
 /** Output list of items */
 export function list<T>(items: T[], options?: { emptyMessage?: string }): void {
   const format = getCurrentFormat();
@@ -194,7 +202,10 @@ function formatCellValue(value: unknown): string {
     return JSON.stringify(value);
   }
   const str = String(value);
-  return str.length > 50 ? `${str.slice(0, 47)}...` : str;
+  if (maxCellWidth > 0 && str.length > maxCellWidth) {
+    return `${str.slice(0, maxCellWidth - 3)}...`;
+  }
+  return str;
 }
 
 /** Print a single object's properties */
