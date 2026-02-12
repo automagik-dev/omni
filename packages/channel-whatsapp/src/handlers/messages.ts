@@ -636,8 +636,23 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   // If LID was resolved, annotate the raw message so downstream can persist the mapping
   annotateLidResolution(msg, rawChatId, chatId);
 
+  // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
+  const platformTimestamp = msg.messageTimestamp
+    ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp)) * 1000
+    : Date.now();
+
   // Pass all content fields including extended ones (poll, event, product, etc.)
-  await plugin.handleMessageReceived(instanceId, externalId, chatId, senderId, content, replyToId, msg, isFromMe(msg));
+  await plugin.handleMessageReceived(
+    instanceId,
+    externalId,
+    chatId,
+    senderId,
+    content,
+    replyToId,
+    msg,
+    isFromMe(msg),
+    platformTimestamp,
+  );
 }
 
 /**

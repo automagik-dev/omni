@@ -578,8 +578,35 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         }
       }
 
-      this.logger.debug('Sending message', { jid, content, hasQuoted: !!quotedOptions });
+      // Log content summary without raw buffer data to avoid flooding logs
+      const contentSummary = {
+        ...content,
+        ...(Buffer.isBuffer((content as Record<string, unknown>).audio)
+          ? { audio: `<Buffer ${((content as Record<string, unknown>).audio as Buffer).length} bytes>` }
+          : {}),
+        ...(Buffer.isBuffer((content as Record<string, unknown>).image)
+          ? { image: `<Buffer ${((content as Record<string, unknown>).image as Buffer).length} bytes>` }
+          : {}),
+        ...(Buffer.isBuffer((content as Record<string, unknown>).video)
+          ? { video: `<Buffer ${((content as Record<string, unknown>).video as Buffer).length} bytes>` }
+          : {}),
+        ...(Buffer.isBuffer((content as Record<string, unknown>).document)
+          ? { document: `<Buffer ${((content as Record<string, unknown>).document as Buffer).length} bytes>` }
+          : {}),
+        ...(Buffer.isBuffer((content as Record<string, unknown>).sticker)
+          ? { sticker: `<Buffer ${((content as Record<string, unknown>).sticker as Buffer).length} bytes>` }
+          : {}),
+      };
+      this.logger.debug('Sending message', { jid, content: contentSummary, hasQuoted: !!quotedOptions });
+
+      // Journey timing: T10 (pluginSentAt) before platform call
+      const correlationId = message.metadata?.correlationId as string | undefined;
+      if (correlationId) this.captureT10(correlationId);
+
       const result = await sock.sendMessage(jid, content, quotedOptions as never);
+
+      // Journey timing: T11 (platformDeliveredAt) after platform confirms
+      if (correlationId) this.captureT11(correlationId);
 
       const externalId = result?.key?.id || '';
 
@@ -1524,6 +1551,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     replyToId: string | undefined,
     rawMessage: WAMessage,
     isFromMe: boolean,
+    platformTimestamp?: number,
   ): Promise<void> {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
@@ -1547,7 +1575,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Add chatName from cached group/chat metadata
     this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);
 
-    await this.emitMessageReceived({
+    // Journey timing: capture T0 (platform) and T1 (plugin received)
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+
+    const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
@@ -1560,7 +1591,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
       replyToId,
       rawPayload: extendedPayload,
+      timings,
     });
+
+    // Journey timing: capture T2 (event published to NATS)
+    if (timings) {
+      this.captureT2(correlationId, timings);
+    }
   }
 
   /**

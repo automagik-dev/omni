@@ -139,6 +139,9 @@ export function setupMessageHandlers(bot: Bot, plugin: TelegramPlugin, instanceI
       isMention,
     });
 
+    // T0: Telegram `message.date` is in seconds since epoch → × 1000
+    const platformTimestamp = msg.date * 1000;
+
     await plugin.handleMessageReceived(
       instanceId,
       externalId,
@@ -168,6 +171,7 @@ export function setupMessageHandlers(bot: Bot, plugin: TelegramPlugin, instanceI
         isDM: msg.chat.type === 'private',
         isForwarded: !!msg.forward_origin,
       },
+      platformTimestamp,
     );
   });
 

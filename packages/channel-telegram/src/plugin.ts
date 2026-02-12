@@ -220,7 +220,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
       const replyToId = message.replyTo ? Number.parseInt(message.replyTo, 10) : undefined;
       const replyParam = replyToId && !Number.isNaN(replyToId) ? replyToId : undefined;
 
+      // Journey timing: T10 (pluginSentAt) before platform call
+      const correlationId = message.metadata?.correlationId as string | undefined;
+      if (correlationId) this.captureT10(correlationId);
+
       const messageId = await dispatchContent(bot, chatId, content, replyParam);
+
+      // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
+      if (correlationId) this.captureT11(correlationId);
 
       // Reaction-type sends don't produce a message ID
       if (messageId === null) {
@@ -300,8 +307,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
     },
     replyToId: string | undefined,
     rawPayload: Record<string, unknown>,
+    platformTimestamp?: number,
   ): Promise<void> {
-    await this.emitMessageReceived({
+    // Journey timing: capture T0 (platform) and T1 (plugin received)
+    // Telegram timestamps arrive pre-normalized to ms from the handler
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+
+    const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
@@ -314,7 +326,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
       },
       replyToId,
       rawPayload,
+      timings,
     });
+
+    // Journey timing: capture T2 (event published to NATS)
+    if (timings) {
+      this.captureT2(correlationId, timings);
+    }
   }
 
   /**
