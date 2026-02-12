@@ -16,6 +16,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType } from '@omni/core/types';
 import type { Bot } from 'grammy';
@@ -25,6 +26,7 @@ import { createBot, destroyBot, getBot } from './client';
 import { setupMessageHandlers, setupReactionHandlers } from './handlers';
 import { sendAudio, sendDocument, sendPhoto, sendTextMessage, sendVideo } from './senders';
 import { setReaction } from './senders/reaction';
+import { TelegramStreamSender } from './senders/stream';
 import type { TelegramConfig } from './types';
 
 // ============================================================================
@@ -274,6 +276,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
   // ────────────────────────────────────────────────────────────
   // Typing indicator
   // ────────────────────────────────────────────────────────────
+
+  createStreamSender(instanceId: string, chatId: string, replyToMessageId?: string): StreamSender {
+    const bot = getBot(instanceId);
+    if (!bot) {
+      throw new Error(`No bot for instance ${instanceId}`);
+    }
+    return new TelegramStreamSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined);
+  }
 
   async sendTyping(instanceId: string, chatId: string): Promise<void> {
     const bot = getBot(instanceId);
