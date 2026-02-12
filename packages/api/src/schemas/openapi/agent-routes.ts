@@ -50,7 +50,7 @@ export const AgentRouteSchema = z.object({
   personId: z.string().uuid().nullable().openapi({ description: 'Person UUID (required when scope=user)' }),
 
   agentProviderId: z.string().uuid().openapi({ description: 'Agent provider UUID' }),
-  agentId: z.string().openapi({ description: 'Agent ID within the provider' }),
+  agentId: z.string().min(1).max(255).openapi({ description: 'Agent ID within the provider' }),
   agentType: AgentTypeOpenAPISchema,
 
   // Behavior overrides (null = inherit from instance)

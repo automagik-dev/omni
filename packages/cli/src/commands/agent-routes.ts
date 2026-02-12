@@ -10,6 +10,7 @@
  * omni routes metrics
  */
 
+import type { UpdateAgentRoute } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -111,10 +112,9 @@ async function updateAgentRouteAction(
     const instanceId = await resolveInstanceId(instanceArg);
 
     // Build update object with only provided options
-    // biome-ignore lint/suspicious/noExplicitAny: Dynamic update object builder
-    const updates: any = {};
+    const updates: Partial<UpdateAgentRoute> = {};
     if (options.agent) updates.agentId = options.agent;
-    if (options.agentType) updates.agentType = options.agentType;
+    if (options.agentType) updates.agentType = options.agentType as 'agent' | 'team' | 'workflow';
     if (options.timeout !== undefined) updates.agentTimeout = options.timeout;
     if (options.stream !== undefined) updates.agentStreamMode = options.stream;
     if (options.prefixSender !== undefined) updates.agentPrefixSenderName = options.prefixSender;
