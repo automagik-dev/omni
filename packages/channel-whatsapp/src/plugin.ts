@@ -530,6 +530,44 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Build quoted message options for replies.
+   * Baileys requires key.fromMe and a message object for quoted messages.
+   */
+  private buildQuotedOptions(message: OutgoingMessage, jid: string): { quoted: unknown } | undefined {
+    if (!message.replyTo) return undefined;
+
+    // Get fromMe, rawPayload, and text from metadata (looked up by API)
+    const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
+    const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
+    const replyToText = message.metadata?.replyToText as string | undefined;
+
+    this.logger.debug('Sending with reply', {
+      replyTo: message.replyTo,
+      jid,
+      replyToFromMe,
+      hasRawPayload: !!replyToRawPayload,
+      hasText: !!replyToText,
+    });
+
+    // If we have the full rawPayload, use it directly (this is a WAMessage)
+    if (replyToRawPayload) {
+      return { quoted: replyToRawPayload };
+    }
+
+    // Fallback: construct quoted object with text content for preview
+    return {
+      quoted: {
+        key: {
+          id: message.replyTo,
+          remoteJid: jid,
+          fromMe: replyToFromMe,
+        },
+        message: replyToText ? { conversation: replyToText } : {},
+      },
+    };
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
@@ -555,39 +593,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Build message content based on type
       const content = this.buildContent(processedMessage);
 
-      // Send with optional reply
-      // Baileys requires key.fromMe and a message object for quoted messages
-      let quotedOptions: { quoted: unknown } | undefined;
-      if (message.replyTo) {
-        // Get fromMe, rawPayload, and text from metadata (looked up by API)
-        const replyToFromMe = (message.metadata?.replyToFromMe as boolean) ?? false;
-        const replyToRawPayload = message.metadata?.replyToRawPayload as Record<string, unknown> | undefined;
-        const replyToText = message.metadata?.replyToText as string | undefined;
-        this.logger.debug('Sending with reply', {
-          replyTo: message.replyTo,
-          jid,
-          replyToFromMe,
-          hasRawPayload: !!replyToRawPayload,
-          hasText: !!replyToText,
-        });
-
-        // If we have the full rawPayload, use it directly (this is a WAMessage)
-        if (replyToRawPayload) {
-          quotedOptions = { quoted: replyToRawPayload };
-        } else {
-          // Fallback: construct quoted object with text content for preview
-          quotedOptions = {
-            quoted: {
-              key: {
-                id: message.replyTo,
-                remoteJid: jid,
-                fromMe: replyToFromMe,
-              },
-              message: replyToText ? { conversation: replyToText } : {},
-            },
-          };
-        }
-      }
+      // Build quoted options if this is a reply
+      const quotedOptions = this.buildQuotedOptions(message, jid);
 
       this.logger.debug('Sending message', { jid, content: summarizeContent(content), hasQuoted: !!quotedOptions });
 

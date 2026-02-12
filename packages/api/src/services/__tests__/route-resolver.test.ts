@@ -240,9 +240,8 @@ describe('RouteResolver', () => {
     const result = await resolver.resolve('inst-1', 'chat-1', 'person-1');
 
     expect(result).not.toBeNull();
-    expect(result?.scope).toBe('user');
-    // TypeScript should accept this as 'chat' | 'user'
-    const scope: 'chat' | 'user' = result!.scope;
-    expect(scope).toBe('user');
+    if (result) {
+      expect(result.scope).toBe('user');
+    }
   });
 });
