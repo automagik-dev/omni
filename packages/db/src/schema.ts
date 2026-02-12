@@ -10,9 +10,10 @@
  */
 
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -284,6 +285,74 @@ export const agentProviders = pgTable(
     nameIdx: index('agent_providers_name_idx').on(table.name),
     schemaIdx: index('agent_providers_schema_idx').on(table.schema),
     activeIdx: index('agent_providers_active_idx').on(table.isActive),
+  }),
+);
+
+// ============================================================================
+// AGENT ROUTES
+// ============================================================================
+
+/**
+ * Agent routing configuration - bind specific agents to chats or users.
+ * Resolution order: chat route > user route > instance default
+ *
+ * @see agent-routing wish
+ */
+export const agentRoutes = pgTable(
+  'agent_routes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+
+    // ---- Scope: what does this route match? ----
+    scope: varchar('scope', { length: 20 }).notNull(), // 'chat' | 'user'
+    chatId: uuid('chat_id').references(() => chats.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
+
+    // ---- Target: which agent handles it? ----
+    agentProviderId: uuid('agent_provider_id')
+      .notNull()
+      .references(() => agentProviders.id, { onDelete: 'cascade' }),
+    agentId: varchar('agent_id', { length: 255 }).notNull(),
+    agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
+
+    // ---- Behavior overrides (NULL = inherit from instance) ----
+    agentTimeout: integer('agent_timeout'),
+    agentStreamMode: boolean('agent_stream_mode'),
+    agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),
+    agentSessionStrategy: varchar('agent_session_strategy', { length: 20 }).$type<AgentSessionStrategy>(),
+    agentPrefixSenderName: boolean('agent_prefix_sender_name'),
+    agentWaitForMedia: boolean('agent_wait_for_media'),
+    agentSendMediaPath: boolean('agent_send_media_path'),
+    agentGateEnabled: boolean('agent_gate_enabled'),
+    agentGateModel: varchar('agent_gate_model', { length: 120 }),
+    agentGatePrompt: text('agent_gate_prompt'),
+
+    // ---- Metadata ----
+    label: varchar('label', { length: 255 }),
+    priority: integer('priority').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    // Constraints
+    scopeCheck: check(
+      'scope_check',
+      sql`(scope = 'chat' AND chat_id IS NOT NULL AND person_id IS NULL) OR (scope = 'user' AND person_id IS NOT NULL AND chat_id IS NULL)`,
+    ),
+    uniqueChatRoute: uniqueIndex('agent_routes_unique_chat_route').on(table.instanceId, table.chatId),
+    uniqueUserRoute: uniqueIndex('agent_routes_unique_user_route').on(table.instanceId, table.personId),
+
+    // Indexes for performance
+    instanceIdx: index('agent_routes_instance_idx').on(table.instanceId),
+    chatIdx: index('agent_routes_chat_idx').on(table.chatId),
+    personIdx: index('agent_routes_person_idx').on(table.personId),
+    activeIdx: index('agent_routes_active_idx').on(table.instanceId, table.isActive),
   }),
 );
 
@@ -1985,6 +2054,8 @@ export const triggerLogs = pgTable(
       .references(() => instances.id, { onDelete: 'cascade' }),
     /** Provider that handled the trigger */
     providerId: uuid('provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    /** Route that was matched (null = instance default) */
+    routeId: uuid('route_id').references(() => agentRoutes.id, { onDelete: 'set null' }),
     /** Event type that triggered dispatch (e.g., message.received, reaction.received) */
     eventType: varchar('event_type', { length: 100 }).notNull(),
     /** Original event ID */
