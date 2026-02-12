@@ -9,6 +9,7 @@
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolvePersonId } from '../resolve.js';
 
 export function createPersonsCommand(): Command {
   const persons = new Command('persons').description('Search and manage persons');
@@ -49,7 +50,8 @@ export function createPersonsCommand(): Command {
       const client = getClient();
 
       try {
-        const person = await client.persons.get(id);
+        const personId = await resolvePersonId(id);
+        const person = await client.persons.get(personId);
         output.data(person);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -65,7 +67,8 @@ export function createPersonsCommand(): Command {
       const client = getClient();
 
       try {
-        const presence = await client.persons.presence(id);
+        const personId = await resolvePersonId(id);
+        const presence = await client.persons.presence(personId);
         output.data(presence);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';

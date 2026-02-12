@@ -14,6 +14,7 @@ import type { BatchJobType, CostEstimate, OmniClient, ProcessableContentType } f
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveBatchJobId } from '../resolve.js';
 
 // ============================================================================
 // TYPES
@@ -375,7 +376,8 @@ export function createBatchCommand(): Command {
     .action(async (jobId: string, options: StatusOptions) => {
       const client = getClient();
       try {
-        await handleStatus(client, jobId, options);
+        const resolvedJobId = await resolveBatchJobId(jobId);
+        await handleStatus(client, resolvedJobId, options);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get status: ${message}`);
@@ -389,7 +391,8 @@ export function createBatchCommand(): Command {
     .action(async (jobId: string) => {
       const client = getClient();
       try {
-        await handleCancel(client, jobId);
+        const resolvedJobId = await resolveBatchJobId(jobId);
+        await handleCancel(client, resolvedJobId);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to cancel job: ${message}`);

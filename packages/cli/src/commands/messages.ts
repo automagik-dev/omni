@@ -10,6 +10,7 @@ import type { Chat, Message, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveChatId, resolveInstanceId, resolveMessageId } from '../resolve.js';
 
 // ============================================================================
 // Helper Types and Functions
@@ -187,10 +188,16 @@ async function handleBatchRead(client: OmniClient, options: ReadOptions): Promis
     return;
   }
 
-  const messageIds = ids.split(',').map((id) => id.trim());
+  const chatId = await resolveChatId(chat);
+  const instanceId = await resolveInstanceId(instance);
+  const messageIdInputs = ids.split(',').map((id) => id.trim());
+
+  // Resolve each message ID
+  const messageIds = await Promise.all(messageIdInputs.map((id) => resolveMessageId(id, chatId)));
+
   const result = await client.messages.batchMarkRead({
-    instanceId: instance,
-    chatId: chat,
+    instanceId,
+    chatId,
     messageIds,
   });
 
@@ -199,7 +206,9 @@ async function handleBatchRead(client: OmniClient, options: ReadOptions): Promis
 
 /** Handle single message mark read */
 async function handleSingleRead(client: OmniClient, messageId: string, instanceId: string): Promise<void> {
-  const result = await client.messages.markRead(messageId, { instanceId });
+  const resolvedMessageId = await resolveMessageId(messageId);
+  const resolvedInstanceId = await resolveInstanceId(instanceId);
+  const result = await client.messages.markRead(resolvedMessageId, { instanceId: resolvedInstanceId });
   output.success('Message marked as read', result);
 }
 
@@ -214,7 +223,8 @@ export function createMessagesCommand(): Command {
       const client = getClient();
 
       try {
-        const message = (await client.messages.get(messageId)) as ExtendedMessage;
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const message = (await client.messages.get(resolvedMessageId)) as ExtendedMessage;
 
         const items = {
           id: message.id,
@@ -314,6 +324,8 @@ export function createMessagesCommand(): Command {
     .requiredOption('--channel-id <id>', 'Chat JID (e.g., 5511999999999@s.whatsapp.net)')
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
@@ -322,9 +334,9 @@ export function createMessagesCommand(): Command {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
-            instanceId: options.instance,
+            instanceId,
             channelId: options.channelId,
-            messageId,
+            messageId: resolvedMessageId,
           }),
         });
 
@@ -333,7 +345,7 @@ export function createMessagesCommand(): Command {
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
 
-        output.success(`Message deleted: ${messageId}`);
+        output.success(`Message deleted: ${resolvedMessageId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete message: ${message}`);
@@ -348,15 +360,17 @@ export function createMessagesCommand(): Command {
     .requiredOption('--channel-id <id>', 'Chat JID')
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
-        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${resolvedMessageId}/star`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
-            instanceId: options.instance,
+            instanceId,
             channelId: options.channelId,
           }),
         });
@@ -366,7 +380,7 @@ export function createMessagesCommand(): Command {
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
 
-        output.success(`Message starred: ${messageId}`);
+        output.success(`Message starred: ${resolvedMessageId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to star message: ${message}`);
@@ -381,15 +395,17 @@ export function createMessagesCommand(): Command {
     .requiredOption('--channel-id <id>', 'Chat JID')
     .action(async (messageId: string, options: { instance: string; channelId: string }) => {
       try {
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
-        const resp = await fetch(`${baseUrl}/api/v2/messages/${messageId}/star`, {
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${resolvedMessageId}/star`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
-            instanceId: options.instance,
+            instanceId,
             channelId: options.channelId,
           }),
         });
@@ -399,7 +415,7 @@ export function createMessagesCommand(): Command {
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
 
-        output.success(`Message unstarred: ${messageId}`);
+        output.success(`Message unstarred: ${resolvedMessageId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unstar message: ${message}`);
@@ -415,6 +431,8 @@ export function createMessagesCommand(): Command {
     .requiredOption('--text <text>', 'New text content')
     .action(async (messageId: string, options: { instance: string; chat: string; text: string }) => {
       try {
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
         const apiKey = _cfg.apiKey ?? '';
@@ -422,9 +440,9 @@ export function createMessagesCommand(): Command {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
-            instanceId: options.instance,
+            instanceId,
             channelId: options.chat,
-            messageId,
+            messageId: resolvedMessageId,
             text: options.text,
           }),
         });

@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
 /** Replay command options */
 interface ReplayOptions {
@@ -184,6 +185,7 @@ export function createEventsCommand(): Command {
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
     .option('--type <type>', 'Filter by event type')
+    .option('--chat-id <id>', 'Filter by chat ID')
     .option('--since <time>', 'Events since (e.g., 24h, 7d, or ISO timestamp)')
     .option('--until <time>', 'Events until (ISO timestamp)')
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 50)
@@ -192,6 +194,7 @@ export function createEventsCommand(): Command {
         instance?: string;
         channel?: string;
         type?: string;
+        chatId?: string;
         since?: string;
         until?: string;
         limit?: number;
@@ -199,10 +202,18 @@ export function createEventsCommand(): Command {
         const client = getClient();
 
         try {
+          const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+          // Note: chatId resolution added, but SDK doesn't support it yet
+          // This will be a no-op until the SDK is updated
+          if (options.chatId) {
+            await resolveChatId(options.chatId);
+          }
+
           const result = await client.events.list({
-            instanceId: options.instance,
+            instanceId,
             channel: options.channel,
             eventType: options.type,
+            // chatId parameter not yet supported by SDK
             since: options.since ? parseSinceTime(options.since) : undefined,
             until: options.until,
             limit: options.limit,

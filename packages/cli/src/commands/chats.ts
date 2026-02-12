@@ -16,6 +16,7 @@ import type { Channel, Chat, Message, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 
@@ -388,7 +389,8 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        const chat = await client.chats.get(id);
+        const chatId = await resolveChatId(id);
+        const chat = await client.chats.get(chatId);
         output.data(chat);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -459,7 +461,8 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        const chat = await client.chats.update(id, {
+        const chatId = await resolveChatId(id);
+        const chat = await client.chats.update(chatId, {
           name: options.name,
           description: options.description,
         });
@@ -483,8 +486,9 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        await client.chats.delete(id);
-        output.success(`Chat deleted: ${id}`);
+        const chatId = await resolveChatId(id);
+        await client.chats.delete(chatId);
+        output.success(`Chat deleted: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete chat: ${message}`);
@@ -500,24 +504,27 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        if (options.instance) {
+        const chatId = await resolveChatId(id);
+        const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+
+        if (instanceId) {
           // Call API with instanceId to archive on channel
           const _cfg = (await import('../config.js')).loadConfig();
           const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
           const apiKey = _cfg.apiKey ?? '';
-          const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/archive`, {
+          const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/archive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-            body: JSON.stringify({ instanceId: options.instance }),
+            body: JSON.stringify({ instanceId }),
           });
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: { message?: string } };
             throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
           }
         } else {
-          await client.chats.archive(id);
+          await client.chats.archive(chatId);
         }
-        output.success(`Chat archived: ${id}`);
+        output.success(`Chat archived: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to archive chat: ${message}`);
@@ -533,23 +540,26 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        if (options.instance) {
+        const chatId = await resolveChatId(id);
+        const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+
+        if (instanceId) {
           const _cfg = (await import('../config.js')).loadConfig();
           const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
           const apiKey = _cfg.apiKey ?? '';
-          const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unarchive`, {
+          const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/unarchive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-            body: JSON.stringify({ instanceId: options.instance }),
+            body: JSON.stringify({ instanceId }),
           });
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: { message?: string } };
             throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
           }
         } else {
-          await client.chats.unarchive(id);
+          await client.chats.unarchive(chatId);
         }
-        output.success(`Chat unarchived: ${id}`);
+        output.success(`Chat unarchived: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unarchive chat: ${message}`);
@@ -563,19 +573,21 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
         const apiKey = _cfg.apiKey ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/pin`, {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/pin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ instanceId: options.instance }),
+          body: JSON.stringify({ instanceId }),
         });
         if (!resp.ok) {
           const err = (await resp.json()) as { error?: { message?: string } };
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
-        output.success(`Chat pinned: ${id}`);
+        output.success(`Chat pinned: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to pin chat: ${message}`);
@@ -589,19 +601,21 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
         const apiKey = _cfg.apiKey ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unpin`, {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/unpin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ instanceId: options.instance }),
+          body: JSON.stringify({ instanceId }),
         });
         if (!resp.ok) {
           const err = (await resp.json()) as { error?: { message?: string } };
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
-        output.success(`Chat unpinned: ${id}`);
+        output.success(`Chat unpinned: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unpin chat: ${message}`);
@@ -616,12 +630,14 @@ export function createChatsCommand(): Command {
     .option('--duration <ms>', 'Mute duration in milliseconds (default: 8 hours)', (v) => Number.parseInt(v, 10))
     .action(async (id: string, options: { instance: string; duration?: number }) => {
       try {
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
         const apiKey = _cfg.apiKey ?? '';
-        const body: Record<string, unknown> = { instanceId: options.instance };
+        const body: Record<string, unknown> = { instanceId };
         if (options.duration) body.duration = options.duration;
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/mute`, {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/mute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify(body),
@@ -630,7 +646,7 @@ export function createChatsCommand(): Command {
           const err = (await resp.json()) as { error?: { message?: string } };
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
-        output.success(`Chat muted: ${id}`);
+        output.success(`Chat muted: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to mute chat: ${message}`);
@@ -644,19 +660,21 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .action(async (id: string, options: { instance: string }) => {
       try {
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
         const apiKey = _cfg.apiKey ?? '';
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/unmute`, {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/unmute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({ instanceId: options.instance }),
+          body: JSON.stringify({ instanceId }),
         });
         if (!resp.ok) {
           const err = (await resp.json()) as { error?: { message?: string } };
           throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
         }
-        output.success(`Chat unmuted: ${id}`);
+        output.success(`Chat unmuted: ${chatId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unmute chat: ${message}`);
@@ -694,7 +712,8 @@ export function createChatsCommand(): Command {
         const client = getClient();
 
         try {
-          const rawMessages = await client.chats.getMessages(id, {
+          const chatId = await resolveChatId(id);
+          const rawMessages = await client.chats.getMessages(chatId, {
             limit: options.limit,
             before: options.before,
             after: options.after,
@@ -731,19 +750,20 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
+        const chatId = await resolveChatId(id);
         if (options.add) {
-          const participant = await client.chats.addParticipant(id, {
+          const participant = await client.chats.addParticipant(chatId, {
             platformUserId: options.add,
             displayName: options.name,
             role: options.role,
           });
           output.success(`Participant added: ${participant.platformUserId}`, participant);
         } else if (options.remove) {
-          await client.chats.removeParticipant(id, options.remove);
+          await client.chats.removeParticipant(chatId, options.remove);
           output.success(`Participant removed: ${options.remove}`);
         } else {
           // List participants
-          const participants = await client.chats.listParticipants(id);
+          const participants = await client.chats.listParticipants(chatId);
 
           const items = participants.map((p) => ({
             id: p.id,
@@ -769,8 +789,10 @@ export function createChatsCommand(): Command {
       const client = getClient();
 
       try {
-        const result = await client.chats.markRead(id, {
-          instanceId: options.instance,
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
+        const result = await client.chats.markRead(chatId, {
+          instanceId,
         });
         output.success('Chat marked as read', result);
       } catch (err) {
@@ -795,15 +817,17 @@ export function createChatsCommand(): Command {
       }
 
       try {
+        const chatId = await resolveChatId(id);
+        const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
         const apiKey = config.apiKey ?? '';
 
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${id}/disappearing`, {
+        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/disappearing`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
-            instanceId: options.instance,
+            instanceId,
             duration,
           }),
         });

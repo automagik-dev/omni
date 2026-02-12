@@ -24,6 +24,7 @@
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveAutomationId } from '../resolve.js';
 
 // ============================================================================
 // HELPERS
@@ -149,7 +150,8 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
-        const automation = await client.automations.get(id);
+        const automationId = await resolveAutomationId(id);
+        const automation = await client.automations.get(automationId);
         output.data(automation);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -231,7 +233,8 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
-        const automation = await client.automations.update(id, {
+        const automationId = await resolveAutomationId(id);
+        const automation = await client.automations.update(automationId, {
           name: options.name,
           description: options.description,
           priority: options.priority,
@@ -255,8 +258,9 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
-        await client.automations.delete(id);
-        output.success(`Automation deleted: ${id}`);
+        const automationId = await resolveAutomationId(id);
+        await client.automations.delete(automationId);
+        output.success(`Automation deleted: ${automationId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete automation: ${message}`);
@@ -271,7 +275,8 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
-        const automation = await client.automations.enable(id);
+        const automationId = await resolveAutomationId(id);
+        const automation = await client.automations.enable(automationId);
         output.success(`Automation enabled: ${automation.name}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -287,7 +292,8 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
-        const automation = await client.automations.disable(id);
+        const automationId = await resolveAutomationId(id);
+        const automation = await client.automations.disable(automationId);
         output.success(`Automation disabled: ${automation.name}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -304,6 +310,7 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
+        const automationId = await resolveAutomationId(id);
         let event: { type: string; payload: Record<string, unknown> };
         try {
           event = JSON.parse(options.event);
@@ -316,7 +323,7 @@ export function createAutomationsCommand(): Command {
           output.error('Event must have "type" and "payload" fields');
         }
 
-        const result = await client.automations.test(id, { event });
+        const result = await client.automations.test(automationId, { event });
 
         if (result.matched) {
           output.success('Automation matched the event', {
@@ -342,6 +349,7 @@ export function createAutomationsCommand(): Command {
       const client = getClient();
 
       try {
+        const automationId = await resolveAutomationId(id);
         let event: { type: string; payload: Record<string, unknown> };
         try {
           event = JSON.parse(options.event);
@@ -355,7 +363,7 @@ export function createAutomationsCommand(): Command {
           return;
         }
 
-        const result = await client.automations.execute(id, { event });
+        const result = await client.automations.execute(automationId, { event });
 
         if (result.triggered) {
           const allSuccess = result.results.every((r: { status: string }) => r.status === 'success');
@@ -390,9 +398,10 @@ export function createAutomationsCommand(): Command {
     .option('--cursor <cursor>', 'Pagination cursor')
     .action(async (id: string, options: { limit?: number; cursor?: string }) => {
       const client = getClient();
+      const automationId = await resolveAutomationId(id);
 
       try {
-        const result = await client.automations.getLogs(id, {
+        const result = await client.automations.getLogs(automationId, {
           limit: options.limit,
           cursor: options.cursor,
         });
