@@ -29,6 +29,7 @@ export type {
   AgentTrigger,
   AgentTriggerType,
   AgentTriggerResult,
+  StreamDelta,
   WebhookProviderConfig,
   WebhookPayload,
   WebhookResponse,

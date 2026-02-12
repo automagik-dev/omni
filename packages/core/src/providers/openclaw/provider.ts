@@ -12,9 +12,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../logger';
-import type { AgentTrigger, AgentTriggerResult, IAgentProvider } from '../types';
+import type { AgentTrigger, AgentTriggerResult, IAgentProvider, StreamDelta } from '../types';
 import { OpenClawClient } from './client';
-import type { ChatEvent, OpenClawClientConfig, OpenClawProviderConfig } from './types';
+import type { AgentEventPayload, ChatEvent, OpenClawClientConfig, OpenClawProviderConfig } from './types';
 
 const log = createLogger('openclaw:provider');
 
@@ -41,6 +41,43 @@ const MAX_MESSAGE_BYTES = 100 * 1024; // 100KB
 const MAX_ACCUMULATION_BYTES = 1 * 1024 * 1024; // 1MB
 const AGENT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
+/** Mutable state container for a single triggerStream() invocation. */
+class StreamContext {
+  runId = '';
+  readonly queue: StreamDelta[] = [];
+  resolve: (() => void) | null = null;
+  done = false;
+  timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  deltasReceived = 0;
+  thinkingText = '';
+  thinkingStartMs = 0;
+  thinkingDurationMs: number | undefined;
+  contentText = '';
+  sawThinkingStarted = false;
+  sawContentStarted = false;
+
+  constructor(private readonly maxQueueSize: number) {}
+
+  push(delta: StreamDelta): void {
+    if (this.queue.length >= this.maxQueueSize) {
+      // Deltas are cumulative snapshots — oldest entries are safe to discard under pressure
+      this.queue.shift();
+    }
+    this.queue.push(delta);
+    this.wake();
+  }
+
+  finish(): void {
+    this.done = true;
+    this.wake();
+  }
+
+  private wake(): void {
+    this.resolve?.();
+    this.resolve = null;
+  }
+}
+
 export class OpenClawAgentProvider implements IAgentProvider {
   readonly schema = 'openclaw' as const;
   readonly mode = 'round-trip' as const;
@@ -65,6 +102,28 @@ export class OpenClawAgentProvider implements IAgentProvider {
 
   canHandle(_trigger: AgentTrigger): boolean {
     return true;
+  }
+
+  /** Build the outbound message string from trigger content, or null if empty / too large. */
+  private buildMessage(context: AgentTrigger): { message: string } | { error: string } | null {
+    let message = '';
+    if (context.content.text) {
+      message = context.content.text;
+    } else if (context.content.emoji) {
+      message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
+    }
+    if (!message) return null;
+
+    if (this.config.prefixSenderName !== false && context.sender.displayName) {
+      message = `[${context.sender.displayName}]: ${message}`;
+    }
+
+    const messageBytes = new TextEncoder().encode(message).length;
+    if (messageBytes > MAX_MESSAGE_BYTES) {
+      return { error: 'Your message is too long. Please shorten it and try again.' };
+    }
+
+    return { message };
   }
 
   async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
@@ -106,39 +165,22 @@ export class OpenClawAgentProvider implements IAgentProvider {
     }
 
     // Build message from trigger content
-    let message = '';
-    if (context.content.text) {
-      message = context.content.text;
-    } else if (context.content.emoji) {
-      message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
-    }
-
-    if (!message) {
+    const built = this.buildMessage(context);
+    if (!built) {
       log.debug('No content to send to agent', { traceId: context.traceId });
       return {
         parts: [],
         metadata: { runId: '', providerId: this.id, durationMs: Date.now() - startTime },
       };
     }
-
-    // Prefix sender name if configured
-    if (this.config.prefixSenderName !== false && context.sender.displayName) {
-      message = `[${context.sender.displayName}]: ${message}`;
-    }
-
-    // 100KB message length cap
-    const messageBytes = new TextEncoder().encode(message).length;
-    if (messageBytes > MAX_MESSAGE_BYTES) {
-      log.error('Message exceeds 100KB limit', {
-        traceId: context.traceId,
-        providerId: this.id,
-        messageBytes,
-      });
+    if ('error' in built) {
+      log.error('Message exceeds 100KB limit', { traceId: context.traceId, providerId: this.id });
       return {
-        parts: ['Your message is too long. Please shorten it and try again.'],
+        parts: [built.error],
         metadata: { runId: '', providerId: this.id, durationMs: Date.now() - startTime },
       };
     }
+    const { message } = built;
 
     try {
       // Phase 1: Wait for connection + send chat.send
@@ -226,6 +268,245 @@ export class OpenClawAgentProvider implements IAgentProvider {
         metadata: { runId: '', providerId: this.id, durationMs },
       };
     }
+  }
+
+  async *triggerStream(context: AgentTrigger): AsyncGenerator<StreamDelta> {
+    const startTime = Date.now();
+    const agentId = this.config.defaultAgentId;
+    const sessionKey = this.buildSessionKey(agentId, context.sessionId || context.source.chatId);
+    const agentTimeoutMs = this.config.agentTimeoutMs ?? 120_000;
+    const sendAckTimeoutMs = this.config.sendAckTimeoutMs ?? 10_000;
+    const MAX_QUEUE_SIZE = 100;
+
+    if (this.isCircuitOpen()) {
+      yield { phase: 'error', error: 'The assistant is temporarily unavailable. Please try again in a moment.' };
+      return;
+    }
+
+    const built = this.buildMessage(context);
+    if (!built) return;
+    if ('error' in built) {
+      yield { phase: 'error', error: built.error };
+      return;
+    }
+    const { message } = built;
+
+    const ctx = new StreamContext(MAX_QUEUE_SIZE);
+
+    try {
+      await this.client.waitForReady(sendAckTimeoutMs);
+
+      const sendResult = await this.client.chatSend(
+        {
+          sessionKey,
+          message,
+          deliver: true,
+          idempotencyKey: randomUUID(),
+        },
+        sendAckTimeoutMs,
+      );
+
+      ctx.runId = sendResult.runId;
+
+      log.debug('triggerStream: started', {
+        traceId: context.traceId,
+        runId: ctx.runId,
+        sessionKey,
+        providerId: this.id,
+      });
+
+      ctx.timeoutHandle = setTimeout(() => {
+        if (ctx.done) return;
+        log.warn('triggerStream: timeout', {
+          traceId: context.traceId,
+          runId: ctx.runId,
+          timeoutMs: agentTimeoutMs,
+          deltasReceived: ctx.deltasReceived,
+          providerId: this.id,
+        });
+        this.registerStreamFailure('timeout');
+        ctx.push({
+          phase: 'error',
+          error: 'The assistant is taking longer than expected. Please try again in a moment.',
+        });
+        ctx.finish();
+      }, agentTimeoutMs);
+
+      this.client.registerAgentAccumulation(ctx.runId, (event: AgentEventPayload) => {
+        this.handleStreamEvent(event, ctx, context, startTime);
+      });
+
+      while (!ctx.done) {
+        const next = ctx.queue.shift();
+        if (next) {
+          yield next;
+        } else {
+          await new Promise<void>((r) => {
+            ctx.resolve = r;
+          });
+        }
+      }
+
+      for (let item = ctx.queue.shift(); item; item = ctx.queue.shift()) {
+        yield item;
+      }
+    } catch (err) {
+      const error = String(err);
+      this.registerStreamFailure(error);
+      log.error('triggerStream: error', {
+        traceId: context.traceId,
+        runId: ctx.runId,
+        sessionKey,
+        providerId: this.id,
+        error,
+        consecutiveFailures: this.consecutiveFailures,
+      });
+      yield { phase: 'error', error: 'The assistant is taking longer than expected. Please try again in a moment.' };
+    } finally {
+      if (ctx.timeoutHandle) clearTimeout(ctx.timeoutHandle);
+      if (ctx.runId) this.client.unregisterAgentAccumulation(ctx.runId);
+    }
+  }
+
+  /** Register a stream failure for circuit breaker tracking. */
+  private registerStreamFailure(error: string): void {
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= OpenClawAgentProvider.CIRCUIT_THRESHOLD) {
+      this.circuitOpenUntil = Date.now() + OpenClawAgentProvider.CIRCUIT_COOLDOWN_MS;
+      log.warn('Circuit breaker OPENED', {
+        providerId: this.id,
+        consecutiveFailures: this.consecutiveFailures,
+        cooldownMs: OpenClawAgentProvider.CIRCUIT_COOLDOWN_MS,
+        error,
+      });
+    }
+  }
+
+  /** Handle a single agent event within a stream context. */
+  private handleStreamEvent(
+    event: AgentEventPayload,
+    ctx: StreamContext,
+    trigger: AgentTrigger,
+    startTime: number,
+  ): void {
+    if (ctx.done) return;
+    ctx.deltasReceived++;
+    const data = event.data ?? {};
+
+    switch (event.stream) {
+      case 'thinking':
+        this.handleThinkingEvent(data, ctx, trigger);
+        break;
+      case 'assistant':
+        this.handleAssistantEvent(data, ctx, trigger);
+        break;
+      case 'tool':
+        log.debug('triggerStream: tool_event', {
+          traceId: trigger.traceId,
+          runId: ctx.runId,
+          seq: event.seq,
+          providerId: this.id,
+        });
+        break;
+      case 'lifecycle':
+        this.handleLifecycleEvent(data, ctx, trigger, startTime);
+        break;
+      case 'error':
+        this.handleErrorEvent(data, ctx, trigger);
+        break;
+    }
+  }
+
+  private handleThinkingEvent(data: Record<string, unknown>, ctx: StreamContext, trigger: AgentTrigger): void {
+    const text = typeof data.text === 'string' ? data.text : '';
+    if (!ctx.thinkingStartMs) {
+      ctx.thinkingStartMs = Date.now();
+      if (!ctx.sawThinkingStarted) {
+        ctx.sawThinkingStarted = true;
+        log.debug('triggerStream: thinking_started', {
+          traceId: trigger.traceId,
+          runId: ctx.runId,
+          providerId: this.id,
+        });
+      }
+    }
+    ctx.thinkingText = text;
+    ctx.push({ phase: 'thinking', thinking: text, thinkingElapsedMs: Date.now() - ctx.thinkingStartMs });
+  }
+
+  private handleAssistantEvent(data: Record<string, unknown>, ctx: StreamContext, trigger: AgentTrigger): void {
+    const text = typeof data.text === 'string' ? data.text : '';
+    ctx.contentText = text;
+    if (!ctx.sawContentStarted) {
+      ctx.sawContentStarted = true;
+      log.debug('triggerStream: content_started', { traceId: trigger.traceId, runId: ctx.runId, providerId: this.id });
+    }
+    if (ctx.thinkingStartMs && ctx.thinkingDurationMs === undefined) {
+      ctx.thinkingDurationMs = Date.now() - ctx.thinkingStartMs;
+    }
+    ctx.push({
+      phase: 'content',
+      content: text,
+      thinking: ctx.thinkingText || undefined,
+      thinkingDurationMs: ctx.thinkingDurationMs || undefined,
+    });
+  }
+
+  private handleLifecycleEvent(
+    data: Record<string, unknown>,
+    ctx: StreamContext,
+    trigger: AgentTrigger,
+    startTime: number,
+  ): void {
+    const phase = data.phase;
+    if (phase === 'end') {
+      if (ctx.thinkingStartMs && ctx.thinkingDurationMs === undefined) {
+        ctx.thinkingDurationMs = Date.now() - ctx.thinkingStartMs;
+      }
+      this.consecutiveFailures = 0;
+      log.info('triggerStream: completed', {
+        traceId: trigger.traceId,
+        runId: ctx.runId,
+        providerId: this.id,
+        durationMs: Date.now() - startTime,
+      });
+      ctx.push({
+        phase: 'final',
+        content: ctx.contentText,
+        thinking: ctx.thinkingText || undefined,
+        thinkingDurationMs: ctx.thinkingDurationMs,
+      });
+      ctx.finish();
+      return;
+    }
+    if (phase === 'error') {
+      const error = typeof data.error === 'string' && data.error ? data.error : 'Agent error';
+      log.error('triggerStream: lifecycle_error', {
+        traceId: trigger.traceId,
+        runId: ctx.runId,
+        providerId: this.id,
+        error,
+      });
+      this.registerStreamFailure(error);
+      ctx.push({ phase: 'error', error });
+      ctx.finish();
+    }
+  }
+
+  private handleErrorEvent(data: Record<string, unknown>, ctx: StreamContext, trigger: AgentTrigger): void {
+    const error =
+      (typeof data.error === 'string' && data.error) ||
+      (typeof data.message === 'string' && data.message) ||
+      'Unknown error';
+    log.error('triggerStream: error_stream', {
+      traceId: trigger.traceId,
+      runId: ctx.runId,
+      providerId: this.id,
+      error,
+    });
+    this.registerStreamFailure(error);
+    ctx.push({ phase: 'error', error });
+    ctx.finish();
   }
 
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {

@@ -16,3 +16,6 @@ export * from './instance';
 
 // Messaging
 export * from './messaging';
+
+// Streaming
+export * from './streaming';

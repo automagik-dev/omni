@@ -14,6 +14,7 @@
 
 import { createLogger } from '../../logger';
 import type {
+  AgentEventPayload,
   ChatEvent,
   ChatSendParams,
   ChatSendResult,
@@ -39,12 +40,17 @@ interface PendingRequest {
 /** Callback for runId-based accumulation (DEC-5: O(1) lookup) */
 export type AccumulationCallback = (event: ChatEvent) => void;
 
+/** Callback for runId-based agent accumulation */
+export type AgentAccumulationCallback = (event: AgentEventPayload) => void;
+
 export class OpenClawClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
   private eventListeners = new Set<EventListener>();
   /** DEC-5: O(1) runId-based event routing for accumulation */
   private accumulationCallbacks = new Map<string, AccumulationCallback>();
+  /** O(1) runId-based routing for agent event accumulation */
+  private agentAccumulationCallbacks = new Map<string, AgentAccumulationCallback>();
   private closed = false;
   private backoffMs = 800;
   private connectSent = false;
@@ -86,6 +92,10 @@ export class OpenClawClient {
     return this.accumulationCallbacks.size;
   }
 
+  get activeAgentAccumulations(): number {
+    return this.agentAccumulationCallbacks.size;
+  }
+
   /** Start the WebSocket connection (DEC-14: lazy, non-blocking) */
   start(): void {
     this.closed = false;
@@ -104,6 +114,7 @@ export class OpenClawClient {
     this.ws = null;
     this.flushPending(new Error('Client stopped'));
     this.flushAccumulations(new Error('Client stopped'));
+    this.flushAgentAccumulations(new Error('Client stopped'));
     this.setState('disconnected');
     log.info('Client stopped', {
       providerId: this.config.providerId,
@@ -122,6 +133,19 @@ export class OpenClawClient {
   /** Unregister a runId-based accumulation callback */
   unregisterAccumulation(runId: string): void {
     this.accumulationCallbacks.delete(runId);
+  }
+
+  /** Register a runId-based agent accumulation callback */
+  registerAgentAccumulation(runId: string, callback: AgentAccumulationCallback): void {
+    if (this.agentAccumulationCallbacks.size >= 50) {
+      throw new Error('Max concurrent accumulations (50) reached — backpressure');
+    }
+    this.agentAccumulationCallbacks.set(runId, callback);
+  }
+
+  /** Unregister a runId-based agent accumulation callback */
+  unregisterAgentAccumulation(runId: string): void {
+    this.agentAccumulationCallbacks.delete(runId);
   }
 
   /** Add a raw event listener */
@@ -272,6 +296,10 @@ export class OpenClawClient {
       this.routeChatEvent(event.payload as ChatEvent);
     }
 
+    if (event.event === 'agent' && event.payload) {
+      this.routeAgentEvent(event.payload as AgentEventPayload);
+    }
+
     // Emit to generic listeners
     for (const listener of this.eventListeners) {
       try {
@@ -296,6 +324,22 @@ export class OpenClawClient {
       log.error('Accumulation callback error', {
         providerId: this.config.providerId,
         runId: chatEvent.runId,
+        error: String(err),
+      });
+    }
+  }
+
+  private routeAgentEvent(payload: AgentEventPayload): void {
+    const runId = payload.runId;
+    if (!runId) return;
+    const callback = this.agentAccumulationCallbacks.get(runId);
+    if (!callback) return;
+    try {
+      callback(payload);
+    } catch (err) {
+      log.error('Agent accumulation callback error', {
+        providerId: this.config.providerId,
+        runId,
         error: String(err),
       });
     }
@@ -333,7 +377,7 @@ export class OpenClawClient {
       },
       role: 'operator',
       scopes: ['operator.admin'],
-      caps: [],
+      caps: ['tool-events'],
       auth: this.config.token ? { token: this.config.token } : undefined,
       locale: 'en-US',
       userAgent: 'omni-v2/1.0.0',
@@ -449,6 +493,23 @@ export class OpenClawClient {
       }
     }
     this.accumulationCallbacks.clear();
+  }
+
+  private flushAgentAccumulations(error: Error): void {
+    for (const [runId, callback] of this.agentAccumulationCallbacks) {
+      try {
+        callback({
+          runId,
+          seq: 0,
+          stream: 'error',
+          ts: Date.now(),
+          data: { error: error.message },
+        });
+      } catch {
+        // ignore
+      }
+    }
+    this.agentAccumulationCallbacks.clear();
   }
 
   private setState(newState: ConnectionState): void {
