@@ -142,6 +142,13 @@ export type UpdateAgentRoute = z.infer<typeof UpdateAgentRouteSchema>;
  */
 export const ListAgentRoutesQuerySchema = z.object({
   scope: AgentRouteScopeSchema.optional(),
-  isActive: z.coerce.boolean().optional(),
+  // Custom transform to handle "false" string correctly (z.coerce.boolean would make "false" → true)
+  isActive: z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .transform((val) => {
+      if (typeof val === 'boolean') return val;
+      return val === 'true' || val === '1';
+    })
+    .optional(),
 });
 export type ListAgentRoutesQuery = z.infer<typeof ListAgentRoutesQuerySchema>;
