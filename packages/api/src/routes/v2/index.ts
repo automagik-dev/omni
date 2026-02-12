@@ -15,6 +15,7 @@ import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
 import { instancesRoutes } from './instances';
+import { journeysRoutes } from './journeys';
 import { keysRoutes } from './keys';
 import { logsRoutes } from './logs';
 import { mediaRoutes } from './media';
@@ -34,6 +35,7 @@ v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);
 v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations
 v2Routes.route('/events', eventsRoutes);
+v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
 v2Routes.route('/access', accessRoutes);
 v2Routes.route('/settings', settingsRoutes);
