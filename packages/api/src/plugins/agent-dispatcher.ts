@@ -1477,9 +1477,22 @@ async function shouldProcessMessage(
     return null;
   }
 
-  // Baileys LID addressing: payload.from may be a LID (e.g. "54958418317348") while
-  // access rules use phone patterns (e.g. "5511986780008"). Try both the LID and the
-  // phone JID from rawPayload.key.participantAlt for access matching.
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  if (accessDenied) return null;
+
+  return instance;
+}
+
+/**
+ * Check access using primary sender ID, falling back to participantAlt for Baileys LID addressing.
+ * Returns true if access is denied (caller should return null).
+ */
+async function checkAccessWithFallback(
+  accessService: Services['access'],
+  instance: Instance,
+  payload: { from: string; chatId: string; rawPayload?: unknown },
+  channel: ChannelType,
+): Promise<boolean> {
   const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
   const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
   const primaryId = payload.from ?? '';
@@ -1488,22 +1501,19 @@ async function shouldProcessMessage(
   if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
     accessResult = await accessService.checkAccess(instance, participantAlt, channel);
   }
-  if (!accessResult.allowed) {
-    log.info('Access denied', {
-      instanceId: instance.id,
-      chatId: payload.chatId,
-      from: payload.from,
-      participantAlt,
-      reason: accessResult.reason,
-    });
-    // Send block message if applicable
-    if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
-      sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
-    }
-    return null;
-  }
+  if (accessResult.allowed) return false;
 
-  return instance;
+  log.info('Access denied', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    from: payload.from,
+    participantAlt,
+    reason: accessResult.reason,
+  });
+  if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
+    sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
+  }
+  return true;
 }
 
 /**
@@ -1537,25 +1547,9 @@ async function shouldProcessReaction(
     return null;
   }
 
-  // Access check for reactions
-  let accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
-  if (!accessResult.allowed) {
-    // Fallback for Baileys LID mode: try participantAlt phone from reaction metadata
-    const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
-    const key = rawPayload?.key as Record<string, unknown> | undefined;
-    const participantAlt = (key?.participantAlt as string)?.replace(/@.*$/, '');
-    if (participantAlt && participantAlt !== payload.from) {
-      accessResult = await accessService.checkAccess(instance, participantAlt, channel);
-    }
-  }
-  if (!accessResult.allowed) {
-    log.info('Access denied for reaction', {
-      instanceId: instance.id,
-      from: payload.from,
-      reason: accessResult.reason,
-    });
-    return null;
-  }
+  // Access check for reactions (reuses LID fallback logic)
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  if (accessDenied) return null;
 
   if (reactionDedup.isDuplicate(payload.messageId, payload.emoji, payload.from)) {
     log.debug('Duplicate reaction, skipping', {

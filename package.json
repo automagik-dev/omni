@@ -31,6 +31,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.39",
     "qrcode-terminal": "^0.12.0"
   }
 }
