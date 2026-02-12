@@ -76,17 +76,16 @@ export class RouteService {
       isActive: data.isActive ?? true,
     };
 
-    try {
-      const [created] = await this.db.insert(agentRoutes).values(routeData).returning();
+    let created: AgentRoute;
 
-      if (!created) {
+    try {
+      const [result] = await this.db.insert(agentRoutes).values(routeData).returning();
+
+      if (!result) {
         throw new Error('Failed to create agent route');
       }
 
-      // Invalidate cache after creation
-      this.routeResolver.invalidateInstance(instanceId);
-
-      return created;
+      created = result;
     } catch (error) {
       // Check for unique constraint violation (PostgreSQL error code 23505)
       if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
@@ -113,6 +112,16 @@ export class RouteService {
 
       throw error;
     }
+
+    // Best-effort cache invalidation outside try-catch
+    // This ensures cache failures don't mask successful creation
+    try {
+      this.routeResolver.invalidateInstance(instanceId);
+    } catch {
+      // Ignore cache invalidation errors - the route was created successfully
+    }
+
+    return created;
   }
 
   /**
@@ -132,8 +141,12 @@ export class RouteService {
       throw new NotFoundError('AgentRoute', id);
     }
 
-    // Invalidate cache after update
-    this.routeResolver.invalidateInstance(route.instanceId);
+    // Best-effort cache invalidation - don't fail update if cache fails
+    try {
+      this.routeResolver.invalidateInstance(route.instanceId);
+    } catch {
+      // Ignore cache invalidation errors
+    }
 
     return updated;
   }
@@ -151,7 +164,11 @@ export class RouteService {
       throw new NotFoundError('AgentRoute', id);
     }
 
-    // Invalidate cache after deletion
-    this.routeResolver.invalidateInstance(route.instanceId);
+    // Best-effort cache invalidation - don't fail deletion if cache fails
+    try {
+      this.routeResolver.invalidateInstance(route.instanceId);
+    } catch {
+      // Ignore cache invalidation errors
+    }
   }
 }
