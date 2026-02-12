@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import { UuidSchema } from './common';
+import { AgentTypeSchema } from './instance';
 
 /**
  * Route scope enum
@@ -12,16 +13,10 @@ export const AgentRouteScopeSchema = z.enum(['chat', 'user']);
 export type AgentRouteScope = z.infer<typeof AgentRouteScopeSchema>;
 
 /**
- * Agent type enum
- */
-export const AgentTypeSchema = z.enum(['agent', 'team', 'workflow']);
-export type AgentType = z.infer<typeof AgentTypeSchema>;
-
-/**
  * Agent session strategy enum
+ * Note: AgentSessionStrategy type is defined in automations/types.ts
  */
 export const AgentSessionStrategySchema = z.enum(['per_user', 'per_chat', 'per_user_per_chat']);
-export type AgentSessionStrategy = z.infer<typeof AgentSessionStrategySchema>;
 
 /**
  * Reply filter mode

@@ -24,6 +24,7 @@ import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
 import { ProviderService } from './providers';
+import { RouteResolver } from './route-resolver';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
 import { TTSService } from './tts';
@@ -41,6 +42,7 @@ export interface Services {
   settings: SettingsService;
   access: AccessService;
   providers: ProviderService;
+  routeResolver: RouteResolver;
   deadLetters: DeadLetterService;
   payloadStore: PayloadStoreService;
   eventOps: EventOpsService;
@@ -74,6 +76,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     settings,
     access: new AccessService(db, eventBus, accessCache),
     providers: new ProviderService(db),
+    routeResolver: new RouteResolver(db),
     deadLetters,
     payloadStore,
     eventOps: new EventOpsService(db, eventBus, deadLetters, payloadStore),
@@ -98,6 +101,7 @@ export { EventService } from './events';
 export { SettingsService } from './settings';
 export { AccessService } from './access';
 export { ProviderService } from './providers';
+export { RouteResolver } from './route-resolver';
 export { DeadLetterService } from './dead-letters';
 export { PayloadStoreService } from './payload-store';
 export { EventOpsService } from './event-ops';
