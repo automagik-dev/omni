@@ -48,6 +48,7 @@ __pycache__/
 *.pyc
 # Worker worktrees (genie-cli spawns these)
 omni-*/
+.genie/workers.json
 # bd worktree
 omni-soi/
 # bd worktree
@@ -68,3 +69,9 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
+# bd worktree
+omni-jmn/
+# bd worktree
+omni-0t1/
+# bd worktree
+omni-qbi/

@@ -1,11 +1,11 @@
 /**
  * Provider module exports
  *
- * Provides clients for executing AI agents (Agno, Webhook, and future OpenAI/Anthropic/Custom)
+ * Provides clients for executing AI agents (Agno, Webhook, OpenClaw)
  * and the unified AgentProvider abstraction for multi-provider dispatch.
  */
 
-// Types — legacy client types
+// Types — generic client interface
 export {
   type ProviderRequest,
   type ProviderFile,
@@ -15,7 +15,9 @@ export {
   type AgnoAgent,
   type AgnoTeam,
   type AgnoWorkflow,
-  type IAgnoClient,
+  type IAgentClient,
+  type AgentDiscoveryEntry,
+  type AgentHealthResult,
   type AgnoClientConfig,
   ProviderError,
   type ProviderErrorCode,
@@ -32,11 +34,17 @@ export type {
   WebhookResponse,
 } from './types';
 
-// Agno Client (legacy direct client)
+// Agno Client
 export { AgnoClient, createAgnoClient } from './agno-client';
+
+// Claude Code Client
+export { ClaudeCodeClient, createClaudeCodeClient } from './claude-code-client';
+export type { ClaudeCodeConfig } from './claude-code-client';
 
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';
+export { ClaudeCodeAgentProvider } from './claude-code-provider';
+export type { ClaudeCodeProviderOptions } from './claude-code-provider';
 export { WebhookAgentProvider } from './webhook-provider';
 export { OpenClawAgentProvider, OpenClawClient, createOpenClawProvider } from './openclaw';
 export type { OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';

@@ -484,7 +484,15 @@ export class DiscordPlugin extends BaseChannelPlugin {
 
     try {
       channelId = await resolveChannelId(client, channelId, this.logger);
+
+      // Journey timing: T10 (pluginSentAt) before platform call
+      const correlationId = message.metadata?.correlationId as string | undefined;
+      if (correlationId) this.captureT10(correlationId);
+
       const messageId = await this.dispatchMessageByType(client, channelId, message);
+
+      // Journey timing: T11 (platformDeliveredAt) after Discord API responds
+      if (correlationId) this.captureT11(correlationId);
 
       await this.emitMessageSent({
         instanceId,
@@ -1100,8 +1108,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
     },
     replyToId: string | undefined,
     rawPayload: Record<string, unknown>,
+    platformTimestamp?: number,
   ): Promise<void> {
-    await this.emitMessageReceived({
+    // Journey timing: capture T0 (platform) and T1 (plugin received)
+    // Discord timestamps are already in milliseconds
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+
+    const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
@@ -1109,7 +1122,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
       content,
       replyToId,
       rawPayload,
+      timings,
     });
+
+    // Journey timing: capture T2 (event published to NATS)
+    if (timings) {
+      this.captureT2(correlationId, timings);
+    }
   }
 
   /**

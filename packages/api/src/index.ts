@@ -29,6 +29,7 @@ import {
   loadChannelPlugins,
   reconnectWithPool,
   setupAgentResponder,
+  setupChatUnreadListener,
   setupConnectionListener,
   setupContactNamesListener,
   setupEventPersistence,
@@ -94,6 +95,7 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     await setupConnectionListener(eventBus, db);
     await setupLidMappingListener(eventBus, db);
     await setupContactNamesListener(eventBus, db);
+    await setupChatUnreadListener(eventBus, db);
     await setupMessageListener(eventBus);
     await setupEventPersistence(eventBus, db);
 

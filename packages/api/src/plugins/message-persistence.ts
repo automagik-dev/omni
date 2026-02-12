@@ -16,6 +16,7 @@ import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni
 import { createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import type { Services } from '../services';
+import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
 const log = createLogger('message-persistence');
@@ -25,11 +26,13 @@ const log = createLogger('message-persistence');
 // ============================================================================
 
 /**
- * Truncate string to max length (safe for varchar columns)
+ * Truncate string to max length (safe for varchar columns).
+ * Also sanitizes for valid UTF-8.
  */
 function truncate(str: string | undefined | null, maxLength: number): string | undefined {
-  if (!str) return undefined;
-  return str.length > maxLength ? str.slice(0, maxLength) : str;
+  const safe = sanitizeText(str);
+  if (!safe) return undefined;
+  return safe.length > maxLength ? safe.slice(0, maxLength) : safe;
 }
 
 /**
@@ -161,14 +164,28 @@ const MEDIA_BADGES: Record<string, string> = {
 };
 
 /**
- * Extract phone number from WhatsApp JID.
- * Returns undefined for @lid JIDs (the numeric part is NOT a phone number).
+ * Extract and validate phone from sender ID.
+ * Returns E.164 phone (+digits) or undefined for non-phone IDs.
+ *
+ * Filters out:
+ * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
+ * - LID references (numeric but not phone numbers)
+ * - Meta IDs (non-numeric platform identifiers)
+ * - IDs that are too short (<7 digits) or too long (>15 digits)
  */
-function extractPhoneFromJid(jid: string, channel: string): string | undefined {
+function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
   if (!channel.startsWith('whatsapp')) return undefined;
-  // @lid JIDs contain a Linked Device ID, not a phone number — skip them
-  if (jid.endsWith('@lid')) return undefined;
-  return jid.split('@')[0]?.replace(/\D/g, '');
+
+  // Strip @suffix if still present (defensive)
+  const bare = senderId.split('@')[0] || senderId;
+
+  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
+  if (!/^\d+$/.test(bare)) return undefined;
+
+  // E.164 validation: 7-15 digits
+  if (bare.length < 7 || bare.length > 15) return undefined;
+
+  return `+${bare}`;
 }
 
 // ============================================================================
@@ -200,7 +217,7 @@ async function processSenderIdentity(
 
   const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
-  const phoneNumber = extractPhoneFromJid(platformUserId, channel);
+  const phoneNumber = extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
@@ -328,7 +345,9 @@ async function handleMessageReceived(
 
   const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
   const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
-  const rawPayload = payload.rawPayload;
+  // Deep-sanitize rawPayload: WhatsApp protobuf can contain invalid UTF-8 bytes
+  // (e.g. truncated multi-byte chars) that PostgreSQL rejects on insert
+  const rawPayload = payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined;
 
   // Step 1: Find or create chat
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
@@ -376,7 +395,7 @@ async function handleMessageReceived(
   const { created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
     source: 'realtime',
     messageType: mapContentType(payload.content.type),
-    textContent: payload.content.text,
+    textContent: sanitizeText(payload.content.text),
     platformTimestamp,
     senderPlatformUserId: truncate(payload.from, 255),
     senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
@@ -405,7 +424,7 @@ async function handleMessageReceived(
   }
 
   // Step 6: Update chat lastMessageAt and preview
-  const preview = buildChatPreview(payload, rawPayload);
+  const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
     log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
   });
@@ -525,7 +544,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
             source: 'realtime',
             messageType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             platformTimestamp: new Date(event.timestamp),
             // Sender info (from us)
             senderPersonId: metadata.personId,

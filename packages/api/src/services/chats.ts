@@ -19,7 +19,8 @@ import {
   chats,
   omniGroups,
 } from '@omni/db';
-import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from 'drizzle-orm';
+import { sanitizeText } from '../utils/utf8';
 
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
@@ -41,6 +42,8 @@ export interface ListChatsOptions {
   excludeChatTypes?: ChatType[];
   search?: string;
   includeArchived?: boolean;
+  unreadOnly?: boolean;
+  sort?: 'activity' | 'unread' | 'name';
   limit?: number;
   cursor?: string;
 }
@@ -77,6 +80,8 @@ export class ChatService {
       excludeChatTypes,
       search,
       includeArchived = false,
+      unreadOnly = false,
+      sort = 'activity',
       limit = 50,
       cursor,
     } = options;
@@ -122,15 +127,27 @@ export class ChatService {
 
     conditions.push(sql`${chats.deletedAt} IS NULL`);
 
+    if (unreadOnly) {
+      conditions.push(gt(chats.unreadCount, 0));
+    }
+
     if (cursor) {
       conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
     }
+
+    // Determine sort order
+    const orderBy =
+      sort === 'unread'
+        ? [desc(chats.unreadCount), desc(chats.lastMessageAt)]
+        : sort === 'name'
+          ? [asc(chats.name), desc(chats.lastMessageAt)]
+          : [desc(chats.lastMessageAt)];
 
     const items = await this.db
       .select()
       .from(chats)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(chats.lastMessageAt))
+      .orderBy(...orderBy)
       .limit(limit + 1);
 
     const hasMore = items.length > limit;
@@ -277,6 +294,9 @@ export class ChatService {
    * Create a new chat
    */
   async create(data: NewChat): Promise<Chat> {
+    if (data.name) data.name = sanitizeText(data.name) ?? data.name;
+    if (data.lastMessagePreview)
+      data.lastMessagePreview = sanitizeText(data.lastMessagePreview) ?? data.lastMessagePreview;
     const [created] = await this.db.insert(chats).values(data).returning();
 
     if (!created) {
@@ -373,6 +393,9 @@ export class ChatService {
    * Update a chat
    */
   async update(id: string, data: Partial<NewChat>): Promise<Chat> {
+    if (data.name) data.name = sanitizeText(data.name) ?? data.name;
+    if (data.lastMessagePreview)
+      data.lastMessagePreview = sanitizeText(data.lastMessagePreview) ?? data.lastMessagePreview;
     const [updated] = await this.db
       .update(chats)
       .set({ ...data, updatedAt: new Date() })
@@ -390,11 +413,12 @@ export class ChatService {
    * Update last message preview
    */
   async updateLastMessage(chatId: string, preview: string, timestamp: Date): Promise<void> {
+    const safePreview = sanitizeText(preview) ?? preview;
     await this.db
       .update(chats)
       .set({
         lastMessageAt: timestamp,
-        lastMessagePreview: preview.substring(0, 500),
+        lastMessagePreview: safePreview.substring(0, 500),
         messageCount: sql`${chats.messageCount} + 1`,
         updatedAt: new Date(),
       })

@@ -204,12 +204,45 @@ async function handleSingleRead(client: OmniClient, messageId: string, instanceI
 }
 
 export function createMessagesCommand(): Command {
-  const messages = new Command('messages').description('Manage messages');
+  const messages = new Command('messages').description('Manage messages (use "get" for transcriptions/descriptions)');
+
+  // omni messages get <id>
+  messages
+    .command('get <messageId>')
+    .description('Get full message details including transcription/description fields')
+    .action(async (messageId: string) => {
+      const client = getClient();
+
+      try {
+        const message = (await client.messages.get(messageId)) as ExtendedMessage;
+
+        const items = {
+          id: message.id,
+          chatId: message.chatId,
+          externalId: message.externalId,
+          type: message.messageType,
+          source: message.source,
+          isFromMe: message.isFromMe ?? false,
+          timestamp: formatDate(message.platformTimestamp),
+          content: message.textContent ?? '-',
+          hasMedia: message.hasMedia ?? false,
+          transcription: message.transcription ?? '-',
+          imageDescription: message.imageDescription ?? '-',
+          videoDescription: message.videoDescription ?? '-',
+          documentExtraction: message.documentExtraction ?? '-',
+        };
+
+        output.data(items);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get message: ${message}`);
+      }
+    });
 
   // omni messages search <query>
   messages
     .command('search <query>')
-    .description('Search messages across chats')
+    .description('Search messages across chats (includes transcriptions/descriptions in results)')
     .option('--instance <id>', 'Instance ID (uses default if not specified)')
     .option('--chat <id>', 'Limit search to specific chat')
     .option('--since <duration>', 'Time range: 1d, 7d, 30d (default: 7d)', '7d')
@@ -241,7 +274,7 @@ export function createMessagesCommand(): Command {
           const chatMap = await fetchChatMap(client, chatIds);
           const items = formatSearchResults(searchResults, chatMap);
 
-          output.list(items, { emptyMessage: 'No messages found.' });
+          output.list(items, { emptyMessage: 'No messages found.', rawData: searchResults });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Search failed: ${message}`);

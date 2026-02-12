@@ -197,6 +197,17 @@ export interface WhatsAppConfig extends WhatsAppConnectionOptions {}
  * - Read receipts and delivery confirmations
  * - Automatic reconnection with exponential backoff
  */
+/** Summarize message content for debug logging, replacing raw buffers with size descriptions. */
+function summarizeContent(content: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = { ...content };
+  for (const key of ['audio', 'image', 'video', 'document', 'sticker'] as const) {
+    if (Buffer.isBuffer(summary[key])) {
+      summary[key] = `<Buffer ${(summary[key] as Buffer).length} bytes>`;
+    }
+  }
+  return summary;
+}
+
 export class WhatsAppPlugin extends BaseChannelPlugin {
   readonly id: ChannelType = 'whatsapp-baileys';
   readonly name = 'WhatsApp (Baileys)';
@@ -332,6 +343,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Get the bot's own JID for an instance (e.g., "5511999990000@s.whatsapp.net")
+   */
+  getMeJid(instanceId: string): string | undefined {
+    return this.sockets.get(instanceId)?.user?.id;
   }
 
   /**
@@ -578,8 +596,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         }
       }
 
-      this.logger.debug('Sending message', { jid, content, hasQuoted: !!quotedOptions });
+      this.logger.debug('Sending message', { jid, content: summarizeContent(content), hasQuoted: !!quotedOptions });
+
+      // Journey timing: T10 before platform call, T11 after
+      const correlationId = message.metadata?.correlationId as string | undefined;
+      correlationId && this.captureT10(correlationId);
       const result = await sock.sendMessage(jid, content, quotedOptions as never);
+      correlationId && this.captureT11(correlationId);
 
       const externalId = result?.key?.id || '';
 
@@ -1524,6 +1547,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     replyToId: string | undefined,
     rawMessage: WAMessage,
     isFromMe: boolean,
+    platformTimestamp?: number,
   ): Promise<void> {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
@@ -1547,7 +1571,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Add chatName from cached group/chat metadata
     this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);
 
-    await this.emitMessageReceived({
+    // Journey timing: capture T0 (platform) and T1 (plugin received)
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+
+    const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
@@ -1560,7 +1587,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
       replyToId,
       rawPayload: extendedPayload,
+      timings,
     });
+
+    // Journey timing: capture T2 (event published to NATS)
+    if (timings) {
+      this.captureT2(correlationId, timings);
+    }
   }
 
   /**
@@ -1755,36 +1788,61 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const chat of chats) {
-      // Baileys Chat type extends IConversation which has displayName
-      const c = chat as { id?: string; displayName?: string; name?: string };
-      if (c.id) {
-        const name = c.displayName || c.name;
-        if (name) {
-          cache.set(c.id, name);
-          this.logger.debug('Cached chat name', { instanceId, chatId: c.id, name });
-        }
+      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      if (!c.id) continue;
+
+      const name = c.displayName || c.name;
+      if (name) {
+        cache.set(c.id, name);
+      }
+
+      // Sync unread count from WhatsApp
+      if (c.unreadCount !== undefined) {
+        this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
   }
 
   /**
    * Handle chats update
-   * Updates cached chat display names
+   * Updates cached chat display names and syncs unread counts from WhatsApp
    * @internal
    */
   handleChatsUpdate(instanceId: string, updates: unknown[]): void {
-    const cache = this.chatNamesCache.get(instanceId);
-    if (!cache) return;
+    let cache = this.chatNamesCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.chatNamesCache.set(instanceId, cache);
+    }
 
     for (const update of updates) {
-      const u = update as { id?: string; displayName?: string; name?: string };
+      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
 
       const name = u.displayName || u.name;
       if (name) {
         cache.set(u.id, name);
       }
+
+      // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
+      if (u.unreadCount !== undefined) {
+        this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
+      }
     }
+  }
+
+  /**
+   * Emit chat unread count update from platform-native data
+   * @internal
+   */
+  private emitChatUnreadUpdate(instanceId: string, chatId: string, unreadCount: number): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.chat.unread-updated',
+        { chatId, unreadCount },
+        { instanceId, channelType: this.id, source: `channel:${this.id}`, correlationId: `unread-${chatId}` },
+      )
+      .catch((err) => this.logger.warn('Failed to publish chat unread update', { error: String(err) }));
   }
 
   /**

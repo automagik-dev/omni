@@ -453,6 +453,32 @@ function isFromMe(msg: WAMessage): boolean {
 }
 
 /**
+ * Resolve the actual sender JID for a message.
+ *
+ * Fixes:
+ * - isFromMe in groups: uses the bot's own JID instead of group JID
+ * - @lid participant JIDs: resolves to phone JID via cache/remoteJidAlt
+ */
+function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage, chatId: string): string {
+  if (isFromMe(msg)) {
+    // Use the bot's own JID for own messages (not chatId, which could be a group)
+    return plugin.getMeJid(instanceId) || chatId;
+  }
+
+  // In groups, msg.key.participant is the actual sender
+  const senderJid = msg.key.participant || msg.key.remoteJid || chatId;
+
+  // Resolve @lid participant JIDs to phone JIDs
+  if (isLidJid(senderJid)) {
+    const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
+    const lidCache = plugin.getLidMappingCache(instanceId);
+    return resolveToPhoneJid(senderJid, participantAlt, lidCache);
+  }
+
+  return senderJid;
+}
+
+/**
  * Check if a message should be processed
  */
 function shouldProcessMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): boolean {
@@ -617,7 +643,8 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   const { chatId, rawChatId } = resolveChatId(plugin, instanceId, msg);
 
   const externalId = msg.key.id || '';
-  const { id: senderId } = fromJid(isFromMe(msg) ? chatId : msg.key.participant || chatId);
+  const senderJid = resolveSenderJid(plugin, instanceId, msg, chatId);
+  const { id: senderId } = fromJid(senderJid);
   const replyToId = getReplyToId(msg);
 
   // Handle special message types (reactions, edits, deletes) — returns true if handled
@@ -636,8 +663,23 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   // If LID was resolved, annotate the raw message so downstream can persist the mapping
   annotateLidResolution(msg, rawChatId, chatId);
 
+  // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
+  const platformTimestamp = msg.messageTimestamp
+    ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp)) * 1000
+    : Date.now();
+
   // Pass all content fields including extended ones (poll, event, product, etc.)
-  await plugin.handleMessageReceived(instanceId, externalId, chatId, senderId, content, replyToId, msg, isFromMe(msg));
+  await plugin.handleMessageReceived(
+    instanceId,
+    externalId,
+    chatId,
+    senderId,
+    content,
+    replyToId,
+    msg,
+    isFromMe(msg),
+    platformTimestamp,
+  );
 }
 
 /**

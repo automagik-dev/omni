@@ -54,7 +54,8 @@
       "bin",
       "*.generated.ts",
       "omni-*",
-      ".worktrees"
+      ".worktrees",
+      ".genie"
     ]
   },
   "overrides": [

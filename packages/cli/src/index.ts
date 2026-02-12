@@ -20,6 +20,7 @@ import { createConfigCommand } from './commands/config.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
 import { createInstancesCommand } from './commands/instances.js';
+import { createJourneyCommand } from './commands/journey.js';
 import { createKeysCommand } from './commands/keys.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
@@ -33,9 +34,17 @@ import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
-import type { CommandCategory } from './config.js';
+import { type CommandCategory, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors } from './output.js';
+
+// Handle --json flag early (before Commander) so it works anywhere in argv
+if (process.argv.includes('--json')) {
+  setRuntimeFormat('json');
+  // Remove --json from argv so Commander doesn't choke on it in subcommands
+  const idx = process.argv.indexOf('--json');
+  process.argv.splice(idx, 1);
+}
 import { getConfigSummary, getInlineStatus } from './status.js';
 
 const VERSION = '0.0.1';
@@ -157,6 +166,14 @@ const COMMANDS: CommandDef[] = [
     helpDescription: 'Trigger history backfill for instances',
   },
 
+  // Performance/tracing
+  {
+    create: createJourneyCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Message journey tracing & latency',
+  },
+
   // Debug commands (not shown in grouped help)
   { create: createLogsCommand, category: 'debug', helpGroup: 'System' },
   { create: createDeadLettersCommand, category: 'debug', helpGroup: 'System' },
@@ -184,7 +201,6 @@ program
   .passThroughOptions()
   .option('--no-color', 'Disable colored output')
   .hook('preAction', (_thisCommand, actionCommand) => {
-    // Handle --no-color flag
     const opts = actionCommand.optsWithGlobals();
     if (opts.color === false) {
       disableColors();
@@ -275,6 +291,10 @@ ${c().bold('Quick Start')}:
   omni send --to +5511999999999 --text "Hello"
   omni chats list
   omni events list --limit 10
+
+${c().bold('Global Flags')}:
+  --json         Output in JSON format (works with any command)
+  --no-color     Disable colored output
 `;
   return quickStart;
 });

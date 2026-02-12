@@ -2,8 +2,9 @@
 
 > GitHub Actions workflows that catch "works on my machine" bugs by running setup, build, and quality checks on every push and PR.
 
-**Status:** DRAFT
+**Status:** SHIPPED
 **Created:** 2026-02-10
+**Updated:** 2026-02-12
 **Author:** WISH Agent
 **Beads:** omni-gt7
 **GitHub:** #17
@@ -12,34 +13,45 @@
 
 ## Problem
 
-There is **no CI/CD pipeline** in the repository. Three setup issues (#14, #15, #16) were only discovered when running `make setup` in a fresh environment:
+The CI pipeline exists (`.github/workflows/ci.yml`) but is **incomplete**. It has a single quality-gate job that runs typecheck, lint, and test — but **136 out of 297 tests are silently skipped** because there's no database in CI.
 
-- **#14** — API starts twice (port conflict)
-- **#15** — DB schema init runs before PostgreSQL is ready
-- **#16** — SDK not built before UI dev server needs it
+The original motivation was catching fresh-environment issues (#14, #15, #16). The smoke test job — the core value of this wish — was never implemented.
 
-All are "works on my machine" bugs that CI would catch immediately.
+### Current State (as of 2026-02-12)
+
+| What | Status |
+|------|--------|
+| Quality Gate job | Exists, but 136 tests skip (no DB) |
+| Build Validation job | Missing |
+| Smoke Test job | Missing |
+| Caching | None (re-downloads everything) |
+| Run time | ~1m15s (only 1 job) |
+
+---
 
 ## Assumptions
 
-- **ASM-1**: pgserve (`bunx pgserve`) works in GitHub Actions runners (no external Postgres needed)
-- **ASM-2**: NATS binary can be downloaded in CI via `ensure-nats.sh` (Linux amd64)
-- **ASM-3**: PM2 can manage services in CI the same way as local dev
-- **ASM-4**: Default `.env.example` values are sufficient for CI (no secrets needed for smoke test)
+- **ASM-1**: pgserve (`bunx pgserve`) works on GitHub Actions Ubuntu runners — **validated partially**: pgserve is a bun package that embeds PostgreSQL, no native deps needed
+- **ASM-2**: NATS binary can be downloaded in CI via `ensure-nats.sh` (Linux amd64) — **high confidence**: standard curl + tar from GitHub releases
+- **ASM-3** ~~PM2 in CI~~: **REVISED** — Skip PM2 in CI entirely. Start processes directly with `&` (background). Simpler, fewer deps, faster.
+- **ASM-4**: Default `.env.example` values are sufficient for CI (no secrets needed) — **confirmed**: .env.example uses localhost with default credentials
 
 ## Decisions
 
 - **DEC-1**: Use pgserve + downloaded NATS binary in CI (same as local dev) — no Docker services
 - **DEC-2**: Single workflow file `.github/workflows/ci.yml` with parallel jobs
-- **DEC-3**: Cache `node_modules`, `bin/` (NATS binary), and `.pgserve-data` between runs
-- **DEC-4**: Run on push to `main` and all PRs
+- **DEC-3**: Cache bun packages and NATS binary between runs
+- **DEC-4**: Run on push to `main`/`dev` and all PRs (current behavior, keep it)
 - **DEC-5**: Branch protection configuration is OUT OF SCOPE (manual GitHub settings step)
+- **DEC-6** (NEW): **No PM2 in CI** — start pgserve and NATS directly as background processes. CI doesn't need process management, just process launch.
+- **DEC-7** (NEW): **Two jobs, not three** — merge build validation into quality gate. Build already runs as a turbo dependency of typecheck. Just add dist/ verification as a step. Smoke test remains separate.
 
 ## Risks
 
-- **RISK-1**: pgserve may behave differently on GitHub Actions Ubuntu runners vs WSL2 — **Mitigation:** smoke test catches this immediately on first run
+- **RISK-1**: pgserve may behave differently on GitHub Actions Ubuntu runners vs WSL2 — **Mitigation:** smoke test catches this immediately on first run; pgserve is pure-bun with embedded PG
 - **RISK-2**: NATS download could be rate-limited in CI — **Mitigation:** cache the `bin/` directory between runs
-- **RISK-3**: PM2 process startup timing may differ in CI — **Mitigation:** `_init-db-wait` already retries up to 15 times with 2s intervals
+- **RISK-3** ~~PM2 timing~~: **Eliminated** by DEC-6 (no PM2 in CI)
+- **RISK-4** (NEW): pgserve startup time in CI may be slower than local — **Mitigation:** retry loop (`_init-db-wait` pattern) with 15 attempts × 2s = 30s max wait
 
 ---
 
@@ -47,10 +59,11 @@ All are "works on my machine" bugs that CI would catch immediately.
 
 ### IN SCOPE
 
-- GitHub Actions workflow file (`.github/workflows/ci.yml`)
-- Three parallel CI jobs: quality gate, build validation, smoke test
-- Bun + NATS binary caching
-- Documentation of required branch protection settings
+- Update `.github/workflows/ci.yml` (existing file)
+- Two parallel CI jobs: quality gate (with DB), smoke test
+- pgserve + NATS as direct background processes (no PM2)
+- Bun + NATS binary caching via `actions/cache`
+- dist/ output verification in quality gate
 
 ### OUT OF SCOPE
 
@@ -59,6 +72,7 @@ All are "works on my machine" bugs that CI would catch immediately.
 - GitHub branch protection rule configuration (manual step, documented)
 - UI E2E tests (Playwright)
 - Secret management / external service integration
+- PM2 installation in CI
 
 ---
 
@@ -68,81 +82,136 @@ All are "works on my machine" bugs that CI would catch immediately.
 
 | Package | Changes | Notes |
 |---------|---------|-------|
-| (root) | `.github/workflows/ci.yml` | New workflow file |
-| (root) | Makefile (possibly) | CI-specific target if needed |
+| (root) | `.github/workflows/ci.yml` | Update existing workflow |
 
 No application code changes. This is purely CI infrastructure.
 
 ### System Checklist
 
-- [ ] **Events**: No changes
-- [ ] **Database**: No schema changes
-- [ ] **SDK**: No changes
-- [ ] **CLI**: No changes
-- [ ] **Tests**: Existing tests run in CI, no new tests needed
+- [x] **Events**: No changes
+- [x] **Database**: No schema changes (pgserve is infra only)
+- [x] **SDK**: No changes
+- [x] **CLI**: No changes
+- [x] **Tests**: Existing tests — currently skipped ones should now PASS with DB available
 
 ---
 
 ## Execution Groups
 
-### Group A: CI Workflow
+### Group A: Complete CI Workflow
 
-**Goal:** Create a GitHub Actions workflow that validates the project on every push/PR with three parallel jobs.
+**Goal:** Update the existing CI workflow to run all tests (including DB-dependent) and add a smoke test job that validates the fresh-environment setup flow.
 
 **Files:**
-- `.github/workflows/ci.yml` (new)
+- `.github/workflows/ci.yml` (update)
 
-**Deliverables:**
+---
 
-#### Job 1: Quality Gate (`make check`)
-- [ ] Install Bun
-- [ ] `bun install`
-- [ ] Build SDK + CLI dist (`_build-dist` dependency)
-- [ ] Run `make typecheck`
-- [ ] Run `make lint`
-- [ ] Run `make test` (with pgserve + NATS running for DB tests)
+#### Job 1: Quality Gate (typecheck + lint + test + build verification)
 
-#### Job 2: Build Validation
-- [ ] `bun install`
-- [ ] `bun run build` (turbo build — validates dependency order)
-- [ ] Verify `packages/sdk/dist` exists
-- [ ] Verify `packages/cli/dist` exists
+Updates the existing job to include a database and verify build outputs.
 
-#### Job 3: Smoke Test (Fresh Environment)
-- [ ] `bun install`
-- [ ] Copy `.env.example` to `.env`
-- [ ] `make ensure-nats` (download NATS binary)
-- [ ] Start pgserve + NATS via PM2 (`make dev-services`)
-- [ ] Wait for PostgreSQL readiness (`_init-db-wait` pattern)
-- [ ] `make db-push` (initialize schema)
-- [ ] Build SDK (`_build-dist`)
-- [ ] Start API in background
-- [ ] `curl --fail http://localhost:8882/api/v2/health`
-- [ ] Verify single process on port 8882 (catches #14)
+**Steps:**
+1. Checkout + setup Bun
+2. Cache bun packages (`~/.bun/install/cache`, keyed on `bun.lock`)
+3. Cache NATS binary (`bin/`, keyed on NATS version)
+4. `bun install`
+5. `cp .env.example .env`
+6. Download NATS: `./scripts/ensure-nats.sh`
+7. Start pgserve: `bunx pgserve --port 8432 --data .pgserve-data --no-cluster &`
+8. Start NATS: `./bin/nats-server -js -p 4222 &`
+9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 2s sleep
+10. `bun run build` (turbo build — all packages)
+11. Verify `packages/sdk/dist` exists
+12. Verify `packages/cli/dist` exists
+13. `bun run typecheck`
+14. `bunx biome check .`
+15. `bun test --env-file=.env`
+
+**Key changes from current:**
+- Steps 5-9 are NEW (DB + NATS infrastructure)
+- Steps 11-12 are NEW (build output verification)
+- Tests should now report **~297 pass, ~0 skip** instead of **161 pass, 136 skip**
+
+---
+
+#### Job 2: Smoke Test (Fresh Environment)
+
+Validates the full `make setup` → health check flow in a clean environment. This is the core value of the wish.
+
+**Steps:**
+1. Checkout + setup Bun
+2. Cache bun packages (same key as Job 1)
+3. Cache NATS binary (same key as Job 1)
+4. `bun install`
+5. `cp .env.example .env`
+6. Download NATS: `./scripts/ensure-nats.sh`
+7. Start pgserve: `bunx pgserve --port 8432 --data .pgserve-data --no-cluster &`
+8. Start NATS: `./bin/nats-server -js -p 4222 &`
+9. Wait for DB: retry `drizzle-kit push --force` up to 15 times with 2s sleep
+10. Build all: `bun run build`
+11. Start API in background:
+    ```bash
+    OMNI_PACKAGES_DIR=$PWD/packages bun packages/api/src/index.ts &
+    ```
+12. Wait for API: retry `curl --fail http://localhost:8882/api/v2/health` up to 15 times with 2s sleep
+13. Verify health response is valid JSON with `status: "healthy"`
+14. Verify single process on port 8882: `lsof -ti:8882 | wc -l` equals 1 (catches #14)
+
+---
 
 #### Caching Strategy
-- [ ] Cache `~/.bun/install/cache` (bun packages)
-- [ ] Cache `bin/` (NATS binary, ~20MB)
-- [ ] Cache `node_modules` (keyed on lockfile hash)
 
-**Acceptance Criteria:**
-- [ ] Workflow runs on push to `main` and on PRs
-- [ ] All three jobs run in parallel
-- [ ] Fresh `bun install` + service startup works in CI
-- [ ] Health endpoint returns 200 after startup
-- [ ] `make check` passes (typecheck + lint + test)
-- [ ] `bun run build` succeeds with correct dependency order
+```yaml
+# Bun packages (shared across jobs)
+- uses: actions/cache@v4
+  with:
+    path: ~/.bun/install/cache
+    key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+# NATS binary (shared across jobs)
+- uses: actions/cache@v4
+  with:
+    path: bin/
+    key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
+```
+
+---
+
+### Acceptance Criteria
+
+- [ ] Workflow runs on push to `main`/`dev` and on PRs
+- [ ] Both jobs run in parallel
+- [ ] Quality gate runs ALL tests (0 skips for DB-related reasons)
+- [ ] Quality gate verifies `sdk/dist` and `cli/dist` exist
+- [ ] Smoke test starts pgserve + NATS without PM2
+- [ ] Smoke test health endpoint returns 200
+- [ ] Smoke test verifies single process on API port
 - [ ] Workflow completes in < 5 minutes (target)
 - [ ] Caching reduces subsequent run times
+- [ ] Concurrency control cancels superseded runs (already exists)
 
-**Validation:**
+### Validation
+
 ```bash
 # Push to a test branch and verify:
-# 1. All three jobs appear in GitHub Actions
-# 2. All three jobs pass
-# 3. Cached runs are faster than first run
+git checkout -b ci/complete-pipeline
+# ... make changes ...
+git push -u origin ci/complete-pipeline
+
+# 1. Both jobs appear in GitHub Actions
 gh run list --limit 3
-gh run view <id>
+
+# 2. Quality gate: check test counts (should be ~297 pass, 0 skip)
+gh run view <id> --log | grep -E "pass|skip|fail"
+
+# 3. Smoke test: check health check passed
+gh run view <id> --log | grep "health"
+
+# 4. Verify caching works on second push
+git commit --allow-empty -m "test cache"
+git push
+# Second run should be faster
 ```
 
 ---
@@ -153,26 +222,32 @@ After the workflow is green:
 
 1. **Enable branch protection** on `main`:
    - Require status checks to pass before merging
-   - Required checks: `quality-gate`, `build-validation`, `smoke-test`
+   - Required checks: `quality-gate`, `smoke-test`
 2. **Add status badge** to README (optional)
+3. **Monitor first few runs** — watch for pgserve/NATS startup issues on GitHub runners
 
 ---
 
-## Reference: Current Local Dev Flow
+## Reference: CI vs Local Dev
 
-```
-make setup
-  ├── check-deps          # Verify bun, pm2, etc.
-  ├── install
-  │   ├── bun install
-  │   ├── cp .env.example .env
-  │   └── drizzle-kit push (may skip if no DB)
-  ├── dev-services
-  │   ├── ensure-nats.sh  # Download NATS binary
-  │   └── pm2 start       # pgserve + NATS
-  ├── _init-db-wait       # Retry DB init up to 15x
-  ├── _build-dist         # Build SDK + CLI
-  └── bun run dev         # turbo dev (API + UI)
+```text
+Local (make dev):                    CI Quality Gate:
+  dev-services (PM2)                   pgserve & (background)
+    ├── pgserve                        nats-server & (background)
+    └── nats-server                    drizzle-kit push (retry loop)
+  _init-db-wait                        bun run build
+  _build-dist                          typecheck + lint + test
+  bun run dev                          (exit)
+
+                                     CI Smoke Test:
+                                       pgserve & (background)
+                                       nats-server & (background)
+                                       drizzle-kit push (retry loop)
+                                       bun run build
+                                       bun api/src/index.ts & (background)
+                                       curl health endpoint
+                                       verify single process on port
+                                       (exit)
 ```
 
-The CI smoke test mirrors this flow minus `bun run dev` (replaced with targeted health check).
+Key difference: CI uses direct background processes (`&`), local dev uses PM2.

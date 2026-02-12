@@ -9,10 +9,9 @@
  */
 
 import {
-  type IAgnoClient,
+  type IAgentClient,
   ProviderError,
   type ProviderFile,
-  type ProviderResponse,
   type StreamChunk,
   createProviderClient,
   isProviderSchemaSupported,
@@ -312,14 +311,14 @@ async function* processStreamChunks(
 // ============================================================================
 
 export class AgentRunnerService {
-  private clientCache: Map<string, IAgnoClient> = new Map();
+  private clientCache: Map<string, IAgentClient> = new Map();
 
   constructor(private db: Database) {}
 
   /**
    * Get or create an Agno client for a provider
    */
-  private async getClient(providerId: string): Promise<IAgnoClient> {
+  private async getClient(providerId: string): Promise<IAgentClient> {
     // Check cache
     const cached = this.clientCache.get(providerId);
     if (cached) return cached;
@@ -438,10 +437,11 @@ export class AgentRunnerService {
       senderName: prefixEnabled ? senderName : undefined,
     });
 
-    // Call appropriate endpoint based on agent type
-    let response: ProviderResponse;
+    // Build request — client routes by agentType internally
     const request = {
       message: combinedMessage,
+      agentId: instance.agentId,
+      agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: false,
       sessionId, // Computed based on session strategy
       userId: personId || senderId, // ← Person UUID (internal identity)
@@ -466,21 +466,7 @@ export class AgentRunnerService {
       files,
     };
 
-    const agentType = instance.agentType ?? 'agent';
-
-    switch (agentType) {
-      case 'agent':
-        response = await client.runAgent(instance.agentId, request);
-        break;
-      case 'team':
-        response = await client.runTeam(instance.agentId, request);
-        break;
-      case 'workflow':
-        response = await client.runWorkflow(instance.agentId, request);
-        break;
-      default:
-        throw new ProviderError(`Unknown agent type: ${agentType}`, 'NOT_FOUND', 400);
-    }
+    const response = await client.run(request);
 
     // Split response if enabled
     const parts = splitResponse(response.content, instance.enableAutoSplit ?? true);
@@ -545,6 +531,8 @@ export class AgentRunnerService {
 
     const request = {
       message: combinedMessage,
+      agentId: instance.agentId,
+      agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: true,
       sessionId, // Computed based on session strategy
       userId: personId || senderId, // ← Person UUID (internal identity)
@@ -568,15 +556,8 @@ export class AgentRunnerService {
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
     };
 
-    const agentType = instance.agentType ?? 'agent';
-
-    const streamGenerator =
-      agentType === 'team'
-        ? client.streamTeam(instance.agentId, request)
-        : client.streamAgent(instance.agentId, request);
-
-    // Delegate to helper for stream processing with split
-    yield* processStreamChunks(streamGenerator, enableSplit);
+    // Client routes by agentType internally
+    yield* processStreamChunks(client.stream(request), enableSplit);
   }
 
   /**

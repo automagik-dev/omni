@@ -293,15 +293,13 @@ export interface ListProvidersParams {
 
 /**
  * Provider schema type
- * - agnoos: AgnoOS AI orchestration platform
- * - a2a: Agent-to-Agent protocol (Google A2A)
- * - openai: OpenAI-compatible API
- * - anthropic: Anthropic Claude API
+ * - agno: Agno AI orchestration platform
  * - webhook: Webhook-based agent provider
  * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
- * - custom: Custom provider implementation
+ * - ag-ui: AG-UI protocol
+ * - claude-code: Claude Code agent provider
  */
-export type ProviderSchema = 'agnoos' | 'agno' | 'a2a' | 'openai' | 'anthropic' | 'webhook' | 'openclaw' | 'custom';
+export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code';
 
 /**
  * Body for creating a provider
@@ -376,6 +374,8 @@ export interface ListChatsParams {
   excludeChatTypes?: string;
   search?: string;
   includeArchived?: boolean;
+  unreadOnly?: boolean;
+  sort?: 'activity' | 'unread' | 'name';
   limit?: number;
   cursor?: string;
 }
@@ -429,6 +429,7 @@ export interface ListChatMessagesParams {
   limit?: number;
   before?: string;
   after?: string;
+  mediaOnly?: boolean;
 }
 
 /**
@@ -902,6 +903,8 @@ export interface ListContactsParams {
   limit?: number;
   cursor?: string;
   guildId?: string; // Required for Discord
+  search?: string;
+  excludeGroups?: boolean;
 }
 
 /**
@@ -910,6 +913,7 @@ export interface ListContactsParams {
 export interface ListGroupsParams {
   limit?: number;
   cursor?: string;
+  search?: string;
 }
 
 /**
@@ -1228,6 +1232,8 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
         if (params?.guildId) query.set('guildId', params.guildId);
+        if (params?.search) query.set('search', params.search);
+        if (params?.excludeGroups) query.set('excludeGroups', 'true');
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/contacts?${query}`, {});
         const json = (await resp.json()) as {
           items?: Contact[];
@@ -1247,6 +1253,7 @@ export function createOmniClient(config: OmniClientConfig) {
         const query = new URLSearchParams();
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.cursor) query.set('cursor', params.cursor);
+        if (params?.search) query.set('search', params.search);
         const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/groups?${query}`, {});
         const json = (await resp.json()) as {
           items?: Group[];
@@ -1291,6 +1298,8 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('excludeChatTypes', params?.excludeChatTypes);
         setIfDefined('search', params?.search);
         setIfDefined('includeArchived', params?.includeArchived);
+        setIfDefined('unreadOnly', params?.unreadOnly);
+        setIfDefined('sort', params?.sort);
         setIfDefined('limit', params?.limit);
         setIfDefined('cursor', params?.cursor);
         const resp = await apiFetch(`${baseUrl}/api/v2/chats?${query}`, {});
@@ -1384,6 +1393,7 @@ export function createOmniClient(config: OmniClientConfig) {
         if (params?.limit) query.set('limit', String(params.limit));
         if (params?.before) query.set('before', params.before);
         if (params?.after) query.set('after', params.after);
+        if (params?.mediaOnly) query.set('mediaOnly', 'true');
         const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/messages?${query}`, {});
         const json = (await resp.json()) as { items?: Message[] };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
@@ -1448,6 +1458,16 @@ export function createOmniClient(config: OmniClientConfig) {
      * Message sending
      */
     messages: {
+      /**
+       * Get a message by ID
+       */
+      async get(messageId: string): Promise<Message> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/${messageId}`, {});
+        const json = (await resp.json()) as { data?: Message };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as Message;
+      },
+
       /**
        * Send a text message
        */

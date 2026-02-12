@@ -1013,6 +1013,8 @@ const listContactsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
   cursor: z.string().optional(),
   guildId: z.string().optional().describe('Guild ID (required for Discord)'),
+  search: z.string().optional(),
+  excludeGroups: z.coerce.boolean().optional(),
 });
 
 /**
@@ -1023,7 +1025,7 @@ const listContactsQuerySchema = z.object({
  */
 instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listContactsQuerySchema), async (c) => {
   const id = c.req.param('id');
-  const { limit, guildId } = c.req.valid('query');
+  const { limit, guildId, search, excludeGroups } = c.req.valid('query');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -1084,7 +1086,23 @@ instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listCon
 
     // If plugin returns contacts, use them
     if (result.contacts.length > 0) {
-      const contacts = result.contacts.slice(0, limit);
+      let filtered = result.contacts;
+
+      // Server-side search filter
+      if (search) {
+        const q = search.toLowerCase();
+        filtered = filtered.filter(
+          (c) =>
+            c.name?.toLowerCase().includes(q) || c.phone?.includes(q) || c.platformUserId.toLowerCase().includes(q),
+        );
+      }
+
+      // Exclude groups if requested
+      if (excludeGroups) {
+        filtered = filtered.filter((c) => !c.isGroup);
+      }
+
+      const contacts = filtered.slice(0, limit);
 
       return c.json({
         items: contacts.map((contact) => ({
@@ -1098,7 +1116,8 @@ instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listCon
         })),
         meta: {
           totalFetched: result.totalFetched,
-          hasMore: contacts.length < result.contacts.length,
+          totalMatched: filtered.length,
+          hasMore: contacts.length < filtered.length,
           cursor: undefined,
         },
       });
@@ -1133,6 +1152,7 @@ instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listCon
 const listGroupsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
   cursor: z.string().optional(),
+  search: z.string().optional(),
 });
 
 /**
@@ -1142,7 +1162,7 @@ const listGroupsQuerySchema = z.object({
  */
 instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroupsQuerySchema), async (c) => {
   const id = c.req.param('id');
-  const { limit } = c.req.valid('query');
+  const { limit, search } = c.req.valid('query');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -1187,8 +1207,15 @@ instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroup
       plugin as { fetchGroups: (instanceId: string, options: Record<string, unknown>) => Promise<FetchGroupsResult> }
     ).fetchGroups(id, {});
 
+    // Apply server-side search filter before limiting
+    let filtered = result.groups;
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter((g) => g.name?.toLowerCase().includes(q) || g.externalId.toLowerCase().includes(q));
+    }
+
     // Apply limit
-    const groups = result.groups.slice(0, limit);
+    const groups = filtered.slice(0, limit);
 
     return c.json({
       items: groups.map((group) => ({
@@ -1203,7 +1230,8 @@ instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroup
       })),
       meta: {
         totalFetched: result.totalFetched,
-        hasMore: groups.length < result.groups.length,
+        totalMatched: filtered.length,
+        hasMore: groups.length < filtered.length,
         cursor: undefined, // TODO: implement pagination cursor
       },
     });

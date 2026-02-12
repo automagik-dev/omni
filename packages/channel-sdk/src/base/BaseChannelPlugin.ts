@@ -11,6 +11,7 @@
 import { generateCorrelationId } from '@omni/core';
 import type { EventBus } from '@omni/core/events';
 import { buildSubject } from '@omni/core/events/nats';
+import { JOURNEY_STAGES, getJourneyTracker } from '@omni/core/tracing';
 import type { ChannelType } from '@omni/core/types';
 import type {
   EmitMediaReceivedParams,
@@ -228,6 +229,83 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Journey Timing Helpers
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Normalize a platform timestamp to Unix milliseconds (T0).
+   *
+   * Platform normalization:
+   * - WhatsApp: `messageTimestamp` is seconds since epoch → × 1000
+   * - Discord: `message.createdTimestamp` is already milliseconds → no conversion
+   * - Telegram: `message.date` is seconds since epoch → × 1000
+   *
+   * @param platformTimestamp - Raw timestamp from the platform
+   * @param isSeconds - Whether the timestamp is in seconds (true for WhatsApp/Telegram)
+   * @returns Unix milliseconds timestamp
+   */
+  protected captureT0(platformTimestamp: number, isSeconds = false): number {
+    return isSeconds ? platformTimestamp * 1000 : platformTimestamp;
+  }
+
+  /**
+   * Build a timings map with T0 and T1 checkpoints for inbound messages.
+   * Checks sampling rate — returns undefined if this message should not be tracked.
+   *
+   * @param platformTimestamp - Normalized T0 timestamp (Unix ms)
+   * @returns Timings map with platformReceivedAt and pluginReceivedAt, or undefined if not sampled
+   */
+  protected captureInboundTimings(platformTimestamp: number): Record<string, number> | undefined {
+    const tracker = getJourneyTracker();
+    if (!tracker.shouldSample()) return undefined;
+
+    return {
+      [JOURNEY_STAGES.T0]: platformTimestamp,
+      [JOURNEY_STAGES.T1]: Date.now(),
+    };
+  }
+
+  /**
+   * Record T2 (eventPublishedAt) after event emission completes.
+   * Records all inbound checkpoints (T0, T1, T2) with the journey tracker.
+   */
+  protected captureT2(correlationId: string, timings: Record<string, number>): void {
+    const t2 = Date.now();
+    const tracker = getJourneyTracker();
+
+    // Record all inbound checkpoints with the tracker
+    const t0 = timings[JOURNEY_STAGES.T0];
+    const t1 = timings[JOURNEY_STAGES.T1];
+    if (t0 != null) tracker.recordCheckpoint(correlationId, 'T0', JOURNEY_STAGES.T0, t0);
+    if (t1 != null) tracker.recordCheckpoint(correlationId, 'T1', JOURNEY_STAGES.T1, t1);
+    tracker.recordCheckpoint(correlationId, 'T2', JOURNEY_STAGES.T2, t2);
+  }
+
+  /**
+   * Record T10 (pluginSentAt) before sending to the platform.
+   */
+  protected captureT10(correlationId: string): number {
+    const t10 = Date.now();
+    const tracker = getJourneyTracker();
+    if (tracker.isTracking(correlationId)) {
+      tracker.recordCheckpoint(correlationId, 'T10', JOURNEY_STAGES.T10, t10);
+    }
+    return t10;
+  }
+
+  /**
+   * Record T11 (platformDeliveredAt) after platform confirms delivery.
+   */
+  protected captureT11(correlationId: string): number {
+    const t11 = Date.now();
+    const tracker = getJourneyTracker();
+    if (tracker.isTracking(correlationId)) {
+      tracker.recordCheckpoint(correlationId, 'T11', JOURNEY_STAGES.T11, t11);
+    }
+    return t11;
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Event Emission Helpers
   // ─────────────────────────────────────────────────────────────
 
@@ -243,8 +321,9 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    *   content: { type: 'text', text: 'Hello!' },
    * });
    */
-  protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<void> {
+  protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<string> {
     const _subject = buildSubject('message.received', this.id, params.instanceId);
+    const correlationId = generateCorrelationId('evt');
 
     await this.eventBus.publish(
       'message.received',
@@ -257,15 +336,17 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         rawPayload: params.rawPayload,
       },
       {
-        correlationId: generateCorrelationId('evt'),
+        correlationId,
         instanceId: params.instanceId,
         channelType: this.id,
         source: `channel:${this.id}`,
+        timings: params.timings,
       },
     );
 
     this.instances.recordActivity(params.instanceId);
     this.logger.debug('Emitted message.received', { instanceId: params.instanceId, externalId: params.externalId });
+    return correlationId;
   }
 
   /**

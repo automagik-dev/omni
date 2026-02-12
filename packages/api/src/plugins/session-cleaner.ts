@@ -82,7 +82,7 @@ async function clearAgentSession(
   }
 
   // Fallback: direct AgnoOS client
-  if (providerRecord.schema !== 'agnoos' && providerRecord.schema !== 'agno') {
+  if (providerRecord.schema !== 'agno') {
     throw new Error(`Session clearing not supported for ${providerRecord.schema} providers`);
   }
 
@@ -92,7 +92,7 @@ async function clearAgentSession(
     defaultTimeoutMs: (providerRecord.defaultTimeout ?? 60) * 1000,
   });
 
-  await client.deleteSession(sessionId);
+  await client.deleteSession?.(sessionId);
 
   return { sessionId, sessionStrategy };
 }

@@ -1,23 +1,23 @@
 /**
- * AgnoAgentProvider — wraps existing IAgnoClient as a unified AgentProvider
+ * AgnoAgentProvider — wraps IAgentClient as a unified AgentProvider
  *
  * This adapter maintains backward compatibility with the existing Agno integration
  * while conforming to the new AgentProvider interface for multi-provider dispatch.
  */
 
 import { createLogger } from '../logger';
-import type { AgentTrigger, AgentTriggerResult, IAgentProvider, IAgnoClient, ProviderRequest } from './types';
+import type { AgentTrigger, AgentTriggerResult, IAgentClient, IAgentProvider, ProviderRequest } from './types';
 
 const log = createLogger('provider:agno');
 
 export class AgnoAgentProvider implements IAgentProvider {
-  readonly schema = 'agnoos' as const;
+  readonly schema = 'agno' as const;
   readonly mode = 'round-trip' as const;
 
   constructor(
     readonly id: string,
     readonly name: string,
-    private client: IAgnoClient,
+    private client: IAgentClient,
     private config: {
       agentId: string;
       agentType: 'agent' | 'team' | 'workflow';
@@ -63,6 +63,8 @@ export class AgnoAgentProvider implements IAgentProvider {
 
     const request: ProviderRequest = {
       message,
+      agentId: this.config.agentId,
+      agentType: this.config.agentType,
       stream: false,
       sessionId: context.sessionId,
       userId: context.sender.platformUserId,
@@ -76,8 +78,8 @@ export class AgnoAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
-    // Call the appropriate Agno endpoint based on agent type
-    const response = await this.callAgent(request);
+    // Call the provider — client routes internally by agentType
+    const response = await this.client.run(request);
 
     // Split response if enabled
     const parts =
@@ -116,16 +118,5 @@ export class AgnoAgentProvider implements IAgentProvider {
 
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
     return this.client.checkHealth();
-  }
-
-  private async callAgent(request: ProviderRequest) {
-    switch (this.config.agentType) {
-      case 'team':
-        return this.client.runTeam(this.config.agentId, request);
-      case 'workflow':
-        return this.client.runWorkflow(this.config.agentId, request);
-      default:
-        return this.client.runAgent(this.config.agentId, request);
-    }
   }
 }

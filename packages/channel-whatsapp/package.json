@@ -17,6 +17,7 @@
     "@hapi/boom": "^10.0.1",
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
+    "audio-decode": "workspace:*",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "node-cache": "^5.1.2",
     "pino": "^9.6.0"

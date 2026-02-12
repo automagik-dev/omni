@@ -63,3 +63,6 @@ export * from './providers';
 
 // Cache
 export * from './cache';
+
+// Tracing
+export * from './tracing';

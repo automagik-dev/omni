@@ -37,7 +37,7 @@ import { join } from 'node:path';
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
-import { ERROR_CODES, OmniError, createLogger } from '@omni/core';
+import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -806,6 +806,13 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
+  // T7: Agent response arrives at API — record journey checkpoint
+  const correlationId = c.req.header('x-correlation-id');
+  const tracker = getJourneyTracker();
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
+  }
+
   const { instance, plugin } = await getPluginForInstance(
     services,
     c.get('channelRegistry'),
@@ -824,8 +831,18 @@ messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
     metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
   };
 
+  // T8: API processed the send request
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+  }
+
   const result = await plugin.sendMessage(instanceId, outgoingMessage);
   handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send message' });
+
+  // T9: Outbound event published (plugin.sendMessage publishes message.sent to NATS)
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+  }
 
   return c.json(
     {
@@ -850,6 +867,13 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), data.instanceId);
+
+  // T7: Agent response arrives at API — record journey checkpoint
+  const correlationId = c.req.header('x-correlation-id');
+  const tracker = getJourneyTracker();
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
+  }
 
   // Verify instance exists
   const instance = await services.instances.getById(data.instanceId);
@@ -907,6 +931,11 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
     },
   };
 
+  // T8: API processed the send request
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+  }
+
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
@@ -923,6 +952,11 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       },
       recoverable: result.retryable ?? false,
     });
+  }
+
+  // T9: Outbound event published
+  if (correlationId && tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
   }
 
   return c.json(

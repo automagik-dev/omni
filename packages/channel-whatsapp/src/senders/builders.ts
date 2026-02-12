@@ -122,6 +122,11 @@ const buildImage: ContentBuilder = (message) => {
  *
  * Supports URL, buffer (for converted audio), and base64.
  * Priority: audioBuffer > base64 > URL
+ *
+ * For PTT (voice notes), Baileys automatically generates waveform and duration
+ * via its audio processing pipeline (music-metadata for duration, audio-decode
+ * for waveform). We provide a workspace audio-decode shim (ffmpeg-based) since
+ * the npm audio-decode package crashes in Bun.
  */
 const buildAudio: ContentBuilder = (message) => {
   const isPtt = message.content.mimeType?.includes('ogg') || (message.metadata?.ptt as boolean) === true;
@@ -138,6 +143,9 @@ const buildAudio: ContentBuilder = (message) => {
     audioSource = { url: message.content.mediaUrl || '' };
   }
 
+  // Don't set `seconds` — Baileys needs it undefined so it saves the original
+  // file to disk, which is then used for both duration (music-metadata) and
+  // waveform (audio-decode shim via ffmpeg) computation.
   return {
     audio: audioSource,
     mimetype: message.content.mimeType || 'audio/ogg; codecs=opus',

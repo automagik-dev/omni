@@ -1,16 +1,18 @@
 /**
  * Agno API Client
  *
- * Implements the IAgnoClient interface for running agents, teams, and workflows
+ * Implements the IAgentClient interface for running agents, teams, and workflows
  * with both sync and streaming support.
  */
 
 import {
+  type AgentDiscoveryEntry,
+  type AgentHealthResult,
   type AgnoAgent,
   type AgnoClientConfig,
   type AgnoTeam,
   type AgnoWorkflow,
-  type IAgnoClient,
+  type IAgentClient,
   ProviderError,
   type ProviderRequest,
   type ProviderResponse,
@@ -19,7 +21,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-export class AgnoClient implements IAgnoClient {
+export class AgnoClient implements IAgentClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly defaultTimeoutMs: number;
@@ -76,7 +78,63 @@ export class AgnoClient implements IAgnoClient {
     throw new ProviderError(`Request failed: ${context}`, 'SERVER_ERROR', statusCode);
   }
 
-  // --- List Endpoints ---
+  // --- IAgentClient interface ---
+
+  async run(request: ProviderRequest): Promise<ProviderResponse> {
+    const endpoint = this.agentTypeToEndpoint(request.agentType);
+    return this.runEndpoint(endpoint, request.agentId, request);
+  }
+
+  async *stream(request: ProviderRequest): AsyncGenerator<StreamChunk> {
+    const endpoint = this.agentTypeToEndpoint(request.agentType);
+    yield* this.streamEndpoint(endpoint, request.agentId, request);
+  }
+
+  async discover(): Promise<AgentDiscoveryEntry[]> {
+    const [agents, teams, workflows] = await Promise.all([
+      this.listAgents().catch(() => [] as AgnoAgent[]),
+      this.listTeams().catch(() => [] as AgnoTeam[]),
+      this.listWorkflows().catch(() => [] as AgnoWorkflow[]),
+    ]);
+
+    const entries: AgentDiscoveryEntry[] = [
+      ...agents.map((a) => ({
+        id: a.agent_id,
+        name: a.name,
+        type: 'agent' as const,
+        description: a.description,
+        metadata: a.model ? { model: a.model } : undefined,
+      })),
+      ...teams.map((t) => ({
+        id: t.team_id,
+        name: t.name,
+        type: 'team' as const,
+        description: t.description,
+        metadata: t.mode ? { mode: t.mode, memberCount: t.members?.length } : undefined,
+      })),
+      ...workflows.map((w) => ({
+        id: w.workflow_id,
+        name: w.name,
+        type: 'workflow' as const,
+        description: w.description,
+      })),
+    ];
+
+    return entries;
+  }
+
+  private agentTypeToEndpoint(agentType?: string): 'agents' | 'teams' | 'workflows' {
+    switch (agentType) {
+      case 'team':
+        return 'teams';
+      case 'workflow':
+        return 'workflows';
+      default:
+        return 'agents';
+    }
+  }
+
+  // --- List Endpoints (used internally by discover()) ---
 
   async listAgents(): Promise<AgnoAgent[]> {
     const url = `${this.baseUrl}/agents`;
@@ -377,7 +435,7 @@ export class AgnoClient implements IAgnoClient {
 
   // --- Health Check ---
 
-  async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
+  async checkHealth(): Promise<AgentHealthResult> {
     const start = Date.now();
 
     try {
@@ -427,6 +485,6 @@ export class AgnoClient implements IAgnoClient {
 /**
  * Create an Agno client instance
  */
-export function createAgnoClient(config: AgnoClientConfig): IAgnoClient {
+export function createAgnoClient(config: AgnoClientConfig): IAgentClient {
   return new AgnoClient(config);
 }

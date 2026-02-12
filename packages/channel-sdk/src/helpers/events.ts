@@ -37,6 +37,9 @@ export interface EmitMessageReceivedParams {
 
   /** Raw payload from the platform (for debugging) */
   rawPayload?: Record<string, unknown>;
+
+  /** Journey timing checkpoints (T0, T1, etc.) to include in event metadata */
+  timings?: Record<string, number>;
 }
 
 /**

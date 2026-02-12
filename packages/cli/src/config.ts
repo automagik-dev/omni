@@ -153,8 +153,19 @@ export function isValidConfigKey(key: string): key is ConfigKey {
   return key in CONFIG_KEYS;
 }
 
-/** Get output format based on precedence: ENV > Config > TTY */
+/** Set runtime format override (e.g., from --json flag) */
+export function setRuntimeFormat(format: 'human' | 'json'): void {
+  process.env.__OMNI_RUNTIME_FORMAT = format;
+}
+
+/** Get output format based on precedence: --json flag > ENV > Config > TTY */
 export function getOutputFormat(): 'human' | 'json' {
+  // 0. Runtime override (--json flag) — uses process.env to avoid bundler module duplication
+  const runtimeFormat = process.env.__OMNI_RUNTIME_FORMAT;
+  if (runtimeFormat === 'human' || runtimeFormat === 'json') {
+    return runtimeFormat;
+  }
+
   // 1. Environment variable
   const envFormat = process.env.OMNI_FORMAT;
   if (envFormat === 'human' || envFormat === 'json') {

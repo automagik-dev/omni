@@ -18,10 +18,18 @@ const listQuerySchema = z.object({
 // Create provider schema
 const createProviderSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique provider name'),
-  schema: ProviderSchemaEnum.default('agnoos').describe('Provider schema type'),
+  schema: ProviderSchemaEnum.default('agno').describe('Provider schema type'),
   baseUrl: z.string().url().describe('Base URL for provider API'),
   apiKey: z.string().optional().describe('API key (stored encrypted)'),
-  schemaConfig: z.record(z.string(), z.unknown()).optional().describe('Schema-specific configuration'),
+  schemaConfig: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      'Schema-specific config. Required fields by schema: ' +
+        'agno: { agentId }, openclaw: { defaultAgentId }, ' +
+        'claude-code: { projectPath, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
+        'webhook: { mode?, retries? }',
+    ),
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
   defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
   supportsStreaming: z.boolean().default(true).describe('Provider supports streaming'),
@@ -145,8 +153,8 @@ providersRoutes.get('/:id/agents', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Agent listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Agent listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {
@@ -159,13 +167,14 @@ providersRoutes.get('/:id/agents', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const agents = await client.listAgents();
+  const allEntries = (await client.discover?.()) ?? [];
+  const agents = allEntries.filter((e) => e.type === 'agent');
 
   return c.json({ items: agents });
 });
 
 /**
- * GET /providers/:id/teams - List teams from provider (AgnoOS only)
+ * GET /providers/:id/teams - List teams from provider (Agno only)
  */
 providersRoutes.get('/:id/teams', async (c) => {
   const id = c.req.param('id');
@@ -173,8 +182,8 @@ providersRoutes.get('/:id/teams', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Team listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Team listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {
@@ -187,13 +196,14 @@ providersRoutes.get('/:id/teams', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const teams = await client.listTeams();
+  const allEntries = (await client.discover?.()) ?? [];
+  const teams = allEntries.filter((e) => e.type === 'team');
 
   return c.json({ items: teams });
 });
 
 /**
- * GET /providers/:id/workflows - List workflows from provider (AgnoOS only)
+ * GET /providers/:id/workflows - List workflows from provider (Agno only)
  */
 providersRoutes.get('/:id/workflows', async (c) => {
   const id = c.req.param('id');
@@ -201,8 +211,8 @@ providersRoutes.get('/:id/workflows', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Workflow listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Workflow listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {
@@ -215,7 +225,8 @@ providersRoutes.get('/:id/workflows', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const workflows = await client.listWorkflows();
+  const allEntries = (await client.discover?.()) ?? [];
+  const workflows = allEntries.filter((e) => e.type === 'workflow');
 
   return c.json({ items: workflows });
 });

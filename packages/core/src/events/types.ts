@@ -125,6 +125,21 @@ export interface EventMetadata {
   source?: string;
   /** NATS stream sequence number (set by subscription handler, not by publisher) */
   streamSequence?: number;
+  /** Journey timing checkpoints: checkpoint name → Unix ms timestamp */
+  timings?: Record<string, number>;
+}
+
+/**
+ * Add a timing checkpoint to event metadata (immutable — returns new metadata)
+ */
+export function withTiming(metadata: EventMetadata, checkpoint: string, timestamp: number = Date.now()): EventMetadata {
+  return {
+    ...metadata,
+    timings: {
+      ...metadata.timings,
+      [checkpoint]: timestamp,
+    },
+  };
 }
 
 /**

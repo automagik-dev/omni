@@ -1748,6 +1748,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/journeys/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregated journey metrics
+         * @description Get aggregated latency metrics across all tracked message journeys.
+         */
+        get: operations["getJourneySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/journeys/{correlationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get journey by correlation ID
+         * @description Retrieve a specific message journey timeline with all checkpoints and calculated latencies.
+         */
+        get: operations["getJourney"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3018,7 +3058,7 @@ export interface components {
              * @description Provider schema type
              * @enum {string}
              */
-            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
             /**
              * Format: uri
              * @description Base URL
@@ -3067,7 +3107,7 @@ export interface components {
              * @default agnoos
              * @enum {string}
              */
-            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
             /**
              * Format: uri
              * @description Base URL
@@ -3746,6 +3786,107 @@ export interface components {
              * @description Oldest payload date
              */
             oldestPayload: string | null;
+        };
+        JourneyCheckpoint: {
+            /** @description Checkpoint name (e.g., platformReceivedAt) */
+            name: string;
+            /** @description Stage key (e.g., T0, T1) */
+            stage: string;
+            /** @description Unix millisecond timestamp */
+            timestamp: number;
+        };
+        Journey: {
+            /** @description Event correlation ID */
+            correlationId: string;
+            /** @description Ordered list of journey checkpoints */
+            checkpoints: {
+                /** @description Checkpoint name (e.g., platformReceivedAt) */
+                name: string;
+                /** @description Stage key (e.g., T0, T1) */
+                stage: string;
+                /** @description Unix millisecond timestamp */
+                timestamp: number;
+            }[];
+            /** @description Journey start timestamp (Unix ms) */
+            startedAt: number;
+            /** @description Journey completion timestamp (Unix ms) */
+            completedAt?: number;
+            /** @description Calculated latencies between stages */
+            latencies: {
+                /** @description T1 - T0 (ms) */
+                channelProcessing?: number;
+                /** @description T2 - T1 (ms) */
+                eventPublish?: number;
+                /** @description T3 - T2 (ms) */
+                natsDelivery?: number;
+                /** @description T4 - T3 (ms) */
+                dbWrite?: number;
+                /** @description T5 - T4 (ms) */
+                agentNotification?: number;
+                /** @description T5 - T0 (ms) */
+                totalInbound?: number;
+                /** @description T7 - T5 (ms) */
+                agentRoundTrip?: number;
+                /** @description T8 - T7 (ms) */
+                apiProcessing?: number;
+                /** @description T9 - T8 (ms) */
+                outboundEventPublish?: number;
+                /** @description T10 - T9 (ms) */
+                outboundNatsDelivery?: number;
+                /** @description T11 - T10 (ms) */
+                platformSend?: number;
+                /** @description T11 - T7 (ms) */
+                totalOutbound?: number;
+                /** @description T11 - T0 (ms) */
+                totalRoundTrip?: number;
+                /** @description (T5-T0) + (T11-T7) (ms) */
+                omniProcessing?: number;
+            };
+        };
+        JourneySummary: {
+            /** @description Total tracked journeys */
+            totalTracked: number;
+            /** @description Completed journeys */
+            completedJourneys: number;
+            /** @description Currently active journeys */
+            activeJourneys: number;
+            /** @description Percentile stats per latency stage */
+            stages: {
+                [key: string]: {
+                    /** @description Number of samples */
+                    count: number;
+                    /** @description Average (ms) */
+                    avg: number;
+                    /** @description Minimum (ms) */
+                    min: number;
+                    /** @description Maximum (ms) */
+                    max: number;
+                    /** @description 50th percentile (ms) */
+                    p50: number;
+                    /** @description 95th percentile (ms) */
+                    p95: number;
+                    /** @description 99th percentile (ms) */
+                    p99: number;
+                };
+            };
+            /** @description Filter timestamp (0 = all time) */
+            since: number;
+        };
+        PercentileStats: {
+            /** @description Number of samples */
+            count: number;
+            /** @description Average (ms) */
+            avg: number;
+            /** @description Minimum (ms) */
+            min: number;
+            /** @description Maximum (ms) */
+            max: number;
+            /** @description 50th percentile (ms) */
+            p50: number;
+            /** @description 95th percentile (ms) */
+            p95: number;
+            /** @description 99th percentile (ms) */
+            p99: number;
         };
     };
     responses: never;
@@ -8974,7 +9115,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9037,7 +9178,7 @@ export interface operations {
                      * @default agnoos
                      * @enum {string}
                      */
-                    schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9106,7 +9247,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9203,7 +9344,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9337,7 +9478,7 @@ export interface operations {
                      * @default agnoos
                      * @enum {string}
                      */
-                    schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9406,7 +9547,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -12508,6 +12649,141 @@ export interface operations {
                              * @description Oldest payload date
                              */
                             oldestPayload: string | null;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getJourneySummary: {
+        parameters: {
+            query?: {
+                /** @description Filter by time: relative duration (1h, 30m, 24h) or ISO datetime */
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Journey summary with percentile stats per stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Total tracked journeys */
+                        totalTracked: number;
+                        /** @description Completed journeys */
+                        completedJourneys: number;
+                        /** @description Currently active journeys */
+                        activeJourneys: number;
+                        /** @description Percentile stats per latency stage */
+                        stages: {
+                            [key: string]: {
+                                /** @description Number of samples */
+                                count: number;
+                                /** @description Average (ms) */
+                                avg: number;
+                                /** @description Minimum (ms) */
+                                min: number;
+                                /** @description Maximum (ms) */
+                                max: number;
+                                /** @description 50th percentile (ms) */
+                                p50: number;
+                                /** @description 95th percentile (ms) */
+                                p95: number;
+                                /** @description 99th percentile (ms) */
+                                p99: number;
+                            };
+                        };
+                        /** @description Filter timestamp (0 = all time) */
+                        since: number;
+                    };
+                };
+            };
+        };
+    };
+    getJourney: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Event correlation ID */
+                correlationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Journey timeline with checkpoints and latencies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Event correlation ID */
+                        correlationId: string;
+                        /** @description Ordered list of journey checkpoints */
+                        checkpoints: {
+                            /** @description Checkpoint name (e.g., platformReceivedAt) */
+                            name: string;
+                            /** @description Stage key (e.g., T0, T1) */
+                            stage: string;
+                            /** @description Unix millisecond timestamp */
+                            timestamp: number;
+                        }[];
+                        /** @description Journey start timestamp (Unix ms) */
+                        startedAt: number;
+                        /** @description Journey completion timestamp (Unix ms) */
+                        completedAt?: number;
+                        /** @description Calculated latencies between stages */
+                        latencies: {
+                            /** @description T1 - T0 (ms) */
+                            channelProcessing?: number;
+                            /** @description T2 - T1 (ms) */
+                            eventPublish?: number;
+                            /** @description T3 - T2 (ms) */
+                            natsDelivery?: number;
+                            /** @description T4 - T3 (ms) */
+                            dbWrite?: number;
+                            /** @description T5 - T4 (ms) */
+                            agentNotification?: number;
+                            /** @description T5 - T0 (ms) */
+                            totalInbound?: number;
+                            /** @description T7 - T5 (ms) */
+                            agentRoundTrip?: number;
+                            /** @description T8 - T7 (ms) */
+                            apiProcessing?: number;
+                            /** @description T9 - T8 (ms) */
+                            outboundEventPublish?: number;
+                            /** @description T10 - T9 (ms) */
+                            outboundNatsDelivery?: number;
+                            /** @description T11 - T10 (ms) */
+                            platformSend?: number;
+                            /** @description T11 - T7 (ms) */
+                            totalOutbound?: number;
+                            /** @description T11 - T0 (ms) */
+                            totalRoundTrip?: number;
+                            /** @description (T5-T0) + (T11-T7) (ms) */
+                            omniProcessing?: number;
+                        };
+                    };
+                };
+            };
+            /** @description Journey not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
                         };
                     };
                 };

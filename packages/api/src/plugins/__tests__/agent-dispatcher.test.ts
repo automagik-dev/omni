@@ -39,7 +39,7 @@ mock.module('../loader', () => ({
 mock.module('@omni/core', () => {
   // We need to provide the class constructors for agent providers
   class MockAgnoAgentProvider {
-    readonly schema = 'agnoos' as const;
+    readonly schema = 'agno' as const;
     readonly mode = 'round-trip' as const;
     constructor(
       readonly id: string,

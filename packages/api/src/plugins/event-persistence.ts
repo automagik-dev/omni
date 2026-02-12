@@ -6,10 +6,11 @@
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { JOURNEY_STAGES, createLogger, getJourneyTracker } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, contentTypes, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
 
@@ -57,6 +58,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
+        // T3: Event consumed from NATS — record journey checkpoint
+        const t3 = Date.now();
+        if (metadata.timings && metadata.correlationId) {
+          const tracker = getJourneyTracker();
+          tracker.recordCheckpoint(metadata.correlationId, 'T3', JOURNEY_STAGES.T3, t3);
+        }
+
         try {
           const newEvent: NewOmniEvent = {
             externalId: payload.externalId,
@@ -67,14 +75,14 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             eventType: 'message.received',
             direction: 'inbound',
             contentType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             mediaUrl: payload.content.mediaUrl,
             mediaMimeType: payload.content.mimeType,
             chatId: payload.chatId,
             replyToExternalId: payload.replyToId,
             status: 'received',
             receivedAt: new Date(event.timestamp),
-            rawPayload: payload.rawPayload,
+            rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
             metadata: {
               correlationId: metadata.correlationId,
               from: payload.from,
@@ -82,6 +90,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           };
 
           await db.insert(omniEvents).values(newEvent);
+
+          // T4: Message stored in database — record journey checkpoint
+          if (metadata.timings && metadata.correlationId) {
+            const tracker = getJourneyTracker();
+            tracker.recordCheckpoint(metadata.correlationId, 'T4', JOURNEY_STAGES.T4);
+          }
+
           log.debug('Persisted message.received', {
             externalId: payload.externalId,
             instanceId: metadata.instanceId,
@@ -113,7 +128,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             eventType: 'message.sent',
             direction: 'outbound',
             contentType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             mediaUrl: payload.content.mediaUrl,
             chatId: payload.chatId,
             replyToExternalId: payload.replyToId,

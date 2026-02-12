@@ -297,9 +297,9 @@ export class MessageService {
    */
   async getChatMessages(
     chatId: string,
-    options: { limit?: number; before?: Date; after?: Date } = {},
+    options: { limit?: number; before?: Date; after?: Date; mediaOnly?: boolean } = {},
   ): Promise<Message[]> {
-    const { limit = 100, before, after } = options;
+    const { limit = 100, before, after, mediaOnly } = options;
     const conditions = [eq(messages.chatId, chatId), sql`${messages.deletedAt} IS NULL`];
 
     if (before) {
@@ -308,6 +308,10 @@ export class MessageService {
 
     if (after) {
       conditions.push(gte(messages.platformTimestamp, after));
+    }
+
+    if (mediaOnly) {
+      conditions.push(eq(messages.hasMedia, true));
     }
 
     return this.db
@@ -401,8 +405,7 @@ export class MessageService {
         lastMessageAt: options.platformTimestamp,
         lastMessagePreview: preview,
         messageCount: sql`${chats.messageCount} + 1`,
-        // Incoming: increment unread; Sent: reset unread (sending implies reading)
-        ...(options.isFromMe ? { unreadCount: 0 } : { unreadCount: sql`${chats.unreadCount} + 1` }),
+        // Unread count is managed by platform-native events (chat.unread-updated)
         updatedAt: new Date(),
       })
       .where(eq(chats.id, options.chatId));

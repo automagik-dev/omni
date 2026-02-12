@@ -30,6 +30,7 @@ import { registerEventOpsSchemas } from '../schemas/openapi/event-ops';
 import { registerEventSchemas } from '../schemas/openapi/events';
 import { registerHealthSchemas } from '../schemas/openapi/health';
 import { registerInstanceSchemas } from '../schemas/openapi/instances';
+import { registerJourneySchemas } from '../schemas/openapi/journeys';
 import { registerLogSchemas } from '../schemas/openapi/logs';
 import { registerMessageSchemas } from '../schemas/openapi/messages';
 import { registerMetricsSchemas } from '../schemas/openapi/metrics';
@@ -57,6 +58,7 @@ registerEventOpsSchemas(registry);
 registerMetricsSchemas(registry);
 registerAutomationSchemas(registry);
 registerPayloadSchemas(registry);
+registerJourneySchemas(registry);
 
 const openapiRoutes = new Hono<{ Variables: AppVariables }>();
 

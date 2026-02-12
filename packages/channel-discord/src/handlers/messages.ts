@@ -240,6 +240,7 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     },
     replyToId,
     extendedPayload,
+    message.createdTimestamp, // T0: Discord timestamps are already in milliseconds
   );
 }
 

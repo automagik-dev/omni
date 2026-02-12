@@ -27,6 +27,10 @@
       "types": "./src/schemas/index.ts",
       "default": "./src/schemas/index.ts"
     },
+    "./tracing": {
+      "types": "./src/tracing/index.ts",
+      "default": "./src/tracing/index.ts"
+    },
     "./types": {
       "types": "./src/types/index.ts",
       "default": "./src/types/index.ts"
@@ -37,6 +41,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.39",
     "croner": "^9.1.0",
     "nats": "^2.29.3",
     "prom-client": "^15.1.3",

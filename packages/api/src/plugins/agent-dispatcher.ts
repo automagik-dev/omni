@@ -22,8 +22,10 @@ import {
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
+  ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
+  JOURNEY_STAGES,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
   OpenClawClient,
@@ -35,6 +37,7 @@ import {
   createLogger,
   createProviderClient,
   generateCorrelationId,
+  getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
@@ -67,6 +70,10 @@ interface DispatchMetadata {
   personId?: string;
   platformIdentityId?: string;
   traceId: string;
+  /** Original NATS event correlationId for journey tracking */
+  correlationId?: string;
+  /** Whether this message is being journey-tracked (has timings) */
+  journeyTracked?: boolean;
 }
 
 interface DebounceConfig {
@@ -1148,6 +1155,44 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
   });
 }
 
+/** Create a Claude Code agent provider */
+function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const projectPath = schemaConfig.projectPath as string;
+
+  if (!projectPath) {
+    log.error('Claude Code provider missing projectPath', { providerId: provider.id });
+    throw new Error('Claude Code provider requires schemaConfig.projectPath');
+  }
+
+  return new ClaudeCodeAgentProvider(
+    provider.id,
+    provider.name,
+    {
+      projectPath,
+      apiKey: provider.apiKey ?? undefined,
+      allowedTools: schemaConfig.allowedTools as string[] | undefined,
+      permissionMode: schemaConfig.permissionMode as string | undefined as
+        | 'default'
+        | 'acceptEdits'
+        | 'bypassPermissions'
+        | 'plan'
+        | undefined,
+      model: schemaConfig.model as string | undefined,
+      systemPrompt: schemaConfig.systemPrompt as string | undefined,
+      mcpServers: schemaConfig.mcpServers as
+        | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
+        | undefined,
+      maxTurns: schemaConfig.maxTurns as number | undefined,
+    },
+    {
+      timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+      enableAutoSplit: instance.enableAutoSplit ?? true,
+      prefixSenderName: instance.agentPrefixSenderName ?? true,
+    },
+  );
+}
+
 /** Create a webhook-based agent provider */
 function createWebhookProvider(provider: AgentProvider): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -1175,7 +1220,6 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
   let agentProvider: IAgentProvider | null = null;
 
   switch (provider.schema) {
-    case 'agnoos':
     case 'agno':
       agentProvider = createAgnoProvider(provider, instance);
       break;
@@ -1184,6 +1228,9 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
       break;
     case 'openclaw':
       agentProvider = createOpenClawProviderInstance(provider, instance);
+      break;
+    case 'claude-code':
+      agentProvider = createClaudeCodeProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -1690,6 +1737,12 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
       }
     }
 
+    // T5: Agent notified — record journey checkpoint
+    if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
+      const tracker = getJourneyTracker();
+      tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
+    }
+
     await processAgentResponse(services, instance, messages, triggerType);
   });
 
@@ -1734,6 +1787,8 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                correlationId: metadata.correlationId,
+                journeyTracked: metadata.timings != null,
               },
               timestamp: event.timestamp,
             },

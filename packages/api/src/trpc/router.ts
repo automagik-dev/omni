@@ -331,9 +331,10 @@ export const appRouter = t.router({
       .input(
         z.object({
           name: z.string().min(1).max(255),
-          schema: ProviderSchemaEnum.default('agnoos'),
+          schema: ProviderSchemaEnum.default('agno'),
           baseUrl: z.string().url(),
           apiKey: z.string().optional(),
+          schemaConfig: z.record(z.string(), z.unknown()).optional(),
           defaultStream: z.boolean().default(true),
           defaultTimeout: z.number().int().positive().default(60),
         }),

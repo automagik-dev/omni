@@ -26,6 +26,7 @@ interface LsOptions {
   limit?: number;
   remoteOnly?: boolean;
   cachedOnly?: boolean;
+  full?: boolean;
 }
 
 interface DownloadOptions {
@@ -44,6 +45,11 @@ interface MediaMessage {
   mediaUrl?: string | null;
   senderDisplayName?: string | null;
   instanceId?: string | null;
+  transcription?: string | null;
+  imageDescription?: string | null;
+  videoDescription?: string | null;
+  documentExtraction?: string | null;
+  messageType?: string;
 }
 
 interface MessagesResponse {
@@ -160,6 +166,22 @@ function formatTimestamp(ts: string | null | undefined): string {
   });
 }
 
+/** Get media processing content (transcription/description) */
+function getMediaContent(msg: MediaMessage): string | null {
+  if (msg.transcription) return msg.transcription;
+  if (msg.imageDescription) return msg.imageDescription;
+  if (msg.videoDescription) return msg.videoDescription;
+  if (msg.documentExtraction) return msg.documentExtraction;
+  return null;
+}
+
+/** Truncate text with ellipsis */
+function truncateText(text: string | null | undefined, maxLen: number): string {
+  if (!text) return '-';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 3)}...`;
+}
+
 /** Apply client-side filters (type, remote/cached) to messages */
 function applyFilters(items: MediaMessage[], options: LsOptions): MediaMessage[] {
   let result = items;
@@ -210,14 +232,19 @@ async function handleLs(options: LsOptions): Promise<void> {
   }
 
   // Format for table display
-  const rows = items.map((msg) => ({
-    id: msg.id.slice(0, 8),
-    chat: msg.chatName ?? msg.chatId?.slice(0, 8) ?? '-',
-    timestamp: formatTimestamp(msg.platformTimestamp),
-    mimeType: msg.mediaMimeType ?? '-',
-    status: isCached(msg) ? 'cached' : 'remote',
-    sender: msg.senderDisplayName ?? '-',
-  }));
+  const maxContentLen = options.full ? 0 : 50;
+  const rows = items.map((msg) => {
+    const content = getMediaContent(msg);
+    return {
+      id: msg.id.slice(0, 8),
+      chat: msg.chatName ?? msg.chatId?.slice(0, 8) ?? '-',
+      timestamp: formatTimestamp(msg.platformTimestamp),
+      type: msg.messageType ?? 'media',
+      status: isCached(msg) ? 'cached' : 'remote',
+      sender: msg.senderDisplayName ?? '-',
+      content: content ? (maxContentLen > 0 ? truncateText(content, maxContentLen) : content) : '-',
+    };
+  });
 
   output.list(rows);
 }
@@ -242,7 +269,8 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
   }
 
   const body = buildMessageRef(options);
-  const result = (await apiCall('messages/media/download', 'POST', body)) as DownloadResponse;
+  const response = (await apiCall('messages/media/download', 'POST', body)) as { data: DownloadResponse };
+  const result = response.data;
 
   output.success(`Downloaded: ${result.mediaMimeType}`);
   output.info(`Local path: ${result.mediaLocalPath}`);
@@ -260,7 +288,7 @@ export function createMediaCommand(): Command {
   // omni media ls
   media
     .command('ls')
-    .description('List media items (metadata only, no download)')
+    .description('List media items with transcriptions/descriptions (use "omni messages get <id>" for full details)')
     .option('--instance <id>', 'Filter by instance UUID')
     .option('--chat <id>', 'Filter by chat UUID')
     .option('--since <datetime>', 'ISO datetime (e.g., 2026-01-01T00:00:00Z)')
@@ -269,6 +297,7 @@ export function createMediaCommand(): Command {
     .option('--limit <n>', 'Max results (default: 20, max: 100)', (v) => Number.parseInt(v, 10), 20)
     .option('--remote-only', 'Only show items not yet downloaded')
     .option('--cached-only', 'Only show items already downloaded')
+    .option('--full', 'Show full content without truncation')
     .action(async (options: LsOptions) => {
       try {
         await handleLs(options);

@@ -118,13 +118,21 @@ export function data(value: unknown): void {
   }
 }
 
-/** Output list of items */
-export function list<T>(items: T[], options?: { emptyMessage?: string }): void {
+/** Maximum cell width for table display (0 = unlimited) */
+let maxCellWidth = 50;
+
+/** Set max cell width for table rendering (0 = unlimited) */
+export function setMaxCellWidth(width: number): void {
+  maxCellWidth = width;
+}
+
+/** Output list of items. When rawData is provided, JSON mode outputs rawData instead of formatted items. */
+export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?: unknown[] }): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
     // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(items, null, 2));
+    console.log(JSON.stringify(options?.rawData ?? items, null, 2));
     return;
   }
 
@@ -194,7 +202,10 @@ function formatCellValue(value: unknown): string {
     return JSON.stringify(value);
   }
   const str = String(value);
-  return str.length > 50 ? `${str.slice(0, 47)}...` : str;
+  if (maxCellWidth > 0 && str.length > maxCellWidth) {
+    return `${str.slice(0, maxCellWidth - 3)}...`;
+  }
+  return str;
 }
 
 /** Print a single object's properties */

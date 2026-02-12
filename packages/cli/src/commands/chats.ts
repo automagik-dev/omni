@@ -301,7 +301,7 @@ function displayChatList(
       messages: c.messageCount ?? 0,
       archived: c.isArchived ? 'yes' : 'no',
     }));
-    output.list(items, { emptyMessage: 'No chats found.' });
+    output.list(items, { emptyMessage: 'No chats found.', rawData: chatItems });
   } else {
     const showInstance = !options.instance && instanceNames.size > 0;
     const items = chatItems.map((c) => {
@@ -317,7 +317,7 @@ function displayChatList(
       row.time = formatRelativeTime(c.lastMessageAt);
       return row;
     });
-    output.list(items, { emptyMessage: 'No chats found.' });
+    output.list(items, { emptyMessage: 'No chats found.', rawData: chatItems });
   }
 }
 
@@ -361,25 +361,14 @@ export function createChatsCommand(): Command {
             includeArchived: options.archived,
             limit: options.limit,
             chatType: options.type,
+            unreadOnly: options.unread || undefined,
+            sort: (options.sort as 'activity' | 'unread' | 'name') || undefined,
             // Filter out newsletters and broadcasts server-side (use --all to include)
             excludeChatTypes: options.all ? undefined : 'channel,broadcast',
           });
 
           // Cast to extended type to access additional fields
-          let chats = result.items as ExtendedChat[];
-
-          // Client-side filtering for --unread
-          if (options.unread) {
-            chats = chats.filter((c) => (c.unreadCount ?? 0) > 0);
-          }
-
-          // Client-side sorting
-          if (options.sort === 'unread') {
-            chats.sort((a, b) => (b.unreadCount ?? 0) - (a.unreadCount ?? 0));
-          } else if (options.sort === 'name') {
-            chats.sort((a, b) => formatChatName(a).localeCompare(formatChatName(b)));
-          }
-          // Default is 'activity' - already sorted by lastMessageAt from API
+          const chats = result.items as ExtendedChat[];
 
           // Build instance name lookup for multi-instance display
           const instanceNames = options.instance ? new Map<string, string>() : await buildInstanceNameMap(client);
@@ -677,14 +666,15 @@ export function createChatsCommand(): Command {
   // omni chats messages <id>
   chats
     .command('messages <id>')
-    .description('Get chat messages')
+    .description('List chat messages (use "omni messages get <id>" for full single message)')
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
-    .option('--rich', 'Show rich format with transcriptions/descriptions')
+    .option('--compact', 'Show compact format (minimal fields, no transcriptions)')
     .option('--media-only', 'Only show media messages')
-    .option('--full', 'Show full text without truncation')
-    .option('--no-truncate', 'Alias for --full')
+    .option('--truncate <n>', 'Truncate text to N chars (0 = no truncation, default: no truncation)', (v) =>
+      Number.parseInt(v, 10),
+    )
     .action(
       async (
         id: string,
@@ -692,14 +682,15 @@ export function createChatsCommand(): Command {
           limit?: number;
           before?: string;
           after?: string;
-          rich?: boolean;
+          compact?: boolean;
           mediaOnly?: boolean;
-          full?: boolean;
-          truncate?: boolean;
+          truncate?: number;
         },
       ) => {
-        // Set module-level truncation: --full or --no-truncate disables it
-        _truncateMax = options.full || options.truncate === false ? 0 : 200;
+        // No truncation by default (user already scoped to a specific chat)
+        _truncateMax = options.truncate ?? 0;
+        // Also disable table cell truncation when showing full content
+        if (_truncateMax === 0) output.setMaxCellWidth(0);
         const client = getClient();
 
         try {
@@ -707,24 +698,19 @@ export function createChatsCommand(): Command {
             limit: options.limit,
             before: options.before,
             after: options.after,
+            mediaOnly: options.mediaOnly || undefined,
           });
 
           // Cast to extended type
-          let messages = rawMessages as ExtendedMessage[];
+          const messages = rawMessages as ExtendedMessage[];
 
-          // Filter media-only if requested
-          if (options.mediaOnly) {
-            messages = messages.filter(
-              (m) => m.hasMedia || ['audio', 'image', 'video', 'document'].includes(m.messageType),
-            );
-          }
-
-          if (options.rich) {
-            const items = formatRichMessages(messages);
-            output.list(items, { emptyMessage: 'No messages found.' });
-          } else {
+          // Default to rich format (shows transcriptions), use --compact for minimal view
+          if (options.compact) {
             const items = formatStandardMessages(messages);
-            output.list(items, { emptyMessage: 'No messages found.' });
+            output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
+          } else {
+            const items = formatRichMessages(messages);
+            output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
