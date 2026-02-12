@@ -10,6 +10,7 @@ import { createLogger } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, contentTypes, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
 
@@ -67,14 +68,14 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             eventType: 'message.received',
             direction: 'inbound',
             contentType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             mediaUrl: payload.content.mediaUrl,
             mediaMimeType: payload.content.mimeType,
             chatId: payload.chatId,
             replyToExternalId: payload.replyToId,
             status: 'received',
             receivedAt: new Date(event.timestamp),
-            rawPayload: payload.rawPayload,
+            rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
             metadata: {
               correlationId: metadata.correlationId,
               from: payload.from,
@@ -113,7 +114,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             eventType: 'message.sent',
             direction: 'outbound',
             contentType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             mediaUrl: payload.content.mediaUrl,
             chatId: payload.chatId,
             replyToExternalId: payload.replyToId,

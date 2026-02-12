@@ -16,6 +16,7 @@ import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni
 import { createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import type { Services } from '../services';
+import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
 const log = createLogger('message-persistence');
@@ -25,11 +26,13 @@ const log = createLogger('message-persistence');
 // ============================================================================
 
 /**
- * Truncate string to max length (safe for varchar columns)
+ * Truncate string to max length (safe for varchar columns).
+ * Also sanitizes for valid UTF-8.
  */
 function truncate(str: string | undefined | null, maxLength: number): string | undefined {
-  if (!str) return undefined;
-  return str.length > maxLength ? str.slice(0, maxLength) : str;
+  const safe = sanitizeText(str);
+  if (!safe) return undefined;
+  return safe.length > maxLength ? safe.slice(0, maxLength) : safe;
 }
 
 /**
@@ -328,7 +331,9 @@ async function handleMessageReceived(
 
   const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
   const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
-  const rawPayload = payload.rawPayload;
+  // Deep-sanitize rawPayload: WhatsApp protobuf can contain invalid UTF-8 bytes
+  // (e.g. truncated multi-byte chars) that PostgreSQL rejects on insert
+  const rawPayload = payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined;
 
   // Step 1: Find or create chat
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
@@ -376,7 +381,7 @@ async function handleMessageReceived(
   const { created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
     source: 'realtime',
     messageType: mapContentType(payload.content.type),
-    textContent: payload.content.text,
+    textContent: sanitizeText(payload.content.text),
     platformTimestamp,
     senderPlatformUserId: truncate(payload.from, 255),
     senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
@@ -405,7 +410,7 @@ async function handleMessageReceived(
   }
 
   // Step 6: Update chat lastMessageAt and preview
-  const preview = buildChatPreview(payload, rawPayload);
+  const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
     log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
   });
@@ -525,7 +530,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
             source: 'realtime',
             messageType: mapContentType(payload.content.type),
-            textContent: payload.content.text,
+            textContent: sanitizeText(payload.content.text),
             platformTimestamp: new Date(event.timestamp),
             // Sender info (from us)
             senderPersonId: metadata.personId,
