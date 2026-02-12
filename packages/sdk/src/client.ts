@@ -1982,7 +1982,7 @@ export function createOmniClient(config: OmniClientConfig) {
           body,
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to create route', 'CREATE_FAILED', undefined, 500);
+        if (!data?.data) throw new OmniApiError('Failed to create route', 'CREATE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -1999,7 +1999,7 @@ export function createOmniClient(config: OmniClientConfig) {
           body,
         });
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to update route', 'UPDATE_FAILED', undefined, 500);
+        if (!data?.data) throw new OmniApiError('Failed to update route', 'UPDATE_FAILED', undefined, response.status);
         return data.data;
       },
 
@@ -2019,7 +2019,7 @@ export function createOmniClient(config: OmniClientConfig) {
       async getMetrics(): Promise<components['schemas']['CacheMetrics']> {
         const { data, error, response } = await client.GET('/routes/metrics');
         throwIfError(response, error);
-        if (!data?.data) throw new OmniApiError('Failed to get metrics', 'FETCH_ERROR', undefined, 500);
+        if (!data?.data) throw new OmniApiError('Failed to get metrics', 'FETCH_ERROR', undefined, response.status);
         return data.data;
       },
     },

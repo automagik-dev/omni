@@ -7,37 +7,11 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import type { Database } from '@omni/db';
-import { RouteResolver } from '../route-resolver';
+import { type ResolvedRoute, RouteResolver } from '../route-resolver';
 
 // ============================================================================
 // Helpers
 // ============================================================================
-
-interface ResolvedRoute {
-  id: string;
-  instanceId: string;
-  scope: 'chat' | 'user';
-  chatId: string | null;
-  personId: string | null;
-  agentProviderId: string;
-  agentId: string;
-  agentType: 'agent' | 'team' | 'workflow';
-  agentTimeout: number | null;
-  agentStreamMode: boolean | null;
-  agentReplyFilter: unknown | null;
-  agentSessionStrategy: string | null;
-  agentPrefixSenderName: boolean | null;
-  agentWaitForMedia: boolean | null;
-  agentSendMediaPath: boolean | null;
-  agentGateEnabled: boolean | null;
-  agentGateModel: string | null;
-  agentGatePrompt: string | null;
-  label: string | null;
-  priority: number;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
 
 function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
   return {
@@ -70,16 +44,33 @@ function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
 
 /**
  * Create a mock DB that returns the given routes from select query.
+ * Optionally validates query parameters if assertions provided.
  */
-function createMockDb(routes: ResolvedRoute[]) {
+function createMockDb(
+  routes: ResolvedRoute[],
+  assertions?: {
+    where?: (arg: unknown) => void;
+    orderBy?: (...args: unknown[]) => void;
+    limit?: (arg: number) => void;
+  },
+) {
   return {
     select: mock(() => ({
       from: mock(() => ({
-        where: mock(() => ({
-          orderBy: mock(() => ({
-            limit: mock(() => Promise.resolve(routes)),
-          })),
-        })),
+        where: mock((arg: unknown) => {
+          if (assertions?.where) assertions.where(arg);
+          return {
+            orderBy: mock((...args: unknown[]) => {
+              if (assertions?.orderBy) assertions.orderBy(...args);
+              return {
+                limit: mock((limitArg: number) => {
+                  if (assertions?.limit) assertions.limit(limitArg);
+                  return Promise.resolve(routes);
+                }),
+              };
+            }),
+          };
+        }),
       })),
     })),
   } as unknown as Database;

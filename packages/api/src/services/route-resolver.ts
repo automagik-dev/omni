@@ -19,7 +19,7 @@ const log = createLogger('route-resolver');
 const NO_ROUTE = Symbol('NO_ROUTE');
 type CacheValue = ResolvedRoute | typeof NO_ROUTE;
 
-interface ResolvedRoute {
+export interface ResolvedRoute {
   id: string;
   instanceId: string;
   scope: 'chat' | 'user';
@@ -95,6 +95,9 @@ export class RouteResolver {
     const startMs = Date.now();
 
     // Query database: chat route > user route (ordered by specificity)
+    // Note: personId ?? null handles SQL NULL semantics correctly - when personId is undefined,
+    // the query becomes "personId = NULL" which is always false in SQL (use IS NULL instead).
+    // This is intentional: undefined personId means "no user context", so user routes won't match.
     const routes = await this.db
       .select()
       .from(agentRoutes)

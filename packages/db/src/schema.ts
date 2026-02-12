@@ -2111,4 +2111,12 @@ export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
     fields: [triggerLogs.providerId],
     references: [agentProviders.id],
   }),
+  route: one(agentRoutes, {
+    fields: [triggerLogs.routeId],
+    references: [agentRoutes.id],
+  }),
+}));
+
+export const agentRoutesRelations = relations(agentRoutes, ({ many }) => ({
+  triggerLogs: many(triggerLogs),
 }));
