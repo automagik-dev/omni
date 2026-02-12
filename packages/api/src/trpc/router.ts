@@ -331,7 +331,7 @@ export const appRouter = t.router({
       .input(
         z.object({
           name: z.string().min(1).max(255),
-          schema: ProviderSchemaEnum.default('agnoos'),
+          schema: ProviderSchemaEnum.default('agno'),
           baseUrl: z.string().url(),
           apiKey: z.string().optional(),
           defaultStream: z.boolean().default(true),

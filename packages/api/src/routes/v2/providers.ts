@@ -18,7 +18,7 @@ const listQuerySchema = z.object({
 // Create provider schema
 const createProviderSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique provider name'),
-  schema: ProviderSchemaEnum.default('agnoos').describe('Provider schema type'),
+  schema: ProviderSchemaEnum.default('agno').describe('Provider schema type'),
   baseUrl: z.string().url().describe('Base URL for provider API'),
   apiKey: z.string().optional().describe('API key (stored encrypted)'),
   schemaConfig: z.record(z.string(), z.unknown()).optional().describe('Schema-specific configuration'),
@@ -145,8 +145,8 @@ providersRoutes.get('/:id/agents', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Agent listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Agent listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {
@@ -173,8 +173,8 @@ providersRoutes.get('/:id/teams', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Team listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Team listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {
@@ -201,8 +201,8 @@ providersRoutes.get('/:id/workflows', async (c) => {
 
   const provider = await services.providers.getById(id);
 
-  if (provider.schema !== 'agnoos') {
-    return c.json({ items: [], message: 'Workflow listing only supported for AgnoOS providers' });
+  if (provider.schema !== 'agno') {
+    return c.json({ items: [], message: 'Workflow listing only supported for Agno providers' });
   }
 
   if (!provider.apiKey) {

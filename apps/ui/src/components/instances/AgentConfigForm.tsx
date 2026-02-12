@@ -166,7 +166,7 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
       </Card>
 
       {/* Agent Selection (for Agno providers) */}
-      {selectedProvider?.schema === 'agnoos' && (
+      {selectedProvider?.schema === 'agno' && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -287,14 +287,12 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
  */
 function getProviderColor(schema: string): string {
   switch (schema) {
-    case 'agnoos':
+    case 'agno':
       return 'bg-purple-500';
-    case 'openai':
-      return 'bg-green-500';
-    case 'anthropic':
-      return 'bg-orange-500';
-    case 'a2a':
+    case 'webhook':
       return 'bg-blue-500';
+    case 'openclaw':
+      return 'bg-teal-500';
     default:
       return 'bg-gray-500';
   }

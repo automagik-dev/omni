@@ -12,34 +12,22 @@ import { useState } from 'react';
 // Provider schema options
 const SCHEMA_OPTIONS = [
   {
-    value: 'agnoos',
-    label: 'AgnoOS',
-    description: 'AgnoOS AI orchestration platform',
+    value: 'agno',
+    label: 'Agno',
+    description: 'Agno AI orchestration platform',
     color: 'bg-purple-500',
   },
   {
-    value: 'openai',
-    label: 'OpenAI',
-    description: 'OpenAI-compatible API (GPT-4, etc.)',
-    color: 'bg-green-500',
-  },
-  {
-    value: 'anthropic',
-    label: 'Anthropic',
-    description: 'Anthropic Claude API',
-    color: 'bg-orange-500',
-  },
-  {
-    value: 'a2a',
-    label: 'Agent-to-Agent',
-    description: 'A2A protocol for agent communication',
+    value: 'webhook',
+    label: 'Webhook',
+    description: 'Custom webhook-based provider',
     color: 'bg-blue-500',
   },
   {
-    value: 'custom',
-    label: 'Custom',
-    description: 'Custom provider implementation',
-    color: 'bg-gray-500',
+    value: 'openclaw',
+    label: 'OpenClaw',
+    description: 'OpenClaw WebSocket gateway',
+    color: 'bg-teal-500',
   },
 ];
 
@@ -209,7 +197,7 @@ function CreateProviderModal({ open, onClose }: { open: boolean; onClose: () => 
     try {
       await createProvider.mutateAsync({
         name: name.trim(),
-        schema: schema as 'agnoos' | 'openai' | 'anthropic' | 'a2a' | 'custom',
+        schema: schema as 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code',
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim() || undefined,
       });

@@ -1181,7 +1181,6 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
   let agentProvider: IAgentProvider | null = null;
 
   switch (provider.schema) {
-    case 'agnoos':
     case 'agno':
       agentProvider = createAgnoProvider(provider, instance);
       break;

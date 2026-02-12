@@ -224,20 +224,17 @@ export type JobStatus = (typeof jobStatuses)[number];
 // ============================================================================
 
 export const providerSchemas = [
-  'agnoos',
   'agno',
-  'a2a',
-  'openai',
-  'anthropic',
   'webhook',
   'openclaw',
-  'custom',
+  'ag-ui',
+  'claude-code',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
 /**
  * Reusable agent provider configurations.
- * Supports multiple API schemas: AgnoOS, A2A, OpenAI, Anthropic, and custom.
+ * Supports multiple API schemas: Agno, Webhook, OpenClaw, AG-UI, Claude Code.
  *
  * @see v1: omni_agent_providers table
  * @see docs/architecture/provider-system.md
@@ -249,17 +246,15 @@ export const agentProviders = pgTable(
     name: varchar('name', { length: 255 }).notNull().unique(),
 
     // Schema type determines how to communicate with the provider
-    schema: varchar('schema', { length: 20 }).notNull().default('agnoos').$type<ProviderSchema>(),
+    schema: varchar('schema', { length: 20 }).notNull().default('agno').$type<ProviderSchema>(),
 
     // Connection settings
     baseUrl: text('base_url').notNull(),
     apiKey: text('api_key'),
 
     // Schema-specific configuration (JSON)
-    // For OpenAI: { model, systemPrompt, maxTokens, temperature }
-    // For Anthropic: { model, systemPrompt, maxTokens }
     // For Agno: { agentId, teamId, timeout }
-    // For Custom: { full CustomProviderConfig }
+    // For OpenClaw: { defaultAgentId, agentTimeoutMs, origin }
     schemaConfig: jsonb('schema_config').$type<Record<string, unknown>>(),
 
     // Default settings

@@ -293,15 +293,13 @@ export interface ListProvidersParams {
 
 /**
  * Provider schema type
- * - agnoos: AgnoOS AI orchestration platform
- * - a2a: Agent-to-Agent protocol (Google A2A)
- * - openai: OpenAI-compatible API
- * - anthropic: Anthropic Claude API
+ * - agno: Agno AI orchestration platform
  * - webhook: Webhook-based agent provider
  * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
- * - custom: Custom provider implementation
+ * - ag-ui: AG-UI protocol
+ * - claude-code: Claude Code agent provider
  */
-export type ProviderSchema = 'agnoos' | 'agno' | 'a2a' | 'openai' | 'anthropic' | 'webhook' | 'openclaw' | 'custom';
+export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code';
 
 /**
  * Body for creating a provider

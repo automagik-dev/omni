@@ -21,6 +21,10 @@ import type { ChannelType } from '../types/channel';
 export interface ProviderRequest {
   /** The message/prompt to send */
   message: string;
+  /** Agent/team/workflow ID to run */
+  agentId: string;
+  /** Agent type — the client uses this to route internally (default: 'agent') */
+  agentType?: 'agent' | 'team' | 'workflow';
   /** Whether to stream the response (default: false for sync) */
   stream?: boolean;
   /** Session ID for conversation continuity (typically chatId) */
@@ -152,41 +156,47 @@ export interface AgnoWorkflow {
 }
 
 /**
- * Agno client interface
+ * Generic agent client interface
+ *
+ * All provider clients (Agno, future Claude Code, etc.) implement this
+ * minimal contract. The client routes internally based on request.agentType.
  */
-export interface IAgnoClient {
-  /** List available agents */
-  listAgents(): Promise<AgnoAgent[]>;
+export interface IAgentClient {
+  /** Run an agent synchronously — routes by request.agentType internally */
+  run(request: ProviderRequest): Promise<ProviderResponse>;
 
-  /** List available teams */
-  listTeams(): Promise<AgnoTeam[]>;
+  /** Stream an agent response — routes by request.agentType internally */
+  stream(request: ProviderRequest): AsyncGenerator<StreamChunk>;
 
-  /** List available workflows */
-  listWorkflows(): Promise<AgnoWorkflow[]>;
-
-  /** Run an agent synchronously */
-  runAgent(agentId: string, request: ProviderRequest): Promise<ProviderResponse>;
-
-  /** Run a team synchronously */
-  runTeam(teamId: string, request: ProviderRequest): Promise<ProviderResponse>;
-
-  /** Run a workflow synchronously */
-  runWorkflow(workflowId: string, request: ProviderRequest): Promise<ProviderResponse>;
-
-  /** Stream an agent response */
-  streamAgent(agentId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
-
-  /** Stream a team response */
-  streamTeam(teamId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
-
-  /** Stream a workflow response */
-  streamWorkflow(workflowId: string, request: ProviderRequest): AsyncGenerator<StreamChunk>;
+  /** Optional: discover available agents from the provider */
+  discover?(): Promise<AgentDiscoveryEntry[]>;
 
   /** Health check */
-  checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }>;
+  checkHealth(): Promise<AgentHealthResult>;
 
-  /** Delete a session (clear conversation history) */
-  deleteSession(sessionId: string): Promise<void>;
+  /** Optional: delete a session (clear conversation history) */
+  deleteSession?(sessionId: string): Promise<void>;
+}
+
+/**
+ * Entry returned by IAgentClient.discover()
+ */
+export interface AgentDiscoveryEntry {
+  id: string;
+  name: string;
+  /** Provider-specific type (e.g. 'agent', 'team', 'workflow' for Agno) */
+  type?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Health check result
+ */
+export interface AgentHealthResult {
+  healthy: boolean;
+  latencyMs: number;
+  error?: string;
 }
 
 /**
