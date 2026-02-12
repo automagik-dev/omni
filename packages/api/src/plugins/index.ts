@@ -28,6 +28,7 @@ export { storeQrCode, getQrCode, clearQrCode, setupQrCodeListener } from './qr-s
 
 // Event listeners (connection, messages)
 export {
+  setupChatUnreadListener,
   setupConnectionListener,
   setupContactNamesListener,
   setupLidMappingListener,

@@ -1755,36 +1755,61 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const chat of chats) {
-      // Baileys Chat type extends IConversation which has displayName
-      const c = chat as { id?: string; displayName?: string; name?: string };
-      if (c.id) {
-        const name = c.displayName || c.name;
-        if (name) {
-          cache.set(c.id, name);
-          this.logger.debug('Cached chat name', { instanceId, chatId: c.id, name });
-        }
+      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      if (!c.id) continue;
+
+      const name = c.displayName || c.name;
+      if (name) {
+        cache.set(c.id, name);
+      }
+
+      // Sync unread count from WhatsApp
+      if (c.unreadCount !== undefined) {
+        this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
   }
 
   /**
    * Handle chats update
-   * Updates cached chat display names
+   * Updates cached chat display names and syncs unread counts from WhatsApp
    * @internal
    */
   handleChatsUpdate(instanceId: string, updates: unknown[]): void {
-    const cache = this.chatNamesCache.get(instanceId);
-    if (!cache) return;
+    let cache = this.chatNamesCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.chatNamesCache.set(instanceId, cache);
+    }
 
     for (const update of updates) {
-      const u = update as { id?: string; displayName?: string; name?: string };
+      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
 
       const name = u.displayName || u.name;
       if (name) {
         cache.set(u.id, name);
       }
+
+      // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
+      if (u.unreadCount !== undefined) {
+        this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
+      }
     }
+  }
+
+  /**
+   * Emit chat unread count update from platform-native data
+   * @internal
+   */
+  private emitChatUnreadUpdate(instanceId: string, chatId: string, unreadCount: number): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.chat.unread-updated',
+        { chatId, unreadCount },
+        { instanceId, channelType: this.id, source: `channel:${this.id}`, correlationId: `unread-${chatId}` },
+      )
+      .catch((err) => this.logger.warn('Failed to publish chat unread update', { error: String(err) }));
   }
 
   /**

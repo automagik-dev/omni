@@ -214,3 +214,39 @@ export async function setupContactNamesListener(eventBus: EventBus, db?: Databas
     contactsLog.warn('Failed to set up contact names listener', { error: String(error) });
   }
 }
+
+const unreadLog = createLogger('chat-unread');
+
+/**
+ * Listen for chat.unread-updated events from channel plugins.
+ * WhatsApp provides native unread counts — use them as source of truth
+ * instead of manually incrementing/decrementing.
+ */
+export async function setupChatUnreadListener(eventBus: EventBus, db?: Database): Promise<void> {
+  if (!db) return;
+
+  try {
+    await eventBus.subscribePattern('custom.chat.unread-updated', async (event) => {
+      const instanceId = event.metadata.instanceId;
+      const { chatId, unreadCount } = event.payload as { chatId: string; unreadCount: number };
+      if (!instanceId || !chatId) return;
+
+      try {
+        const result = await db
+          .update(chats)
+          .set({ unreadCount, updatedAt: new Date() })
+          .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
+          .returning({ id: chats.id });
+
+        if (result.length > 0) {
+          unreadLog.debug('Synced unread count from platform', { instanceId, chatId, unreadCount });
+        }
+      } catch (error) {
+        unreadLog.warn('Failed to sync unread count', { instanceId, chatId, error: String(error) });
+      }
+    });
+    unreadLog.info('Listening for custom.chat.unread-updated events');
+  } catch (error) {
+    unreadLog.warn('Failed to set up chat unread listener', { error: String(error) });
+  }
+}
