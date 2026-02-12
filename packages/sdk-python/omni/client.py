@@ -203,7 +203,7 @@ class MessagesApi(BaseApi):
         body: Dict[str, Any] = {"instanceId": instance_id, "to": to, "text": text}
         if reply_to:
             body["replyTo"] = reply_to
-        data = self._request("POST", "/messages", body=body)
+        data = self._request("POST", "/messages/send", body=body)
         return data.get("data", {})
 
     def send_media(
@@ -229,7 +229,7 @@ class MessagesApi(BaseApi):
             body["caption"] = caption
         if voice_note:
             body["voiceNote"] = True
-        data = self._request("POST", "/messages/media", body=body)
+        data = self._request("POST", "/messages/send/media", body=body)
         return data.get("data", {})
 
     def send_reaction(
