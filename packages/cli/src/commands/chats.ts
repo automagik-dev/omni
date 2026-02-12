@@ -171,19 +171,19 @@ function truncate(text: string | null | undefined, maxLen: number): string {
 }
 
 /**
- * Get media type badge for display
+ * Get media type icon for display
  */
-function getMediaBadge(type: string): string {
-  const badges: Record<string, string> = {
-    audio: '[AUDIO]',
-    image: '[IMAGE]',
-    video: '[VIDEO]',
-    document: '[DOC]',
-    sticker: '[STICKER]',
-    contact: '[CONTACT]',
-    location: '[LOCATION]',
+function getMediaIcon(type: string): string {
+  const icons: Record<string, string> = {
+    audio: '🎤',
+    image: '📷',
+    video: '🎥',
+    document: '📄',
+    sticker: '🎨',
+    contact: '👤',
+    location: '📍',
   };
-  return badges[type] ?? `[${type.toUpperCase()}]`;
+  return icons[type] ?? '📎';
 }
 
 /**
@@ -220,6 +220,90 @@ function formatDuration(seconds: number): string {
 }
 
 /**
+ * Parse "since" duration string (e.g., "7d", "30d", "1h") to Date
+ */
+function parseSinceDuration(duration: string): Date {
+  const now = new Date();
+  const match = duration.match(/^(\d+)([dhm])$/);
+  if (!match) {
+    throw new Error(`Invalid duration format: ${duration}. Use format like "7d", "30d", "24h"`);
+  }
+
+  const value = Number.parseInt(match[1], 10);
+  const unit = match[2];
+
+  switch (unit) {
+    case 'd':
+      return new Date(now.getTime() - value * 24 * 60 * 60 * 1000);
+    case 'h':
+      return new Date(now.getTime() - value * 60 * 60 * 1000);
+    case 'm':
+      return new Date(now.getTime() - value * 60 * 1000);
+    default:
+      throw new Error(`Unknown duration unit: ${unit}`);
+  }
+}
+
+/**
+ * Apply client-side filters to messages
+ */
+function applyMessageFilters(
+  messages: ExtendedMessage[],
+  options: {
+    audioOnly?: boolean;
+    imagesOnly?: boolean;
+    videosOnly?: boolean;
+    docsOnly?: boolean;
+    search?: string;
+    since?: string;
+  },
+): ExtendedMessage[] {
+  let filtered = messages;
+
+  // Media type filters
+  if (options.audioOnly) {
+    filtered = filtered.filter((m) => m.messageType === 'audio');
+  } else if (options.imagesOnly) {
+    filtered = filtered.filter((m) => m.messageType === 'image');
+  } else if (options.videosOnly) {
+    filtered = filtered.filter((m) => m.messageType === 'video');
+  } else if (options.docsOnly) {
+    filtered = filtered.filter((m) => m.messageType === 'document');
+  }
+
+  // Search filter
+  if (options.search) {
+    const searchLower = options.search.toLowerCase();
+    filtered = filtered.filter((m) => {
+      const textContent = m.textContent?.toLowerCase() ?? '';
+      const transcription = m.transcription?.toLowerCase() ?? '';
+      const imageDesc = m.imageDescription?.toLowerCase() ?? '';
+      const videoDesc = m.videoDescription?.toLowerCase() ?? '';
+      const docExtract = m.documentExtraction?.toLowerCase() ?? '';
+      return (
+        textContent.includes(searchLower) ||
+        transcription.includes(searchLower) ||
+        imageDesc.includes(searchLower) ||
+        videoDesc.includes(searchLower) ||
+        docExtract.includes(searchLower)
+      );
+    });
+  }
+
+  // Time filter
+  if (options.since) {
+    const sinceDate = parseSinceDuration(options.since);
+    filtered = filtered.filter((m) => {
+      if (!m.platformTimestamp) return false;
+      const msgDate = new Date(m.platformTimestamp);
+      return msgDate >= sinceDate;
+    });
+  }
+
+  return filtered;
+}
+
+/**
  * Build content string for rich message display
  */
 function buildRichContent(msg: ExtendedMessage): string {
@@ -228,21 +312,22 @@ function buildRichContent(msg: ExtendedMessage): string {
     return truncate(msg.textContent, _truncateMax) ?? '-';
   }
 
-  const badge = getMediaBadge(msg.messageType);
-  const parts = [badge];
+  const icon = getMediaIcon(msg.messageType);
+  const parts = [icon];
 
   const filename = msg.mediaMetadata?.filename;
   if (filename) parts.push(filename);
 
   const duration = msg.mediaMetadata?.duration;
-  if (duration) parts.push(formatDuration(duration));
+  if (duration) parts.push(`(${formatDuration(duration)})`);
 
-  const descLimit = _truncateMax > 0 ? Math.min(_truncateMax, 80) : 0;
+  // Show full descriptions when not truncating, otherwise use larger limit
+  const descLimit = _truncateMax > 0 ? Math.min(_truncateMax, 200) : 0;
   const mediaDesc = getMediaDescription(msg);
   if (mediaDesc) {
-    parts.push(`- "${truncate(mediaDesc, descLimit)}"`);
+    parts.push(`"${truncate(mediaDesc, descLimit)}"`);
   } else if (msg.textContent) {
-    parts.push(`- "${truncate(msg.textContent, descLimit)}"`);
+    parts.push(`"${truncate(msg.textContent, descLimit)}"`);
   }
 
   return parts.join(' ');
@@ -685,11 +770,17 @@ export function createChatsCommand(): Command {
   chats
     .command('messages <id>')
     .description('List chat messages (use "omni messages get <id>" for full single message)')
-    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
+    .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 100)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
     .option('--compact', 'Show compact format (minimal fields, no transcriptions)')
-    .option('--media-only', 'Only show media messages')
+    .option('--media-only', 'Only show media messages (all types)')
+    .option('--audio-only', 'Only show audio messages')
+    .option('--images-only', 'Only show image messages')
+    .option('--videos-only', 'Only show video messages')
+    .option('--docs-only', 'Only show document messages')
+    .option('--search <text>', 'Filter messages containing text (case-insensitive)')
+    .option('--since <duration>', 'Only show messages since duration ago (e.g., "1h", "7d", "30d")')
     .option('--truncate <n>', 'Truncate text to N chars (0 = no truncation, default: no truncation)', (v) =>
       Number.parseInt(v, 10),
     )
@@ -702,6 +793,12 @@ export function createChatsCommand(): Command {
           after?: string;
           compact?: boolean;
           mediaOnly?: boolean;
+          audioOnly?: boolean;
+          imagesOnly?: boolean;
+          videosOnly?: boolean;
+          docsOnly?: boolean;
+          search?: string;
+          since?: string;
           truncate?: number;
         },
       ) => {
@@ -720,8 +817,9 @@ export function createChatsCommand(): Command {
             mediaOnly: options.mediaOnly || undefined,
           });
 
-          // Cast to extended type
-          const messages = rawMessages as ExtendedMessage[];
+          // Cast to extended type and apply filters
+          let messages = rawMessages as ExtendedMessage[];
+          messages = applyMessageFilters(messages, options);
 
           // Default to rich format (shows transcriptions), use --compact for minimal view
           if (options.compact) {
