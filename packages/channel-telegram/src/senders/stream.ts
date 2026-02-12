@@ -34,8 +34,10 @@ const MAX_STREAM_CHARS = 3800;
 const MAX_THINKING_CHARS = 600;
 /** Minimum thinking duration to show in UI (skip visual noise for fast responses) */
 const MIN_THINKING_DISPLAY_MS = 2000;
-/** Edit throttle interval */
-const THROTTLE_MS = 900;
+/** Edit throttle interval for DMs */
+const THROTTLE_MS_DM = 900;
+/** Edit throttle interval for groups (stricter Telegram rate limits: ~20 msg/min) */
+const THROTTLE_MS_GROUP = 3000;
 /** Maximum retries for 429 errors */
 const MAX_RETRIES = 3;
 /** Telegram max message length */
@@ -51,12 +53,16 @@ export class TelegramStreamSender implements StreamSender {
   private pendingEditTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRenderedText = '';
   private retryDelay = 1000;
+  private readonly throttleMs: number;
 
   constructor(
     private readonly bot: Bot,
     private readonly chatId: string,
     private readonly replyToMessageId?: number,
-  ) {}
+    chatType?: 'dm' | 'group' | 'channel',
+  ) {
+    this.throttleMs = chatType === 'group' || chatType === 'channel' ? THROTTLE_MS_GROUP : THROTTLE_MS_DM;
+  }
 
   async onThinkingDelta(delta: StreamDelta & { phase: 'thinking' }): Promise<void> {
     if (this.phase === 'done') return;
@@ -216,14 +222,14 @@ export class TelegramStreamSender implements StreamSender {
     const now = Date.now();
     const elapsed = now - this.lastEditAt;
 
-    if (elapsed >= THROTTLE_MS) {
+    if (elapsed >= this.throttleMs) {
       // Safe to edit immediately
       this.clearPendingEdit();
       await this.doEdit(html);
     } else {
       // Schedule edit for when throttle window expires
       this.clearPendingEdit();
-      const delay = THROTTLE_MS - elapsed;
+      const delay = this.throttleMs - elapsed;
       this.pendingEditTimer = setTimeout(async () => {
         this.pendingEditTimer = null;
         if (this.phase !== 'done') {

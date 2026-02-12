@@ -163,7 +163,12 @@ export interface ChannelPlugin {
    *
    * Optional - only implement if canStreamResponse capability is true.
    */
-  createStreamSender?(instanceId: string, chatId: string, replyToMessageId?: string): StreamSender;
+  createStreamSender?(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ): StreamSender;
 
   /**
    * Send typing indicator
