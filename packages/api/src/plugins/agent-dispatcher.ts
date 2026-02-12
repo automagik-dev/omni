@@ -1628,11 +1628,19 @@ async function checkMessageAccess(
   channel: ChannelType,
 ): Promise<boolean> {
   const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
-  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  // Validate participantAlt looks like a real phone number (Baileys LID fallback)
+  const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
   const primaryId = payload.from ?? '';
 
   let accessResult = await accessService.checkAccess(instance, primaryId, channel);
   if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
+    log.warn('Access fallback to participantAlt', {
+      instanceId: instance.id,
+      primaryId,
+      participantAlt,
+      chatId: payload.chatId,
+    });
     accessResult = await accessService.checkAccess(instance, participantAlt, channel);
   }
 

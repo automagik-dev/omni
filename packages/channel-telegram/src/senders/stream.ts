@@ -90,12 +90,15 @@ export class TelegramStreamSender implements StreamSender {
     const contentText = delta.content;
     let displayHtml: string;
 
-    if (contentText.length > MAX_STREAM_CHARS) {
+    const escapedContent = escapeHtml(contentText);
+    if (escapedContent.length > MAX_STREAM_CHARS) {
       // Tail window: show last MAX_STREAM_CHARS with ellipsis header
-      const tail = contentText.slice(-MAX_STREAM_CHARS);
-      displayHtml = `⏳ ...\n${escapeHtml(tail)}█`;
+      const header = '⏳ ...\n';
+      const budget = MAX_STREAM_CHARS - header.length;
+      const tail = escapedContent.slice(-budget);
+      displayHtml = `${header}${tail}█`;
     } else {
-      displayHtml = `${escapeHtml(contentText)}█`;
+      displayHtml = `${escapedContent}█`;
     }
 
     await this.throttledEdit(displayHtml);
@@ -185,8 +188,9 @@ export class TelegramStreamSender implements StreamSender {
   // ─── Private helpers ────────────────────────────────────────
 
   private buildThinkingHtml(thinking: string): string {
-    const truncated = thinking.length > MAX_THINKING_CHARS ? `...${thinking.slice(-MAX_THINKING_CHARS)}` : thinking;
-    return `<blockquote expandable>🧠 Thinking...\n${escapeHtml(truncated)}</blockquote>`;
+    const escaped = escapeHtml(thinking);
+    const truncated = escaped.length > MAX_THINKING_CHARS ? `...${escaped.slice(-MAX_THINKING_CHARS)}` : escaped;
+    return `<blockquote expandable>🧠 Thinking...\n${truncated}</blockquote>`;
   }
 
   private buildFinalThinkingBlock(thinking: string | undefined, durationMs: number | undefined): string | null {
@@ -195,10 +199,11 @@ export class TelegramStreamSender implements StreamSender {
     const duration = durationMs ?? this.thinkingDurationMs;
     if (duration !== undefined && duration < MIN_THINKING_DISPLAY_MS) return null;
 
-    const truncated = thinking.length > MAX_THINKING_CHARS ? `...${thinking.slice(-MAX_THINKING_CHARS)}` : thinking;
+    const escaped = escapeHtml(thinking);
+    const truncated = escaped.length > MAX_THINKING_CHARS ? `...${escaped.slice(-MAX_THINKING_CHARS)}` : escaped;
 
     const durationLabel = duration ? ` (${(duration / 1000).toFixed(1)}s)` : '';
-    return `<blockquote expandable>🧠 Thought${durationLabel}\n${escapeHtml(truncated)}</blockquote>`;
+    return `<blockquote expandable>🧠 Thought${durationLabel}\n${truncated}</blockquote>`;
   }
 
   private async throttledEdit(html: string): Promise<void> {

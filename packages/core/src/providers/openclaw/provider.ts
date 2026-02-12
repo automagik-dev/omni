@@ -39,6 +39,7 @@ interface AccumulationState {
 
 const MAX_MESSAGE_BYTES = 100 * 1024; // 100KB
 const MAX_ACCUMULATION_BYTES = 1 * 1024 * 1024; // 1MB
+const MAX_DELTA_CONTENT_BYTES = 256 * 1024; // 256KB per delta max
 const AGENT_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 /** Mutable state container for a single triggerStream() invocation. */
@@ -63,8 +64,23 @@ class StreamContext {
       // Deltas are cumulative snapshots — oldest entries are safe to discard under pressure
       this.queue.shift();
     }
-    this.queue.push(delta);
+    // Cap delta content to prevent OOM from very large responses
+    const capped = StreamContext.capDeltaSize(delta);
+    this.queue.push(capped);
     this.wake();
+  }
+
+  private static capDeltaSize(delta: StreamDelta): StreamDelta {
+    const cap = MAX_DELTA_CONTENT_BYTES;
+    switch (delta.phase) {
+      case 'thinking':
+        return delta.thinking.length > cap ? { ...delta, thinking: delta.thinking.slice(-cap) } : delta;
+      case 'content':
+      case 'final':
+        return delta.content.length > cap ? { ...delta, content: delta.content.slice(-cap) } : delta;
+      case 'error':
+        return delta;
+    }
   }
 
   finish(): void {
