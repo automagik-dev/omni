@@ -670,7 +670,7 @@ export function createChatsCommand(): Command {
     .option('--limit <n>', 'Limit results', (v) => Number.parseInt(v, 10), 20)
     .option('--before <cursor>', 'Get messages before cursor')
     .option('--after <cursor>', 'Get messages after cursor')
-    .option('--rich', 'Show rich format with transcriptions/descriptions')
+    .option('--compact', 'Show compact format (minimal fields, no transcriptions)')
     .option('--media-only', 'Only show media messages')
     .option('--truncate <n>', 'Truncate text to N chars (0 = no truncation, default: no truncation)', (v) =>
       Number.parseInt(v, 10),
@@ -682,7 +682,7 @@ export function createChatsCommand(): Command {
           limit?: number;
           before?: string;
           after?: string;
-          rich?: boolean;
+          compact?: boolean;
           mediaOnly?: boolean;
           truncate?: number;
         },
@@ -704,11 +704,12 @@ export function createChatsCommand(): Command {
           // Cast to extended type
           const messages = rawMessages as ExtendedMessage[];
 
-          if (options.rich) {
-            const items = formatRichMessages(messages);
+          // Default to rich format (shows transcriptions), use --compact for minimal view
+          if (options.compact) {
+            const items = formatStandardMessages(messages);
             output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
           } else {
-            const items = formatStandardMessages(messages);
+            const items = formatRichMessages(messages);
             output.list(items, { emptyMessage: 'No messages found.', rawData: messages });
           }
         } catch (err) {

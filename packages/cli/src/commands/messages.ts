@@ -204,12 +204,12 @@ async function handleSingleRead(client: OmniClient, messageId: string, instanceI
 }
 
 export function createMessagesCommand(): Command {
-  const messages = new Command('messages').description('Manage messages');
+  const messages = new Command('messages').description('Manage messages (use "get" for transcriptions/descriptions)');
 
   // omni messages get <id>
   messages
     .command('get <messageId>')
-    .description('Get a single message by ID')
+    .description('Get full message details including transcription/description fields')
     .action(async (messageId: string) => {
       const client = getClient();
 
@@ -242,7 +242,7 @@ export function createMessagesCommand(): Command {
   // omni messages search <query>
   messages
     .command('search <query>')
-    .description('Search messages across chats')
+    .description('Search messages across chats (includes transcriptions/descriptions in results)')
     .option('--instance <id>', 'Instance ID (uses default if not specified)')
     .option('--chat <id>', 'Limit search to specific chat')
     .option('--since <duration>', 'Time range: 1d, 7d, 30d (default: 7d)', '7d')
