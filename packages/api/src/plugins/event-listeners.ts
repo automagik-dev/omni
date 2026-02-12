@@ -9,6 +9,7 @@ import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { sanitizeText } from '../utils/utf8';
 import { clearQrCode } from './qr-store';
 
 const instanceLog = createLogger('instance');
@@ -179,7 +180,8 @@ async function updateChatName(db: Database, instanceId: string, jid: string, nam
 
   const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
   if (!chat.name || hasStaleJidName) {
-    await db.update(chats).set({ name, updatedAt: new Date() }).where(eq(chats.id, chat.id));
+    const safeName = sanitizeText(name) ?? name;
+    await db.update(chats).set({ name: safeName, updatedAt: new Date() }).where(eq(chats.id, chat.id));
     return true;
   }
   return false;
