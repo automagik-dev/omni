@@ -19,7 +19,7 @@ import {
   chats,
   omniGroups,
 } from '@omni/db';
-import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from 'drizzle-orm';
 
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
@@ -41,6 +41,8 @@ export interface ListChatsOptions {
   excludeChatTypes?: ChatType[];
   search?: string;
   includeArchived?: boolean;
+  unreadOnly?: boolean;
+  sort?: 'activity' | 'unread' | 'name';
   limit?: number;
   cursor?: string;
 }
@@ -77,6 +79,8 @@ export class ChatService {
       excludeChatTypes,
       search,
       includeArchived = false,
+      unreadOnly = false,
+      sort = 'activity',
       limit = 50,
       cursor,
     } = options;
@@ -122,15 +126,27 @@ export class ChatService {
 
     conditions.push(sql`${chats.deletedAt} IS NULL`);
 
+    if (unreadOnly) {
+      conditions.push(gt(chats.unreadCount, 0));
+    }
+
     if (cursor) {
       conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
     }
+
+    // Determine sort order
+    const orderBy =
+      sort === 'unread'
+        ? [desc(chats.unreadCount), desc(chats.lastMessageAt)]
+        : sort === 'name'
+          ? [asc(chats.name), desc(chats.lastMessageAt)]
+          : [desc(chats.lastMessageAt)];
 
     const items = await this.db
       .select()
       .from(chats)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(chats.lastMessageAt))
+      .orderBy(...orderBy)
       .limit(limit + 1);
 
     const hasMore = items.length > limit;

@@ -566,27 +566,11 @@ export function createInstancesCommand(): Command {
             limit: options.limit,
             cursor: options.cursor,
             guildId: options.guild,
+            search: options.search,
+            excludeGroups: options.groups === false ? true : undefined,
           });
 
-          let contacts = result.items;
-
-          // Filter out groups if --no-groups
-          if (options.groups === false) {
-            contacts = contacts.filter((c) => !c.isGroup);
-          }
-
-          // Search filter
-          if (options.search) {
-            const q = options.search.toLowerCase();
-            contacts = contacts.filter(
-              (c) =>
-                (c.displayName ?? '').toLowerCase().includes(q) ||
-                (c.phone ?? '').includes(q) ||
-                c.platformUserId.includes(q),
-            );
-          }
-
-          const items = contacts.map((c) => ({
+          const items = result.items.map((c) => ({
             jid: c.platformUserId,
             name: c.displayName ?? '-',
             phone: c.phone ?? '-',
@@ -621,17 +605,10 @@ export function createInstancesCommand(): Command {
         const result = await client.instances.listGroups(id, {
           limit: options.limit,
           cursor: options.cursor,
+          search: options.search,
         });
 
-        let groups = result.items;
-
-        // Search filter
-        if (options.search) {
-          const q = options.search.toLowerCase();
-          groups = groups.filter((g) => (g.name ?? '').toLowerCase().includes(q) || (g.externalId ?? '').includes(q));
-        }
-
-        const items = groups.map((g) => ({
+        const items = result.items.map((g) => ({
           jid: g.externalId,
           name: g.name ?? '-',
           members: g.memberCount ?? '-',

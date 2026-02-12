@@ -361,25 +361,14 @@ export function createChatsCommand(): Command {
             includeArchived: options.archived,
             limit: options.limit,
             chatType: options.type,
+            unreadOnly: options.unread || undefined,
+            sort: (options.sort as 'activity' | 'unread' | 'name') || undefined,
             // Filter out newsletters and broadcasts server-side (use --all to include)
             excludeChatTypes: options.all ? undefined : 'channel,broadcast',
           });
 
           // Cast to extended type to access additional fields
-          let chats = result.items as ExtendedChat[];
-
-          // Client-side filtering for --unread
-          if (options.unread) {
-            chats = chats.filter((c) => (c.unreadCount ?? 0) > 0);
-          }
-
-          // Client-side sorting
-          if (options.sort === 'unread') {
-            chats.sort((a, b) => (b.unreadCount ?? 0) - (a.unreadCount ?? 0));
-          } else if (options.sort === 'name') {
-            chats.sort((a, b) => formatChatName(a).localeCompare(formatChatName(b)));
-          }
-          // Default is 'activity' - already sorted by lastMessageAt from API
+          const chats = result.items as ExtendedChat[];
 
           // Build instance name lookup for multi-instance display
           const instanceNames = options.instance ? new Map<string, string>() : await buildInstanceNameMap(client);
@@ -707,17 +696,11 @@ export function createChatsCommand(): Command {
             limit: options.limit,
             before: options.before,
             after: options.after,
+            mediaOnly: options.mediaOnly || undefined,
           });
 
           // Cast to extended type
-          let messages = rawMessages as ExtendedMessage[];
-
-          // Filter media-only if requested
-          if (options.mediaOnly) {
-            messages = messages.filter(
-              (m) => m.hasMedia || ['audio', 'image', 'video', 'document'].includes(m.messageType),
-            );
-          }
+          const messages = rawMessages as ExtendedMessage[];
 
           if (options.rich) {
             const items = formatRichMessages(messages);

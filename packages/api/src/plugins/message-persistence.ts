@@ -655,6 +655,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Update delivery status to read
           await services.messages.updateDeliveryStatus(message.id, 'read');
+
+          // Reset chat unread count — reading a message means the user opened the chat
+          if (chat.unreadCount > 0) {
+            await services.chats.resetUnreadCount(chat.id);
+          }
+
           log.debug('Updated message delivery status', { messageId: message.id, status: 'read' });
         } catch (error) {
           log.error('Failed to update read status', {

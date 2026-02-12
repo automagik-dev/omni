@@ -297,9 +297,9 @@ export class MessageService {
    */
   async getChatMessages(
     chatId: string,
-    options: { limit?: number; before?: Date; after?: Date } = {},
+    options: { limit?: number; before?: Date; after?: Date; mediaOnly?: boolean } = {},
   ): Promise<Message[]> {
-    const { limit = 100, before, after } = options;
+    const { limit = 100, before, after, mediaOnly } = options;
     const conditions = [eq(messages.chatId, chatId), sql`${messages.deletedAt} IS NULL`];
 
     if (before) {
@@ -308,6 +308,10 @@ export class MessageService {
 
     if (after) {
       conditions.push(gte(messages.platformTimestamp, after));
+    }
+
+    if (mediaOnly) {
+      conditions.push(eq(messages.hasMedia, true));
     }
 
     return this.db

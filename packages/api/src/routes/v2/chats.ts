@@ -102,6 +102,8 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof ChatTypeSchema>[] | undefined),
   search: z.string().optional(),
   includeArchived: z.coerce.boolean().default(false),
+  unreadOnly: z.coerce.boolean().optional(),
+  sort: z.enum(['activity', 'unread', 'name']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().optional(),
 });
@@ -491,12 +493,14 @@ chatsRoutes.get('/:id/messages', async (c) => {
   const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
   const before = c.req.query('before');
   const after = c.req.query('after');
+  const mediaOnly = c.req.query('mediaOnly') === 'true';
   const services = c.get('services');
 
   const messages = await services.messages.getChatMessages(chatId, {
     limit,
     before: before ? new Date(before) : undefined,
     after: after ? new Date(after) : undefined,
+    mediaOnly,
   });
 
   return c.json({ items: messages });
