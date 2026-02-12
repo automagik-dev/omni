@@ -2,7 +2,7 @@
 
 > End-to-end latency instrumentation for the message processing pipeline
 
-**Status:** DRAFT
+**Status:** FORGING
 **Created:** 2026-02-10
 **Updated:** 2026-02-12
 **Author:** WISH Agent
