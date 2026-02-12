@@ -534,7 +534,8 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  // Use smart lookup to handle LID/phone JID resolution
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
@@ -617,7 +618,8 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    // Use smart lookup to handle LID/phone JID resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -836,7 +838,8 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    // Use smart lookup to handle LID/phone JID resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,

@@ -604,8 +604,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
 
-          // Find the chat
-          const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
+          // Find the chat (use smart lookup to handle LID/phone JID resolution)
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
           if (!chat) {
             log.debug('Chat not found for message.delivered', { chatId: payload.chatId });
             return;
@@ -653,8 +653,8 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
 
-          // Find the chat
-          const chat = await services.chats.getByExternalId(metadata.instanceId, payload.chatId);
+          // Find the chat (use smart lookup to handle LID/phone JID resolution)
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
           if (!chat) {
             log.debug('Chat not found for message.read', { chatId: payload.chatId });
             return;
