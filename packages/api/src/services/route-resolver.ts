@@ -15,6 +15,10 @@ import { LRUCache } from 'lru-cache';
 
 const log = createLogger('route-resolver');
 
+// Sentinel value for negative caching (no route found)
+const NO_ROUTE = Symbol('NO_ROUTE');
+type CacheValue = ResolvedRoute | typeof NO_ROUTE;
+
 interface ResolvedRoute {
   id: string;
   instanceId: string;
@@ -50,12 +54,12 @@ interface CacheMetrics {
 }
 
 export class RouteResolver {
-  private cache: LRUCache<string, ResolvedRoute>;
+  private cache: LRUCache<string, CacheValue>;
   private metrics: CacheMetrics;
 
   constructor(private db: Database) {
     // 30s TTL, max 1000 entries
-    this.cache = new LRUCache<string, ResolvedRoute>({
+    this.cache = new LRUCache<string, CacheValue>({
       max: 1000,
       ttl: 30_000, // 30 seconds
       updateAgeOnGet: false, // Don't reset TTL on cache hits
@@ -79,10 +83,12 @@ export class RouteResolver {
     const cacheKey = this.getCacheKey(instanceId, chatId, personId);
     const cached = this.cache.get(cacheKey);
 
-    if (cached) {
+    // Check if we have a cached result (including negative cache via NO_ROUTE sentinel)
+    if (cached !== undefined) {
       this.metrics.hits++;
-      log.debug('Route cache hit', { instanceId, chatId, personId, hit: true });
-      return cached;
+      const result = cached === NO_ROUTE ? null : cached;
+      log.debug('Route cache hit', { instanceId, chatId, personId, hit: true, hasRoute: result !== null });
+      return result;
     }
 
     this.metrics.misses++;
@@ -113,7 +119,10 @@ export class RouteResolver {
     this.metrics.lastQueryMs = Date.now() - startMs;
 
     if (!dbRoute) {
-      log.debug('No route found (using instance default)', {
+      // Cache negative result using sentinel to avoid repeated DB queries
+      this.metrics.sets++;
+      this.cache.set(cacheKey, NO_ROUTE);
+      log.debug('No route found (using instance default, cached negative result)', {
         instanceId,
         chatId,
         personId,

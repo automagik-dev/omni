@@ -60,8 +60,18 @@ routesRoutes.post(
     const instanceId = c.req.param('instanceId');
     const data = c.req.valid('json');
     const services = c.get('services');
+    const eventBus = c.get('eventBus');
 
     const route = await services.routes.create(instanceId, data);
+
+    // Publish route.created event
+    if (eventBus) {
+      eventBus
+        .publishGeneric('custom.route.created', { routeId: route.id, instanceId, route }, { instanceId })
+        .catch(() => {
+          // Event publishing is fire-and-forget, don't block response
+        });
+    }
 
     return c.json({ data: route }, 201);
   },
@@ -79,6 +89,7 @@ routesRoutes.patch(
     const instanceId = c.req.param('instanceId');
     const data = c.req.valid('json');
     const services = c.get('services');
+    const eventBus = c.get('eventBus');
 
     // Fetch route first to verify ownership
     const existingRoute = await services.routes.getById(id);
@@ -87,6 +98,15 @@ routesRoutes.patch(
     }
 
     const route = await services.routes.update(id, data);
+
+    // Publish route.updated event
+    if (eventBus) {
+      eventBus
+        .publishGeneric('custom.route.updated', { routeId: route.id, instanceId, route, changes: data }, { instanceId })
+        .catch(() => {
+          // Event publishing is fire-and-forget, don't block response
+        });
+    }
 
     return c.json({ data: route });
   },
@@ -99,6 +119,7 @@ routesRoutes.delete('/instances/:instanceId/routes/:id', instanceAccess, async (
   const id = c.req.param('id');
   const instanceId = c.req.param('instanceId');
   const services = c.get('services');
+  const eventBus = c.get('eventBus');
 
   // Fetch route first to verify ownership
   const existingRoute = await services.routes.getById(id);
@@ -107,6 +128,13 @@ routesRoutes.delete('/instances/:instanceId/routes/:id', instanceAccess, async (
   }
 
   await services.routes.delete(id);
+
+  // Publish route.deleted event
+  if (eventBus) {
+    eventBus.publishGeneric('custom.route.deleted', { routeId: id, instanceId }, { instanceId }).catch(() => {
+      // Event publishing is fire-and-forget, don't block response
+    });
+  }
 
   return c.json({ success: true });
 });
