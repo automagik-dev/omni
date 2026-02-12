@@ -206,10 +206,15 @@ function createMockServices(overrides: Record<string, unknown> = {}) {
     }),
   };
 
+  const routeResolver = {
+    resolve: mock(async () => null),
+  };
+
   return {
     agentRunner,
     access,
     providers,
+    routeResolver,
     ...overrides,
   } as unknown as import('../../services').Services;
 }

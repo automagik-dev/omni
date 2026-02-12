@@ -242,7 +242,7 @@ describe('RouteResolver', () => {
     expect(result).not.toBeNull();
     expect(result?.scope).toBe('user');
     // TypeScript should accept this as 'chat' | 'user'
-    const scope: 'chat' | 'user' = result?.scope;
+    const scope: 'chat' | 'user' = result!.scope;
     expect(scope).toBe('user');
   });
 });

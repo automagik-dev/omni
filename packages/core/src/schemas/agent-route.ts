@@ -21,7 +21,7 @@ export const AgentSessionStrategySchema = z.enum(['per_user', 'per_chat', 'per_u
 /**
  * Reply filter mode
  */
-export const ReplyFilterModeSchema = z.enum(['always', 'conditional', 'never']);
+export const ReplyFilterModeSchema = z.enum(['all', 'filtered']);
 export type ReplyFilterMode = z.infer<typeof ReplyFilterModeSchema>;
 
 /**

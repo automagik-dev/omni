@@ -1570,6 +1570,9 @@ export const chatIdMappingsRelations = relations(chatIdMappings, ({ one }) => ({
 export type AgentProvider = typeof agentProviders.$inferSelect;
 export type NewAgentProvider = typeof agentProviders.$inferInsert;
 
+export type AgentRoute = typeof agentRoutes.$inferSelect;
+export type NewAgentRoute = typeof agentRoutes.$inferInsert;
+
 export type Instance = typeof instances.$inferSelect;
 export type NewInstance = typeof instances.$inferInsert;
 

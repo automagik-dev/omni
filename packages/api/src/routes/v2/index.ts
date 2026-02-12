@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
+import { routesRoutes } from './agent-routes';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
@@ -51,3 +52,4 @@ v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/pa
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
+v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
