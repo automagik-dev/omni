@@ -12,7 +12,6 @@ import {
   type IAgentClient,
   ProviderError,
   type ProviderFile,
-  type ProviderResponse,
   type StreamChunk,
   createProviderClient,
   isProviderSchemaSupported,

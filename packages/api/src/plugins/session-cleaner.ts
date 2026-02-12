@@ -92,7 +92,7 @@ async function clearAgentSession(
     defaultTimeoutMs: (providerRecord.defaultTimeout ?? 60) * 1000,
   });
 
-  await client.deleteSession(sessionId);
+  await client.deleteSession?.(sessionId);
 
   return { sessionId, sessionStrategy };
 }

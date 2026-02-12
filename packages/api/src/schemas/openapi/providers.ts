@@ -10,7 +10,9 @@ import { ErrorSchema, SuccessSchema } from './common';
 export const ProviderSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Provider UUID' }),
   name: z.string().openapi({ description: 'Provider name' }),
-  schema: z.enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code']).openapi({ description: 'Provider schema type' }),
+  schema: z
+    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code'])
+    .openapi({ description: 'Provider schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
   schemaConfig: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Schema config' }),

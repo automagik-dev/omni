@@ -3058,7 +3058,7 @@ export interface components {
              * @description Provider schema type
              * @enum {string}
              */
-            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
             /**
              * Format: uri
              * @description Base URL
@@ -3107,7 +3107,7 @@ export interface components {
              * @default agnoos
              * @enum {string}
              */
-            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
             /**
              * Format: uri
              * @description Base URL
@@ -9115,7 +9115,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9178,7 +9178,7 @@ export interface operations {
                      * @default agnoos
                      * @enum {string}
                      */
-                    schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9247,7 +9247,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9344,7 +9344,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9478,7 +9478,7 @@ export interface operations {
                      * @default agnoos
                      * @enum {string}
                      */
-                    schema?: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9547,7 +9547,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agnoos" | "a2a" | "openai" | "anthropic" | "custom";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
                             /**
                              * Format: uri
                              * @description Base URL

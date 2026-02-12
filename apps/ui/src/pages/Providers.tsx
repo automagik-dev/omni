@@ -288,11 +288,7 @@ function CreateProviderModal({ open, onClose }: { open: boolean; onClose: () => 
                   id="base-url"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder={
-                    schema === 'openclaw'
-                      ? 'ws://127.0.0.1:18789'
-                      : 'https://...'
-                  }
+                  placeholder={schema === 'openclaw' ? 'ws://127.0.0.1:18789' : 'https://...'}
                 />
                 <p className="text-xs text-muted-foreground">Leave empty to use the default endpoint</p>
               </div>

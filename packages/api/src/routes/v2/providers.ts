@@ -159,13 +159,14 @@ providersRoutes.get('/:id/agents', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const agents = await client.listAgents();
+  const allEntries = (await client.discover?.()) ?? [];
+  const agents = allEntries.filter((e) => e.type === 'agent');
 
   return c.json({ items: agents });
 });
 
 /**
- * GET /providers/:id/teams - List teams from provider (AgnoOS only)
+ * GET /providers/:id/teams - List teams from provider (Agno only)
  */
 providersRoutes.get('/:id/teams', async (c) => {
   const id = c.req.param('id');
@@ -187,13 +188,14 @@ providersRoutes.get('/:id/teams', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const teams = await client.listTeams();
+  const allEntries = (await client.discover?.()) ?? [];
+  const teams = allEntries.filter((e) => e.type === 'team');
 
   return c.json({ items: teams });
 });
 
 /**
- * GET /providers/:id/workflows - List workflows from provider (AgnoOS only)
+ * GET /providers/:id/workflows - List workflows from provider (Agno only)
  */
 providersRoutes.get('/:id/workflows', async (c) => {
   const id = c.req.param('id');
@@ -215,7 +217,8 @@ providersRoutes.get('/:id/workflows', async (c) => {
     defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
   });
 
-  const workflows = await client.listWorkflows();
+  const allEntries = (await client.discover?.()) ?? [];
+  const workflows = allEntries.filter((e) => e.type === 'workflow');
 
   return c.json({ items: workflows });
 });
