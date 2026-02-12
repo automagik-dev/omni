@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin/
-          key: nats-${{ runner.os }}-v2.10.24
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
 
       - name: Install dependencies
         run: bun install
@@ -104,7 +104,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin/
-          key: nats-${{ runner.os }}-v2.10.24
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
 
       - name: Install dependencies
         run: bun install
