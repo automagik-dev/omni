@@ -283,6 +283,7 @@ export function registerRouteSchemas(registry: OpenAPIRegistry): void {
         description: 'Cache metrics',
         content: { 'application/json': { schema: z.object({ data: CacheMetricsSchema }) } },
       },
+      403: { description: 'Access denied', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 }

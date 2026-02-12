@@ -109,6 +109,12 @@ async function updateAgentRouteAction(
   const client = getClient();
 
   try {
+    // Validate mutually exclusive flags
+    if (options.active && options.inactive) {
+      output.error('Cannot specify both --active and --inactive');
+      return;
+    }
+
     const instanceId = await resolveInstanceId(instanceArg);
 
     // Build update object with only provided options
