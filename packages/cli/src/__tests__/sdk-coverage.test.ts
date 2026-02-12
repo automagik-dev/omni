@@ -56,6 +56,7 @@ const CLI_COMMANDS: Record<string, string> = {
   // ============================================================================
   // MESSAGES
   // ============================================================================
+  'messages.get': 'messages get <id>',
   'messages.send': 'send text',
   'messages.sendMedia': 'send media',
   'messages.sendReaction': 'send reaction',
