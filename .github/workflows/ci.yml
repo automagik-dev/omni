@@ -15,6 +15,7 @@ jobs:
     name: Secrets Scan (GitGuardian)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +175,7 @@ jobs:
 
       - name: Verify single API process
         run: |
-          PROC_COUNT=$(lsof -ti:8882 | wc -l)
+          PROC_COUNT=$(lsof -ti:8882 | sort -u | wc -l)
           echo "Processes on port 8882: $PROC_COUNT"
           if [ "$PROC_COUNT" -ne 1 ]; then
             echo "Expected 1 process on port 8882, found $PROC_COUNT"
