@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { CreateAgentRouteSchema, ListAgentRoutesQuerySchema, UpdateAgentRouteSchema } from '@omni/core';
+import { CreateAgentRouteSchema, ListAgentRoutesQuerySchema, NotFoundError, UpdateAgentRouteSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
@@ -36,9 +36,15 @@ routesRoutes.get(
  */
 routesRoutes.get('/instances/:instanceId/routes/:id', instanceAccess, async (c) => {
   const id = c.req.param('id');
+  const instanceId = c.req.param('instanceId');
   const services = c.get('services');
 
   const route = await services.routes.getById(id);
+
+  // Verify route belongs to this instance
+  if (route.instanceId !== instanceId) {
+    throw new NotFoundError('AgentRoute', id);
+  }
 
   return c.json({ data: route });
 });
@@ -70,8 +76,15 @@ routesRoutes.patch(
   zValidator('json', UpdateAgentRouteSchema),
   async (c) => {
     const id = c.req.param('id');
+    const instanceId = c.req.param('instanceId');
     const data = c.req.valid('json');
     const services = c.get('services');
+
+    // Fetch route first to verify ownership
+    const existingRoute = await services.routes.getById(id);
+    if (existingRoute.instanceId !== instanceId) {
+      throw new NotFoundError('AgentRoute', id);
+    }
 
     const route = await services.routes.update(id, data);
 
@@ -84,7 +97,14 @@ routesRoutes.patch(
  */
 routesRoutes.delete('/instances/:instanceId/routes/:id', instanceAccess, async (c) => {
   const id = c.req.param('id');
+  const instanceId = c.req.param('instanceId');
   const services = c.get('services');
+
+  // Fetch route first to verify ownership
+  const existingRoute = await services.routes.getById(id);
+  if (existingRoute.instanceId !== instanceId) {
+    throw new NotFoundError('AgentRoute', id);
+  }
 
   await services.routes.delete(id);
 
@@ -93,8 +113,11 @@ routesRoutes.delete('/instances/:instanceId/routes/:id', instanceAccess, async (
 
 /**
  * GET /routes/metrics - Get cache metrics
+ * Note: Global endpoint, requires auth but not instance-specific
  */
 routesRoutes.get('/routes/metrics', async (c) => {
+  // Note: Auth is applied at the root level via authMiddleware in app.ts
+  // This endpoint returns global cache metrics across all instances
   const services = c.get('services');
   const metrics = services.routeResolver.getMetrics();
 

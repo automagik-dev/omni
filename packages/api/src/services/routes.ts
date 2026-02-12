@@ -2,11 +2,11 @@
  * Route service - manages agent routes
  */
 
-import { NotFoundError } from '@omni/core';
+import { ConflictError, NotFoundError } from '@omni/core';
 import type { CreateAgentRoute, ListAgentRoutesQuery, UpdateAgentRoute } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentRoute, type NewAgentRoute, agentRoutes } from '@omni/db';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { RouteResolver } from './route-resolver';
 
 export class RouteService {
@@ -19,20 +19,20 @@ export class RouteService {
    * List routes for an instance
    */
   async list(instanceId: string, options: ListAgentRoutesQuery = {}): Promise<AgentRoute[]> {
-    let query = this.db.select().from(agentRoutes).where(eq(agentRoutes.instanceId, instanceId)).$dynamic();
+    // Build filter conditions
+    const conditions = [eq(agentRoutes.instanceId, instanceId)];
 
-    // Filter by scope if provided
     if (options.scope) {
-      query = query.where(eq(agentRoutes.scope, options.scope));
+      conditions.push(eq(agentRoutes.scope, options.scope));
     }
-
-    // Filter by active status if provided
     if (options.isActive !== undefined) {
-      query = query.where(eq(agentRoutes.isActive, options.isActive));
+      conditions.push(eq(agentRoutes.isActive, options.isActive));
     }
 
-    // Order by priority (highest first), then by creation time
-    return query.orderBy(desc(agentRoutes.priority), agentRoutes.createdAt);
+    // Apply all conditions (single condition can be used directly, multiple need and())
+    const where = conditions.length === 1 ? conditions[0] : and(...conditions);
+
+    return this.db.select().from(agentRoutes).where(where).orderBy(desc(agentRoutes.priority), agentRoutes.createdAt);
   }
 
   /**
@@ -76,16 +76,43 @@ export class RouteService {
       isActive: data.isActive ?? true,
     };
 
-    const [created] = await this.db.insert(agentRoutes).values(routeData).returning();
+    try {
+      const [created] = await this.db.insert(agentRoutes).values(routeData).returning();
 
-    if (!created) {
-      throw new Error('Failed to create agent route');
+      if (!created) {
+        throw new Error('Failed to create agent route');
+      }
+
+      // Invalidate cache after creation
+      this.routeResolver.invalidateInstance(instanceId);
+
+      return created;
+    } catch (error) {
+      // Check for unique constraint violation (PostgreSQL error code 23505)
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+        const constraint = 'constraint' in error && typeof error.constraint === 'string' ? error.constraint : 'unknown';
+
+        // Determine which unique constraint was violated
+        if (constraint.includes('chat')) {
+          throw new ConflictError('AgentRoute', 'A route for this chat already exists', {
+            instanceId,
+            chatId: data.chatId,
+            scope: data.scope,
+          });
+        }
+        if (constraint.includes('user') || constraint.includes('person')) {
+          throw new ConflictError('AgentRoute', 'A route for this user already exists', {
+            instanceId,
+            personId: data.personId,
+            scope: data.scope,
+          });
+        }
+
+        throw new ConflictError('AgentRoute', 'Route already exists', { constraint });
+      }
+
+      throw error;
     }
-
-    // Invalidate cache after creation
-    this.routeResolver.invalidateInstance(instanceId);
-
-    return created;
   }
 
   /**

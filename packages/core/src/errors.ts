@@ -130,6 +130,26 @@ export class NotFoundError extends OmniError {
 }
 
 /**
+ * Conflict error (409)
+ */
+export class ConflictError extends OmniError {
+  readonly resourceType: string;
+  readonly conflictReason: string;
+
+  constructor(resourceType: string, conflictReason: string, context?: Record<string, unknown>) {
+    super({
+      code: ERROR_CODES.CONFLICT,
+      message: `${resourceType} conflict: ${conflictReason}`,
+      context: { ...context, resourceType, conflictReason },
+      recoverable: true,
+    });
+    this.name = 'ConflictError';
+    this.resourceType = resourceType;
+    this.conflictReason = conflictReason;
+  }
+}
+
+/**
  * Channel error
  */
 export class ChannelError extends OmniError {
