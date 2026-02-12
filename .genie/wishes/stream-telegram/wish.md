@@ -1,6 +1,6 @@
 # Wish: Stream Telegram — Progressive Response Rendering + Dispatcher
 
-**Status:** READY (stream-plumbing complete)
+**Status:** SHIPPED (PR #23 — nightly/2026-02-12)
 **Slug:** `stream-telegram`
 **Created:** 2026-02-11
 **Parent:** `reasoning-stream` (split 2/2)
