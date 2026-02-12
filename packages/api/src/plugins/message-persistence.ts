@@ -164,14 +164,28 @@ const MEDIA_BADGES: Record<string, string> = {
 };
 
 /**
- * Extract phone number from WhatsApp JID.
- * Returns undefined for @lid JIDs (the numeric part is NOT a phone number).
+ * Extract and validate phone from sender ID.
+ * Returns E.164 phone (+digits) or undefined for non-phone IDs.
+ *
+ * Filters out:
+ * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
+ * - LID references (numeric but not phone numbers)
+ * - Meta IDs (non-numeric platform identifiers)
+ * - IDs that are too short (<7 digits) or too long (>15 digits)
  */
-function extractPhoneFromJid(jid: string, channel: string): string | undefined {
+function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
   if (!channel.startsWith('whatsapp')) return undefined;
-  // @lid JIDs contain a Linked Device ID, not a phone number — skip them
-  if (jid.endsWith('@lid')) return undefined;
-  return jid.split('@')[0]?.replace(/\D/g, '');
+
+  // Strip @suffix if still present (defensive)
+  const bare = senderId.split('@')[0] || senderId;
+
+  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
+  if (!/^\d+$/.test(bare)) return undefined;
+
+  // E.164 validation: 7-15 digits
+  if (bare.length < 7 || bare.length > 15) return undefined;
+
+  return `+${bare}`;
 }
 
 // ============================================================================
@@ -203,7 +217,7 @@ async function processSenderIdentity(
 
   const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
-  const phoneNumber = extractPhoneFromJid(platformUserId, channel);
+  const phoneNumber = extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },

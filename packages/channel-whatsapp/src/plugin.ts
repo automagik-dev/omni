@@ -346,6 +346,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Get the bot's own JID for an instance (e.g., "5511999990000@s.whatsapp.net")
+   */
+  getMeJid(instanceId: string): string | undefined {
+    return this.sockets.get(instanceId)?.user?.id;
+  }
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {

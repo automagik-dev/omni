@@ -571,7 +571,7 @@ export const persons = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
-    phoneIdx: index('persons_phone_idx').on(table.primaryPhone),
+    phoneIdx: uniqueIndex('persons_phone_idx').on(table.primaryPhone),
     emailIdx: index('persons_email_idx').on(table.primaryEmail),
     nameIdx: index('persons_name_idx').on(table.displayName),
   }),
