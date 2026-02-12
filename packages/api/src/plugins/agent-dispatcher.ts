@@ -24,6 +24,7 @@ import {
   AgnoAgentProvider,
   type EventBus,
   type IAgentProvider,
+  JOURNEY_STAGES,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
   OpenClawClient,
@@ -35,6 +36,7 @@ import {
   createLogger,
   createProviderClient,
   generateCorrelationId,
+  getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
@@ -67,6 +69,10 @@ interface DispatchMetadata {
   personId?: string;
   platformIdentityId?: string;
   traceId: string;
+  /** Original NATS event correlationId for journey tracking */
+  correlationId?: string;
+  /** Whether this message is being journey-tracked (has timings) */
+  journeyTracked?: boolean;
 }
 
 interface DebounceConfig {
@@ -1690,6 +1696,12 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
       }
     }
 
+    // T5: Agent notified — record journey checkpoint
+    if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
+      const tracker = getJourneyTracker();
+      tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
+    }
+
     await processAgentResponse(services, instance, messages, triggerType);
   });
 
@@ -1734,6 +1746,8 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                correlationId: metadata.correlationId,
+                journeyTracked: metadata.timings != null,
               },
               timestamp: event.timestamp,
             },
