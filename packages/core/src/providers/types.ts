@@ -119,6 +119,15 @@ export interface StreamChunk {
 }
 
 /**
+ * Unified streaming delta format for provider triggerStream implementations.
+ */
+export type StreamDelta =
+  | { phase: 'thinking'; thinking: string; thinkingElapsedMs: number }
+  | { phase: 'content'; content: string; thinking?: string; thinkingDurationMs?: number }
+  | { phase: 'final'; content: string; thinking?: string; thinkingDurationMs?: number }
+  | { phase: 'error'; error: string };
+
+/**
  * Agent entity from Agno
  */
 export interface AgnoAgent {
@@ -260,6 +269,9 @@ export interface IAgentProvider {
 
   /** Process a trigger and return response (null = fire-and-forget, no response) */
   trigger(context: AgentTrigger): Promise<AgentTriggerResult | null>;
+
+  /** Optional: Process a trigger as a stream of provider deltas */
+  triggerStream?(context: AgentTrigger): AsyncGenerator<StreamDelta>;
 
   /** Health check */
   checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }>;

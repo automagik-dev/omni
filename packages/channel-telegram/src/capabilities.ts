@@ -62,6 +62,7 @@ export const TELEGRAM_CAPABILITIES: ChannelCapabilities = {
   canCreateWebhooks: false,
   canSendViaWebhook: false,
   canHandleVoice: false,
+  canStreamResponse: true,
 
   // Limits
   maxMessageLength: 4096,

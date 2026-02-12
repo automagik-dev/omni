@@ -69,6 +69,9 @@ export * from './helpers/message';
 
 export * from './discovery';
 
+// Explicit streaming type export for package root access
+export type { StreamSender } from './types/streaming';
+
 // ─────────────────────────────────────────────────────────────
 // Re-exports from @omni/core for convenience
 // ─────────────────────────────────────────────────────────────

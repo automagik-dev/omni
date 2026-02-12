@@ -10,6 +10,7 @@ import type { ChannelCapabilities } from './capabilities';
 import type { PluginContext } from './context';
 import type { ConnectionStatus, InstanceConfig } from './instance';
 import type { OutgoingMessage, SendResult } from './messaging';
+import type { StreamSender } from './streaming';
 
 /**
  * Health status for the plugin
@@ -156,6 +157,13 @@ export interface ChannelPlugin {
    * @returns Send result with message ID or error
    */
   sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult>;
+
+  /**
+   * Create a stream sender for partial response updates
+   *
+   * Optional - only implement if canStreamResponse capability is true.
+   */
+  createStreamSender?(instanceId: string, chatId: string, replyToMessageId?: string): StreamSender;
 
   /**
    * Send typing indicator

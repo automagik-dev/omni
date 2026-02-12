@@ -18,6 +18,7 @@
  */
 
 import { join, resolve } from 'node:path';
+import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
   type AgentTriggerType,
@@ -33,6 +34,7 @@ import {
   type OpenClawProviderConfig,
   type ProviderFile,
   type ReactionReceivedPayload,
+  type StreamDelta,
   WebhookAgentProvider,
   createLogger,
   createProviderClient,
@@ -847,6 +849,165 @@ async function fetchChatMetadata(
   }
 }
 
+// ─── Per-chatId stream guard ──────────────────────────────
+const activeStreams = new Map<string, StreamSender>();
+
+/** Route a single StreamDelta to the appropriate StreamSender method. */
+async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
+  switch (delta.phase) {
+    case 'thinking':
+      await sender.onThinkingDelta(delta);
+      break;
+    case 'content':
+      await sender.onContentDelta(delta);
+      break;
+    case 'final':
+      await sender.onFinal(delta);
+      break;
+    case 'error':
+      await sender.onError(delta);
+      break;
+  }
+}
+
+interface StreamCapabilities {
+  provider: IAgentProvider & { triggerStream: (ctx: AgentTrigger) => AsyncGenerator<StreamDelta> };
+  createSender: (instanceId: string, chatId: string, replyToMessageId?: string) => StreamSender;
+}
+
+/** Check all preconditions for streaming dispatch. Returns null if any guard fails. */
+async function resolveStreamingCapabilities(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  traceId: string,
+): Promise<StreamCapabilities | null> {
+  if (!instance.agentStreamMode) return null;
+
+  const provider = await getAgentProvider(services, instance);
+  if (!provider?.triggerStream) return null;
+
+  const plugin = await getPlugin(channel);
+  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) return null;
+
+  const streamKey = `${instance.id}:${chatId}`;
+  if (activeStreams.has(streamKey)) {
+    log.info('Stream guard: parallel stream blocked, falling back to accumulate', {
+      instanceId: instance.id,
+      chatId,
+      traceId,
+    });
+    return null;
+  }
+
+  return {
+    provider: provider as StreamCapabilities['provider'],
+    createSender: plugin.createStreamSender.bind(plugin),
+  };
+}
+
+/**
+ * Try streaming dispatch: provider.triggerStream() → StreamSender.
+ * Returns true if handled via streaming, false to fall back to accumulate.
+ */
+async function dispatchViaStreamingProvider(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  personId: string,
+  senderName: string | undefined,
+  traceId: string,
+  rawEvent: AgentTrigger['event'],
+): Promise<boolean> {
+  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId);
+  if (!resolved) return false;
+
+  const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+  if (!messageTexts.length && !mediaFiles.length) return false;
+  if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
+
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const replyToId = messages[0]?.payload.externalId;
+
+  const trigger: AgentTrigger = {
+    traceId,
+    type: triggerType,
+    event: rawEvent,
+    source: {
+      channelType: channel,
+      instanceId: instance.id,
+      chatId,
+      messageId: messages[0]?.payload.externalId ?? '',
+    },
+    sender: {
+      platformUserId: senderId,
+      personId,
+      displayName: senderName,
+    },
+    content: {
+      text: messageTexts.join('\n'),
+    },
+    sessionId,
+  };
+
+  const sender = resolved.createSender(instance.id, chatId, replyToId);
+  const streamKey = `${instance.id}:${chatId}`;
+  activeStreams.set(streamKey, sender);
+
+  const startTime = Date.now();
+  let generator: AsyncGenerator<StreamDelta> | null = null;
+
+  try {
+    generator = resolved.provider.triggerStream(trigger);
+    let hadError = false;
+
+    for await (const delta of generator) {
+      if (delta.phase === 'error') hadError = true;
+      await routeStreamDelta(sender, delta);
+    }
+
+    log.info('Streaming response complete', {
+      instanceId: instance.id,
+      chatId,
+      durationMs: Date.now() - startTime,
+      hadError,
+      traceId,
+    });
+
+    // Error deltas (timeout, circuit-breaker) are not exceptions — they just
+    // clean up the placeholder.  Return false so the caller falls back to the
+    // accumulate-then-reply path and the user still gets a response.
+    return !hadError;
+  } catch (err) {
+    log.error('Streaming dispatch failed, falling back', {
+      instanceId: instance.id,
+      chatId,
+      error: String(err),
+      traceId,
+    });
+    try {
+      await sender.abort();
+    } catch {
+      // Best effort cleanup
+    }
+    return false;
+  } finally {
+    activeStreams.delete(streamKey);
+    if (generator) {
+      try {
+        await generator.return(undefined as never);
+      } catch {
+        // Generator may already be closed
+      }
+    }
+  }
+}
+
 /**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
@@ -1038,7 +1199,8 @@ async function processAgentResponse(
     const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
     let handled = false;
     try {
-      handled = await dispatchViaProvider(
+      // B-1a: Try streaming dispatch first (if instance + provider + channel support it)
+      handled = await dispatchViaStreamingProvider(
         services,
         instance,
         messages,
@@ -1051,6 +1213,23 @@ async function processAgentResponse(
         traceId,
         rawEvent,
       );
+
+      // B-1b: Fall back to accumulate-then-reply
+      if (!handled) {
+        handled = await dispatchViaProvider(
+          services,
+          instance,
+          messages,
+          triggerType,
+          channel,
+          chatId,
+          senderId,
+          personId,
+          senderName,
+          traceId,
+          rawEvent,
+        );
+      }
     } catch (providerError) {
       log.error('Provider dispatch failed, falling back to legacy', {
         instanceId: instance.id,
@@ -1494,11 +1673,19 @@ async function checkAccessWithFallback(
   channel: ChannelType,
 ): Promise<boolean> {
   const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
-  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  // Validate participantAlt looks like a real phone number (Baileys LID fallback)
+  const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
   const primaryId = payload.from ?? '';
 
   let accessResult = await accessService.checkAccess(instance, primaryId, channel);
   if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
+    log.warn('Access fallback to participantAlt', {
+      instanceId: instance.id,
+      primaryId,
+      participantAlt,
+      chatId: payload.chatId,
+    });
     accessResult = await accessService.checkAccess(instance, participantAlt, channel);
   }
   if (accessResult.allowed) return false;

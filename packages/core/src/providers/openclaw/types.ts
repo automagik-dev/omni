@@ -63,6 +63,19 @@ export interface ContentBlock {
   source?: { type: string; media_type: string; data: string };
 }
 
+// === Agent Event Types ===
+
+export type AgentEventStream = 'lifecycle' | 'tool' | 'assistant' | 'thinking' | 'error';
+
+export interface AgentEventPayload {
+  runId: string;
+  seq: number;
+  stream: AgentEventStream;
+  ts: number;
+  data: Record<string, unknown>;
+  sessionKey?: string;
+}
+
 // === Connect Types ===
 
 export interface ConnectParams {
