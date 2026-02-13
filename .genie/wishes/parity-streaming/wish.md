@@ -1,6 +1,6 @@
 # Wish: WhatsApp Response Streaming
 
-**Status:** READY  
+**Status:** DONE  
 **Slug:** parity-streaming  
 **Created:** 2026-02-13  
 **Depends on:** channel-parity-telegram-whatsapp  
