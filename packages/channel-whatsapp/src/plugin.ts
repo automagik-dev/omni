@@ -12,6 +12,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
@@ -24,6 +25,7 @@ import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
+import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -815,6 +817,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     lines.push('END:VCARD');
     return lines.join('\n');
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Streaming (progressive response edits)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Create a stream sender for progressive response rendering.
+   *
+   * Uses Baileys message edits to update a single message as the LLM
+   * streams its response. Throttled conservatively (default 2500ms)
+   * to avoid WhatsApp anti-bot detection.
+   *
+   * Config: `streamThrottleMs` in instance options (default 2500)
+   */
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ): StreamSender {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+
+    // Read per-instance throttle from config
+    const instanceEntry = this.instances.get(instanceId);
+    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+
+    return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
+      throttleMs,
+    });
   }
 
   /**
