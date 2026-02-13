@@ -149,6 +149,48 @@ function handleConflictError(c: Context, error: ConflictError): Response {
 }
 
 /**
+ * Channel error code → HTTP status + user-friendly message.
+ * Hoisted to module scope to avoid re-creation on every error.
+ */
+const CHANNEL_ERROR_MAP: Record<string, { status: 400 | 401 | 429 | 502 | 503; message: string }> = {
+  WHATSAPP_NOT_CONNECTED: {
+    status: 503,
+    message: 'WhatsApp instance is disconnected. Re-scan QR code to reconnect.',
+  },
+  WHATSAPP_AUTH_FAILED: { status: 401, message: 'WhatsApp authentication failed. Re-scan QR code.' },
+  WHATSAPP_RATE_LIMITED: { status: 429, message: 'WhatsApp rate limit reached. Try again later.' },
+  WHATSAPP_INVALID_JID: { status: 400, message: 'Invalid WhatsApp JID format.' },
+  WHATSAPP_INVALID_PHONE: { status: 400, message: 'Invalid phone number format.' },
+  WHATSAPP_SEND_FAILED: { status: 502, message: 'Failed to send message via WhatsApp.' },
+  WHATSAPP_MEDIA_UPLOAD_FAILED: { status: 502, message: 'Failed to upload media to WhatsApp.' },
+  TELEGRAM_NOT_CONNECTED: { status: 503, message: 'Telegram bot is disconnected.' },
+};
+
+/**
+ * Handle channel plugin errors (WhatsAppError, TelegramError, etc.)
+ * Maps known channel error codes to friendly HTTP responses.
+ */
+function handleChannelError(c: Context, error: Error & { code?: string; retryable?: boolean }): Response | null {
+  const code = error.code;
+  if (!code || typeof code !== 'string') return null;
+
+  // Safe lookup — guard against Object.prototype keys (constructor, __proto__, etc.)
+  const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
+  if (!mapped) return null;
+
+  return c.json(
+    {
+      error: {
+        code,
+        message: mapped.message,
+        retryable: error.retryable ?? false,
+      },
+    },
+    mapped.status,
+  );
+}
+
+/**
  * Handle unknown errors
  */
 function handleUnknownError(c: Context, error: unknown): Response {
@@ -188,6 +230,11 @@ function routeError(c: Context, error: unknown): Response {
   if (error instanceof OmniError) {
     return handleOmniError(c, error);
   }
+  // Channel plugin errors (WhatsAppError, TelegramError, etc.) — duck-typed by code
+  if (error instanceof Error && 'code' in error) {
+    const channelResult = handleChannelError(c, error as Error & { code?: string; retryable?: boolean });
+    if (channelResult) return channelResult;
+  }
   return handleUnknownError(c, error);
 }
 
@@ -204,6 +251,14 @@ function isClientError(error: unknown): boolean {
   if (error instanceof OmniError) {
     const status = ERROR_STATUS_MAP[error.code] ?? 500;
     return status < 500;
+  }
+  // Channel plugin errors — only treat as client error if mapped status < 500
+  if (error instanceof Error && 'code' in error && typeof (error as { code: unknown }).code === 'string') {
+    const code = (error as { code: string }).code;
+    const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
+    if (mapped) {
+      return mapped.status < 500;
+    }
   }
   return false;
 }
