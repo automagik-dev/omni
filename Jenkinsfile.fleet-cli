@@ -39,12 +39,15 @@ def updateOmniCLI(String sshTarget, String hostLabel) {
             mkdir -p "\${HOME}/.local/bin"
             
             # Clone or update omni repo
-            if [ -d "\${OMNI_DIR}/omni" ]; then
+            if [ -d "\${OMNI_DIR}/omni/.git" ]; then
                 cd "\${OMNI_DIR}/omni"
                 git fetch origin dev
-                git reset --hard origin/dev
+                git checkout dev
+                git reset --hard FETCH_HEAD
             else
-                git clone --depth 1 https://github.com/automagik-dev/omni.git "\${OMNI_DIR}/omni"
+                # Remove incomplete clone if exists
+                rm -rf "\${OMNI_DIR}/omni"
+                git clone --branch dev --depth 1 https://github.com/automagik-dev/omni.git "\${OMNI_DIR}/omni"
                 cd "\${OMNI_DIR}/omni"
             fi
             
