@@ -48,7 +48,32 @@ if (process.argv.includes('--json')) {
 }
 import { getConfigSummary, getInlineStatus } from './status.js';
 
-const VERSION = '0.0.1';
+import { execSync } from 'node:child_process';
+// Version from package.json + git commit for dev tracking
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let VERSION = '0.0.1'; // fallback
+
+// Try to read version from package.json
+try {
+  const pkgPath = join(__dirname, '..', 'package.json');
+  if (existsSync(pkgPath)) {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    VERSION = pkg.version || VERSION;
+  }
+} catch {}
+
+// Append git short hash in dev builds
+try {
+  const gitDir = join(__dirname, '..', '..', '..');
+  if (existsSync(join(gitDir, '.git'))) {
+    const hash = execSync('git rev-parse --short HEAD 2>/dev/null', { cwd: gitDir, encoding: 'utf-8' }).trim();
+    if (hash) VERSION += `+${hash}`;
+  }
+} catch {}
 
 /**
  * Help display group for organizing commands
