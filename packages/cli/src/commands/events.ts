@@ -151,18 +151,36 @@ async function fetchAnalytics(options: {
 
 /** Display analytics data */
 function displayAnalytics(data: AnalyticsData): void {
-  output.data({
-    totalMessages: data.totalMessages,
-    successful: data.successfulMessages,
-    failed: data.failedMessages,
-    successRate: `${(data.successRate * 100).toFixed(1)}%`,
-    avgProcessingMs: data.avgProcessingTimeMs ?? '-',
-    avgAgentMs: data.avgAgentTimeMs ?? '-',
-  });
+  const format = loadConfig().format ?? 'human';
 
-  displayRecordBreakdown('Message Types', data.messageTypes, 'type');
-  displayRecordBreakdown('Per Instance', data.instances, 'instanceId');
-  displayRecordBreakdown('Error Stages', data.errorStages, 'stage');
+  // For JSON output, use proper numeric types
+  if (format === 'json') {
+    output.data({
+      totalMessages: data.totalMessages,
+      successful: data.successfulMessages,
+      failed: data.failedMessages,
+      successRate: data.successRate,
+      avgProcessingMs: data.avgProcessingTimeMs,
+      avgAgentMs: data.avgAgentTimeMs,
+      messageTypes: data.messageTypes,
+      instances: data.instances,
+      errorStages: data.errorStages,
+    });
+  } else {
+    // For human output, format as strings for readability
+    output.data({
+      totalMessages: data.totalMessages,
+      successful: data.successfulMessages,
+      failed: data.failedMessages,
+      successRate: `${(data.successRate * 100).toFixed(1)}%`,
+      avgProcessingMs: data.avgProcessingTimeMs ?? '-',
+      avgAgentMs: data.avgAgentTimeMs ?? '-',
+    });
+
+    displayRecordBreakdown('Message Types', data.messageTypes, 'type');
+    displayRecordBreakdown('Per Instance', data.instances, 'instanceId');
+    displayRecordBreakdown('Error Stages', data.errorStages, 'stage');
+  }
 }
 
 /** Display a record as a sorted list */

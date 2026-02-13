@@ -298,9 +298,10 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
 export function createMediaCommand(): Command {
   const media = new Command('media').description('Browse and download media items');
 
-  // omni media ls
+  // omni media list (alias: ls)
   media
-    .command('ls')
+    .command('list')
+    .alias('ls')
     .description('List media items with transcriptions/descriptions (use "omni messages get <id>" for full details)')
     .option('--instance <id>', 'Filter by instance UUID')
     .option('--chat <id>', 'Filter by chat UUID')

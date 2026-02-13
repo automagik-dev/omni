@@ -17,6 +17,7 @@ import { loadConfig } from '../config.js';
 import { type Example, type OptionDef, formatExamples, formatOptionGroup } from '../help.js';
 import { areColorsEnabled } from '../output.js';
 import * as output from '../output.js';
+import { resolveInstanceId } from '../resolve.js';
 
 /** Get media type from file extension */
 function getMediaType(path: string): 'image' | 'audio' | 'video' | 'document' {
@@ -235,9 +236,9 @@ function getMessageType(options: SendOptions): keyof typeof messageSenders | nul
 }
 
 /** Validate send options and return instance ID */
-function validateSendOptions(options: SendOptions): string {
-  const instanceId = options.instance ?? loadConfig().defaultInstance;
-  if (!instanceId) {
+async function validateSendOptions(options: SendOptions): Promise<string> {
+  const instanceInput = options.instance ?? loadConfig().defaultInstance;
+  if (!instanceInput) {
     output.error('No instance specified. Use --instance <id> or set default: omni config set defaultInstance <id>');
   }
 
@@ -245,6 +246,8 @@ function validateSendOptions(options: SendOptions): string {
     output.error('--to <recipient> is required');
   }
 
+  // Resolve instance name/prefix to UUID
+  const instanceId = await resolveInstanceId(instanceInput);
   return instanceId;
 }
 
@@ -410,7 +413,7 @@ export function createSendCommand(): Command {
     // Presence
     .option('--presence <type>', 'Send presence indicator (typing, recording, paused)')
     .action(async (options: SendOptions) => {
-      const instanceId = validateSendOptions(options);
+      const instanceId = await validateSendOptions(options);
 
       const messageType = getMessageType(options);
       if (!messageType) {

@@ -213,6 +213,7 @@ program
   .enablePositionalOptions()
   .passThroughOptions()
   .option('--no-color', 'Disable colored output')
+  .option('--all', 'Show all commands including debug commands')
   .hook('preAction', (_thisCommand, actionCommand) => {
     const opts = actionCommand.optsWithGlobals();
     if (opts.color === false) {
