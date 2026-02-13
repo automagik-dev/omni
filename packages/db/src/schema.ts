@@ -154,6 +154,7 @@ export const messageTypes = [
   'contact',
   'location',
   'poll',
+  'reaction', // Emoji reactions to messages
   'system', // System messages (join, leave, etc.)
 ] as const;
 export type MessageType = (typeof messageTypes)[number];

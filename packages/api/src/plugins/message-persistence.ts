@@ -48,6 +48,7 @@ const CONTENT_TYPE_MAP: Record<string, MessageType> = {
   location: 'location',
   poll: 'poll',
   poll_update: 'poll',
+  reaction: 'reaction',
 };
 
 /**
