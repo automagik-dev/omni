@@ -182,6 +182,8 @@ export interface OmniClientConfig {
   baseUrl: string;
   /** API key for authentication */
   apiKey: string;
+  /** Optional CLI version for request handshake header */
+  cliVersion?: string;
 }
 
 /**
@@ -983,20 +985,27 @@ export function createOmniClient(config: OmniClientConfig) {
     async onRequest({ request }) {
       request.headers.set('x-api-key', config.apiKey);
       request.headers.set('Accept-Encoding', 'identity');
+      if (config.cliVersion) {
+        request.headers.set('x-omni-cli-version', config.cliVersion);
+      }
       return request;
     },
   };
 
   // Helper for direct fetch calls with consistent headers
-  const apiFetch = (url: string, init?: RequestInit) =>
-    fetch(url, {
+  const apiFetch = (url: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set('x-api-key', config.apiKey);
+    headers.set('Accept-Encoding', 'identity');
+    if (config.cliVersion) {
+      headers.set('x-omni-cli-version', config.cliVersion);
+    }
+
+    return fetch(url, {
       ...init,
-      headers: {
-        'x-api-key': config.apiKey,
-        'Accept-Encoding': 'identity',
-        ...init?.headers,
-      },
+      headers,
     });
+  };
 
   // Create openapi-fetch client
   const client = createClient<paths>({ baseUrl: `${baseUrl}/api/v2` });
@@ -2693,6 +2702,9 @@ export function createOmniClient(config: OmniClientConfig) {
         const noCompressionMiddleware: Middleware = {
           async onRequest({ request }) {
             request.headers.set('Accept-Encoding', 'identity');
+            if (config.cliVersion) {
+              request.headers.set('x-omni-cli-version', config.cliVersion);
+            }
             return request;
           },
         };

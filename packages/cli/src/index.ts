@@ -34,8 +34,9 @@ import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
+import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
-import { type CommandCategory, setRuntimeFormat } from './config.js';
+import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors } from './output.js';
 
@@ -47,33 +48,7 @@ if (process.argv.includes('--json')) {
   process.argv.splice(idx, 1);
 }
 import { getConfigSummary, getInlineStatus } from './status.js';
-
-import { execSync } from 'node:child_process';
-// Version from package.json + git commit for dev tracking
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-let VERSION = '0.0.1'; // fallback
-
-// Try to read version from package.json
-try {
-  const pkgPath = join(__dirname, '..', 'package.json');
-  if (existsSync(pkgPath)) {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-    VERSION = pkg.version || VERSION;
-  }
-} catch {}
-
-// Append git short hash in dev builds
-try {
-  const gitDir = join(__dirname, '..', '..', '..');
-  if (existsSync(join(gitDir, '.git'))) {
-    const hash = execSync('git rev-parse --short HEAD 2>/dev/null', { cwd: gitDir, encoding: 'utf-8' }).trim();
-    if (hash) VERSION += `+${hash}`;
-  }
-} catch {}
+import { VERSION, fetchServerVersion, formatCliVersionLine } from './version.js';
 
 /**
  * Help display group for organizing commands
@@ -180,6 +155,12 @@ const COMMANDS: CommandDef[] = [
   { create: createSettingsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Server settings' },
   { create: createBatchCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Batch operations' },
   {
+    create: createUpdateCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Update CLI to latest version',
+  },
+  {
     create: createMediaCommand,
     category: 'standard',
     helpGroup: 'Core',
@@ -228,7 +209,7 @@ const program = new Command();
 program
   .name('omni')
   .description('CLI for Omni v2 - Universal Omnichannel Platform')
-  .version(VERSION)
+  .version(VERSION, '-V, --version', 'output the version number')
   .enablePositionalOptions()
   .passThroughOptions()
   .option('--no-color', 'Disable colored output')
@@ -376,4 +357,16 @@ ${c().dim('Showing all commands (--all flag active)')}`;
 });
 
 // Parse and execute
-program.parse(process.argv);
+const argv = process.argv.slice(2);
+const isRootVersionOnly = argv.length > 0 && argv.every((arg) => arg === '--version' || arg === '-V');
+
+if (isRootVersionOnly) {
+  const config = loadConfig();
+  const apiUrl = config.apiUrl ?? 'http://localhost:8882';
+  const serverVersion = await fetchServerVersion(apiUrl);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(formatCliVersionLine(VERSION, serverVersion));
+  process.exit(0);
+}
+
+await program.parseAsync(process.argv);

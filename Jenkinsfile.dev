@@ -24,6 +24,7 @@ pipeline {
                         git checkout dev
                         git pull origin dev
                         bun install
+                        bun run scripts/generate-version.ts
                         bun run build 2>&1 || true
                         systemctl --user restart omni-dev.service 2>/dev/null && echo Service restarted || echo No omni-dev service
                         echo Omni v2 DEV deployed successfully
