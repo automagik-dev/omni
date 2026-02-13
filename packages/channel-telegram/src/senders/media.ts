@@ -63,6 +63,58 @@ export async function sendVideo(
 }
 
 /**
+ * Send a sticker to a Telegram chat
+ */
+export async function sendSticker(
+  bot: Bot,
+  chatId: string,
+  stickerUrl: string,
+  replyToMessageId?: number,
+): Promise<number> {
+  const result = await bot.api.sendSticker(chatId, stickerUrl, {
+    ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+  });
+  log.debug('Sent sticker', { chatId, messageId: result.message_id });
+  return result.message_id;
+}
+
+/**
+ * Send a contact card to a Telegram chat
+ */
+export async function sendContact(
+  bot: Bot,
+  chatId: string,
+  phone: string,
+  firstName: string,
+  lastName?: string,
+  replyToMessageId?: number,
+): Promise<number> {
+  const result = await bot.api.sendContact(chatId, phone, firstName, {
+    last_name: lastName,
+    ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+  });
+  log.debug('Sent contact', { chatId, messageId: result.message_id });
+  return result.message_id;
+}
+
+/**
+ * Send a location pin to a Telegram chat
+ */
+export async function sendLocation(
+  bot: Bot,
+  chatId: string,
+  latitude: number,
+  longitude: number,
+  replyToMessageId?: number,
+): Promise<number> {
+  const result = await bot.api.sendLocation(chatId, latitude, longitude, {
+    ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+  });
+  log.debug('Sent location', { chatId, messageId: result.message_id });
+  return result.message_id;
+}
+
+/**
  * Send a document to a Telegram chat
  */
 export async function sendDocument(
