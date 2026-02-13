@@ -9,7 +9,7 @@
 import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
-import { loadConfig } from '../config.js';
+import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
 import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
@@ -134,7 +134,11 @@ async function fetchAnalytics(options: {
   const baseUrl = config.apiUrl ?? 'http://localhost:8882';
 
   const params = new URLSearchParams();
-  if (options.instance) params.set('instanceId', options.instance);
+  if (options.instance) {
+    // Resolve instance name/prefix to UUID
+    const instanceId = await resolveInstanceId(options.instance);
+    params.set('instanceId', instanceId);
+  }
   if (options.allTime) params.set('allTime', 'true');
   if (options.since) params.set('since', parseSinceTime(options.since));
 
@@ -151,7 +155,7 @@ async function fetchAnalytics(options: {
 
 /** Display analytics data */
 function displayAnalytics(data: AnalyticsData): void {
-  const format = loadConfig().format ?? 'human';
+  const format = getOutputFormat();
 
   // For JSON output, use proper numeric types
   if (format === 'json') {
@@ -168,11 +172,12 @@ function displayAnalytics(data: AnalyticsData): void {
     });
   } else {
     // For human output, format as strings for readability
+    // Note: successRate from API is already a percentage (0-100), not a fraction (0-1)
     output.data({
       totalMessages: data.totalMessages,
       successful: data.successfulMessages,
       failed: data.failedMessages,
-      successRate: `${(data.successRate * 100).toFixed(1)}%`,
+      successRate: `${data.successRate.toFixed(1)}%`,
       avgProcessingMs: data.avgProcessingTimeMs ?? '-',
       avgAgentMs: data.avgAgentTimeMs ?? '-',
     });
