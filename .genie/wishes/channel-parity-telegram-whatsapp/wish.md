@@ -1,6 +1,6 @@
 # Wish: Channel Feature Parity — Telegram ↔ WhatsApp (Baileys)
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 **Slug:** `channel-parity-telegram-whatsapp`
 **Created:** 2026-02-12
 **Updated:** 2026-02-13
