@@ -11,6 +11,7 @@
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { createAccessCommand } from './commands/access.js';
+import { createRoutesCommand } from './commands/agent-routes.js';
 import { createAuthCommand } from './commands/auth.js';
 import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
@@ -110,6 +111,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'AI/LLM providers configuration',
+  },
+  {
+    create: createRoutesCommand,
+    category: 'standard',
+    helpGroup: 'Management',
+    helpDescription: 'Agent routing configuration',
   },
   {
     create: createKeysCommand,

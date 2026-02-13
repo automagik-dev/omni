@@ -1463,19 +1463,81 @@ async function getAgentProvider(services: Services, instance: Instance): Promise
   }
 }
 
+/**
+ * Resolve effective instance by applying route overrides.
+ * Resolution priority: chat route > user route > instance default
+ *
+ * @see agent-routing wish
+ */
+async function resolveEffectiveInstance(
+  services: Services,
+  instance: Instance,
+  chatId: string,
+  personId?: string,
+): Promise<{ instance: Instance; routeId: string | null }> {
+  // Resolve route (chat > user > null)
+  const route = await services.routeResolver.resolve(instance.id, chatId, personId);
+
+  if (!route) {
+    // No route matched - use instance defaults
+    return { instance, routeId: null };
+  }
+
+  // Merge route overrides with instance defaults
+  const effectiveInstance: Instance = {
+    ...instance,
+    // Override provider and agent ID
+    agentProviderId: route.agentProviderId,
+    agentId: route.agentId,
+    agentType: route.agentType,
+    // Override behavior (null = inherit from instance)
+    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
+    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
+    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
+    agentSessionStrategy:
+      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
+    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
+    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
+    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
+    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
+    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
+    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
+  };
+
+  log.debug('Route resolved and merged', {
+    instanceId: instance.id,
+    chatId,
+    personId,
+    routeId: route.id,
+    routeScope: route.scope,
+    agentProviderId: route.agentProviderId,
+    agentId: route.agentId,
+  });
+
+  return { instance: effectiveInstance, routeId: route.id };
+}
+
 // ============================================================================
 // Reaction Trigger Handler
 // ============================================================================
 
 async function processReactionTrigger(
   services: Services,
-  instance: Instance,
+  baseInstance: Instance,
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
   rawEvent: AgentTrigger['event'],
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const chatId = payload.chatId;
+
+  // Resolve agent route and merge with instance defaults
+  const { instance, routeId: _routeId } = await resolveEffectiveInstance(
+    services,
+    baseInstance,
+    chatId,
+    metadata.personId,
+  );
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
@@ -1909,11 +1971,16 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     if (!firstMsg) return;
 
     const instanceId = firstMsg.metadata.instanceId;
-    const instance = await agentRunner.getInstanceWithProvider(instanceId);
-    if (!instance) {
+    const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+    if (!baseInstance) {
       log.warn('Instance not found for debounced messages', { instanceId });
       return;
     }
+
+    // Resolve agent route and merge with instance defaults
+    const chatId = firstMsg.payload.chatId;
+    const personId = firstMsg.metadata.personId;
+    const { instance, routeId: _routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, personId);
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);

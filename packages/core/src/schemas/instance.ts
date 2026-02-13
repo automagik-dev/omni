@@ -18,7 +18,7 @@ export const SplitDelayModeSchema = z.enum(['disabled', 'fixed', 'randomized']);
 /**
  * Agent type enum
  */
-export const AgentTypeSchema = z.enum(['agent', 'team']);
+export const AgentTypeSchema = z.enum(['agent', 'team', 'workflow']);
 
 /**
  * Agent provider schema

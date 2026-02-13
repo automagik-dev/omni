@@ -126,6 +126,16 @@ const CLI_COMMANDS: Record<string, string> = {
   'providers.listWorkflows': 'providers workflows <id>',
 
   // ============================================================================
+  // ROUTES
+  // ============================================================================
+  'routes.list': 'routes list',
+  'routes.get': 'routes get',
+  'routes.create': 'routes create',
+  'routes.update': 'routes update',
+  'routes.delete': 'routes delete',
+  'routes.getMetrics': 'routes metrics',
+
+  // ============================================================================
   // LOGS
   // ============================================================================
   'logs.recent': 'logs',

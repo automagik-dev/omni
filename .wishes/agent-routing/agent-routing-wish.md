@@ -2,8 +2,10 @@
 
 > Granular per-chat and per-user agent configuration within an instance
 
-**Status:** DRAFT
+**Status:** COMPLETE
 **Created:** 2026-02-10
+**Updated:** 2026-02-12
+**Completed:** 2026-02-12
 **Author:** WISH Agent
 **Beads:** omni-pyt
 
@@ -57,6 +59,7 @@ Add an **agent routing layer** that sits between event ingestion and agent dispa
 - **RISK-1**: `personId` resolution is async (2s polling). If identity hasn't been created yet, user route won't match → falls back to instance default. **Mitigation**: This is acceptable; first message may use default, subsequent messages will route correctly. The identity system already handles this delay.
 - **RISK-2**: Chat routes reference `chats.id` which requires the chat to exist in our DB first. **Mitigation**: Chats are created on first message sync. For pre-configuration, user can trigger a sync or we can accept `externalId` as an alternative lookup.
 - **RISK-3**: Route cache invalidation — stale cache could route to wrong agent. **Mitigation**: Short TTL cache (30s) + event-based invalidation on route CRUD.
+- **RISK-4**: Performance impact — route resolution adds 1 DB query per message. **Mitigation**: 30s TTL in-memory cache keyed by (instanceId, chatId, personId). High-volume chats hit cache (negligible latency), low-volume chats query DB (5-10ms acceptable). Cache invalidation on route CRUD via event bus.
 
 ---
 
@@ -68,19 +71,27 @@ Add an **agent routing layer** that sits between event ingestion and agent dispa
 - Route resolver logic integrated into agent-dispatcher
 - Full CRUD API endpoints: `GET/POST/PATCH/DELETE /instances/:id/agent-routes`
 - Bulk operations: list all routes for an instance, delete all routes
-- CLI commands: `omni agent-routes list|add|update|remove`
+- CLI commands: `omni agent-routes list|add|update|remove|resolve`
 - Route field in `trigger_logs` for observability
 - SDK regeneration (auto from OpenAPI)
 - Config inheritance (null fields fall back to instance defaults)
+- Route-level overrides for:
+  - Core agent config: timeout, stream mode, reply filter, session strategy
+  - Media preprocessing: `agentWaitForMedia`, `agentSendMediaPath`
+  - Smart response gate: `agentGateEnabled`, `agentGateModel`, `agentGatePrompt`
+- In-memory route cache (30s TTL) with event-based invalidation
+- Cache metrics: hit rate, resolution latency
 
 ### OUT OF SCOPE
 
 - Per-message routing (too granular, use automations for that)
 - Wildcard/pattern matching on chat names (could be future enhancement)
 - Route-level debounce overrides (stays instance-level)
+- Route-level custom credentials (`agentApiUrl`, `agentApiKey`) — defer to v2, use separate provider entries instead
 - UI dashboard for route management (future)
 - Route-level access rules (use existing access system)
 - Migration of existing configs (no data migration needed — zero routes = existing behavior)
+- Read-only fields: `agentLatencyMs`, `agentRequest`, `agentResponse` (not config)
 
 ---
 
@@ -109,6 +120,8 @@ Add an **agent routing layer** that sits between event ingestion and agent dispa
 - [ ] **SDK**: Regenerate after API changes (`make sdk-generate`)
 - [ ] **CLI**: New command group
 - [ ] **Tests**: Route resolver unit tests, API integration tests
+- [ ] **Cache**: In-memory route cache (30s TTL) with metrics
+- [ ] **Metrics**: Cache hit rate, resolution latency tracking
 
 ---
 
@@ -138,6 +151,10 @@ CREATE TABLE agent_routes (
   agent_session_strategy  VARCHAR(20),
   agent_prefix_sender_name BOOLEAN,
   agent_wait_for_media    BOOLEAN,
+  agent_send_media_path   BOOLEAN,
+  agent_gate_enabled      BOOLEAN,
+  agent_gate_model        VARCHAR(120),
+  agent_gate_prompt       TEXT,
 
   -- Metadata
   label                   VARCHAR(255),  -- human-friendly description
@@ -214,6 +231,10 @@ const createAgentRouteSchema = z.object({
   agentSessionStrategy: z.enum(['per_user', 'per_chat', 'per_user_per_chat']).optional(),
   agentPrefixSenderName: z.boolean().optional(),
   agentWaitForMedia: z.boolean().optional(),
+  agentSendMediaPath: z.boolean().optional(),
+  agentGateEnabled: z.boolean().optional(),
+  agentGateModel: z.string().max(120).optional(),
+  agentGatePrompt: z.string().optional(),
 
   label: z.string().max(255).optional(),
   priority: z.number().int().default(0),
@@ -248,6 +269,10 @@ interface AgentRoute {
   agentSessionStrategy?: AgentSessionStrategy;
   agentPrefixSenderName?: boolean;
   agentWaitForMedia?: boolean;
+  agentSendMediaPath?: boolean;
+  agentGateEnabled?: boolean;
+  agentGateModel?: string;
+  agentGatePrompt?: string;
 
   label?: string;
   priority: number;
@@ -297,9 +322,12 @@ omni agent-routes resolve <instanceId> --chat-id <id> [--person-id <id>]  # Debu
 **Deliverables:**
 - [ ] `agent_routes` table in Drizzle schema with constraints and indexes
 - [ ] `AgentRoute` types and Zod schemas in `@omni/core`
-- [ ] `RouteResolver` service: query + cache + merge with instance defaults
+- [ ] `RouteResolver` service: query + 30s TTL cache + merge with instance defaults
+- [ ] Cache implementation: in-memory LRU, keyed by `(instanceId, chatId, personId)`
+- [ ] Cache metrics tracking (hit rate, resolution latency)
 - [ ] Integrate resolver into `agent-dispatcher.ts` (`shouldProcessMessage` → resolve route → use effective config)
 - [ ] Add `routeId` to `trigger_logs` table
+- [ ] Unit tests: route resolution logic, cache behavior, config inheritance
 - [ ] `db-push` to apply schema
 
 **Acceptance Criteria:**
@@ -308,12 +336,18 @@ omni agent-routes resolve <instanceId> --chat-id <id> [--person-id <id>]  # Debu
 - [ ] User route overrides instance agent for that person's DMs
 - [ ] Chat route wins over user route when both could match
 - [ ] Null override fields correctly inherit from instance config
-- [ ] Route resolution adds <5ms latency (cached path)
+- [ ] Route resolution adds <5ms latency (cached path), <20ms (DB path)
+- [ ] Cache hit rate >90% for active chats (30s TTL sufficient)
+- [ ] Route with deleted provider falls back to instance default (graceful degradation)
+- [ ] All override fields (including gate config and media settings) work correctly
 
 **Validation:**
 - `make check`
 - `bun test packages/api` (dispatcher tests)
+- `bun test packages/core` (route resolver tests)
 - Manual: set route on a chat, verify correct agent is triggered
+- Manual: verify cache metrics (hit rate, latency)
+- Manual: test all override fields (gate config, media settings)
 
 ### Group B: API + SDK
 
@@ -329,21 +363,26 @@ omni agent-routes resolve <instanceId> --chat-id <id> [--person-id <id>]  # Debu
 - [ ] Expanded references in GET responses (chat name, person name, provider name)
 - [ ] Unique constraint enforcement with friendly error messages
 - [ ] Mount routes in `v2/index.ts`
-- [ ] OpenAPI docs for all endpoints
+- [ ] OpenAPI docs for all endpoints (includes new override fields)
+- [ ] Cache invalidation on route CRUD (publish event → resolver clears cache)
 - [ ] SDK regeneration: `make sdk-generate`
 
 **Acceptance Criteria:**
 - [ ] All CRUD operations work via API
 - [ ] Creating duplicate chat/user route returns 409 Conflict
-- [ ] Deleting a route immediately falls back to instance default
+- [ ] Deleting a route immediately falls back to instance default (cache cleared)
+- [ ] Updating a route immediately takes effect (cache cleared)
 - [ ] Invalid scope/reference combinations return 400
-- [ ] SDK types include all new endpoints
+- [ ] All override fields validate correctly (gate config, media settings)
+- [ ] SDK types include all new endpoints and fields
 - [ ] Consistent with existing API patterns (providers, access rules)
 
 **Validation:**
 - `make check`
 - `make sdk-generate`
 - Manual: CRUD via curl/SDK
+- Manual: verify cache invalidation on CRUD operations
+- Manual: test all override fields via API
 
 ### Group C: CLI + Observability
 
@@ -353,13 +392,16 @@ omni agent-routes resolve <instanceId> --chat-id <id> [--person-id <id>]  # Debu
 
 **Deliverables:**
 - [ ] `omni agent-routes` command group (list, add, update, remove, resolve)
-- [ ] `resolve` subcommand for debugging (shows which route would match)
-- [ ] Trigger logs include `routeId` in output
+- [ ] `resolve` subcommand for debugging (shows which route would match + effective config)
+- [ ] Support for all override fields in CLI (gate config, media settings)
+- [ ] Trigger logs include `routeId` and route scope in output
 - [ ] Update `omni logs` to show route info when present
+- [ ] Add `omni agent-routes stats` for cache metrics (optional)
 
 **Acceptance Criteria:**
 - [ ] All CLI commands work end-to-end
-- [ ] `resolve` command shows effective config with inheritance
+- [ ] `resolve` command shows effective config with inheritance (all override fields)
+- [ ] CLI supports setting all override fields (gate config, media settings)
 - [ ] Trigger logs show which route was used (or "default" for instance fallback)
 - [ ] Consistent with existing CLI patterns (providers, instances)
 
@@ -367,6 +409,7 @@ omni agent-routes resolve <instanceId> --chat-id <id> [--person-id <id>]  # Debu
 - `make cli-build && make cli-link`
 - `omni agent-routes list <instanceId>`
 - `omni agent-routes resolve <instanceId> --chat-id <chatId>`
+- `omni agent-routes add <instanceId> --scope chat --chat-id <id> --provider <id> --agent <agentId> --gate-enabled true --gate-model gpt-4o-mini`
 
 ---
 
@@ -414,6 +457,10 @@ async function resolveEffectiveConfig(
     agentSessionStrategy: route.agentSessionStrategy ?? instance.agentSessionStrategy,
     agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
     agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
+    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
+    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
+    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
+    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
     routeId: route.id,
   };
 }
