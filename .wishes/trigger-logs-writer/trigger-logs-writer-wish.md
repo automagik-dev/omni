@@ -1,6 +1,7 @@
 # Wish: trigger_logs Writer (Cross-Provider Observability)
 
 **Status:** DRAFT
+**Beads:** omni-6ek
 **Slug:** `trigger-logs-writer`
 **Created:** 2026-02-10
 

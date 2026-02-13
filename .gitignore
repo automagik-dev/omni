@@ -61,6 +61,14 @@ omni-93g/
 omni-4l0/
 .research/
 *.egg-info/
+
+# Operational memory & secrets (never commit to public repo)
+HANDOFF.md
+MEMORY.md
+TOOLS.md
+HEARTBEAT.md
+BOOTSTRAP.md
+memory/
 # bd worktree
 omni-jmn/
 # bd worktree

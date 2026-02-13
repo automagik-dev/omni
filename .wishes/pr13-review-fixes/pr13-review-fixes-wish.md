@@ -2,10 +2,10 @@
 
 > Fix 3 bugs found by Codex and Gemini code review on PR #13 (feat/omnichannel-agent-platform).
 
-**Status:** APPROVED
+**Status:** SHIPPED
 **Created:** 2026-02-09
 **Author:** WISH Agent
-**Beads:** TBD
+**Beads:** omni-blj
 
 ---
 

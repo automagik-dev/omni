@@ -18,6 +18,7 @@
  */
 
 import { join, resolve } from 'node:path';
+import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
   type AgentTriggerType,
@@ -33,6 +34,7 @@ import {
   type OpenClawProviderConfig,
   type ProviderFile,
   type ReactionReceivedPayload,
+  type StreamDelta,
   WebhookAgentProvider,
   createLogger,
   createProviderClient,
@@ -345,6 +347,13 @@ function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'c
     return 'dm'; // fallback
   }
 
+  if (channel === 'telegram') {
+    // Telegram: negative chatId = group/supergroup, positive = DM
+    const numId = Number(chatId);
+    if (!Number.isNaN(numId) && numId < 0) return 'group';
+    return 'dm';
+  }
+
   if (channel === 'discord') {
     // Discord group detection logic (based on chatId format or instance metadata)
     // For now, assume DM unless proven otherwise
@@ -534,8 +543,7 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  // Use smart lookup to handle LID/phone JID resolution
-  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+  const chat = await services.chats.getByExternalId(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
@@ -618,8 +626,7 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    // Use smart lookup to handle LID/phone JID resolution
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    const chat = await services.chats.getByExternalId(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -838,8 +845,7 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    // Use smart lookup to handle LID/phone JID resolution
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    const chat = await services.chats.getByExternalId(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -847,6 +853,174 @@ async function fetchChatMetadata(
   } catch (error) {
     log.debug('Failed to fetch chat metadata', { error: String(error) });
     return {};
+  }
+}
+
+// ─── Per-chatId stream guard ──────────────────────────────
+const activeStreams = new Map<string, StreamSender>();
+
+/** Route a single StreamDelta to the appropriate StreamSender method. */
+async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
+  switch (delta.phase) {
+    case 'thinking':
+      await sender.onThinkingDelta(delta);
+      break;
+    case 'content':
+      await sender.onContentDelta(delta);
+      break;
+    case 'final':
+      await sender.onFinal(delta);
+      break;
+    case 'error':
+      await sender.onError(delta);
+      break;
+  }
+}
+
+interface StreamCapabilities {
+  provider: IAgentProvider & { triggerStream: (ctx: AgentTrigger) => AsyncGenerator<StreamDelta> };
+  createSender: (
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ) => StreamSender;
+}
+
+/** Check all preconditions for streaming dispatch. Returns null if any guard fails. */
+async function resolveStreamingCapabilities(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  traceId: string,
+): Promise<StreamCapabilities | null> {
+  if (!instance.agentStreamMode) return null;
+
+  const provider = await getAgentProvider(services, instance);
+  if (!provider?.triggerStream) return null;
+
+  const plugin = await getPlugin(channel);
+  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) return null;
+
+  const streamKey = `${instance.id}:${chatId}`;
+  if (activeStreams.has(streamKey)) {
+    log.info('Stream guard: parallel stream blocked, falling back to accumulate', {
+      instanceId: instance.id,
+      chatId,
+      traceId,
+    });
+    return null;
+  }
+
+  return {
+    provider: provider as StreamCapabilities['provider'],
+    createSender: plugin.createStreamSender.bind(plugin),
+  };
+}
+
+/** Consume a streaming generator, routing each delta to the sender. Returns true if no error deltas. */
+async function consumeStream(
+  generator: AsyncGenerator<StreamDelta>,
+  sender: StreamSender,
+  instanceId: string,
+  chatId: string,
+  traceId: string,
+): Promise<boolean> {
+  const startTime = Date.now();
+  let hadError = false;
+
+  for await (const delta of generator) {
+    if (delta.phase === 'error') hadError = true;
+    await routeStreamDelta(sender, delta);
+  }
+
+  log.info('Streaming response complete', {
+    instanceId,
+    chatId,
+    durationMs: Date.now() - startTime,
+    hadError,
+    traceId,
+  });
+
+  return !hadError;
+}
+
+/**
+ * Try streaming dispatch: provider.triggerStream() → StreamSender.
+ * Returns true if handled via streaming, false to fall back to accumulate.
+ */
+async function dispatchViaStreamingProvider(
+  services: Services,
+  instance: Instance,
+  messages: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  personId: string,
+  senderName: string | undefined,
+  traceId: string,
+  rawEvent: AgentTrigger['event'],
+): Promise<boolean> {
+  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId);
+  if (!resolved) return false;
+
+  const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+  if (!messageTexts.length && !mediaFiles.length) return false;
+  if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
+
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const replyToId = messages[0]?.payload.externalId;
+
+  const trigger: AgentTrigger = {
+    traceId,
+    type: triggerType,
+    event: rawEvent,
+    source: {
+      channelType: channel,
+      instanceId: instance.id,
+      chatId,
+      messageId: messages[0]?.payload.externalId ?? '',
+    },
+    sender: {
+      platformUserId: senderId,
+      personId,
+      displayName: senderName,
+    },
+    content: {
+      text: messageTexts.join('\n'),
+    },
+    sessionId,
+  };
+
+  const chatType = determineChatType(chatId, channel);
+  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType);
+  const streamKey = `${instance.id}:${chatId}`;
+  activeStreams.set(streamKey, sender);
+
+  try {
+    const generator = resolved.provider.triggerStream(trigger);
+
+    // Error deltas (timeout, circuit-breaker) are not exceptions — they just
+    // clean up the placeholder.  Return false so the caller falls back to the
+    // accumulate-then-reply path and the user still gets a response.
+    return await consumeStream(generator, sender, instance.id, chatId, traceId);
+  } catch (err) {
+    log.error('Streaming dispatch failed, falling back', {
+      instanceId: instance.id,
+      chatId,
+      error: String(err),
+      traceId,
+    });
+    try {
+      await sender.abort();
+    } catch {
+      // Best effort cleanup
+    }
+    return false;
+  } finally {
+    activeStreams.delete(streamKey);
   }
 }
 
@@ -1041,7 +1215,8 @@ async function processAgentResponse(
     const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
     let handled = false;
     try {
-      handled = await dispatchViaProvider(
+      // B-1a: Try streaming dispatch first (if instance + provider + channel support it)
+      handled = await dispatchViaStreamingProvider(
         services,
         instance,
         messages,
@@ -1054,6 +1229,23 @@ async function processAgentResponse(
         traceId,
         rawEvent,
       );
+
+      // B-1b: Fall back to accumulate-then-reply
+      if (!handled) {
+        handled = await dispatchViaProvider(
+          services,
+          instance,
+          messages,
+          triggerType,
+          channel,
+          chatId,
+          senderId,
+          personId,
+          senderName,
+          traceId,
+          rawEvent,
+        );
+      }
     } catch (providerError) {
       log.error('Provider dispatch failed, falling back to legacy', {
         instanceId: instance.id,
@@ -1173,7 +1365,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
     provider.name,
     {
       projectPath,
-      apiKey: (schemaConfig.apiKey as string | undefined) ?? provider.apiKey ?? undefined,
+      apiKey: provider.apiKey ?? undefined,
       allowedTools: schemaConfig.allowedTools as string[] | undefined,
       permissionMode: schemaConfig.permissionMode as string | undefined as
         | 'default'
@@ -1271,19 +1463,81 @@ async function getAgentProvider(services: Services, instance: Instance): Promise
   }
 }
 
+/**
+ * Resolve effective instance by applying route overrides.
+ * Resolution priority: chat route > user route > instance default
+ *
+ * @see agent-routing wish
+ */
+async function resolveEffectiveInstance(
+  services: Services,
+  instance: Instance,
+  chatId: string,
+  personId?: string,
+): Promise<{ instance: Instance; routeId: string | null }> {
+  // Resolve route (chat > user > null)
+  const route = await services.routeResolver.resolve(instance.id, chatId, personId);
+
+  if (!route) {
+    // No route matched - use instance defaults
+    return { instance, routeId: null };
+  }
+
+  // Merge route overrides with instance defaults
+  const effectiveInstance: Instance = {
+    ...instance,
+    // Override provider and agent ID
+    agentProviderId: route.agentProviderId,
+    agentId: route.agentId,
+    agentType: route.agentType,
+    // Override behavior (null = inherit from instance)
+    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
+    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
+    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
+    agentSessionStrategy:
+      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
+    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
+    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
+    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
+    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
+    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
+    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
+  };
+
+  log.debug('Route resolved and merged', {
+    instanceId: instance.id,
+    chatId,
+    personId,
+    routeId: route.id,
+    routeScope: route.scope,
+    agentProviderId: route.agentProviderId,
+    agentId: route.agentId,
+  });
+
+  return { instance: effectiveInstance, routeId: route.id };
+}
+
 // ============================================================================
 // Reaction Trigger Handler
 // ============================================================================
 
 async function processReactionTrigger(
   services: Services,
-  instance: Instance,
+  baseInstance: Instance,
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
   rawEvent: AgentTrigger['event'],
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const chatId = payload.chatId;
+
+  // Resolve agent route and merge with instance defaults
+  const { instance, routeId: _routeId } = await resolveEffectiveInstance(
+    services,
+    baseInstance,
+    chatId,
+    metadata.personId,
+  );
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
@@ -1443,41 +1697,6 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
-/**
- * Check access for a message sender, with LID fallback.
- * Baileys LID addressing means payload.from may be a LID while access rules use phone patterns.
- * Returns true if access is allowed.
- */
-async function checkMessageAccess(
-  accessService: Services['access'],
-  instance: Instance,
-  payload: MessageReceivedPayload,
-  channel: ChannelType,
-): Promise<boolean> {
-  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
-  const participantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
-  const primaryId = payload.from ?? '';
-
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
-  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
-  }
-
-  if (accessResult.allowed) return true;
-
-  log.info('Access denied', {
-    instanceId: instance.id,
-    chatId: payload.chatId,
-    from: payload.from,
-    participantAlt,
-    reason: accessResult.reason,
-  });
-  if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
-    sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
-  }
-  return false;
-}
-
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -1515,9 +1734,51 @@ async function shouldProcessMessage(
     return null;
   }
 
-  if (!(await checkMessageAccess(accessService, instance, payload, channel))) return null;
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  if (accessDenied) return null;
 
   return instance;
+}
+
+/**
+ * Check access using primary sender ID, falling back to participantAlt for Baileys LID addressing.
+ * Returns true if access is denied (caller should return null).
+ */
+async function checkAccessWithFallback(
+  accessService: Services['access'],
+  instance: Instance,
+  payload: { from: string; chatId: string; rawPayload?: unknown },
+  channel: ChannelType,
+): Promise<boolean> {
+  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
+  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  // Validate participantAlt looks like a real phone number (Baileys LID fallback)
+  const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
+  const primaryId = payload.from ?? '';
+
+  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
+  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
+    log.warn('Access fallback to participantAlt', {
+      instanceId: instance.id,
+      primaryId,
+      participantAlt,
+      chatId: payload.chatId,
+    });
+    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+  }
+  if (accessResult.allowed) return false;
+
+  log.info('Access denied', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    from: payload.from,
+    participantAlt,
+    reason: accessResult.reason,
+  });
+  if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
+    sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
+  }
+  return true;
 }
 
 /**
@@ -1551,25 +1812,9 @@ async function shouldProcessReaction(
     return null;
   }
 
-  // Access check for reactions
-  let accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
-  if (!accessResult.allowed) {
-    // Fallback for Baileys LID mode: try participantAlt phone from reaction metadata
-    const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
-    const key = rawPayload?.key as Record<string, unknown> | undefined;
-    const participantAlt = (key?.participantAlt as string)?.replace(/@.*$/, '');
-    if (participantAlt && participantAlt !== payload.from) {
-      accessResult = await accessService.checkAccess(instance, participantAlt, channel);
-    }
-  }
-  if (!accessResult.allowed) {
-    log.info('Access denied for reaction', {
-      instanceId: instance.id,
-      from: payload.from,
-      reason: accessResult.reason,
-    });
-    return null;
-  }
+  // Access check for reactions (reuses LID fallback logic)
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  if (accessDenied) return null;
 
   if (reactionDedup.isDuplicate(payload.messageId, payload.emoji, payload.from)) {
     log.debug('Duplicate reaction, skipping', {
@@ -1726,11 +1971,16 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     if (!firstMsg) return;
 
     const instanceId = firstMsg.metadata.instanceId;
-    const instance = await agentRunner.getInstanceWithProvider(instanceId);
-    if (!instance) {
+    const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+    if (!baseInstance) {
       log.warn('Instance not found for debounced messages', { instanceId });
       return;
     }
+
+    // Resolve agent route and merge with instance defaults
+    const chatId = firstMsg.payload.chatId;
+    const personId = firstMsg.metadata.personId;
+    const { instance, routeId: _routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, personId);
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);

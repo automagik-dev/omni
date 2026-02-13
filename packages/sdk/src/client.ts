@@ -1937,6 +1937,94 @@ export function createOmniClient(config: OmniClientConfig) {
     },
 
     // ========================================================================
+    // ROUTES
+    // ========================================================================
+
+    /**
+     * Agent routing configuration
+     */
+    routes: {
+      /**
+       * List routes for an instance
+       */
+      async list(
+        instanceId: string,
+        params?: { scope?: 'chat' | 'user'; isActive?: boolean },
+      ): Promise<components['schemas']['AgentRoute'][]> {
+        const { data, error, response } = await client.GET('/instances/{instanceId}/routes', {
+          params: { path: { instanceId }, query: params },
+        });
+        throwIfError(response, error);
+        return data?.items ?? [];
+      },
+
+      /**
+       * Get route by ID
+       */
+      async get(instanceId: string, id: string): Promise<components['schemas']['AgentRoute']> {
+        const { data, error, response } = await client.GET('/instances/{instanceId}/routes/{id}', {
+          params: { path: { instanceId, id } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Route not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      /**
+       * Create a route
+       */
+      async create(
+        instanceId: string,
+        body: components['schemas']['CreateAgentRouteRequest'],
+      ): Promise<components['schemas']['AgentRoute']> {
+        const { data, error, response } = await client.POST('/instances/{instanceId}/routes', {
+          params: { path: { instanceId } },
+          body,
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Failed to create route', 'CREATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      /**
+       * Update a route
+       */
+      async update(
+        instanceId: string,
+        id: string,
+        body: components['schemas']['UpdateAgentRouteRequest'],
+      ): Promise<components['schemas']['AgentRoute']> {
+        const { data, error, response } = await client.PATCH('/instances/{instanceId}/routes/{id}', {
+          params: { path: { instanceId, id } },
+          body,
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Failed to update route', 'UPDATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      /**
+       * Delete a route
+       */
+      async delete(instanceId: string, id: string): Promise<void> {
+        const { error, response } = await client.DELETE('/instances/{instanceId}/routes/{id}', {
+          params: { path: { instanceId, id } },
+        });
+        throwIfError(response, error);
+      },
+
+      /**
+       * Get route cache metrics
+       */
+      async getMetrics(): Promise<components['schemas']['CacheMetrics']> {
+        const { data, error, response } = await client.GET('/routes/metrics');
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Failed to get metrics', 'FETCH_ERROR', undefined, response.status);
+        return data.data;
+      },
+    },
+
+    // ========================================================================
     // LOGS
     // ========================================================================
 

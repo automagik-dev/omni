@@ -1,6 +1,7 @@
 # Wish: Provider Schemas — Single Source of Truth (Core + DB)
 
 **Status:** DRAFT
+**Beads:** omni-3ys
 **Slug:** `provider-schemas-single-source-of-truth`
 **Created:** 2026-02-10
 

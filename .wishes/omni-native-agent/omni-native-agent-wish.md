@@ -3,6 +3,7 @@
 > Make Omni (the AI octopus) a first-class agent INSIDE the Omni platform — not an external caller, but the nervous system itself.
 
 **Status:** BACKLOG
+**Beads:** omni-5ks
 **Created:** 2026-02-09
 **Author:** Omni + Felipe
 **Priority:** STRATEGIC — discussed, needs terms defined

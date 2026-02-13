@@ -1,6 +1,7 @@
 # Wish: OpenClaw Provider — Review Round 2 Fixes
 
-**Status:** APPROVED
+**Status:** SHIPPED
+**Beads:** omni-ui7
 **Slug:** `openclaw-review-fixes-r2`
 **Created:** 2026-02-11
 **Branch:** `feat/openclaw-provider`

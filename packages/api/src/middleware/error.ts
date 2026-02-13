@@ -2,7 +2,7 @@
  * Error handling middleware and onError handler
  */
 
-import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import { ConflictError, ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
@@ -129,6 +129,26 @@ function handleValidationError(c: Context, error: ValidationError): Response {
 }
 
 /**
+ * Handle ConflictError
+ */
+function handleConflictError(c: Context, error: ConflictError): Response {
+  return c.json(
+    {
+      error: {
+        code: 'CONFLICT',
+        message: error.message,
+        details: {
+          resourceType: error.resourceType,
+          conflictReason: error.conflictReason,
+          ...error.context,
+        },
+      },
+    },
+    409,
+  );
+}
+
+/**
  * Handle unknown errors
  */
 function handleUnknownError(c: Context, error: unknown): Response {
@@ -162,6 +182,9 @@ function routeError(c: Context, error: unknown): Response {
   if (error instanceof ValidationError) {
     return handleValidationError(c, error);
   }
+  if (error instanceof ConflictError) {
+    return handleConflictError(c, error);
+  }
   if (error instanceof OmniError) {
     return handleOmniError(c, error);
   }
@@ -176,6 +199,7 @@ function isClientError(error: unknown): boolean {
   if (error instanceof ZodError) return true;
   if (error instanceof NotFoundError) return true;
   if (error instanceof ValidationError) return true;
+  if (error instanceof ConflictError) return true;
   if (error instanceof HTTPException && error.status < 500) return true;
   if (error instanceof OmniError) {
     const status = ERROR_STATUS_MAP[error.code] ?? 500;

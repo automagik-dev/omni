@@ -37,6 +37,15 @@ const timelineQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+// Update person schema
+const updatePersonSchema = z.object({
+  displayName: z.string().max(255).optional().describe('Display name'),
+  primaryPhone: z.string().max(50).optional().nullable().describe('Primary phone (E.164)'),
+  primaryEmail: z.string().email().max(255).optional().nullable().describe('Primary email'),
+  avatarUrl: z.string().url().optional().nullable().describe('Avatar URL'),
+  metadata: z.record(z.unknown()).optional().nullable().describe('Arbitrary metadata (tags, notes, role, etc.)'),
+});
+
 // Link identities schema
 const linkIdentitiesSchema = z.object({
   identityA: z.string().uuid().describe('First identity ID'),
@@ -88,6 +97,19 @@ personsRoutes.get('/:id', async (c) => {
   const services = c.get('services');
 
   const person = await services.persons.getById(id);
+
+  return c.json({ data: person });
+});
+
+/**
+ * PATCH /persons/:id - Update person (displayName, email, phone, metadata)
+ */
+personsRoutes.patch('/:id', zValidator('json', updatePersonSchema), async (c) => {
+  const id = c.req.param('id');
+  const data = c.req.valid('json');
+  const services = c.get('services');
+
+  const person = await services.persons.update(id, data);
 
   return c.json({ data: person });
 });

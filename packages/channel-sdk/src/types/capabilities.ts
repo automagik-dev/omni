@@ -94,6 +94,9 @@ export interface ChannelCapabilities {
   /** Can handle voice channels (future) */
   canHandleVoice?: boolean;
 
+  /** Can stream partial response updates (thinking/content/final/error) */
+  canStreamResponse?: boolean;
+
   // ─────────────────────────────────────────────────────────────
   // Limits
   // ─────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 # Wish: CLI — Instance Sessions Debugging (`omni instances sessions`)
 
 **Status:** DRAFT
+**Beads:** omni-b2t
 **Slug:** `instances-sessions-cli`
 **Created:** 2026-02-10
 

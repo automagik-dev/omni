@@ -1184,6 +1184,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{instanceId}/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List agent routes
+         * @description List all agent routes for an instance, optionally filtered by scope and active status.
+         */
+        get: operations["listAgentRoutes"];
+        put?: never;
+        /**
+         * Create agent route
+         * @description Create a new agent route for an instance. Routes allow per-chat or per-user agent customization.
+         *
+         *     **Resolution priority:** chat routes > user routes > instance default
+         *
+         *     **Note:** Only one route per chat/person allowed per instance.
+         */
+        post: operations["createAgentRoute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{instanceId}/routes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent route
+         * @description Get details of a specific agent route.
+         */
+        get: operations["getAgentRoute"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete agent route
+         * @description Delete an agent route. The instance will fallback to its default agent configuration.
+         */
+        delete: operations["deleteAgentRoute"];
+        options?: never;
+        head?: never;
+        /**
+         * Update agent route
+         * @description Update an existing agent route. Set nullable fields to null to inherit from instance.
+         */
+        patch: operations["updateAgentRoute"];
+        trace?: never;
+    };
+    "/routes/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get route cache metrics
+         * @description Get performance metrics for the route resolution cache.
+         */
+        get: operations["getRouteCacheMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/logs/stream": {
         parameters: {
             query?: never;
@@ -3185,6 +3261,264 @@ export interface components {
             latency: number | null;
             /** @description Error message */
             error: string | null;
+        };
+        AgentRoute: {
+            /**
+             * Format: uuid
+             * @description Route UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Instance UUID
+             */
+            instanceId: string;
+            /**
+             * @description Route scope: chat (specific chat) or user (specific person)
+             * @enum {string}
+             */
+            scope: "chat" | "user";
+            /**
+             * Format: uuid
+             * @description Chat UUID (required when scope=chat)
+             */
+            chatId: string | null;
+            /**
+             * Format: uuid
+             * @description Person UUID (required when scope=user)
+             */
+            personId: string | null;
+            /**
+             * Format: uuid
+             * @description Agent provider UUID
+             */
+            agentProviderId: string;
+            /** @description Agent ID within the provider */
+            agentId: string;
+            /**
+             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+             * @enum {string}
+             */
+            agentType: "agent" | "team" | "workflow";
+            /** @description Agent timeout override (seconds) */
+            agentTimeout: number | null;
+            /** @description Stream mode override */
+            agentStreamMode: boolean | null;
+            /** @description Reply filter override */
+            agentReplyFilter: {
+                /**
+                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                 * @enum {string}
+                 */
+                mode: "all" | "filtered";
+                conditions: {
+                    /** @description Reply if message is a DM */
+                    onDm: boolean;
+                    /** @description Reply if bot is @mentioned */
+                    onMention: boolean;
+                    /** @description Reply if message is a reply to bot */
+                    onReply: boolean;
+                    /** @description Reply if bot name appears in text */
+                    onNameMatch: boolean;
+                    /** @description Custom patterns for name matching */
+                    namePatterns?: string[];
+                };
+            } | null;
+            /**
+             * @description Session strategy override
+             * @enum {string|null}
+             */
+            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+            /** @description Prefix sender name override */
+            agentPrefixSenderName: boolean | null;
+            /** @description Wait for media override */
+            agentWaitForMedia: boolean | null;
+            /** @description Send media path override */
+            agentSendMediaPath: boolean | null;
+            /** @description Response gate enabled override */
+            agentGateEnabled: boolean | null;
+            /** @description Response gate model override */
+            agentGateModel: string | null;
+            /** @description Response gate prompt override */
+            agentGatePrompt: string | null;
+            /** @description Human-readable label for this route (e.g., "VIP Support") */
+            label: string | null;
+            /** @description Priority (higher = higher priority, default: 0) */
+            priority: number;
+            /** @description Whether this route is active */
+            isActive: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateAgentRouteRequest: {
+            /**
+             * @description Route scope: chat (specific chat) or user (specific person)
+             * @enum {string}
+             */
+            scope: "chat" | "user";
+            /**
+             * Format: uuid
+             * @description Chat UUID (required when scope=chat)
+             */
+            chatId?: string;
+            /**
+             * Format: uuid
+             * @description Person UUID (required when scope=user)
+             */
+            personId?: string;
+            /**
+             * Format: uuid
+             * @description Agent provider UUID
+             */
+            agentProviderId: string;
+            /** @description Agent ID within the provider */
+            agentId: string;
+            /**
+             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+             * @default agent
+             * @enum {string}
+             */
+            agentType: "agent" | "team" | "workflow";
+            /** @description Agent timeout (seconds) */
+            agentTimeout?: number;
+            /** @description Enable streaming responses */
+            agentStreamMode?: boolean;
+            /** @description Reply filter configuration */
+            agentReplyFilter?: {
+                /**
+                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                 * @enum {string}
+                 */
+                mode: "all" | "filtered";
+                conditions: {
+                    /** @description Reply if message is a DM */
+                    onDm: boolean;
+                    /** @description Reply if bot is @mentioned */
+                    onMention: boolean;
+                    /** @description Reply if message is a reply to bot */
+                    onReply: boolean;
+                    /** @description Reply if bot name appears in text */
+                    onNameMatch: boolean;
+                    /** @description Custom patterns for name matching */
+                    namePatterns?: string[];
+                };
+            };
+            /**
+             * @description Session strategy
+             * @enum {string}
+             */
+            agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+            /** @description Prefix sender name */
+            agentPrefixSenderName?: boolean;
+            /** @description Wait for media processing */
+            agentWaitForMedia?: boolean;
+            /** @description Include file path in media text */
+            agentSendMediaPath?: boolean;
+            /** @description Enable LLM response gate */
+            agentGateEnabled?: boolean;
+            /** @description Response gate model */
+            agentGateModel?: string;
+            /** @description Response gate prompt */
+            agentGatePrompt?: string;
+            /** @description Human-readable label */
+            label?: string;
+            /**
+             * @description Priority (higher = higher priority)
+             * @default 0
+             */
+            priority: number;
+            /**
+             * @description Whether active
+             * @default true
+             */
+            isActive: boolean;
+        };
+        UpdateAgentRouteRequest: {
+            /** @description Agent ID within the provider */
+            agentId?: string;
+            /**
+             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+             * @enum {string}
+             */
+            agentType?: "agent" | "team" | "workflow";
+            /** @description Agent timeout (seconds) */
+            agentTimeout?: number | null;
+            /** @description Enable streaming responses */
+            agentStreamMode?: boolean | null;
+            /** @description Reply filter configuration */
+            agentReplyFilter?: {
+                /**
+                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                 * @enum {string}
+                 */
+                mode: "all" | "filtered";
+                conditions: {
+                    /** @description Reply if message is a DM */
+                    onDm: boolean;
+                    /** @description Reply if bot is @mentioned */
+                    onMention: boolean;
+                    /** @description Reply if message is a reply to bot */
+                    onReply: boolean;
+                    /** @description Reply if bot name appears in text */
+                    onNameMatch: boolean;
+                    /** @description Custom patterns for name matching */
+                    namePatterns?: string[];
+                };
+            } | null;
+            /**
+             * @description Session strategy
+             * @enum {string|null}
+             */
+            agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat" | null;
+            /** @description Prefix sender name */
+            agentPrefixSenderName?: boolean | null;
+            /** @description Wait for media processing */
+            agentWaitForMedia?: boolean | null;
+            /** @description Include file path in media text */
+            agentSendMediaPath?: boolean | null;
+            /** @description Enable LLM response gate */
+            agentGateEnabled?: boolean | null;
+            /** @description Response gate model */
+            agentGateModel?: string | null;
+            /** @description Response gate prompt */
+            agentGatePrompt?: string | null;
+            /** @description Human-readable label */
+            label?: string | null;
+            /** @description Priority (higher = higher priority) */
+            priority?: number;
+            /** @description Whether active */
+            isActive?: boolean;
+        };
+        CacheMetrics: {
+            cache: {
+                /** @description Cache hits count */
+                hits: number;
+                /** @description Cache misses count */
+                misses: number;
+                /** @description Cache sets count */
+                sets: number;
+                /** @description Cache invalidation count */
+                invalidations: number;
+                /** @description Last query time in milliseconds */
+                lastQueryMs: number;
+                /** @description Current cache size (entries) */
+                cacheSize: number;
+                /** @description Cache hit rate percentage */
+                hitRate: number;
+            };
+            /**
+             * Format: date-time
+             * @description Metrics timestamp
+             */
+            timestamp: string;
         };
         LogEntry: {
             /** @description Timestamp (ms) */
@@ -9800,6 +10134,928 @@ export interface operations {
                             message: string;
                             /** @description Additional error details */
                             details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listAgentRoutes: {
+        parameters: {
+            query?: {
+                scope?: "chat" | "user";
+                isActive?: boolean | null;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of agent routes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Route UUID
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /**
+                             * @description Route scope: chat (specific chat) or user (specific person)
+                             * @enum {string}
+                             */
+                            scope: "chat" | "user";
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (required when scope=chat)
+                             */
+                            chatId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Person UUID (required when scope=user)
+                             */
+                            personId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent provider UUID
+                             */
+                            agentProviderId: string;
+                            /** @description Agent ID within the provider */
+                            agentId: string;
+                            /**
+                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                             * @enum {string}
+                             */
+                            agentType: "agent" | "team" | "workflow";
+                            /** @description Agent timeout override (seconds) */
+                            agentTimeout: number | null;
+                            /** @description Stream mode override */
+                            agentStreamMode: boolean | null;
+                            /** @description Reply filter override */
+                            agentReplyFilter: {
+                                /**
+                                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                                 * @enum {string}
+                                 */
+                                mode: "all" | "filtered";
+                                conditions: {
+                                    /** @description Reply if message is a DM */
+                                    onDm: boolean;
+                                    /** @description Reply if bot is @mentioned */
+                                    onMention: boolean;
+                                    /** @description Reply if message is a reply to bot */
+                                    onReply: boolean;
+                                    /** @description Reply if bot name appears in text */
+                                    onNameMatch: boolean;
+                                    /** @description Custom patterns for name matching */
+                                    namePatterns?: string[];
+                                };
+                            } | null;
+                            /**
+                             * @description Session strategy override
+                             * @enum {string|null}
+                             */
+                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            /** @description Prefix sender name override */
+                            agentPrefixSenderName: boolean | null;
+                            /** @description Wait for media override */
+                            agentWaitForMedia: boolean | null;
+                            /** @description Send media path override */
+                            agentSendMediaPath: boolean | null;
+                            /** @description Response gate enabled override */
+                            agentGateEnabled: boolean | null;
+                            /** @description Response gate model override */
+                            agentGateModel: string | null;
+                            /** @description Response gate prompt override */
+                            agentGatePrompt: string | null;
+                            /** @description Human-readable label for this route (e.g., "VIP Support") */
+                            label: string | null;
+                            /** @description Priority (higher = higher priority, default: 0) */
+                            priority: number;
+                            /** @description Whether this route is active */
+                            isActive: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createAgentRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Route scope: chat (specific chat) or user (specific person)
+                     * @enum {string}
+                     */
+                    scope: "chat" | "user";
+                    /**
+                     * Format: uuid
+                     * @description Chat UUID (required when scope=chat)
+                     */
+                    chatId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Person UUID (required when scope=user)
+                     */
+                    personId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Agent provider UUID
+                     */
+                    agentProviderId: string;
+                    /** @description Agent ID within the provider */
+                    agentId: string;
+                    /**
+                     * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                     * @default agent
+                     * @enum {string}
+                     */
+                    agentType?: "agent" | "team" | "workflow";
+                    /** @description Agent timeout (seconds) */
+                    agentTimeout?: number;
+                    /** @description Enable streaming responses */
+                    agentStreamMode?: boolean;
+                    /** @description Reply filter configuration */
+                    agentReplyFilter?: {
+                        /**
+                         * @description Reply mode: all = reply to everything, filtered = check conditions
+                         * @enum {string}
+                         */
+                        mode: "all" | "filtered";
+                        conditions: {
+                            /** @description Reply if message is a DM */
+                            onDm: boolean;
+                            /** @description Reply if bot is @mentioned */
+                            onMention: boolean;
+                            /** @description Reply if message is a reply to bot */
+                            onReply: boolean;
+                            /** @description Reply if bot name appears in text */
+                            onNameMatch: boolean;
+                            /** @description Custom patterns for name matching */
+                            namePatterns?: string[];
+                        };
+                    };
+                    /**
+                     * @description Session strategy
+                     * @enum {string}
+                     */
+                    agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    /** @description Prefix sender name */
+                    agentPrefixSenderName?: boolean;
+                    /** @description Wait for media processing */
+                    agentWaitForMedia?: boolean;
+                    /** @description Include file path in media text */
+                    agentSendMediaPath?: boolean;
+                    /** @description Enable LLM response gate */
+                    agentGateEnabled?: boolean;
+                    /** @description Response gate model */
+                    agentGateModel?: string;
+                    /** @description Response gate prompt */
+                    agentGatePrompt?: string;
+                    /** @description Human-readable label */
+                    label?: string;
+                    /**
+                     * @description Priority (higher = higher priority)
+                     * @default 0
+                     */
+                    priority?: number;
+                    /**
+                     * @description Whether active
+                     * @default true
+                     */
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Route created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Route UUID
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /**
+                             * @description Route scope: chat (specific chat) or user (specific person)
+                             * @enum {string}
+                             */
+                            scope: "chat" | "user";
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (required when scope=chat)
+                             */
+                            chatId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Person UUID (required when scope=user)
+                             */
+                            personId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent provider UUID
+                             */
+                            agentProviderId: string;
+                            /** @description Agent ID within the provider */
+                            agentId: string;
+                            /**
+                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                             * @enum {string}
+                             */
+                            agentType: "agent" | "team" | "workflow";
+                            /** @description Agent timeout override (seconds) */
+                            agentTimeout: number | null;
+                            /** @description Stream mode override */
+                            agentStreamMode: boolean | null;
+                            /** @description Reply filter override */
+                            agentReplyFilter: {
+                                /**
+                                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                                 * @enum {string}
+                                 */
+                                mode: "all" | "filtered";
+                                conditions: {
+                                    /** @description Reply if message is a DM */
+                                    onDm: boolean;
+                                    /** @description Reply if bot is @mentioned */
+                                    onMention: boolean;
+                                    /** @description Reply if message is a reply to bot */
+                                    onReply: boolean;
+                                    /** @description Reply if bot name appears in text */
+                                    onNameMatch: boolean;
+                                    /** @description Custom patterns for name matching */
+                                    namePatterns?: string[];
+                                };
+                            } | null;
+                            /**
+                             * @description Session strategy override
+                             * @enum {string|null}
+                             */
+                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            /** @description Prefix sender name override */
+                            agentPrefixSenderName: boolean | null;
+                            /** @description Wait for media override */
+                            agentWaitForMedia: boolean | null;
+                            /** @description Send media path override */
+                            agentSendMediaPath: boolean | null;
+                            /** @description Response gate enabled override */
+                            agentGateEnabled: boolean | null;
+                            /** @description Response gate model override */
+                            agentGateModel: string | null;
+                            /** @description Response gate prompt override */
+                            agentGatePrompt: string | null;
+                            /** @description Human-readable label for this route (e.g., "VIP Support") */
+                            label: string | null;
+                            /** @description Priority (higher = higher priority, default: 0) */
+                            priority: number;
+                            /** @description Whether this route is active */
+                            isActive: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Route already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getAgentRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Route details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Route UUID
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /**
+                             * @description Route scope: chat (specific chat) or user (specific person)
+                             * @enum {string}
+                             */
+                            scope: "chat" | "user";
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (required when scope=chat)
+                             */
+                            chatId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Person UUID (required when scope=user)
+                             */
+                            personId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent provider UUID
+                             */
+                            agentProviderId: string;
+                            /** @description Agent ID within the provider */
+                            agentId: string;
+                            /**
+                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                             * @enum {string}
+                             */
+                            agentType: "agent" | "team" | "workflow";
+                            /** @description Agent timeout override (seconds) */
+                            agentTimeout: number | null;
+                            /** @description Stream mode override */
+                            agentStreamMode: boolean | null;
+                            /** @description Reply filter override */
+                            agentReplyFilter: {
+                                /**
+                                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                                 * @enum {string}
+                                 */
+                                mode: "all" | "filtered";
+                                conditions: {
+                                    /** @description Reply if message is a DM */
+                                    onDm: boolean;
+                                    /** @description Reply if bot is @mentioned */
+                                    onMention: boolean;
+                                    /** @description Reply if message is a reply to bot */
+                                    onReply: boolean;
+                                    /** @description Reply if bot name appears in text */
+                                    onNameMatch: boolean;
+                                    /** @description Custom patterns for name matching */
+                                    namePatterns?: string[];
+                                };
+                            } | null;
+                            /**
+                             * @description Session strategy override
+                             * @enum {string|null}
+                             */
+                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            /** @description Prefix sender name override */
+                            agentPrefixSenderName: boolean | null;
+                            /** @description Wait for media override */
+                            agentWaitForMedia: boolean | null;
+                            /** @description Send media path override */
+                            agentSendMediaPath: boolean | null;
+                            /** @description Response gate enabled override */
+                            agentGateEnabled: boolean | null;
+                            /** @description Response gate model override */
+                            agentGateModel: string | null;
+                            /** @description Response gate prompt override */
+                            agentGatePrompt: string | null;
+                            /** @description Human-readable label for this route (e.g., "VIP Support") */
+                            label: string | null;
+                            /** @description Priority (higher = higher priority, default: 0) */
+                            priority: number;
+                            /** @description Whether this route is active */
+                            isActive: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Route not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteAgentRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Route deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Route not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateAgentRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Agent ID within the provider */
+                    agentId?: string;
+                    /**
+                     * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                     * @enum {string}
+                     */
+                    agentType?: "agent" | "team" | "workflow";
+                    /** @description Agent timeout (seconds) */
+                    agentTimeout?: number | null;
+                    /** @description Enable streaming responses */
+                    agentStreamMode?: boolean | null;
+                    /** @description Reply filter configuration */
+                    agentReplyFilter?: {
+                        /**
+                         * @description Reply mode: all = reply to everything, filtered = check conditions
+                         * @enum {string}
+                         */
+                        mode: "all" | "filtered";
+                        conditions: {
+                            /** @description Reply if message is a DM */
+                            onDm: boolean;
+                            /** @description Reply if bot is @mentioned */
+                            onMention: boolean;
+                            /** @description Reply if message is a reply to bot */
+                            onReply: boolean;
+                            /** @description Reply if bot name appears in text */
+                            onNameMatch: boolean;
+                            /** @description Custom patterns for name matching */
+                            namePatterns?: string[];
+                        };
+                    } | null;
+                    /**
+                     * @description Session strategy
+                     * @enum {string|null}
+                     */
+                    agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                    /** @description Prefix sender name */
+                    agentPrefixSenderName?: boolean | null;
+                    /** @description Wait for media processing */
+                    agentWaitForMedia?: boolean | null;
+                    /** @description Include file path in media text */
+                    agentSendMediaPath?: boolean | null;
+                    /** @description Enable LLM response gate */
+                    agentGateEnabled?: boolean | null;
+                    /** @description Response gate model */
+                    agentGateModel?: string | null;
+                    /** @description Response gate prompt */
+                    agentGatePrompt?: string | null;
+                    /** @description Human-readable label */
+                    label?: string | null;
+                    /** @description Priority (higher = higher priority) */
+                    priority?: number;
+                    /** @description Whether active */
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Route updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Route UUID
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /**
+                             * @description Route scope: chat (specific chat) or user (specific person)
+                             * @enum {string}
+                             */
+                            scope: "chat" | "user";
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (required when scope=chat)
+                             */
+                            chatId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Person UUID (required when scope=user)
+                             */
+                            personId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent provider UUID
+                             */
+                            agentProviderId: string;
+                            /** @description Agent ID within the provider */
+                            agentId: string;
+                            /**
+                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
+                             * @enum {string}
+                             */
+                            agentType: "agent" | "team" | "workflow";
+                            /** @description Agent timeout override (seconds) */
+                            agentTimeout: number | null;
+                            /** @description Stream mode override */
+                            agentStreamMode: boolean | null;
+                            /** @description Reply filter override */
+                            agentReplyFilter: {
+                                /**
+                                 * @description Reply mode: all = reply to everything, filtered = check conditions
+                                 * @enum {string}
+                                 */
+                                mode: "all" | "filtered";
+                                conditions: {
+                                    /** @description Reply if message is a DM */
+                                    onDm: boolean;
+                                    /** @description Reply if bot is @mentioned */
+                                    onMention: boolean;
+                                    /** @description Reply if message is a reply to bot */
+                                    onReply: boolean;
+                                    /** @description Reply if bot name appears in text */
+                                    onNameMatch: boolean;
+                                    /** @description Custom patterns for name matching */
+                                    namePatterns?: string[];
+                                };
+                            } | null;
+                            /**
+                             * @description Session strategy override
+                             * @enum {string|null}
+                             */
+                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            /** @description Prefix sender name override */
+                            agentPrefixSenderName: boolean | null;
+                            /** @description Wait for media override */
+                            agentWaitForMedia: boolean | null;
+                            /** @description Send media path override */
+                            agentSendMediaPath: boolean | null;
+                            /** @description Response gate enabled override */
+                            agentGateEnabled: boolean | null;
+                            /** @description Response gate model override */
+                            agentGateModel: string | null;
+                            /** @description Response gate prompt override */
+                            agentGatePrompt: string | null;
+                            /** @description Human-readable label for this route (e.g., "VIP Support") */
+                            label: string | null;
+                            /** @description Priority (higher = higher priority, default: 0) */
+                            priority: number;
+                            /** @description Whether this route is active */
+                            isActive: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Route not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getRouteCacheMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cache metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            cache: {
+                                /** @description Cache hits count */
+                                hits: number;
+                                /** @description Cache misses count */
+                                misses: number;
+                                /** @description Cache sets count */
+                                sets: number;
+                                /** @description Cache invalidation count */
+                                invalidations: number;
+                                /** @description Last query time in milliseconds */
+                                lastQueryMs: number;
+                                /** @description Current cache size (entries) */
+                                cacheSize: number;
+                                /** @description Cache hit rate percentage */
+                                hitRate: number;
+                            };
+                            /**
+                             * Format: date-time
+                             * @description Metrics timestamp
+                             */
+                            timestamp: string;
                         };
                     };
                 };
