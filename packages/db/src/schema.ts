@@ -555,6 +555,11 @@ export const instances = pgTable(
 
     // ---- Message Processing Config ----
     enableAutoSplit: boolean('enable_auto_split').notNull().default(true),
+    /** Format conversion mode: 'convert' = markdown→native per channel, 'passthrough' = raw text */
+    messageFormatMode: varchar('message_format_mode', { length: 20 })
+      .notNull()
+      .default('convert')
+      .$type<'convert' | 'passthrough'>(),
     disableUsernamePrefix: boolean('disable_username_prefix').notNull().default(false),
     processMediaOnBlocked: boolean('process_media_on_blocked').notNull().default(true),
     accessMode: varchar('access_mode', { length: 20 }).notNull().default('blocklist').$type<AccessMode>(),

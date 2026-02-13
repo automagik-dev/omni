@@ -12,6 +12,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
@@ -23,6 +24,8 @@ import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
+import { sendReaction } from './senders/reaction';
+import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -584,6 +587,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
+      // ── Reaction dispatch (separate path — not a normal message) ──
+      if (message.content.type === 'reaction') {
+        return this.dispatchReaction(instanceId, sock, jid, message);
+      }
+
       // Humanized delay — prevent anti-bot detection
       await this.humanDelay(instanceId);
 
@@ -597,6 +605,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       let processedMessage = message;
       if (message.content.type === 'audio' && message.metadata?.ptt === true) {
         processedMessage = await this.processAudioForVoiceNote(message);
+      }
+
+      // Apply markdown→WhatsApp format conversion for text messages
+      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
+        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+        const converted = markdownToWhatsApp(processedMessage.content.text);
+        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
       }
 
       // Build message content based on type
@@ -655,6 +671,72 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Dispatch a reaction message (add or remove).
+   *
+   * Reactions bypass the normal message pipeline (no typing, no markdown
+   * conversion, no emitMessageSent). They use the dedicated Baileys react
+   * protocol message which modifies an existing message in-place.
+   *
+   * @returns SendResult with success (no messageId for reactions)
+   */
+  private async dispatchReaction(
+    instanceId: string,
+    sock: WASocket,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<SendResult> {
+    const { targetMessageId, emoji } = message.content;
+
+    if (!targetMessageId) {
+      return {
+        success: false,
+        error: 'Reaction content missing target message ID',
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Validate emoji — WhatsApp only supports standard Unicode emoji, not custom emoji IDs
+    const reactionEmoji = emoji || '';
+    if (reactionEmoji && /^\d+$/.test(reactionEmoji)) {
+      // Looks like a custom emoji ID (numeric string) — not supported on WhatsApp
+      return {
+        success: false,
+        error: `Custom emoji reactions are not supported on WhatsApp. Use a standard Unicode emoji instead (received ID: ${reactionEmoji})`,
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Determine fromMe: metadata can override, default true
+    const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+
+    // Minimal delay for reactions (shorter than full humanDelay)
+    await this.humanDelay(instanceId);
+
+    this.logger.debug('Sending reaction', {
+      jid,
+      targetMessageId,
+      emoji: reactionEmoji || '(remove)',
+      fromMe,
+    });
+
+    const correlationId = message.metadata?.correlationId as string | undefined;
+    correlationId && this.captureT10(correlationId);
+
+    await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+
+    correlationId && this.captureT11(correlationId);
+
+    return {
+      success: true,
+      timestamp: Date.now(),
+    };
   }
 
   /**
@@ -735,6 +817,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     lines.push('END:VCARD');
     return lines.join('\n');
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Streaming (progressive response edits)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Create a stream sender for progressive response rendering.
+   *
+   * Uses Baileys message edits to update a single message as the LLM
+   * streams its response. Throttled conservatively (default 2500ms)
+   * to avoid WhatsApp anti-bot detection.
+   *
+   * Config: `streamThrottleMs` in instance options (default 2500)
+   */
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ): StreamSender {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+
+    // Read per-instance throttle from config
+    const instanceEntry = this.instances.get(instanceId);
+    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+
+    return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
+      throttleMs,
+    });
   }
 
   /**

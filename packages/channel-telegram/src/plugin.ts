@@ -24,7 +24,16 @@ import type { Bot } from 'grammy';
 import { TELEGRAM_CAPABILITIES } from './capabilities';
 import { createBot, destroyBot, getBot } from './client';
 import { setupMessageHandlers, setupReactionHandlers } from './handlers';
-import { sendAudio, sendDocument, sendPhoto, sendTextMessage, sendVideo } from './senders';
+import {
+  sendAudio,
+  sendContact,
+  sendDocument,
+  sendLocation,
+  sendPhoto,
+  sendSticker,
+  sendTextMessage,
+  sendVideo,
+} from './senders';
 import { setReaction } from './senders/reaction';
 import { TelegramStreamSender } from './senders/stream';
 import type { TelegramConfig } from './types';
@@ -65,6 +74,8 @@ async function dispatchMedia(
       return sendVideo(bot, chatId, url, caption, replyParam);
     case 'document':
       return sendDocument(bot, chatId, url, caption, content.filename, replyParam);
+    case 'sticker':
+      return sendSticker(bot, chatId, url, replyParam);
     default:
       return sendTextMessage(bot, chatId, content.text ?? '[Unsupported content]', replyParam);
   }
@@ -79,10 +90,45 @@ async function dispatchContent(
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
+  formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<number | null> {
-  if (content.type === 'text') return sendTextMessage(bot, chatId, content.text ?? '', replyParam);
+  if (content.type === 'text') return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode);
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
+  if (content.type === 'contact') return dispatchContact(bot, chatId, content, replyParam);
+  if (content.type === 'location') return dispatchLocation(bot, chatId, content, replyParam);
   return dispatchMedia(bot, chatId, content, replyParam);
+}
+
+/**
+ * Dispatch a contact card via Telegram sender
+ */
+async function dispatchContact(
+  bot: Bot,
+  chatId: string,
+  content: OutgoingMessage['content'],
+  replyParam?: number,
+): Promise<number> {
+  const contact = content.contact;
+  const phone = contact?.phone ?? '';
+  const name = contact?.name ?? content.text ?? '';
+  const [firstName, ...lastParts] = name.split(' ');
+  const lastName = lastParts.join(' ') || undefined;
+  return sendContact(bot, chatId, phone, firstName ?? name, lastName, replyParam);
+}
+
+/**
+ * Dispatch a location pin via Telegram sender
+ */
+async function dispatchLocation(
+  bot: Bot,
+  chatId: string,
+  content: OutgoingMessage['content'],
+  replyParam?: number,
+): Promise<number> {
+  const loc = content.location;
+  const latitude = loc?.latitude ?? 0;
+  const longitude = loc?.longitude ?? 0;
+  return sendLocation(bot, chatId, latitude, longitude, replyParam);
 }
 
 // ============================================================================
@@ -226,7 +272,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
 
-      const messageId = await dispatchContent(bot, chatId, content, replyParam);
+      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      const messageId = await dispatchContent(bot, chatId, content, replyParam, formatMode);
 
       // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
       if (correlationId) this.captureT11(correlationId);
@@ -288,6 +335,104 @@ export class TelegramPlugin extends BaseChannelPlugin {
       throw new Error(`No bot for instance ${instanceId}`);
     }
     return new TelegramStreamSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined, chatType);
+  }
+
+  /**
+   * Forward a message from one chat to another
+   */
+  async forwardMessage(instanceId: string, fromChatId: string, toChatId: string, messageId: string): Promise<string> {
+    const bot = getBot(instanceId);
+    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+
+    const result = await bot.api.forwardMessage(toChatId, fromChatId, Number(messageId));
+    return String(result.message_id);
+  }
+
+  /**
+   * Get the bot's own profile
+   */
+  async getProfile(instanceId: string): Promise<{
+    name?: string;
+    avatarUrl?: string;
+    bio?: string;
+    ownerIdentifier?: string;
+    platformMetadata: Record<string, unknown>;
+  }> {
+    const bot = getBot(instanceId);
+    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+
+    const me = await bot.api.getMe();
+    let avatarUrl: string | undefined;
+    try {
+      const photos = await bot.api.getUserProfilePhotos(me.id, { limit: 1 });
+      if (photos.total_count > 0 && photos.photos[0]?.[0]) {
+        const file = await bot.api.getFile(photos.photos[0][0].file_id);
+        avatarUrl = file.file_path ? `https://api.telegram.org/file/bot${bot.token}/${file.file_path}` : undefined;
+      }
+    } catch {
+      // Avatar fetch is best-effort
+    }
+
+    return {
+      name: [me.first_name, me.last_name].filter(Boolean).join(' '),
+      avatarUrl,
+      bio: undefined, // Bots don't have bios accessible via API
+      ownerIdentifier: me.username ? `@${me.username}` : String(me.id),
+      platformMetadata: {
+        id: me.id,
+        username: me.username,
+        isBot: me.is_bot,
+        canJoinGroups: me.can_join_groups,
+        canReadAllGroupMessages: me.can_read_all_group_messages,
+        supportsInlineQueries: me.supports_inline_queries,
+      },
+    };
+  }
+
+  /**
+   * Fetch profile for a specific user/chat
+   */
+  async fetchUserProfile(
+    instanceId: string,
+    userId: string,
+  ): Promise<{
+    displayName?: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+    platformData?: Record<string, unknown>;
+  }> {
+    const bot = getBot(instanceId);
+    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+
+    const chat = await bot.api.getChat(userId);
+    let avatarUrl: string | undefined;
+    if ('photo' in chat && chat.photo) {
+      try {
+        const file = await bot.api.getFile(chat.photo.big_file_id);
+        avatarUrl = file.file_path ? `https://api.telegram.org/file/bot${bot.token}/${file.file_path}` : undefined;
+      } catch {
+        // Avatar fetch is best-effort
+      }
+    }
+
+    const displayName =
+      'first_name' in chat
+        ? [chat.first_name, 'last_name' in chat ? chat.last_name : undefined].filter(Boolean).join(' ')
+        : 'title' in chat
+          ? chat.title
+          : undefined;
+
+    return {
+      displayName,
+      avatarUrl,
+      bio: 'bio' in chat ? (chat.bio as string) : undefined,
+      platformData: {
+        id: chat.id,
+        type: chat.type,
+        username: 'username' in chat ? chat.username : undefined,
+      },
+    };
   }
 
   async sendTyping(instanceId: string, chatId: string): Promise<void> {
@@ -435,7 +580,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // Start polling in background (non-blocking)
     bot.start({
       drop_pending_updates: true,
-      allowed_updates: ['message', 'message_reaction', 'callback_query', 'my_chat_member'],
+      allowed_updates: ['message', 'edited_message', 'message_reaction', 'callback_query', 'my_chat_member'],
       onStart: () => {
         this.logger.info('Polling started', { instanceId });
       },

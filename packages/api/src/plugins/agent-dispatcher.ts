@@ -380,13 +380,20 @@ async function sendTypingPresence(
   }
 }
 
-async function sendTextMessage(channel: ChannelType, instanceId: string, chatId: string, text: string): Promise<void> {
+async function sendTextMessage(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  text: string,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
+): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
 
   await plugin.sendMessage(instanceId, {
     to: chatId,
     content: { type: 'text', text },
+    metadata: { messageFormatMode },
   });
 }
 
@@ -680,6 +687,7 @@ async function sendResponseParts(
   chatId: string,
   parts: string[],
   splitConfig: SplitDelayConfig,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -688,7 +696,7 @@ async function sendResponseParts(
   }
 
   for (const [index, chunk] of allChunks.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, chunk);
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode);
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1084,7 +1092,8 @@ async function dispatchViaProvider(
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+    const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1154,7 +1163,8 @@ async function dispatchViaLegacy(
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+  const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -1583,7 +1593,8 @@ async function processReactionTrigger(
       const result = await provider.trigger(trigger);
 
       if (result && result.parts.length > 0) {
-        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+        const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
       }
 
       log.info('Reaction trigger response via provider', {
@@ -1634,7 +1645,8 @@ async function processReactionTrigger(
     });
 
     if (result.parts.length > 0) {
-      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+      const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
     }
 
     log.info('Reaction trigger response via legacy runner', {

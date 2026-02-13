@@ -37,6 +37,9 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canSendSticker: true,
   canSendPoll: true,
 
+  // Streaming (progressive response edits)
+  canStreamResponse: true,
+
   // Group/broadcast (deferred)
   canHandleGroups: false, // Defer to future wish
   canHandleBroadcast: false, // Defer to future wish

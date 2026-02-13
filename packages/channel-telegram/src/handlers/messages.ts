@@ -175,5 +175,48 @@ export function setupMessageHandlers(bot: Bot, plugin: TelegramPlugin, instanceI
     );
   });
 
+  // Handle edited messages
+  bot.on('edited_message', async (ctx) => {
+    const msg = ctx.editedMessage;
+    if (!msg) return;
+    const from = msg.from;
+    if (!from || from.is_bot) return;
+
+    const chatId = String(msg.chat.id);
+    const userId = toPlatformUserId(from.id);
+    const externalId = String(msg.message_id);
+    const text = msg.text ?? msg.caption ?? '';
+
+    log.debug('Received edited message', { instanceId, chatId, externalId });
+
+    // Re-emit as a regular message with edited flag in rawPayload
+    // This follows the WhatsApp pattern where edits are processed through handleMessageReceived
+    const displayName = buildDisplayName(from);
+    await plugin.handleMessageReceived(
+      instanceId,
+      externalId,
+      chatId,
+      userId,
+      {
+        type: 'text',
+        text,
+      },
+      undefined,
+      {
+        chatType: msg.chat.type,
+        username: from.username,
+        displayName,
+        pushName: displayName,
+        chatName:
+          ('title' in msg.chat ? msg.chat.title : undefined) || (msg.chat.type === 'private' ? displayName : undefined),
+        isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
+        isDM: msg.chat.type === 'private',
+        isEdited: true,
+        editDate: (msg.edit_date ?? msg.date) * 1000,
+      },
+      (msg.edit_date ?? msg.date) * 1000,
+    );
+  });
+
   log.info('Message handlers set up', { instanceId });
 }

@@ -34,8 +34,9 @@ import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
+import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
-import { type CommandCategory, setRuntimeFormat } from './config.js';
+import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors } from './output.js';
 
@@ -47,8 +48,7 @@ if (process.argv.includes('--json')) {
   process.argv.splice(idx, 1);
 }
 import { getConfigSummary, getInlineStatus } from './status.js';
-
-const VERSION = '0.0.1';
+import { VERSION, fetchServerVersion, formatCliVersionLine } from './version.js';
 
 /**
  * Help display group for organizing commands
@@ -155,6 +155,12 @@ const COMMANDS: CommandDef[] = [
   { create: createSettingsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Server settings' },
   { create: createBatchCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Batch operations' },
   {
+    create: createUpdateCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Update CLI to latest version',
+  },
+  {
     create: createMediaCommand,
     category: 'standard',
     helpGroup: 'Core',
@@ -203,7 +209,7 @@ const program = new Command();
 program
   .name('omni')
   .description('CLI for Omni v2 - Universal Omnichannel Platform')
-  .version(VERSION)
+  .version(VERSION, '-V, --version', 'output the version number')
   .enablePositionalOptions()
   .passThroughOptions()
   .option('--no-color', 'Disable colored output')
@@ -351,4 +357,16 @@ ${c().dim('Showing all commands (--all flag active)')}`;
 });
 
 // Parse and execute
-program.parse(process.argv);
+const argv = process.argv.slice(2);
+const isRootVersionOnly = argv.length > 0 && argv.every((arg) => arg === '--version' || arg === '-V');
+
+if (isRootVersionOnly) {
+  const config = loadConfig();
+  const apiUrl = config.apiUrl ?? 'http://localhost:8882';
+  const serverVersion = await fetchServerVersion(apiUrl);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(formatCliVersionLine(VERSION, serverVersion));
+  process.exit(0);
+}
+
+await program.parseAsync(process.argv);

@@ -591,6 +591,56 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 
 ---
 
+## Branch Workflow — CRITICAL
+
+**`dev` IS HOME. WE BELONG IN `dev`.**
+
+```
+dev ←────────────────────────────────────────
+ ↑                                           │
+ │  PRs from worktrees                       │
+ │                                           │
+ └── .worktrees/<task-id>/  ←── tasks spawn here
+```
+
+### The Rules
+
+1. **`dev` is the working branch** — all development happens here or in worktrees targeting `dev`
+2. **`main` is production** — only promoted from `dev` via explicit merge, never direct commits
+3. **Tasks run in worktrees** — spawned workers create `.worktrees/<task-id>/` and open PRs back to `dev`
+4. **Nightly PRs** — at end of day, changes go into a nightly branch → PR to `dev`
+5. **Never code on `main`** — if `git branch --show-current` returns `main`, you're in the wrong place
+
+### Workflow
+
+```bash
+# Check where you are
+git branch --show-current   # Should be 'dev' or a worktree branch
+
+# Start a task (worker spawns worktree automatically)
+/forge --spawn              # Creates .worktrees/<beads-id>/, PRs back to dev
+
+# End of session — create nightly
+git checkout dev
+git checkout -b nightly/$(date +%Y-%m-%d)
+# ... commits ...
+gh pr create --base dev
+```
+
+### Branch Purpose Summary
+
+| Branch | Purpose | Who commits |
+|--------|---------|-------------|
+| `main` | Production | Only via merge from `dev` |
+| `dev` | Active development | Us, always |
+| `feat/*` | Feature branches | Worktrees, PR to `dev` |
+| `nightly/*` | End-of-day bundles | Us, PR to `dev` |
+| `fix/*` | Bug fixes | Worktrees or direct on `dev` |
+
+**IF YOU'RE ON `main`, YOU'RE LOST.** Get back to `dev`.
+
+---
+
 ## Cowork Mode (How Felipe & Cezar Work)
 
 **Felipe is faster than you in the terminal.** When he says "set up splits", he's already doing it. Your job:
