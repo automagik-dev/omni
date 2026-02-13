@@ -2,9 +2,10 @@
 
 > Granular per-chat and per-user agent configuration within an instance
 
-**Status:** READY
+**Status:** COMPLETE
 **Created:** 2026-02-10
 **Updated:** 2026-02-12
+**Completed:** 2026-02-12
 **Author:** WISH Agent
 **Beads:** omni-pyt
 
