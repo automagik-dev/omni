@@ -1,6 +1,6 @@
 # Wish: Identity & Contact Parity
 
-**Status:** READY  
+**Status:** DONE  
 **Slug:** parity-identity  
 **Created:** 2026-02-13  
 **Depends on:** channel-parity-telegram-whatsapp  

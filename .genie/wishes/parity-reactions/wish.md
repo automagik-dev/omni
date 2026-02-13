@@ -1,6 +1,6 @@
 # Wish: Reaction Parity & Translation
 
-**Status:** READY  
+**Status:** DONE  
 **Slug:** parity-reactions  
 **Created:** 2026-02-13  
 **Depends on:** channel-parity-telegram-whatsapp  
