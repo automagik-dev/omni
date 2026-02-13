@@ -23,6 +23,7 @@ import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
+import { sendReaction } from './senders/reaction';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -584,6 +585,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
+      // ── Reaction dispatch (separate path — not a normal message) ──
+      if (message.content.type === 'reaction') {
+        return this.dispatchReaction(instanceId, sock, jid, message);
+      }
+
       // Humanized delay — prevent anti-bot detection
       await this.humanDelay(instanceId);
 
@@ -663,6 +669,72 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Dispatch a reaction message (add or remove).
+   *
+   * Reactions bypass the normal message pipeline (no typing, no markdown
+   * conversion, no emitMessageSent). They use the dedicated Baileys react
+   * protocol message which modifies an existing message in-place.
+   *
+   * @returns SendResult with success (no messageId for reactions)
+   */
+  private async dispatchReaction(
+    instanceId: string,
+    sock: WASocket,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<SendResult> {
+    const { targetMessageId, emoji } = message.content;
+
+    if (!targetMessageId) {
+      return {
+        success: false,
+        error: 'Reaction content missing target message ID',
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Validate emoji — WhatsApp only supports standard Unicode emoji, not custom emoji IDs
+    const reactionEmoji = emoji || '';
+    if (reactionEmoji && /^\d+$/.test(reactionEmoji)) {
+      // Looks like a custom emoji ID (numeric string) — not supported on WhatsApp
+      return {
+        success: false,
+        error: `Custom emoji reactions are not supported on WhatsApp. Use a standard Unicode emoji instead (received ID: ${reactionEmoji})`,
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Determine fromMe: metadata can override, default true
+    const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+
+    // Minimal delay for reactions (shorter than full humanDelay)
+    await this.humanDelay(instanceId);
+
+    this.logger.debug('Sending reaction', {
+      jid,
+      targetMessageId,
+      emoji: reactionEmoji || '(remove)',
+      fromMe,
+    });
+
+    const correlationId = message.metadata?.correlationId as string | undefined;
+    correlationId && this.captureT10(correlationId);
+
+    await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+
+    correlationId && this.captureT11(correlationId);
+
+    return {
+      success: true,
+      timestamp: Date.now(),
+    };
   }
 
   /**
