@@ -336,6 +336,19 @@ async function postProcessChat(
 }
 
 /**
+ * Resolve sender display name with fallback chain
+ * Priority: pushName > participant displayName > undefined
+ */
+function resolveSenderDisplayName(
+  rawPayload: Record<string, unknown> | undefined,
+  participantResult: { participant: { displayName: string | null } } | undefined,
+): string | undefined {
+  return (
+    truncate(rawPayload?.pushName as string | undefined, 255) || participantResult?.participant.displayName || undefined
+  );
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -396,11 +409,8 @@ async function handleMessageReceived(
     });
   }
 
-  // Step 4: Resolve sender display name (fallback chain)
-  const senderDisplayName =
-    truncate(rawPayload?.pushName as string | undefined, 255) || // Try pushName first
-    participantResult?.participant.displayName || // Fallback to participant displayName
-    undefined;
+  // Step 4: Resolve sender display name (fallback chain: pushName > participant > undefined)
+  const senderDisplayName = resolveSenderDisplayName(rawPayload, participantResult);
 
   // Step 5: Build and create message
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
