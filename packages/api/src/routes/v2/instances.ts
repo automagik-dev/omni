@@ -65,6 +65,10 @@ const createInstanceSchema = z.object({
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
   enableAutoSplit: z.boolean().default(true).describe('Split responses on double newlines'),
+  messageFormatMode: z
+    .enum(['convert', 'passthrough'])
+    .default('convert')
+    .describe('Format conversion: convert markdown to native channel syntax, or passthrough raw text'),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),

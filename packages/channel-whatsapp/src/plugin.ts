@@ -599,6 +599,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         processedMessage = await this.processAudioForVoiceNote(message);
       }
 
+      // Apply markdown→WhatsApp format conversion for text messages
+      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
+        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+        const converted = markdownToWhatsApp(processedMessage.content.text);
+        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
+      }
+
       // Build message content based on type
       const content = this.buildContent(processedMessage);
       const quotedOptions = this.buildQuotedOptions(message, jid);

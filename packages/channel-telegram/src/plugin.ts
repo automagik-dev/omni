@@ -79,8 +79,9 @@ async function dispatchContent(
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
+  formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<number | null> {
-  if (content.type === 'text') return sendTextMessage(bot, chatId, content.text ?? '', replyParam);
+  if (content.type === 'text') return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode);
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
   return dispatchMedia(bot, chatId, content, replyParam);
 }
@@ -226,7 +227,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
 
-      const messageId = await dispatchContent(bot, chatId, content, replyParam);
+      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      const messageId = await dispatchContent(bot, chatId, content, replyParam, formatMode);
 
       // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
       if (correlationId) this.captureT11(correlationId);
