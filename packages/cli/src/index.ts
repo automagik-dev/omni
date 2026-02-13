@@ -34,6 +34,7 @@ import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
+import { createTtsCommand } from './commands/tts.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
@@ -90,6 +91,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Core',
     helpDescription: 'Message actions (read receipts)',
+  },
+  {
+    create: createTtsCommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'Text-to-speech operations',
   },
 
   // Management group - Configuration and setup

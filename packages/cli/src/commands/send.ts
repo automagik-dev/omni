@@ -69,6 +69,9 @@ interface SendOptions {
   color?: number;
   url?: string;
   presence?: string;
+  tts?: string;
+  voiceId?: string;
+  presenceDelay?: number;
 }
 
 /** Message sender handlers - each validates required fields before use */
@@ -219,6 +222,19 @@ const messageSenders = {
     });
     output.success('Presence sent', result);
   },
+
+  async tts(client: OmniClient, instanceId: string, options: SendOptions) {
+    const { to, tts } = options;
+    if (!to || !tts) return;
+    const result = await client.messages.sendTts({
+      instanceId,
+      to,
+      text: tts,
+      voiceId: options.voiceId,
+      presenceDelay: options.presenceDelay,
+    });
+    output.success('TTS voice note sent', result);
+  },
 };
 
 /** Determine which message type to send based on options */
@@ -232,6 +248,7 @@ function getMessageType(options: SendOptions): keyof typeof messageSenders | nul
   if (options.poll) return 'poll';
   if (options.embed) return 'embed';
   if (options.presence) return 'presence';
+  if (options.tts) return 'tts';
   return null;
 }
 
@@ -334,12 +351,19 @@ function buildGroupedSendHelp(): string {
     { flags: '--presence <type>', description: 'Send typing/recording/paused indicator' },
   ];
 
+  const ttsOptions: OptionDef[] = [
+    { flags: '--tts <text>', description: 'Convert text to speech and send as voice note' },
+    { flags: '--voice-id <id>', description: 'ElevenLabs voice ID (optional)' },
+    { flags: '--presence-delay <ms>', description: 'Recording presence duration (optional)' },
+  ];
+
   // Examples
   const examples: Example[] = [
     { command: 'omni send --to +5511999 --text "Hello!"', description: 'Send text' },
     { command: 'omni send --to +5511999 --media ./photo.jpg --caption "Check this"', description: 'Send media' },
     { command: 'omni send --to +5511999 --reaction "👍" --message msg_abc', description: 'React to message' },
     { command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"', description: 'Create poll' },
+    { command: 'omni send --to +5511999 --tts "Hello from AI!"', description: 'Send TTS voice note' },
   ];
 
   // Build help output
@@ -351,6 +375,7 @@ ${c().bold('Options')}:
 ${formatOptionGroup('Common', commonOptions)}
 ${formatOptionGroup('Text Message', textOptions)}
 ${formatOptionGroup('Media Message', mediaOptions)}
+${formatOptionGroup('TTS Voice Note', ttsOptions)}
 ${formatOptionGroup('Reaction', reactionOptions)}
 ${formatOptionGroup('Sticker', stickerOptions)}
 ${formatOptionGroup('Contact Card', contactOptions)}
@@ -412,6 +437,10 @@ export function createSendCommand(): Command {
     .option('--url <url>', 'Embed URL')
     // Presence
     .option('--presence <type>', 'Send presence indicator (typing, recording, paused)')
+    // TTS
+    .option('--tts <text>', 'Send TTS voice note (text-to-speech)')
+    .option('--voice-id <id>', 'ElevenLabs voice ID for TTS')
+    .option('--presence-delay <ms>', 'Recording presence duration in ms', Number.parseInt)
     .action(async (options: SendOptions) => {
       const instanceId = await validateSendOptions(options);
 
