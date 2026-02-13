@@ -386,16 +386,23 @@ async function handleMessageReceived(
   const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
 
   // Step 3: Find or create participant (with identity links)
+  let participantResult: Awaited<ReturnType<typeof services.chats.findOrCreateParticipant>> | undefined;
   if (payload.from) {
     const participantUserId = truncate(payload.from, 255) ?? payload.from;
-    await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
+    participantResult = await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
       displayName: truncate(rawPayload?.pushName as string | undefined, 255),
       personId,
       platformIdentityId,
     });
   }
 
-  // Step 4: Build and create message
+  // Step 4: Resolve sender display name (fallback chain)
+  const senderDisplayName =
+    truncate(rawPayload?.pushName as string | undefined, 255) || // Try pushName first
+    participantResult?.participant.displayName || // Fallback to participant displayName
+    undefined;
+
+  // Step 5: Build and create message
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
   const platformTimestamp = extractPlatformTimestamp(rawPayload, eventTimestamp);
 
@@ -405,7 +412,7 @@ async function handleMessageReceived(
     textContent: sanitizeText(payload.content.text),
     platformTimestamp,
     senderPlatformUserId: truncate(payload.from, 255),
-    senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
+    senderDisplayName,
     senderPersonId: personId,
     senderPlatformIdentityId: platformIdentityId,
     isFromMe: rawPayload?.isFromMe === true,
@@ -424,19 +431,19 @@ async function handleMessageReceived(
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
   }
 
-  // Step 5: Record participant activity
+  // Step 6: Record participant activity
   if (payload.from) {
     const activityUserId = truncate(payload.from, 255) ?? payload.from;
     await services.chats.recordParticipantActivity(chat.id, activityUserId);
   }
 
-  // Step 6: Update chat lastMessageAt and preview
+  // Step 7: Update chat lastMessageAt and preview
   const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
     log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
   });
 
-  // Step 7: Update lastMessageAt on instance (for reconnect gap detection)
+  // Step 8: Update lastMessageAt on instance (for reconnect gap detection)
   services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
     log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
   });
