@@ -1,6 +1,6 @@
 # Wish: Channel-Aware Format Conversion & Smart Splitting
 
-**Status:** REVIEW
+**Status:** DONE
 **Slug:** `channel-format-convert`
 **Created:** 2026-02-13
 **GitHub Issue:** [#28](https://github.com/automagik-dev/omni/issues/28)
