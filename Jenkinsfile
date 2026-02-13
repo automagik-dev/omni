@@ -20,7 +20,7 @@ pipeline {
                     ssh -o StrictHostKeyChecking=no -o BatchMode=yes omni@10.114.1.140 'bash -lc "
                         export PATH=\$HOME/.bun/bin:\$HOME/.local/bin:/usr/local/bin:\$PATH
                         cd /home/omni/omni
-                        git fetch origin dev
+                        git fetch origin main
                         git checkout main
                         git pull origin main
                         bun install
