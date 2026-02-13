@@ -191,6 +191,50 @@ function handleChannelError(c: Context, error: Error & { code?: string; retryabl
 }
 
 /**
+ * Handle PostgreSQL database errors (unique constraint violations, etc.)
+ * Duck-typed by error.code to avoid importing pg types.
+ */
+function handleDatabaseError(
+  c: Context,
+  error: Error & { code?: string; detail?: string; constraint?: string },
+): Response | null {
+  // PostgreSQL unique_violation
+  if (error.code === '23505') {
+    // Extract useful info from the detail string, e.g. 'Key (name)=(foo) already exists.'
+    const field = error.detail?.match(/\(([^)]+)\)/)?.[1] ?? 'unknown';
+    return c.json(
+      {
+        error: {
+          code: 'CONFLICT',
+          message: `A record with that ${field} already exists.`,
+          details: {
+            constraint: error.constraint,
+            field,
+          },
+        },
+      },
+      409,
+    );
+  }
+
+  // PostgreSQL foreign_key_violation
+  if (error.code === '23503') {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Referenced record does not exist.',
+          details: { constraint: error.constraint },
+        },
+      },
+      400,
+    );
+  }
+
+  return null;
+}
+
+/**
  * Handle unknown errors
  */
 function handleUnknownError(c: Context, error: unknown): Response {
@@ -235,7 +279,25 @@ function routeError(c: Context, error: unknown): Response {
     const channelResult = handleChannelError(c, error as Error & { code?: string; retryable?: boolean });
     if (channelResult) return channelResult;
   }
+  // PostgreSQL errors (unique constraint, foreign key, etc.) — duck-typed by numeric code
+  if (error instanceof Error && 'code' in error) {
+    const dbResult = handleDatabaseError(c, error as Error & { code?: string; detail?: string; constraint?: string });
+    if (dbResult) return dbResult;
+  }
   return handleUnknownError(c, error);
+}
+
+/** PostgreSQL error codes that represent client mistakes (not server errors) */
+const PG_CLIENT_ERROR_CODES = new Set(['23505', '23503']); // unique_violation, foreign_key_violation
+
+/**
+ * Check if a string error code maps to a client-side error.
+ * Covers channel plugin codes and PostgreSQL constraint violations.
+ */
+function isCodeClientError(code: string): boolean {
+  if (PG_CLIENT_ERROR_CODES.has(code)) return true;
+  const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
+  return mapped ? mapped.status < 500 : false;
 }
 
 /**
@@ -252,13 +314,9 @@ function isClientError(error: unknown): boolean {
     const status = ERROR_STATUS_MAP[error.code] ?? 500;
     return status < 500;
   }
-  // Channel plugin errors — only treat as client error if mapped status < 500
+  // Duck-typed errors with a string code (channel plugins, PostgreSQL)
   if (error instanceof Error && 'code' in error && typeof (error as { code: unknown }).code === 'string') {
-    const code = (error as { code: string }).code;
-    const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
-    if (mapped) {
-      return mapped.status < 500;
-    }
+    return isCodeClientError((error as { code: string }).code);
   }
   return false;
 }

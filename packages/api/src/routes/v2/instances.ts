@@ -103,6 +103,10 @@ const createInstanceSchema = z.object({
     .default(null)
     .describe('Model for response gate (default: gemini-3-flash-preview)'),
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
+  telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
+  discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
+  slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
+  slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -112,10 +116,34 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   agentId: z.string().max(255).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
+  telegramBotToken: z.string().nullable().optional(),
+  discordBotToken: z.string().nullable().optional(),
+  slackBotToken: z.string().nullable().optional(),
+  slackAppToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
 });
+
+/**
+ * Map the generic `token` field to the correct channel-specific DB column.
+ * Also returns the token to use for the plugin connect call.
+ */
+function resolveChannelToken(data: {
+  channel: string;
+  token?: string;
+  telegramBotToken?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+}): string | undefined {
+  // If a generic `token` was provided but no channel-specific field, persist it
+  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken) {
+    if (data.channel === 'telegram') data.telegramBotToken = data.token;
+    else if (data.channel === 'discord') data.discordBotToken = data.token;
+    else if (data.channel === 'slack') data.slackBotToken = data.token;
+  }
+  return data.token ?? data.telegramBotToken ?? data.discordBotToken ?? data.slackBotToken ?? undefined;
+}
 
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
@@ -212,13 +240,16 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
   }
 
+  // Map generic `token` → channel-specific DB column + resolve connect token
+  const connectToken = resolveChannelToken(data);
+
   // Create the database record first
   const instance = await services.instances.create(data);
 
   // Build connection options
   const connectionOptions: Record<string, unknown> = { forceNewQr: true };
-  if (data.token) {
-    connectionOptions.token = data.token;
+  if (connectToken) {
+    connectionOptions.token = connectToken;
   }
 
   // Get the channel plugin and trigger connection
