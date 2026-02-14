@@ -322,6 +322,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private chatNamesCache = new Map<string, Map<string, string>>();
 
   /**
+   * Get all chat JIDs known to Baileys for an instance.
+   * Sourced from chats.upsert events (fires on every connection).
+   * Used by sync worker to discover chats not yet in the database.
+   */
+  getKnownChatJids(instanceId: string): string[] {
+    return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
+  }
+
+  /**
    * LID → phone JID mapping cache per instance.
    * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
    * Populated from contacts.upsert (c.lid + c.id) and lid-mapping.update events.

@@ -286,7 +286,29 @@ async function processMessageSync(
 
   if (channelType === 'whatsapp-baileys') {
     anchors = await buildWhatsAppAnchors(instanceId, services);
-    log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length });
+    const dbAnchorJids = new Set(anchors.map((a) => a.chatJid));
+
+    // Also include chats known to Baileys but not in our DB
+    // This discovers new chats that were never captured (e.g., outgoing messages sent directly in WhatsApp)
+    if ('getKnownChatJids' in plugin && typeof plugin.getKnownChatJids === 'function') {
+      const knownJids = (plugin as { getKnownChatJids: (id: string) => string[] }).getKnownChatJids(instanceId);
+      let discoveredCount = 0;
+      for (const jid of knownJids) {
+        if (!dbAnchorJids.has(jid) && !jid.includes('@newsletter') && !jid.includes('@broadcast')) {
+          anchors.push({
+            chatJid: jid,
+            messageKey: { remoteJid: jid, id: '', fromMe: false },
+            timestamp: Date.now(),
+          });
+          discoveredCount++;
+        }
+      }
+      if (discoveredCount > 0) {
+        log.info('Discovered chats from Baileys not in DB', { jobId, discoveredCount });
+      }
+    }
+
+    log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length, dbAnchors: dbAnchorJids.size });
   }
 
   const fetchOptions: Record<string, unknown> = {
