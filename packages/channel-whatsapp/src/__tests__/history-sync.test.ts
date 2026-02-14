@@ -61,17 +61,15 @@ describe('Baileys History Sync', () => {
 
     // Process history sync
     for (const msg of historyMessages) {
-      await mockEventBus.publish({
-        type: 'message.received',
-        payload: {
+      await mockEventBus.publish(
+        'message.received',
+        {
           instanceId: 'test-instance',
           channelType: 'whatsapp',
           message: msg,
         },
-        metadata: {
-          source: 'sync',
-        },
-      });
+        { source: 'sync' },
+      );
     }
 
     // Verify events were published
@@ -120,16 +118,14 @@ describe('Baileys History Sync', () => {
     // Process chat upsert
     for (const chat of chatUpsert) {
       if (chat.unreadCount && chat.unreadCount > 0) {
-        await mockEventBus.publish({
-          type: 'custom.chat.unread-updated',
-          payload: {
+        await mockEventBus.publish(
+          'custom.chat.unread-updated',
+          {
             chatId: chat.id,
             unreadCount: chat.unreadCount,
           },
-          metadata: {
-            instanceId: 'test-instance',
-          },
-        });
+          { instanceId: 'test-instance' },
+        );
       }
     }
 
@@ -173,16 +169,14 @@ describe('Baileys History Sync', () => {
     // Process chat upsert
     for (const chat of chatUpsert) {
       if (chat.unreadCount && chat.unreadCount > 0) {
-        await mockEventBus.publish({
-          type: 'custom.chat.unread-updated',
-          payload: {
+        await mockEventBus.publish(
+          'custom.chat.unread-updated',
+          {
             chatId: chat.id,
             unreadCount: chat.unreadCount,
           },
-          metadata: {
-            instanceId: 'test-instance',
-          },
-        });
+          { instanceId: 'test-instance' },
+        );
       }
     }
 
