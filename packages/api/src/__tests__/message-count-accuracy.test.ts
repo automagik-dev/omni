@@ -7,6 +7,7 @@
  * Related to bug fix: Message count mismatches and dual increment issues
  */
 
+// @ts-nocheck - Integration tests with DB queries that may return undefined
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';

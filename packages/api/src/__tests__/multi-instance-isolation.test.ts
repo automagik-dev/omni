@@ -7,6 +7,7 @@
  * Related to bug fix: Multi-tenant isolation is by design, not a bug
  */
 
+// @ts-nocheck - Integration tests with DB queries, currently skipped
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances, messages, persons, platformIdentities } from '@omni/db';
