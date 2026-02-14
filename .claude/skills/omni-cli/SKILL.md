@@ -1048,16 +1048,19 @@ omni messages search "@bot" --since 1h --json | \
 
 The CLI doesn't have built-in streaming, but the skill includes **ready-to-use bash scripts** in `scripts/` for monitoring messages and events.
 
+**🎯 For Agent Workflows:** Use `wait-for-message.sh` - it's one-shot, background-friendly, and perfect for event-driven automation.
+
 #### Available Scripts
 
-| Script | Purpose | Usage |
-|--------|---------|-------|
-| **listen-chat.sh** | Listen to single chat | `./listen-chat.sh <instance> <chat-id>` |
-| **listen-multi-chat.sh** | Monitor multiple chats | `./listen-multi-chat.sh <instance> <chat-1> <chat-2>` |
-| **listen-events.sh** | Event stream monitor | `./listen-events.sh <instance>` |
-| **auto-reply-bot.sh** | Keyword auto-reply | `./auto-reply-bot.sh <instance> <keyword> <reply>` |
-| **keyword-watcher.sh** | Multi-keyword bot | `./keyword-watcher.sh <instance>` |
-| **notify-on-message.sh** | Desktop notifications | `./notify-on-message.sh <instance> <chat-id>` |
+| Script | Purpose | Best For | Usage |
+|--------|---------|----------|-------|
+| **wait-for-message.sh** ⭐ | Wait for one message then exit | **Agent workflows, event-driven automation** | `./wait-for-message.sh <chat-id>` |
+| **listen-chat.sh** | Listen to single chat continuously | Interactive debugging | `./listen-chat.sh <instance> <chat-id>` |
+| **listen-multi-chat.sh** | Monitor multiple chats | Continuous monitoring | `./listen-multi-chat.sh <instance> <chat-1> <chat-2>` |
+| **listen-events.sh** | Event stream monitor | Event debugging | `./listen-events.sh <instance>` |
+| **auto-reply-bot.sh** | Keyword auto-reply | Bot automation | `./auto-reply-bot.sh <instance> <keyword> <reply>` |
+| **keyword-watcher.sh** | Multi-keyword bot | Bot automation | `./keyword-watcher.sh <instance>` |
+| **notify-on-message.sh** | Desktop notifications | Personal alerts | `./notify-on-message.sh <instance> <chat-id>` |
 
 All scripts are in: `.claude/skills/omni-cli/scripts/`
 
@@ -1067,7 +1070,10 @@ All scripts are in: `.claude/skills/omni-cli/scripts/`
 # Navigate to scripts directory
 cd ~/.claude/skills/omni-cli/scripts/
 
-# Listen to a chat
+# Event-driven workflow (RECOMMENDED for agents)
+./wait-for-message.sh <chat-id>
+
+# Listen to a chat (interactive debugging)
 ./listen-chat.sh cezar-personal <recipient-id>@s.whatsapp.net
 
 # Auto-reply to "help" keyword with TTS
@@ -1080,6 +1086,17 @@ cd ~/.claude/skills/omni-cli/scripts/
 # Desktop notifications
 ./notify-on-message.sh cezar-personal <recipient-id>@s.whatsapp.net
 ```
+
+**For event-driven agent workflows**, use `wait-for-message.sh` with the Bash tool's `run_in_background` parameter:
+
+```python
+Bash(
+    command="cd .claude/skills/omni-cli/scripts && ./wait-for-message.sh <chat-id>",
+    run_in_background=True
+)
+```
+
+When a message arrives, the task completes and you get notified - perfect for "wake up on message" patterns.
 
 #### Customizing Listeners
 

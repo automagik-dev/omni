@@ -9,6 +9,8 @@
  * @see media-drive-download wish
  */
 
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
@@ -34,6 +36,7 @@ interface DownloadOptions {
   message?: string;
   chat?: string;
   external?: string;
+  output?: string;
 }
 
 interface MediaMessage {
@@ -263,6 +266,59 @@ function buildMessageRef(options: DownloadOptions): Record<string, string> {
   return { chatId: options.chat ?? '', externalId: options.external ?? '' };
 }
 
+/** Determine server media path from API response */
+function getServerMediaPath(mediaLocalPath: string): string {
+  const mediaBasePath = process.env.MEDIA_STORAGE_PATH ?? './data/media';
+  const serverFilePath = join(mediaBasePath, mediaLocalPath);
+  return resolve(serverFilePath);
+}
+
+/** Copy file to output location if --output flag provided */
+function handleOutputFlag(absoluteServerPath: string, outputPath: string): string {
+  const resolvedOutputPath = resolve(outputPath);
+  const outputDir = dirname(resolvedOutputPath);
+
+  // Ensure output directory exists
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
+  }
+
+  // Copy file to output location
+  if (!existsSync(absoluteServerPath)) {
+    output.error(`Source file not found: ${absoluteServerPath}`);
+    process.exit(1);
+  }
+
+  copyFileSync(absoluteServerPath, resolvedOutputPath);
+  return resolvedOutputPath;
+}
+
+/** Output download result in JSON format */
+function outputJsonResult(result: DownloadResponse, savedTo: string): void {
+  const config = loadConfig();
+  if (process.env.OMNI_FORMAT === 'json' || config.format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(
+      JSON.stringify(
+        {
+          success: true,
+          data: {
+            messageId: result.messageId,
+            instanceId: result.instanceId,
+            mediaMimeType: result.mediaMimeType,
+            mediaLocalPath: result.mediaLocalPath,
+            downloadUrl: result.downloadUrl,
+            cached: result.cached,
+            savedTo,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  }
+}
+
 /** Download a single media item */
 async function handleDownload(options: DownloadOptions): Promise<void> {
   // Validate: must provide --message OR (--chat AND --external)
@@ -285,9 +341,23 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
   const response = (await apiCall('messages/media/download', 'POST', body)) as { data: DownloadResponse };
   const result = response.data;
 
+  // Determine server media path
+  const absoluteServerPath = getServerMediaPath(result.mediaLocalPath);
+
+  // Handle --output flag (copy file to specified location)
+  const savedTo = options.output ? handleOutputFlag(absoluteServerPath, options.output) : absoluteServerPath;
+
+  // JSON mode output
+  outputJsonResult(result, savedTo);
+  const config = loadConfig();
+  if (process.env.OMNI_FORMAT === 'json' || config.format === 'json') {
+    return;
+  }
+
+  // Human-friendly output
   output.success(`Downloaded: ${result.mediaMimeType}`);
-  output.info(`Local path: ${result.mediaLocalPath}`);
-  output.info(`URL: ${result.downloadUrl}`);
+  output.info(`Saved to: ${savedTo}`);
+  output.info(`Download URL: ${result.downloadUrl}`);
   output.info(`Cached: ${result.cached}`);
 }
 
@@ -328,6 +398,7 @@ export function createMediaCommand(): Command {
     .option('--message <uuid>', 'Message ID (UUID)')
     .option('--chat <uuid>', 'Chat ID (UUID, used with --external)')
     .option('--external <id>', 'External message ID (used with --chat)')
+    .option('--output <path>', 'Save file to specific location (absolute or relative path)')
     .action(async (options: DownloadOptions) => {
       try {
         await handleDownload(options);
