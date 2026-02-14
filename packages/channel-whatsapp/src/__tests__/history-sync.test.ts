@@ -29,8 +29,19 @@ describe('Baileys History Sync', () => {
     publishedEvents = [];
 
     mockEventBus = {
-      publish: mock(async (event: MockEvent) => {
-        publishedEvents.push(event);
+      publish: mock(async (...args: unknown[]) => {
+        // Some tests call EventBus.publish(type, payload, metadata) while others call publish({type,payload,metadata}).
+        // Normalize both forms so these conceptual tests remain stable as the real EventBus evolves.
+        if (typeof args[0] === 'string') {
+          publishedEvents.push({
+            type: args[0],
+            payload: (args[1] as Record<string, unknown>) ?? {},
+            metadata: (args[2] as Record<string, unknown>) ?? undefined,
+          });
+          return;
+        }
+
+        publishedEvents.push(args[0] as MockEvent);
       }),
       subscribe: mock(() => {}),
     } as unknown as EventBus;
