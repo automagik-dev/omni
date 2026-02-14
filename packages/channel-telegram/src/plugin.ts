@@ -23,7 +23,12 @@ import type { Bot } from 'grammy';
 
 import { TELEGRAM_CAPABILITIES } from './capabilities';
 import { createBot, destroyBot, getBot } from './client';
-import { setupMessageHandlers, setupReactionHandlers } from './handlers';
+import {
+  setupChannelPostHandlers,
+  setupInteractiveHandlers,
+  setupMessageHandlers,
+  setupReactionHandlers,
+} from './handlers';
 import {
   sendAudio,
   sendContact,
@@ -194,7 +199,9 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
     // Set up handlers before starting
     setupMessageHandlers(bot, this, instanceId);
+    setupChannelPostHandlers(bot, this, instanceId);
     setupReactionHandlers(bot, this, instanceId);
+    setupInteractiveHandlers(bot, this, instanceId);
 
     // Initialize bot (fetches bot info)
     await bot.init();
@@ -479,7 +486,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
       chatId,
       from,
       content: {
-        type: content.type as 'text',
+        type: content.type as import('@omni/core/types').ContentType,
         text: content.text,
         mediaUrl: content.mediaUrl,
         mimeType: content.mimeType,
@@ -539,6 +546,55 @@ export class TelegramPlugin extends BaseChannelPlugin {
     });
   }
 
+  /**
+   * Handle button click (callback_query)
+   * @internal
+   */
+  async handleButtonClick(params: {
+    instanceId: string;
+    callbackQueryId?: string;
+    messageId?: string;
+    chatId?: string;
+    from: string;
+    text?: string;
+    data?: string;
+    rawPayload?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.emitButtonClick(params);
+  }
+
+  /**
+   * Handle poll received/created
+   * @internal
+   */
+  async handlePoll(params: {
+    instanceId: string;
+    pollId: string;
+    chatId?: string;
+    from?: string;
+    question: string;
+    options: string[];
+    multiSelect?: boolean;
+    rawPayload?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.emitPoll(params);
+  }
+
+  /**
+   * Handle poll vote/answer
+   * @internal
+   */
+  async handlePollVote(params: {
+    instanceId: string;
+    pollId: string;
+    chatId?: string;
+    from: string;
+    optionIds: number[];
+    rawPayload?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.emitPollVote(params);
+  }
+
   // ────────────────────────────────────────────────────────────
   // Health
   // ────────────────────────────────────────────────────────────
@@ -580,7 +636,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // Start polling in background (non-blocking)
     bot.start({
       drop_pending_updates: true,
-      allowed_updates: ['message', 'edited_message', 'message_reaction', 'callback_query', 'my_chat_member'],
+      allowed_updates: [
+        'message',
+        'edited_message',
+        'channel_post',
+        'edited_channel_post',
+        'message_reaction',
+        'callback_query',
+        'my_chat_member',
+      ],
       onStart: () => {
         this.logger.info('Polling started', { instanceId });
       },

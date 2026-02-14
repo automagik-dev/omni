@@ -21,6 +21,9 @@ export interface EmitMessageReceivedParams {
   /** Chat/conversation ID */
   chatId: string;
 
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
+
   /** Sender identifier on the platform */
   from: string;
 
@@ -54,6 +57,9 @@ export interface EmitMessageSentParams {
 
   /** Chat/conversation ID */
   chatId: string;
+
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
 
   /** Recipient identifier */
   to: string;
@@ -219,4 +225,85 @@ export interface InstanceConnectedMetadata {
 
   /** Owner identifier (phone, email, username) */
   ownerIdentifier?: string;
+}
+
+/**
+ * Parameters for emitButtonClick
+ */
+export interface EmitButtonClickParams {
+  /** Instance that received the button click */
+  instanceId: string;
+
+  /** Telegram callback_query.id (or equivalent platform id) */
+  callbackQueryId?: string;
+
+  /** The message that contained the button */
+  messageId?: string;
+
+  /** Chat/conversation id where click happened */
+  chatId?: string;
+
+  /** User who clicked */
+  from: string;
+
+  /** Button label shown to user */
+  text?: string;
+
+  /** Platform callback payload */
+  data?: string;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitPoll
+ */
+export interface EmitPollParams {
+  /** Instance that received the poll */
+  instanceId: string;
+
+  /** Poll id on the platform */
+  pollId: string;
+
+  /** Chat id where poll belongs */
+  chatId?: string;
+
+  /** User who created the poll */
+  from?: string;
+
+  /** Poll question */
+  question: string;
+
+  /** Poll options */
+  options: string[];
+
+  /** Whether multiple options can be selected */
+  multiSelect?: boolean;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitPollVote
+ */
+export interface EmitPollVoteParams {
+  /** Instance that received the poll vote */
+  instanceId: string;
+
+  /** Poll id */
+  pollId: string;
+
+  /** Chat id where poll belongs */
+  chatId?: string;
+
+  /** User who voted */
+  from: string;
+
+  /** Selected option indices */
+  optionIds: number[];
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
 }

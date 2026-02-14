@@ -79,6 +79,9 @@ export interface OutgoingMessage {
   /** Recipient identifier (chat ID, user ID, etc.) */
   to: string;
 
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
+
   /** Message content */
   content: OutgoingContent;
 
