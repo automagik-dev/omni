@@ -63,11 +63,23 @@ export function createConfigCommand(): Command {
     .action(() => {
       const cfg = loadConfig();
 
-      const items = Object.entries(CONFIG_KEYS).map(([key, meta]) => ({
-        key,
-        value: cfg[key as ConfigKey] ?? '-',
-        description: meta.description,
-      }));
+      const items = Object.entries(CONFIG_KEYS).map(([key, meta]) => {
+        let value = cfg[key as ConfigKey] ?? '-';
+
+        // Mask API key for security (show first 12 chars and last 4)
+        if (key === 'apiKey' && typeof value === 'string' && value !== '-') {
+          const len = value.length;
+          if (len > 16) {
+            value = `${value.slice(0, 12)}****${value.slice(-4)}`;
+          }
+        }
+
+        return {
+          key,
+          value,
+          description: meta.description,
+        };
+      });
 
       output.data(items);
     });

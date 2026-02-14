@@ -82,7 +82,14 @@ export async function sendContactMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
+    replyToId
+      ? {
+          quoted: {
+            key: { id: replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;
@@ -102,7 +109,14 @@ export async function sendMultiContactMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
+    replyToId
+      ? {
+          quoted: {
+            key: { id: replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;

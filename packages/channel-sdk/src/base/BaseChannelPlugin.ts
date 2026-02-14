@@ -14,12 +14,15 @@ import { buildSubject } from '@omni/core/events/nats';
 import { JOURNEY_STAGES, getJourneyTracker } from '@omni/core/tracing';
 import type { ChannelType } from '@omni/core/types';
 import type {
+  EmitButtonClickParams,
   EmitMediaReceivedParams,
   EmitMessageDeliveredParams,
   EmitMessageFailedParams,
   EmitMessageReadParams,
   EmitMessageReceivedParams,
   EmitMessageSentParams,
+  EmitPollParams,
+  EmitPollVoteParams,
   EmitReactionReceivedParams,
   EmitReactionRemovedParams,
   InstanceConnectedMetadata,
@@ -330,6 +333,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
       {
         externalId: params.externalId,
         chatId: params.chatId,
+        threadId: params.threadId,
         from: params.from,
         content: params.content,
         replyToId: params.replyToId,
@@ -360,6 +364,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
       {
         externalId: params.externalId,
         chatId: params.chatId,
+        threadId: params.threadId,
         to: params.to,
         content: params.content,
         replyToId: params.replyToId,
@@ -517,6 +522,103 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
       instanceId: params.instanceId,
       messageId: params.messageId,
       emoji: params.emoji,
+    });
+  }
+
+  /**
+   * Emit message.button_click event
+   */
+  protected async emitButtonClick(params: EmitButtonClickParams): Promise<void> {
+    const _subject = buildSubject('message.button_click', this.id, params.instanceId);
+
+    await this.eventBus.publish(
+      'message.button_click',
+      {
+        callbackQueryId: params.callbackQueryId,
+        messageId: params.messageId,
+        chatId: params.chatId,
+        from: params.from,
+        text: params.text,
+        data: params.data,
+        rawPayload: params.rawPayload,
+      },
+      {
+        correlationId: generateCorrelationId('evt'),
+        instanceId: params.instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+      },
+    );
+
+    this.instances.recordActivity(params.instanceId);
+    this.logger.debug('Emitted message.button_click', {
+      instanceId: params.instanceId,
+      messageId: params.messageId,
+      data: params.data,
+    });
+  }
+
+  /**
+   * Emit message.poll event
+   */
+  protected async emitPoll(params: EmitPollParams): Promise<void> {
+    const _subject = buildSubject('message.poll', this.id, params.instanceId);
+
+    await this.eventBus.publish(
+      'message.poll',
+      {
+        pollId: params.pollId,
+        chatId: params.chatId,
+        from: params.from,
+        question: params.question,
+        options: params.options,
+        multiSelect: params.multiSelect,
+        rawPayload: params.rawPayload,
+      },
+      {
+        correlationId: generateCorrelationId('evt'),
+        instanceId: params.instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+      },
+    );
+
+    this.instances.recordActivity(params.instanceId);
+    this.logger.debug('Emitted message.poll', {
+      instanceId: params.instanceId,
+      pollId: params.pollId,
+      question: params.question,
+    });
+  }
+
+  /**
+   * Emit message.poll_vote event
+   */
+  protected async emitPollVote(params: EmitPollVoteParams): Promise<void> {
+    const _subject = buildSubject('message.poll_vote', this.id, params.instanceId);
+
+    await this.eventBus.publish(
+      'message.poll_vote',
+      {
+        pollId: params.pollId,
+        chatId: params.chatId,
+        from: params.from,
+        optionIds: params.optionIds,
+        rawPayload: params.rawPayload,
+      },
+      {
+        correlationId: generateCorrelationId('evt'),
+        instanceId: params.instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+      },
+    );
+
+    this.instances.recordActivity(params.instanceId);
+    this.logger.debug('Emitted message.poll_vote', {
+      instanceId: params.instanceId,
+      pollId: params.pollId,
+      optionIds: params.optionIds,
     });
   }
 

@@ -48,6 +48,7 @@ const CONTENT_TYPE_MAP: Record<string, MessageType> = {
   location: 'location',
   poll: 'poll',
   poll_update: 'poll',
+  reaction: 'reaction',
 };
 
 /**
@@ -303,7 +304,8 @@ async function postProcessChat(
   rawPayload: Record<string, unknown> | undefined,
   isFromMe: boolean,
 ): Promise<void> {
-  // Populate canonicalId for phone-based chats (enables search by phone number)
+  // Populate canonicalId ONLY if not already set
+  // (Usually set during creation, but handle legacy chats or edge cases)
   if (chatExternalId.endsWith('@s.whatsapp.net') && !chat.canonicalId) {
     await services.chats.update(chat.id, { canonicalId: chatExternalId });
     chat.canonicalId = chatExternalId;
@@ -335,6 +337,19 @@ async function postProcessChat(
 }
 
 /**
+ * Resolve sender display name with fallback chain
+ * Priority: pushName > participant displayName > undefined
+ */
+function resolveSenderDisplayName(
+  rawPayload: Record<string, unknown> | undefined,
+  participantResult: { participant: { displayName: string | null } } | undefined,
+): string | undefined {
+  return (
+    truncate(rawPayload?.pushName as string | undefined, 255) || participantResult?.participant.displayName || undefined
+  );
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -362,10 +377,14 @@ async function handleMessageReceived(
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
   const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
 
+  // Determine canonicalId upfront for phone-based chats
+  const canonicalId = chatExternalId.endsWith('@s.whatsapp.net') ? chatExternalId : undefined;
+
   const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
     chatType,
     channel,
     name: effectiveName,
+    canonicalId, // Set during creation to leverage unique constraint
   });
 
   // Post-process chat: canonicalId, LID mapping, name updates
@@ -385,26 +404,30 @@ async function handleMessageReceived(
   const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
 
   // Step 3: Find or create participant (with identity links)
+  let participantResult: Awaited<ReturnType<typeof services.chats.findOrCreateParticipant>> | undefined;
   if (payload.from) {
     const participantUserId = truncate(payload.from, 255) ?? payload.from;
-    await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
+    participantResult = await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
       displayName: truncate(rawPayload?.pushName as string | undefined, 255),
       personId,
       platformIdentityId,
     });
   }
 
-  // Step 4: Build and create message
+  // Step 4: Resolve sender display name (fallback chain: pushName > participant > undefined)
+  const senderDisplayName = resolveSenderDisplayName(rawPayload, participantResult);
+
+  // Step 5: Build and create message
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
   const platformTimestamp = extractPlatformTimestamp(rawPayload, eventTimestamp);
 
-  const { created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
+  const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
     source: 'realtime',
     messageType: mapContentType(payload.content.type),
     textContent: sanitizeText(payload.content.text),
     platformTimestamp,
     senderPlatformUserId: truncate(payload.from, 255),
-    senderDisplayName: truncate(rawPayload?.pushName as string | undefined, 255),
+    senderDisplayName,
     senderPersonId: personId,
     senderPlatformIdentityId: platformIdentityId,
     isFromMe: rawPayload?.isFromMe === true,
@@ -419,26 +442,41 @@ async function handleMessageReceived(
     rawPayload,
   });
 
+  // Telegram and WhatsApp edits can arrive as "message.received" with a stable externalId.
+  // When we detect an edit, update the existing unified message instead of treating it as a duplicate.
+  if (!created && rawPayload?.isEdited === true) {
+    const editedAtMs = rawPayload?.editDate;
+    const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
+    await services.messages.recordEdit(
+      message.id,
+      sanitizeText(payload.content.text) ?? '',
+      editedAt,
+      truncate(payload.from, 255) ?? undefined,
+    );
+  }
+
   if (created) {
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
   }
 
-  // Step 5: Record participant activity
+  // Step 6: Record participant activity
   if (payload.from) {
     const activityUserId = truncate(payload.from, 255) ?? payload.from;
     await services.chats.recordParticipantActivity(chat.id, activityUserId);
   }
 
-  // Step 6: Update chat lastMessageAt and preview
-  const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
-  services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
-    log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
-  });
+  // Step 7: Update chat lastMessageAt and preview (edits should not bump recency)
+  if (rawPayload?.isEdited !== true) {
+    const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
+    services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
+      log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
+    });
 
-  // Step 7: Update lastMessageAt on instance (for reconnect gap detection)
-  services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
-    log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
-  });
+    // Step 8: Update lastMessageAt on instance (for reconnect gap detection)
+    services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
+      log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
+    });
+  }
 }
 
 /**

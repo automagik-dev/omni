@@ -120,6 +120,7 @@ export const InstanceSchema = z.object({
 
   // Message processing
   enableAutoSplit: z.boolean(),
+  messageFormatMode: z.enum(['convert', 'passthrough']),
   disableUsernamePrefix: z.boolean(),
   processMediaOnBlocked: z.boolean(),
 

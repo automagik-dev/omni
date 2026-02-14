@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { CORE_EVENT_TYPES } from '../events/types';
 import { PROVIDER_SCHEMAS } from '../types/agent';
 
 /**
@@ -90,22 +91,7 @@ export const ContentTypeSchema = z.enum([
 /**
  * Event type enum
  */
-export const EventTypeSchema = z.enum([
-  'message.received',
-  'message.sent',
-  'message.delivered',
-  'message.read',
-  'message.failed',
-  'media.received',
-  'media.processed',
-  'identity.created',
-  'identity.linked',
-  'identity.unlinked',
-  'instance.connected',
-  'instance.disconnected',
-  'access.allowed',
-  'access.denied',
-]);
+export const EventTypeSchema = z.enum(CORE_EVENT_TYPES);
 
 /**
  * Job status enum

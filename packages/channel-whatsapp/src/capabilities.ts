@@ -10,7 +10,7 @@ import type { ChannelCapabilities } from '@omni/channel-sdk';
  * WhatsApp (Baileys) capabilities
  *
  * WhatsApp supports most messaging features except:
- * - Message editing (WhatsApp doesn't support this)
+ * - Message editing (WhatsApp supports editing own messages; older clients/libraries may be limited)
  * - Groups are deferred to a separate wish
  * - Broadcasts are deferred
  */
@@ -36,6 +36,9 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canSendLocation: true,
   canSendSticker: true,
   canSendPoll: true,
+
+  // Streaming (progressive response edits)
+  canStreamResponse: true,
 
   // Group/broadcast (deferred)
   canHandleGroups: false, // Defer to future wish

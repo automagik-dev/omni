@@ -581,7 +581,11 @@ export function createInstancesCommand(): Command {
           output.list(items, { emptyMessage: 'No contacts found.', rawData: result.items });
 
           if (result.meta.hasMore) {
-            output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+            if (result.meta.cursor) {
+              output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+            } else {
+              output.dim('More results available. Use --limit to adjust page size.');
+            }
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
@@ -622,7 +626,11 @@ export function createInstancesCommand(): Command {
         output.list(items, { emptyMessage: 'No groups found.', rawData: result.items });
 
         if (result.meta.hasMore) {
-          output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          if (result.meta.cursor) {
+            output.dim(`More results available. Use --cursor ${result.meta.cursor}`);
+          } else {
+            output.dim('More results available. Use --limit to adjust page size.');
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';

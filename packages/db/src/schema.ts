@@ -10,6 +10,7 @@
  */
 
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
+import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
@@ -82,23 +83,8 @@ export type SettingValueType = (typeof settingValueTypes)[number];
 export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
 export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
 
-export const eventTypes = [
-  'message.received',
-  'message.sent',
-  'message.delivered',
-  'message.read',
-  'message.failed',
-  'media.received',
-  'media.processed',
-  'identity.created',
-  'identity.linked',
-  'identity.unlinked',
-  'instance.connected',
-  'instance.disconnected',
-  'access.allowed',
-  'access.denied',
-] as const;
-export type EventType = (typeof eventTypes)[number];
+export const eventTypes = CORE_EVENT_TYPES;
+export type EventType = CoreEventType;
 
 export const contentTypes = [
   'text',
@@ -154,6 +140,7 @@ export const messageTypes = [
   'contact',
   'location',
   'poll',
+  'reaction', // Emoji reactions to messages
   'system', // System messages (join, leave, etc.)
 ] as const;
 export type MessageType = (typeof messageTypes)[number];
@@ -555,6 +542,11 @@ export const instances = pgTable(
 
     // ---- Message Processing Config ----
     enableAutoSplit: boolean('enable_auto_split').notNull().default(true),
+    /** Format conversion mode: 'convert' = markdown→native per channel, 'passthrough' = raw text */
+    messageFormatMode: varchar('message_format_mode', { length: 20 })
+      .notNull()
+      .default('convert')
+      .$type<'convert' | 'passthrough'>(),
     disableUsernamePrefix: boolean('disable_username_prefix').notNull().default(false),
     processMediaOnBlocked: boolean('process_media_on_blocked').notNull().default(true),
     accessMode: varchar('access_mode', { length: 20 }).notNull().default('blocklist').$type<AccessMode>(),
@@ -752,6 +744,10 @@ export const chats = pgTable(
   (table) => ({
     instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
     canonicalIdIdx: index('chats_canonical_id_idx').on(table.canonicalId),
+    // Prevents duplicate canonical chats within an instance
+    instanceCanonicalIdx: uniqueIndex('chats_instance_canonical_unique_idx')
+      .on(table.instanceId, table.canonicalId)
+      .where(sql`${table.canonicalId} IS NOT NULL`),
     chatTypeIdx: index('chats_type_idx').on(table.chatType),
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),
@@ -1223,16 +1219,10 @@ export type SyncJobType = (typeof syncJobTypes)[number];
 
 /**
  * Sync job configuration stored in JSONB.
+ *
+ * Source of truth lives in @omni/core (event payload + db record must stay in sync).
  */
-export interface SyncJobConfig {
-  depth?: '7d' | '30d' | '90d' | '1y' | 'all';
-  channelId?: string; // For Discord channel-specific sync
-  downloadMedia?: boolean;
-  /** Explicit since timestamp (ISO string) — takes precedence over depth */
-  since?: string;
-  /** Explicit until timestamp (ISO string) */
-  until?: string;
-}
+export type SyncJobConfig = CoreSyncJobConfig;
 
 /**
  * Sync job progress tracking.

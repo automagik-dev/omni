@@ -1,12 +1,12 @@
 /**
  * Routes Commands
  *
- * omni routes list <instance> [--scope chat|user] [--active]
- * omni routes get <instance> <route-id>
- * omni routes create <instance> --scope <scope> --chat <id>|--person <id> --provider <id> --agent <id> [options]
- * omni routes update <instance> <route-id> [options]
- * omni routes delete <instance> <route-id>
- * omni routes test <instance> [--chat <id>] [--person <id>]
+ * omni routes list --instance <id> [--scope chat|user] [--active]
+ * omni routes get --instance <id> <route-id>
+ * omni routes create --instance <id> --scope <scope> --chat <id>|--person <id> --provider <id> --agent <id> [options]
+ * omni routes update --instance <id> <route-id> [options]
+ * omni routes delete --instance <id> <route-id>
+ * omni routes test --instance <id> [--chat <id>] [--person <id>]
  * omni routes metrics
  */
 
@@ -16,28 +16,26 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
-async function createAgentRouteAction(
-  instanceArg: string,
-  options: {
-    scope: string;
-    chat?: string;
-    person?: string;
-    provider: string;
-    agent: string;
-    agentType?: string;
-    timeout?: number;
-    stream?: boolean;
-    prefixSender?: boolean;
-    waitMedia?: boolean;
-    sendMediaPath?: boolean;
-    gate?: boolean;
-    gateModel?: string;
-    gatePrompt?: string;
-    label?: string;
-    priority?: number;
-    inactive?: boolean;
-  },
-) {
+async function createAgentRouteAction(options: {
+  instance: string;
+  scope: string;
+  chat?: string;
+  person?: string;
+  provider: string;
+  agent: string;
+  agentType?: string;
+  timeout?: number;
+  stream?: boolean;
+  prefixSender?: boolean;
+  waitMedia?: boolean;
+  sendMediaPath?: boolean;
+  gate?: boolean;
+  gateModel?: string;
+  gatePrompt?: string;
+  label?: string;
+  priority?: number;
+  inactive?: boolean;
+}) {
   const client = getClient();
 
   try {
@@ -55,7 +53,7 @@ async function createAgentRouteAction(
       return;
     }
 
-    const instanceId = await resolveInstanceId(instanceArg);
+    const instanceId = await resolveInstanceId(options.instance);
 
     const route = await client.routes.create(instanceId, {
       scope: options.scope as 'chat' | 'user',
@@ -87,9 +85,9 @@ async function createAgentRouteAction(
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: CLI option parsing requires many branches
 async function updateAgentRouteAction(
-  instanceArg: string,
   routeId: string,
   options: {
+    instance: string;
     agent?: string;
     agentType?: string;
     timeout?: number;
@@ -115,7 +113,7 @@ async function updateAgentRouteAction(
       return;
     }
 
-    const instanceId = await resolveInstanceId(instanceArg);
+    const instanceId = await resolveInstanceId(options.instance);
 
     // Build update object with only provided options
     const updates: Partial<UpdateAgentRoute> = {};
@@ -152,17 +150,18 @@ async function updateAgentRouteAction(
 export function createRoutesCommand(): Command {
   const routes = new Command('routes').description('Manage agent routing configuration');
 
-  // omni routes list <instance>
+  // omni routes list --instance <id>
   routes
-    .command('list <instance>')
+    .command('list')
     .description('List agent routes for an instance')
+    .requiredOption('--instance <id>', 'Instance ID')
     .option('--scope <scope>', 'Filter by scope (chat or user)')
     .option('--active', 'Show only active routes')
-    .action(async (instanceArg: string, options: { scope?: string; active?: boolean }) => {
+    .action(async (options: { instance: string; scope?: string; active?: boolean }) => {
       const client = getClient();
 
       try {
-        const instanceId = await resolveInstanceId(instanceArg);
+        const instanceId = await resolveInstanceId(options.instance);
 
         const result = await client.routes.list(instanceId, {
           scope: options.scope as 'chat' | 'user' | undefined,
@@ -188,15 +187,16 @@ export function createRoutesCommand(): Command {
       }
     });
 
-  // omni routes get <instance> <route-id>
+  // omni routes get --instance <id> <route-id>
   routes
-    .command('get <instance> <routeId>')
+    .command('get <routeId>')
     .description('Get agent route details')
-    .action(async (instanceArg: string, routeId: string) => {
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (routeId: string, options: { instance: string }) => {
       const client = getClient();
 
       try {
-        const instanceId = await resolveInstanceId(instanceArg);
+        const instanceId = await resolveInstanceId(options.instance);
         const route = await client.routes.get(instanceId, routeId);
 
         output.data(route);
@@ -206,10 +206,11 @@ export function createRoutesCommand(): Command {
       }
     });
 
-  // omni routes create <instance>
+  // omni routes create --instance <id>
   routes
-    .command('create <instance>')
+    .command('create')
     .description('Create a new agent route')
+    .requiredOption('--instance <id>', 'Instance ID')
     .requiredOption('--scope <scope>', 'Route scope: chat or user')
     .option('--chat <chatId>', 'Chat UUID (required when scope=chat)')
     .option('--person <personId>', 'Person UUID (required when scope=user)')
@@ -234,10 +235,11 @@ export function createRoutesCommand(): Command {
     .option('--inactive', 'Create route as inactive')
     .action(createAgentRouteAction);
 
-  // omni routes update <instance> <route-id>
+  // omni routes update --instance <id> <route-id>
   routes
-    .command('update <instance> <routeId>')
+    .command('update <routeId>')
     .description('Update an existing agent route')
+    .requiredOption('--instance <id>', 'Instance ID')
     .option('--agent <agentId>', 'Agent ID within the provider')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--timeout <seconds>', 'Agent timeout in seconds', Number.parseInt)
@@ -259,15 +261,16 @@ export function createRoutesCommand(): Command {
     .option('--inactive', 'Deactivate route')
     .action(updateAgentRouteAction);
 
-  // omni routes delete <instance> <route-id>
+  // omni routes delete --instance <id> <route-id>
   routes
-    .command('delete <instance> <routeId>')
+    .command('delete <routeId>')
     .description('Delete an agent route')
-    .action(async (instanceArg: string, routeId: string) => {
+    .requiredOption('--instance <id>', 'Instance ID')
+    .action(async (routeId: string, options: { instance: string }) => {
       const client = getClient();
 
       try {
-        const instanceId = await resolveInstanceId(instanceArg);
+        const instanceId = await resolveInstanceId(options.instance);
         await client.routes.delete(instanceId, routeId);
 
         output.success('Route deleted');
@@ -277,17 +280,18 @@ export function createRoutesCommand(): Command {
       }
     });
 
-  // omni routes test <instance>
+  // omni routes test --instance <id>
   routes
-    .command('test <instance>')
+    .command('test')
     .description('Test route resolution for a given instance, chat, and/or person')
+    .requiredOption('--instance <id>', 'Instance ID')
     .option('--chat <chatId>', 'Chat UUID to test')
     .option('--person <personId>', 'Person UUID to test')
-    .action(async (instanceArg: string, options: { chat?: string; person?: string }) => {
+    .action(async (options: { instance: string; chat?: string; person?: string }) => {
       const client = getClient();
 
       try {
-        const instanceId = await resolveInstanceId(instanceArg);
+        const instanceId = await resolveInstanceId(options.instance);
 
         if (!options.chat && !options.person) {
           output.error('At least one of --chat or --person must be provided');

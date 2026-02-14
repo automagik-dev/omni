@@ -69,9 +69,18 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
+
+# Beads state is local-only (keep outside repo)
+.beads/
+
+# Keep this informational stub tracked
+!.beads/README.md
+
 # bd worktree
 omni-jmn/
 # bd worktree
 omni-0t1/
 # bd worktree
 omni-qbi/
+version.json
+.beads/*.log.gz

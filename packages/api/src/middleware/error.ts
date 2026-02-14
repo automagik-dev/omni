@@ -149,6 +149,92 @@ function handleConflictError(c: Context, error: ConflictError): Response {
 }
 
 /**
+ * Channel error code → HTTP status + user-friendly message.
+ * Hoisted to module scope to avoid re-creation on every error.
+ */
+const CHANNEL_ERROR_MAP: Record<string, { status: 400 | 401 | 429 | 502 | 503; message: string }> = {
+  WHATSAPP_NOT_CONNECTED: {
+    status: 503,
+    message: 'WhatsApp instance is disconnected. Re-scan QR code to reconnect.',
+  },
+  WHATSAPP_AUTH_FAILED: { status: 401, message: 'WhatsApp authentication failed. Re-scan QR code.' },
+  WHATSAPP_RATE_LIMITED: { status: 429, message: 'WhatsApp rate limit reached. Try again later.' },
+  WHATSAPP_INVALID_JID: { status: 400, message: 'Invalid WhatsApp JID format.' },
+  WHATSAPP_INVALID_PHONE: { status: 400, message: 'Invalid phone number format.' },
+  WHATSAPP_SEND_FAILED: { status: 502, message: 'Failed to send message via WhatsApp.' },
+  WHATSAPP_MEDIA_UPLOAD_FAILED: { status: 502, message: 'Failed to upload media to WhatsApp.' },
+  TELEGRAM_NOT_CONNECTED: { status: 503, message: 'Telegram bot is disconnected.' },
+};
+
+/**
+ * Handle channel plugin errors (WhatsAppError, TelegramError, etc.)
+ * Maps known channel error codes to friendly HTTP responses.
+ */
+function handleChannelError(c: Context, error: Error & { code?: string; retryable?: boolean }): Response | null {
+  const code = error.code;
+  if (!code || typeof code !== 'string') return null;
+
+  // Safe lookup — guard against Object.prototype keys (constructor, __proto__, etc.)
+  const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
+  if (!mapped) return null;
+
+  return c.json(
+    {
+      error: {
+        code,
+        message: mapped.message,
+        retryable: error.retryable ?? false,
+      },
+    },
+    mapped.status,
+  );
+}
+
+/**
+ * Handle PostgreSQL database errors (unique constraint violations, etc.)
+ * Duck-typed by error.code to avoid importing pg types.
+ */
+function handleDatabaseError(
+  c: Context,
+  error: Error & { code?: string; detail?: string; constraint?: string },
+): Response | null {
+  // PostgreSQL unique_violation
+  if (error.code === '23505') {
+    // Extract useful info from the detail string, e.g. 'Key (name)=(foo) already exists.'
+    const field = error.detail?.match(/\(([^)]+)\)/)?.[1] ?? 'unknown';
+    return c.json(
+      {
+        error: {
+          code: 'CONFLICT',
+          message: `A record with that ${field} already exists.`,
+          details: {
+            constraint: error.constraint,
+            field,
+          },
+        },
+      },
+      409,
+    );
+  }
+
+  // PostgreSQL foreign_key_violation
+  if (error.code === '23503') {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Referenced record does not exist.',
+          details: { constraint: error.constraint },
+        },
+      },
+      400,
+    );
+  }
+
+  return null;
+}
+
+/**
  * Handle unknown errors
  */
 function handleUnknownError(c: Context, error: unknown): Response {
@@ -188,7 +274,30 @@ function routeError(c: Context, error: unknown): Response {
   if (error instanceof OmniError) {
     return handleOmniError(c, error);
   }
+  // Channel plugin errors (WhatsAppError, TelegramError, etc.) — duck-typed by code
+  if (error instanceof Error && 'code' in error) {
+    const channelResult = handleChannelError(c, error as Error & { code?: string; retryable?: boolean });
+    if (channelResult) return channelResult;
+  }
+  // PostgreSQL errors (unique constraint, foreign key, etc.) — duck-typed by numeric code
+  if (error instanceof Error && 'code' in error) {
+    const dbResult = handleDatabaseError(c, error as Error & { code?: string; detail?: string; constraint?: string });
+    if (dbResult) return dbResult;
+  }
   return handleUnknownError(c, error);
+}
+
+/** PostgreSQL error codes that represent client mistakes (not server errors) */
+const PG_CLIENT_ERROR_CODES = new Set(['23505', '23503']); // unique_violation, foreign_key_violation
+
+/**
+ * Check if a string error code maps to a client-side error.
+ * Covers channel plugin codes and PostgreSQL constraint violations.
+ */
+function isCodeClientError(code: string): boolean {
+  if (PG_CLIENT_ERROR_CODES.has(code)) return true;
+  const mapped = Object.prototype.hasOwnProperty.call(CHANNEL_ERROR_MAP, code) ? CHANNEL_ERROR_MAP[code] : null;
+  return mapped ? mapped.status < 500 : false;
 }
 
 /**
@@ -204,6 +313,10 @@ function isClientError(error: unknown): boolean {
   if (error instanceof OmniError) {
     const status = ERROR_STATUS_MAP[error.code] ?? 500;
     return status < 500;
+  }
+  // Duck-typed errors with a string code (channel plugins, PostgreSQL)
+  if (error instanceof Error && 'code' in error && typeof (error as { code: unknown }).code === 'string') {
+    return isCodeClientError((error as { code: string }).code);
   }
   return false;
 }

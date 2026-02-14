@@ -4,30 +4,40 @@
  * omni status - Show API health and connection info
  */
 
-import { createOmniClient } from '@omni/sdk';
 import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getOptionalClient } from '../client.js';
 import { getConfigDir, hasAuth, loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { CLI_VERSION_HEADER, SERVER_VERSION_HEADER, VERSION, formatStatusVersionHint } from '../version.js';
 
 /** Check API health and add to status info */
-async function checkApiHealth(statusInfo: Record<string, unknown>, apiUrl: string): Promise<void> {
-  const healthClient = createOmniClient({
-    baseUrl: apiUrl,
-    apiKey: 'dummy',
-  });
-
+async function checkApiHealth(statusInfo: Record<string, unknown>, apiUrl: string): Promise<string | null> {
   try {
-    const health = await healthClient.system.health();
-    statusInfo.apiStatus = health.status;
+    const response = await fetch(`${apiUrl.replace(/\/$/, '')}/api/v2/health`, {
+      headers: {
+        'Accept-Encoding': 'identity',
+        [CLI_VERSION_HEADER]: VERSION,
+      },
+    });
+
+    const health = (await response.json()) as {
+      status?: string;
+      version?: string;
+      checks?: Record<string, unknown>;
+    };
+
+    statusInfo.apiStatus = health.status ?? 'unknown';
     statusInfo.apiVersion = health.version;
     if (health.checks) {
       statusInfo.checks = health.checks;
     }
+
+    return response.headers.get(SERVER_VERSION_HEADER);
   } catch (err) {
     statusInfo.apiStatus = 'unreachable';
     statusInfo.apiError = err instanceof Error ? err.message : 'Unknown error';
+    return null;
   }
 }
 
@@ -58,7 +68,7 @@ export function createStatusCommand(): Command {
       format: config.format ?? 'auto (TTY detection)',
     };
 
-    await checkApiHealth(statusInfo, apiUrl);
+    const serverVersion = await checkApiHealth(statusInfo, apiUrl);
 
     if (isAuthenticated) {
       const client = getOptionalClient();
@@ -68,6 +78,10 @@ export function createStatusCommand(): Command {
     }
 
     output.data(statusInfo);
+
+    if (output.getCurrentFormat() === 'human' && serverVersion) {
+      output.raw(formatStatusVersionHint(VERSION, serverVersion));
+    }
   });
 
   return status;

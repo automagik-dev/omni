@@ -1,7 +1,7 @@
 # Omni v2 Makefile
 # Universal Event-Driven Omnichannel Platform
 
-.PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean \
+.PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
         test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
@@ -267,7 +267,10 @@ db-reset:
 # Building
 # ============================================================================
 
-build:
+version:
+	bun run scripts/generate-version.ts
+
+build: version
 	bun run build
 
 build-ui:

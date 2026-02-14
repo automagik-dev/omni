@@ -12,7 +12,7 @@ import { join } from 'node:path';
 export type CommandCategory = 'core' | 'standard' | 'advanced' | 'debug';
 
 /** Valid config keys */
-export type ConfigKey = 'apiUrl' | 'apiKey' | 'defaultInstance' | 'format' | 'showCommands';
+export type ConfigKey = 'apiUrl' | 'apiKey' | 'defaultInstance' | 'format' | 'showCommands' | 'updateChannel';
 
 /** Config file structure */
 export interface Config {
@@ -21,6 +21,7 @@ export interface Config {
   defaultInstance?: string;
   format?: 'human' | 'json';
   showCommands?: string; // 'all' or comma-separated categories
+  updateChannel?: 'main' | 'dev';
 }
 
 /** Default config values */
@@ -38,6 +39,10 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   showCommands: {
     description: 'Which command categories to show in help',
     values: ['all', 'core', 'standard', 'advanced', 'debug'],
+  },
+  updateChannel: {
+    description: 'Update track for omni update',
+    values: ['main', 'dev'],
   },
 };
 
@@ -135,8 +140,13 @@ export function setConfigValue(key: ConfigKey, value: string): void {
       }
     }
     config.showCommands = value;
+  } else if (key === 'updateChannel') {
+    if (value !== 'main' && value !== 'dev') {
+      throw new Error(`Invalid updateChannel: ${value}. Must be 'main' or 'dev'.`);
+    }
+    config.updateChannel = value;
   } else {
-    config[key] = value;
+    (config as Record<string, unknown>)[key] = value;
   }
   saveConfig(config);
 }

@@ -12,6 +12,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
@@ -23,6 +24,8 @@ import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from
 import { setupMessageHandlers } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
+import { sendReaction } from './senders/reaction';
+import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 
@@ -319,6 +322,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private chatNamesCache = new Map<string, Map<string, string>>();
 
   /**
+   * Get all chat JIDs known to Baileys for an instance.
+   * Sourced from chats.upsert events (fires on every connection).
+   * Used by sync worker to discover chats not yet in the database.
+   */
+  getKnownChatJids(instanceId: string): string[] {
+    return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
+  }
+
+  /**
    * LID → phone JID mapping cache per instance.
    * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
    * Populated from contacts.upsert (c.lid + c.id) and lid-mapping.update events.
@@ -584,6 +596,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const jid = toJid(message.to);
 
     try {
+      // ── Reaction dispatch (separate path — not a normal message) ──
+      if (message.content.type === 'reaction') {
+        return this.dispatchReaction(instanceId, sock, jid, message);
+      }
+
       // Humanized delay — prevent anti-bot detection
       await this.humanDelay(instanceId);
 
@@ -597,6 +614,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       let processedMessage = message;
       if (message.content.type === 'audio' && message.metadata?.ptt === true) {
         processedMessage = await this.processAudioForVoiceNote(message);
+      }
+
+      // Apply markdown→WhatsApp format conversion for text messages
+      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
+        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+        const converted = markdownToWhatsApp(processedMessage.content.text);
+        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
       }
 
       // Build message content based on type
@@ -655,6 +680,72 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         timestamp: Date.now(),
       };
     }
+  }
+
+  /**
+   * Dispatch a reaction message (add or remove).
+   *
+   * Reactions bypass the normal message pipeline (no typing, no markdown
+   * conversion, no emitMessageSent). They use the dedicated Baileys react
+   * protocol message which modifies an existing message in-place.
+   *
+   * @returns SendResult with success (no messageId for reactions)
+   */
+  private async dispatchReaction(
+    instanceId: string,
+    sock: WASocket,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<SendResult> {
+    const { targetMessageId, emoji } = message.content;
+
+    if (!targetMessageId) {
+      return {
+        success: false,
+        error: 'Reaction content missing target message ID',
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Validate emoji — WhatsApp only supports standard Unicode emoji, not custom emoji IDs
+    const reactionEmoji = emoji || '';
+    if (reactionEmoji && /^\d+$/.test(reactionEmoji)) {
+      // Looks like a custom emoji ID (numeric string) — not supported on WhatsApp
+      return {
+        success: false,
+        error: `Custom emoji reactions are not supported on WhatsApp. Use a standard Unicode emoji instead (received ID: ${reactionEmoji})`,
+        errorCode: ErrorCode.SEND_FAILED,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Determine fromMe: metadata can override, default true
+    const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+
+    // Minimal delay for reactions (shorter than full humanDelay)
+    await this.humanDelay(instanceId);
+
+    this.logger.debug('Sending reaction', {
+      jid,
+      targetMessageId,
+      emoji: reactionEmoji || '(remove)',
+      fromMe,
+    });
+
+    const correlationId = message.metadata?.correlationId as string | undefined;
+    correlationId && this.captureT10(correlationId);
+
+    await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+
+    correlationId && this.captureT11(correlationId);
+
+    return {
+      success: true,
+      timestamp: Date.now(),
+    };
   }
 
   /**
@@ -735,6 +826,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     lines.push('END:VCARD');
     return lines.join('\n');
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Streaming (progressive response edits)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Create a stream sender for progressive response rendering.
+   *
+   * Uses Baileys message edits to update a single message as the LLM
+   * streams its response. Throttled conservatively (default 2500ms)
+   * to avoid WhatsApp anti-bot detection.
+   *
+   * Config: `streamThrottleMs` in instance options (default 2500)
+   */
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    chatType?: 'dm' | 'group' | 'channel',
+  ): StreamSender {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+
+    // Read per-instance throttle from config
+    const instanceEntry = this.instances.get(instanceId);
+    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+
+    return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
+      throttleMs,
+    });
   }
 
   /**
@@ -1202,6 +1324,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   ): Promise<void> {
     for (const anchor of anchors) {
       try {
+        this.logger.debug('Fetching history for anchor', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          hasMessageId: !!anchor.messageKey.id,
+          timestamp: anchor.timestamp,
+        });
         await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
         await new Promise((resolve) => setTimeout(resolve, 300));
       } catch (error) {
@@ -1798,16 +1926,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!c.id) continue;
 
+      // Always cache the JID — even without a name — so getKnownChatJids() discovers all chats
       const name = c.displayName || c.name;
-      if (name) {
-        cache.set(c.id, name);
-      }
+      cache.set(c.id, name ?? c.id);
 
       // Sync unread count from WhatsApp
       if (c.unreadCount !== undefined) {
         this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
+
+    this.logger.debug('Cached chats from upsert', {
+      instanceId,
+      totalCached: cache.size,
+      newBatch: chats.length,
+    });
   }
 
   /**
@@ -1826,9 +1959,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
 
+      // Always ensure the JID is in the cache for discovery
       const name = u.displayName || u.name;
-      if (name) {
-        cache.set(u.id, name);
+      if (name || !cache.has(u.id)) {
+        cache.set(u.id, name ?? u.id);
       }
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
@@ -2104,10 +2238,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       instanceId,
       messageCount: messages.length,
       contactCount: contacts.length,
+      chatCount: history.chats.length,
       progress: progress ?? 'unknown',
       isLatest,
       syncType,
     });
+
+    // Process chats from history sync — ensures all chats are discoverable
+    if (history.chats.length > 0) {
+      this.handleChatsUpsert(instanceId, history.chats);
+    }
 
     // Process contacts from history sync
     if (contacts.length > 0) {
@@ -2140,17 +2280,46 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     msg: WAMessage,
     syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
   ): Promise<void> {
-    if (!msg.key?.id || !msg.key?.remoteJid) return;
+    if (!msg.key?.id || !msg.key?.remoteJid) {
+      this.logger.debug('Skipping history message without key', { instanceId, hasKey: !!msg.key });
+      return;
+    }
 
     const timestamp = this.getMessageTimestamp(msg);
 
     // Filter by date range if specified
-    if (syncState?.since && timestamp < syncState.since) return;
-    if (syncState?.until && timestamp > syncState.until) return;
+    if (syncState?.since && timestamp < syncState.since) {
+      this.logger.debug('Skipping history message - before since', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: new Date(timestamp).toISOString(),
+        since: new Date(syncState.since).toISOString(),
+      });
+      return;
+    }
+    if (syncState?.until && timestamp > syncState.until) {
+      this.logger.debug('Skipping history message - after until', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: new Date(timestamp).toISOString(),
+        until: new Date(syncState.until).toISOString(),
+      });
+      return;
+    }
 
     // Extract basic content info
     const content = this.extractHistoryMessageContent(msg);
-    if (!content) return;
+    if (!content) {
+      this.logger.debug('Skipping history message - no extractable content', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        messageKeys: Object.keys(msg.message || {}),
+      });
+      return;
+    }
 
     const chatId = msg.key.remoteJid;
     const { id: senderId } = fromJid(msg.key.fromMe ? chatId : msg.key.participant || chatId);
@@ -2174,6 +2343,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // No active sync job - this is initial connection history sync
       // Emit the message so it gets stored in the database
       // Note: We store isFromMe messages too for history completeness
+
+      this.logger.debug('Emitting history message from initial sync', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId,
+        from: senderId,
+        contentType: content.type,
+        isFromMe,
+      });
 
       // Build rawPayload with chatName from cache
       const rawPayload: Record<string, unknown> = {

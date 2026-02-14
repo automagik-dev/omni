@@ -245,7 +245,13 @@ async function sendTypingPresence(
 /**
  * Send a text message via channel plugin
  */
-async function sendTextMessage(channel: ChannelType, instanceId: string, chatId: string, text: string): Promise<void> {
+async function sendTextMessage(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  text: string,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
+): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) {
     throw new Error(`Channel plugin not found: ${channel}`);
@@ -257,6 +263,7 @@ async function sendTextMessage(channel: ChannelType, instanceId: string, chatId:
       type: 'text',
       text,
     },
+    metadata: { messageFormatMode },
   });
 }
 
@@ -361,6 +368,7 @@ async function sendResponseParts(
   chatId: string,
   parts: string[],
   splitConfig: SplitDelayConfig,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
 
@@ -371,7 +379,7 @@ async function sendResponseParts(
   }
 
   for (const [index, chunk] of allChunks.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, chunk);
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode);
 
     // Delay between chunks (except last)
     const isLastChunk = index === allChunks.length - 1;
@@ -472,7 +480,8 @@ async function processAgentResponse(
     });
 
     // Send response parts with delays
-    await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+    const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), formatMode);
 
     log.info('Agent response sent', {
       instanceId: instance.id,

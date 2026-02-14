@@ -352,65 +352,68 @@ export class MessageService {
    * Create a new message
    */
   async create(options: CreateMessageOptions): Promise<Message> {
-    const [created] = await this.db
-      .insert(messages)
-      .values({
-        chatId: options.chatId,
-        externalId: options.externalId,
-        source: options.source,
-        messageType: options.messageType,
-        textContent: options.textContent,
-        platformTimestamp: options.platformTimestamp,
-        // Sender
-        senderPersonId: options.senderPersonId,
-        senderPlatformIdentityId: options.senderPlatformIdentityId,
-        senderPlatformUserId: options.senderPlatformUserId,
-        senderDisplayName: options.senderDisplayName,
-        isFromMe: options.isFromMe ?? false,
-        // Media
-        hasMedia: options.hasMedia ?? false,
-        mediaMimeType: options.mediaMimeType,
-        mediaUrl: options.mediaUrl,
-        mediaLocalPath: options.mediaLocalPath,
-        mediaMetadata: options.mediaMetadata,
-        // Pre-processed content
-        transcription: options.transcription,
-        imageDescription: options.imageDescription,
-        videoDescription: options.videoDescription,
-        documentExtraction: options.documentExtraction,
-        // Reply/Forward
-        replyToMessageId: options.replyToMessageId,
-        replyToExternalId: options.replyToExternalId,
-        quotedText: options.quotedText,
-        quotedSenderName: options.quotedSenderName,
-        isForwarded: options.isForwarded ?? false,
-        forwardedFromExternalId: options.forwardedFromExternalId,
-        // Raw data
-        rawPayload: options.rawPayload,
-        // Event links
-        originalEventId: options.originalEventId,
-        latestEventId: options.originalEventId,
-      })
-      .returning();
+    return await this.db.transaction(async (tx) => {
+      // Insert message
+      const [created] = await tx
+        .insert(messages)
+        .values({
+          chatId: options.chatId,
+          externalId: options.externalId,
+          source: options.source,
+          messageType: options.messageType,
+          textContent: options.textContent,
+          platformTimestamp: options.platformTimestamp,
+          // Sender
+          senderPersonId: options.senderPersonId,
+          senderPlatformIdentityId: options.senderPlatformIdentityId,
+          senderPlatformUserId: options.senderPlatformUserId,
+          senderDisplayName: options.senderDisplayName,
+          isFromMe: options.isFromMe ?? false,
+          // Media
+          hasMedia: options.hasMedia ?? false,
+          mediaMimeType: options.mediaMimeType,
+          mediaUrl: options.mediaUrl,
+          mediaLocalPath: options.mediaLocalPath,
+          mediaMetadata: options.mediaMetadata,
+          // Pre-processed content
+          transcription: options.transcription,
+          imageDescription: options.imageDescription,
+          videoDescription: options.videoDescription,
+          documentExtraction: options.documentExtraction,
+          // Reply/Forward
+          replyToMessageId: options.replyToMessageId,
+          replyToExternalId: options.replyToExternalId,
+          quotedText: options.quotedText,
+          quotedSenderName: options.quotedSenderName,
+          isForwarded: options.isForwarded ?? false,
+          forwardedFromExternalId: options.forwardedFromExternalId,
+          // Raw data
+          rawPayload: options.rawPayload,
+          // Event links
+          originalEventId: options.originalEventId,
+          latestEventId: options.originalEventId,
+        })
+        .returning();
 
-    if (!created) {
-      throw new Error('Failed to create message');
-    }
+      if (!created) {
+        throw new Error('Failed to create message');
+      }
 
-    // Update chat's last message and stats
-    const preview = buildMessagePreview(options);
-    await this.db
-      .update(chats)
-      .set({
-        lastMessageAt: options.platformTimestamp,
-        lastMessagePreview: preview,
-        messageCount: sql`${chats.messageCount} + 1`,
-        // Unread count is managed by platform-native events (chat.unread-updated)
-        updatedAt: new Date(),
-      })
-      .where(eq(chats.id, options.chatId));
+      // Update chat stats (in same transaction - ATOMIC)
+      const preview = buildMessagePreview(options);
+      await tx
+        .update(chats)
+        .set({
+          lastMessageAt: options.platformTimestamp,
+          lastMessagePreview: preview,
+          messageCount: sql`${chats.messageCount} + 1`,
+          // Unread count is managed by platform-native events (chat.unread-updated)
+          updatedAt: new Date(),
+        })
+        .where(eq(chats.id, options.chatId));
 
-    return created;
+      return created;
+    });
   }
 
   /**

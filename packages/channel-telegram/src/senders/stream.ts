@@ -18,7 +18,7 @@
 import type { StreamSender } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { StreamDelta } from '@omni/core';
-import type { Bot } from 'grammy';
+import type { TelegramBotLike } from '../grammy-shim';
 import { splitMessage } from '../utils/formatting';
 
 const log = createLogger('telegram:sender:stream');
@@ -56,7 +56,7 @@ export class TelegramStreamSender implements StreamSender {
   private readonly throttleMs: number;
 
   constructor(
-    private readonly bot: Bot,
+    private readonly bot: { api: Pick<TelegramBotLike['api'], 'sendMessage' | 'editMessageText' | 'deleteMessage'> },
     private readonly chatId: string,
     private readonly replyToMessageId?: number,
     chatType?: 'dm' | 'group' | 'channel',
@@ -230,10 +230,12 @@ export class TelegramStreamSender implements StreamSender {
       // Schedule edit for when throttle window expires
       this.clearPendingEdit();
       const delay = this.throttleMs - elapsed;
-      this.pendingEditTimer = setTimeout(async () => {
+      this.pendingEditTimer = setTimeout(() => {
         this.pendingEditTimer = null;
         if (this.phase !== 'done') {
-          await this.doEdit(html);
+          this.doEdit(html).catch((err) => {
+            log.error('Pending edit failed', { chatId: this.chatId, error: String(err) });
+          });
         }
       }, delay);
     }
