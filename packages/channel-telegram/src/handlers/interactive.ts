@@ -12,7 +12,7 @@ const log = createLogger('telegram:interactive');
 type CallbackQueryDataLike = {
   id: string;
   data?: string;
-  from?: { id: number; is_bot: boolean; username?: string; first_name?: string; last_name?: string };
+  from?: { id: number; is_bot: boolean; username?: string; first_name: string; last_name?: string };
   message?: { message_id?: number; chat?: { id: number } };
 };
 
@@ -78,14 +78,18 @@ export function setupInteractiveHandlers(bot: TelegramBotLike, plugin: TelegramP
       | undefined;
     if (!poll) return;
 
-    await plugin.handlePoll({
-      instanceId,
-      pollId: poll.id,
-      question: poll.question,
-      options: poll.options.map((o) => o.text),
-      multiSelect: poll.allows_multiple_answers,
-      rawPayload: { poll },
-    });
+    try {
+      await plugin.handlePoll({
+        instanceId,
+        pollId: poll.id,
+        question: poll.question,
+        options: poll.options.map((o) => o.text),
+        multiSelect: poll.allows_multiple_answers,
+        rawPayload: { poll },
+      });
+    } catch (error) {
+      log.error('Failed to handle poll', { instanceId, pollId: poll.id, error: String(error) });
+    }
   });
 
   bot.on('poll_answer', async (ctx) => {
@@ -101,13 +105,17 @@ export function setupInteractiveHandlers(bot: TelegramBotLike, plugin: TelegramP
     const user = answer.user;
     if (!user || user.is_bot) return;
 
-    await plugin.handlePollVote({
-      instanceId,
-      pollId: answer.poll_id,
-      from: toPlatformUserId(user.id),
-      optionIds: answer.option_ids,
-      rawPayload: { pollAnswer: answer },
-    });
+    try {
+      await plugin.handlePollVote({
+        instanceId,
+        pollId: answer.poll_id,
+        from: toPlatformUserId(user.id),
+        optionIds: answer.option_ids,
+        rawPayload: { pollAnswer: answer },
+      });
+    } catch (error) {
+      log.error('Failed to handle poll answer', { instanceId, pollId: answer.poll_id, error: String(error) });
+    }
   });
 
   log.info('Interactive handlers set up', { instanceId });

@@ -234,7 +234,7 @@ export interface EmitButtonClickParams {
   /** Instance that received the button click */
   instanceId: string;
 
-  /** Telegram callback_query.id (or equivalent platform id) */
+  /** Platform-specific callback/interaction id */
   callbackQueryId?: string;
 
   /** The message that contained the button */

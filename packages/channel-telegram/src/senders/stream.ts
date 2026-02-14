@@ -230,10 +230,12 @@ export class TelegramStreamSender implements StreamSender {
       // Schedule edit for when throttle window expires
       this.clearPendingEdit();
       const delay = this.throttleMs - elapsed;
-      this.pendingEditTimer = setTimeout(async () => {
+      this.pendingEditTimer = setTimeout(() => {
         this.pendingEditTimer = null;
         if (this.phase !== 'done') {
-          await this.doEdit(html);
+          this.doEdit(html).catch((err) => {
+            log.error('Pending edit failed', { chatId: this.chatId, error: String(err) });
+          });
         }
       }, delay);
     }

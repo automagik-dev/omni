@@ -54,8 +54,14 @@ export async function editTextMessage(
   chatId: string,
   messageId: number,
   newText: string,
+  formatMode: MessageFormatMode = 'convert',
 ): Promise<void> {
-  await bot.api.editMessageText(chatId, messageId, newText);
+  const useConversion = formatMode !== 'passthrough';
+  const payload = useConversion ? markdownToTelegramHtml(newText) : newText;
+
+  await bot.api.editMessageText(chatId, messageId, payload, {
+    ...(useConversion ? { parse_mode: 'HTML' as const } : {}),
+  });
   log.debug('Edited text message', { chatId, messageId });
 }
 

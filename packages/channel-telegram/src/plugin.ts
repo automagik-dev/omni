@@ -304,7 +304,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
         chatId,
         to: chatId,
         content: {
-          type: content.type as 'text',
+          type: content.type as import('@omni/core/types').ContentType,
           text: content.text,
           mediaUrl: content.mediaUrl,
         },

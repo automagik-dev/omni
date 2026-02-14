@@ -124,10 +124,21 @@ export async function sendDocument(
   filename?: string,
   replyToMessageId?: number,
 ): Promise<number> {
-  const file = filename
-    ? // Lazy-load to keep this module importable in tests without loading grammy.
-      new (await import('grammy')).InputFile({ url: documentUrl }, filename)
-    : documentUrl;
+  let file: unknown = documentUrl;
+  if (filename) {
+    // Lazy-load to keep this module importable in tests without loading grammy.
+    // If grammy isn't available for some reason, fall back to URL-only.
+    try {
+      const { InputFile } = await import('grammy');
+      file = new InputFile({ url: documentUrl }, filename);
+    } catch (error) {
+      log.warn('Failed to load grammy InputFile, falling back to URL-only document send', {
+        chatId,
+        error: String(error),
+      });
+      file = documentUrl;
+    }
+  }
 
   const result = await bot.api.sendDocument(chatId, file, {
     caption,

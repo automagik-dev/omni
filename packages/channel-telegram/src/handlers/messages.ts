@@ -48,7 +48,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
 
     // Check for bot mention
-    const botInfo = (bot as TelegramBotLike).botInfo;
+    const botInfo = bot.botInfo;
     const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
 
     log.debug('Received message', {

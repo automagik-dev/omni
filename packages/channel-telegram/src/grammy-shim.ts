@@ -11,7 +11,7 @@ export interface TelegramUser {
   id: number;
   is_bot: boolean;
   username?: string;
-  first_name?: string;
+  first_name: string;
   last_name?: string;
 }
 
