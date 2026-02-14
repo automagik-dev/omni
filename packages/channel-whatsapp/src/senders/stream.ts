@@ -6,7 +6,7 @@
  * - Conservative 2500ms default throttle (WhatsApp has stricter rate limits than Telegram)
  * - Robust fallback: if edit fails, sends a new message and stops editing
  * - No humanDelay or typing simulation during streaming (avoids anti-bot double-penalty)
- * - Handles mid-stream splitting if content exceeds maxMessageLength
+ * - Uses a tail window while streaming; splits into multiple messages on final render if needed
  * - Markdown→WhatsApp syntax conversion on final render
  *
  * Config: `streamThrottleMs` per instance (default 2500ms)
@@ -184,7 +184,10 @@ export class WhatsAppStreamSender implements StreamSender {
       this.pendingEditTimer = setTimeout(async () => {
         this.pendingEditTimer = null;
         if (this.phase !== 'done') {
-          await this.doEdit(text);
+          await this.doEdit(text).catch((err: unknown) => {
+            // Defensive: doEdit already swallows send/edit errors, but we never want an unhandled rejection
+            log.warn('Scheduled edit failed', { jid: this.jid, error: String(err) });
+          });
         }
       }, delay);
     }
@@ -195,7 +198,12 @@ export class WhatsAppStreamSender implements StreamSender {
       if (!this.messageId) {
         // Create initial message
         const quoted = this.replyToMessageId
-          ? { quoted: { key: { id: this.replyToMessageId, remoteJid: this.jid } } as never }
+          ? {
+              quoted: {
+                key: { id: this.replyToMessageId, remoteJid: this.jid, fromMe: false },
+                message: {},
+              },
+            }
           : undefined;
         const result = await this.sock.sendMessage(this.jid, { text }, quoted);
         this.messageId = result?.key?.id ?? null;

@@ -64,7 +64,14 @@ export async function sendTextMessage(
     const result = await sock.sendMessage(
       jid,
       content,
-      index === 0 && replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
+      index === 0 && replyToId
+        ? {
+            quoted: {
+              key: { id: replyToId, remoteJid: jid, fromMe: false },
+              message: {},
+            },
+          }
+        : undefined,
     );
 
     lastMessageId = result?.key?.id ?? lastMessageId;
