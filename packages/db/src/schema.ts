@@ -10,6 +10,7 @@
  */
 
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
+import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
@@ -82,44 +83,8 @@ export type SettingValueType = (typeof settingValueTypes)[number];
 export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
 export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
 
-export const eventTypes = [
-  'message.received',
-  'message.sent',
-  'message.delivered',
-  'message.read',
-  'message.failed',
-  'message.button_click',
-  'message.poll',
-  'message.poll_vote',
-  'media.received',
-  'media.processed',
-  'identity.created',
-  'identity.linked',
-  'identity.merged',
-  'identity.unlinked',
-  'instance.connected',
-  'instance.disconnected',
-  'instance.qr_code',
-  'access.allowed',
-  'access.denied',
-  'presence.typing',
-  'presence.online',
-  'presence.offline',
-  'sync.started',
-  'sync.progress',
-  'sync.completed',
-  'sync.failed',
-  'profile.synced',
-  'reaction.received',
-  'reaction.removed',
-  'batch-job.created',
-  'batch-job.started',
-  'batch-job.progress',
-  'batch-job.completed',
-  'batch-job.cancelled',
-  'batch-job.failed',
-] as const;
-export type EventType = (typeof eventTypes)[number];
+export const eventTypes = CORE_EVENT_TYPES;
+export type EventType = CoreEventType;
 
 export const contentTypes = [
   'text',
@@ -1250,18 +1215,10 @@ export type SyncJobType = (typeof syncJobTypes)[number];
 
 /**
  * Sync job configuration stored in JSONB.
+ *
+ * Source of truth lives in @omni/core (event payload + db record must stay in sync).
  */
-export interface SyncJobConfig {
-  depth?: '7d' | '30d' | '90d' | '1y' | 'all';
-  channelId?: string; // For Discord channel-specific sync
-  downloadMedia?: boolean;
-  /** Explicit since timestamp (ISO string) — takes precedence over depth */
-  since?: string;
-  /** Explicit until timestamp (ISO string) */
-  until?: string;
-  /** Specific chat JIDs to fetch history for (WhatsApp only) */
-  chatJids?: string[];
-}
+export type SyncJobConfig = CoreSyncJobConfig;
 
 /**
  * Sync job progress tracking.
