@@ -3,7 +3,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Bot } from 'grammy';
+import type { TelegramBotLike } from '../grammy-shim';
 import { splitHtmlMessage, splitMessage } from '../utils/formatting';
 import { markdownToTelegramHtml } from '../utils/markdown-to-html';
 
@@ -15,7 +15,7 @@ export type MessageFormatMode = 'convert' | 'passthrough';
  * Send a text message to a Telegram chat
  */
 export async function sendTextMessage(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   text: string,
   replyToMessageId?: number,
@@ -49,7 +49,12 @@ export async function sendTextMessage(
 /**
  * Edit a text message
  */
-export async function editTextMessage(bot: Bot, chatId: string, messageId: number, newText: string): Promise<void> {
+export async function editTextMessage(
+  bot: TelegramBotLike,
+  chatId: string,
+  messageId: number,
+  newText: string,
+): Promise<void> {
   await bot.api.editMessageText(chatId, messageId, newText);
   log.debug('Edited text message', { chatId, messageId });
 }
@@ -57,7 +62,7 @@ export async function editTextMessage(bot: Bot, chatId: string, messageId: numbe
 /**
  * Delete a message
  */
-export async function deleteMessage(bot: Bot, chatId: string, messageId: number): Promise<void> {
+export async function deleteMessage(bot: TelegramBotLike, chatId: string, messageId: number): Promise<void> {
   await bot.api.deleteMessage(chatId, messageId);
   log.debug('Deleted message', { chatId, messageId });
 }

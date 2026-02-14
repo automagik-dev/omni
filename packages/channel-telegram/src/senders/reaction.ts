@@ -3,8 +3,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Bot } from 'grammy';
-import type { ReactionTypeEmoji } from 'grammy/types';
+import type { TelegramBotLike } from '../grammy-shim';
 
 const log = createLogger('telegram:sender:reaction');
 
@@ -14,19 +13,20 @@ const log = createLogger('telegram:sender:reaction');
  * Note: Telegram only supports a fixed set of emoji reactions.
  * If the emoji is not in the allowed set, the API will reject it.
  */
-export async function setReaction(bot: Bot, chatId: string, messageId: number, emoji: string): Promise<void> {
-  const reaction: ReactionTypeEmoji = {
-    type: 'emoji',
-    emoji: emoji as ReactionTypeEmoji['emoji'],
-  };
-  await bot.api.setMessageReaction(chatId, messageId, [reaction]);
+export async function setReaction(
+  bot: TelegramBotLike,
+  chatId: string,
+  messageId: number,
+  emoji: string,
+): Promise<void> {
+  await bot.api.setMessageReaction(chatId, messageId, [{ type: 'emoji', emoji }]);
   log.debug('Set reaction', { chatId, messageId, emoji });
 }
 
 /**
  * Remove all reactions from a message (set empty array)
  */
-export async function removeReaction(bot: Bot, chatId: string, messageId: number): Promise<void> {
+export async function removeReaction(bot: TelegramBotLike, chatId: string, messageId: number): Promise<void> {
   await bot.api.setMessageReaction(chatId, messageId, []);
   log.debug('Removed reaction', { chatId, messageId });
 }

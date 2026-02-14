@@ -6,33 +6,28 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Bot } from 'grammy';
-import type { Message } from 'grammy/types';
+import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
+import { extractTelegramMessageContent } from './extract-content';
 
 const log = createLogger('telegram:channel-posts');
 
-function extractText(msg: Message): string {
-  return msg.text ?? msg.caption ?? '[Channel post]';
-}
-
-function getFromId(msg: Message): string {
+function getFromId(msg: TelegramMessageLike): string {
   // Channel posts often do not have `from`; use sender_chat or chat as stable id.
-  const senderChatId = (msg.sender_chat && 'id' in msg.sender_chat ? msg.sender_chat.id : undefined) as
-    | number
-    | undefined;
-  return String(senderChatId ?? msg.chat.id);
+  return String(msg.sender_chat?.id ?? msg.chat.id);
 }
 
-export function setupChannelPostHandlers(bot: Bot, plugin: TelegramPlugin, instanceId: string): void {
+export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): void {
   bot.on('channel_post', async (ctx) => {
-    const msg = ctx.channelPost;
+    const msg = (ctx as { channelPost?: TelegramMessageLike }).channelPost;
     if (!msg) return;
 
     const chatId = String(msg.chat.id);
     const externalId = String(msg.message_id);
     const fromId = getFromId(msg);
     const threadId = msg.message_thread_id;
+    const content = extractTelegramMessageContent(msg);
+    const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
 
     log.debug('Received channel post', { instanceId, chatId, externalId, threadId });
 
@@ -42,10 +37,12 @@ export function setupChannelPostHandlers(bot: Bot, plugin: TelegramPlugin, insta
       chatId,
       fromId,
       {
-        type: 'text',
-        text: extractText(msg),
+        type: content.type,
+        text: content.text ?? '[Channel post]',
+        mediaUrl: content.mediaFileId,
+        mimeType: content.mimeType,
       },
-      undefined,
+      replyToId,
       {
         chatType: msg.chat.type,
         threadId,
@@ -53,20 +50,26 @@ export function setupChannelPostHandlers(bot: Bot, plugin: TelegramPlugin, insta
         isChannelPost: true,
         isGroup: false,
         isDM: false,
-        chatName: 'title' in msg.chat ? msg.chat.title : undefined,
+        mediaFileId: content.mediaFileId,
+        filename: content.filename,
+        displayName: msg.chat.title,
+        pushName: msg.chat.title,
+        chatName: msg.chat.title,
       },
       msg.date * 1000,
     );
   });
 
   bot.on('edited_channel_post', async (ctx) => {
-    const msg = ctx.editedChannelPost;
+    const msg = (ctx as { editedChannelPost?: TelegramMessageLike }).editedChannelPost;
     if (!msg) return;
 
     const chatId = String(msg.chat.id);
     const externalId = String(msg.message_id);
     const fromId = getFromId(msg);
     const threadId = msg.message_thread_id;
+    const content = extractTelegramMessageContent(msg);
+    const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
 
     log.debug('Received edited channel post', { instanceId, chatId, externalId, threadId });
 
@@ -78,10 +81,12 @@ export function setupChannelPostHandlers(bot: Bot, plugin: TelegramPlugin, insta
       chatId,
       fromId,
       {
-        type: 'text',
-        text: extractText(msg),
+        type: content.type,
+        text: content.text ?? '[Channel post]',
+        mediaUrl: content.mediaFileId,
+        mimeType: content.mimeType,
       },
-      undefined,
+      replyToId,
       {
         chatType: msg.chat.type,
         threadId,
@@ -91,7 +96,11 @@ export function setupChannelPostHandlers(bot: Bot, plugin: TelegramPlugin, insta
         editDate: ts,
         isGroup: false,
         isDM: false,
-        chatName: 'title' in msg.chat ? msg.chat.title : undefined,
+        mediaFileId: content.mediaFileId,
+        filename: content.filename,
+        displayName: msg.chat.title,
+        pushName: msg.chat.title,
+        chatName: msg.chat.title,
       },
       ts,
     );

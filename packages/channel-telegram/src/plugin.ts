@@ -19,10 +19,10 @@ import type {
   StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType } from '@omni/core/types';
-import type { Bot } from 'grammy';
 
 import { TELEGRAM_CAPABILITIES } from './capabilities';
 import { createBot, destroyBot, getBot } from './client';
+import type { TelegramBotLike } from './grammy-shim';
 import {
   setupChannelPostHandlers,
   setupInteractiveHandlers,
@@ -50,7 +50,11 @@ import type { TelegramConfig } from './types';
 /**
  * Send a reaction to a target message. Returns null (no message ID produced).
  */
-async function dispatchReaction(bot: Bot, chatId: string, content: OutgoingMessage['content']): Promise<null> {
+async function dispatchReaction(
+  bot: TelegramBotLike,
+  chatId: string,
+  content: OutgoingMessage['content'],
+): Promise<null> {
   if (content.targetMessageId && content.emoji) {
     const targetId = Number.parseInt(content.targetMessageId, 10);
     if (!Number.isNaN(targetId)) {
@@ -62,7 +66,7 @@ async function dispatchReaction(bot: Bot, chatId: string, content: OutgoingMessa
 
 /** Content type → sender dispatch (media subtypes) */
 async function dispatchMedia(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
@@ -91,7 +95,7 @@ async function dispatchMedia(
  * Returns the sent message ID, or null for reaction-type messages.
  */
 async function dispatchContent(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
@@ -108,7 +112,7 @@ async function dispatchContent(
  * Dispatch a contact card via Telegram sender
  */
 async function dispatchContact(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
@@ -125,7 +129,7 @@ async function dispatchContact(
  * Dispatch a location pin via Telegram sender
  */
 async function dispatchLocation(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
@@ -186,14 +190,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
     this.logger.info('Connecting Telegram instance', { instanceId, mode: telegramConfig.mode });
 
     // Create and initialize bot
-    const bot = createBot(instanceId, telegramConfig.token);
+    const bot = await createBot(instanceId, telegramConfig.token);
 
     // Global error handler — prevents unhandled errors from crashing the process
     bot.catch((err) => {
+      const e = err as { message?: string; ctx?: { update?: { update_id?: number } } };
       this.logger.error('Bot error', {
         instanceId,
-        error: err.message ?? String(err),
-        ctx: err.ctx?.update?.update_id,
+        error: e.message ?? String(err),
+        ctx: e.ctx?.update?.update_id,
       });
     });
 
@@ -207,6 +212,9 @@ export class TelegramPlugin extends BaseChannelPlugin {
     await bot.init();
 
     const botInfo = bot.botInfo;
+    if (!botInfo) {
+      throw new Error(`Bot info missing after init for instance ${instanceId}`);
+    }
     this.logger.info('Bot initialized', {
       instanceId,
       botId: botInfo.id,
@@ -630,7 +638,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
   // Private helpers
   // ────────────────────────────────────────────────────────────
 
-  private async startPolling(bot: Bot, instanceId: string): Promise<void> {
+  private async startPolling(bot: TelegramBotLike, instanceId: string): Promise<void> {
     this.logger.info('Starting polling mode', { instanceId });
 
     // Start polling in background (non-blocking)
@@ -643,6 +651,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
         'edited_channel_post',
         'message_reaction',
         'callback_query',
+        'poll',
+        'poll_answer',
         'my_chat_member',
       ],
       onStart: () => {
@@ -656,7 +666,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // surface the failure via getHealthChecks().
   }
 
-  private async startWebhook(_bot: Bot, instanceId: string, _config: TelegramConfig): Promise<void> {
+  private async startWebhook(_bot: TelegramBotLike, instanceId: string, _config: TelegramConfig): Promise<void> {
     // TODO: Webhook mode requires an HTTP handler (e.g. Hono route) to receive
     // incoming updates from Telegram. This is not yet implemented.
     // See: https://grammy.dev/guide/deployment-types#webhooks
@@ -671,7 +681,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
    * Get the grammy Bot instance for a given instance ID.
    * Useful for webhook handlers that need to process incoming updates.
    */
-  getGrammyBot(instanceId: string): Bot | undefined {
+  getGrammyBot(instanceId: string): TelegramBotLike | undefined {
     return getBot(instanceId);
   }
 

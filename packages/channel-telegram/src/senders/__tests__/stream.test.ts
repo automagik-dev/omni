@@ -12,7 +12,6 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { StreamDelta } from '@omni/core';
-import type { Bot } from 'grammy';
 import { TelegramStreamSender } from '../stream';
 
 // ─── Mock Bot ──────────────────────────────────────────────
@@ -62,7 +61,7 @@ function createMockBot() {
   };
 
   return {
-    bot: bot as unknown as Bot,
+    bot,
     sent,
     edited,
     deleted,

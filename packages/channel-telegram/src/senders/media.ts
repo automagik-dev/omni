@@ -3,8 +3,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import { InputFile } from 'grammy';
-import type { Bot } from 'grammy';
+import type { TelegramBotLike } from '../grammy-shim';
 
 const log = createLogger('telegram:sender:media');
 
@@ -12,7 +11,7 @@ const log = createLogger('telegram:sender:media');
  * Send a photo to a Telegram chat
  */
 export async function sendPhoto(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   photoUrl: string,
   caption?: string,
@@ -30,7 +29,7 @@ export async function sendPhoto(
  * Send an audio file to a Telegram chat
  */
 export async function sendAudio(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   audioUrl: string,
   caption?: string,
@@ -48,7 +47,7 @@ export async function sendAudio(
  * Send a video to a Telegram chat
  */
 export async function sendVideo(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   videoUrl: string,
   caption?: string,
@@ -66,7 +65,7 @@ export async function sendVideo(
  * Send a sticker to a Telegram chat
  */
 export async function sendSticker(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   stickerUrl: string,
   replyToMessageId?: number,
@@ -82,7 +81,7 @@ export async function sendSticker(
  * Send a contact card to a Telegram chat
  */
 export async function sendContact(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   phone: string,
   firstName: string,
@@ -101,7 +100,7 @@ export async function sendContact(
  * Send a location pin to a Telegram chat
  */
 export async function sendLocation(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   latitude: number,
   longitude: number,
@@ -118,14 +117,17 @@ export async function sendLocation(
  * Send a document to a Telegram chat
  */
 export async function sendDocument(
-  bot: Bot,
+  bot: TelegramBotLike,
   chatId: string,
   documentUrl: string,
   caption?: string,
   filename?: string,
   replyToMessageId?: number,
 ): Promise<number> {
-  const file = filename ? new InputFile({ url: documentUrl }, filename) : documentUrl;
+  const file = filename
+    ? // Lazy-load to keep this module importable in tests without loading grammy.
+      new (await import('grammy')).InputFile({ url: documentUrl }, filename)
+    : documentUrl;
 
   const result = await bot.api.sendDocument(chatId, file, {
     caption,
