@@ -716,8 +716,18 @@ async function processStatusUpdate(
  */
 export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, instanceId: string): void {
   sock.ev.on('messages.upsert', async (upsert: { messages: WAMessage[]; type: MessageUpsertType }) => {
-    if (upsert.type !== 'notify') return;
+    // Log all message types to diagnose missing messages
+    log.debug('messages.upsert received', {
+      instanceId,
+      type: upsert.type,
+      count: upsert.messages.length,
+      messageIds: upsert.messages.map((m) => m.key.id),
+    });
 
+    // Process all message types, not just 'notify'
+    // 'notify' = incoming messages
+    // 'append' = outgoing messages sent from this device
+    // We need both to capture all conversation activity
     for (const msg of upsert.messages) {
       if (shouldProcessMessage(plugin, instanceId, msg)) {
         await processMessage(plugin, instanceId, msg);
