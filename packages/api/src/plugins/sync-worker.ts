@@ -260,11 +260,27 @@ function resolveWhatsAppAnchors(
   // Explicit chatJids take priority
   if (config.chatJids?.length) {
     log.info('Using explicit chatJids for sync', { jobId, chatJids: config.chatJids });
-    return config.chatJids.map((jid) => ({
-      chatJid: jid,
-      messageKey: { remoteJid: jid, id: '', fromMe: false },
-      timestamp: Date.now(),
-    }));
+
+    // For each requested chatJid, try to find an existing anchor from DB
+    const anchors: WAnchor[] = [];
+    for (const jid of config.chatJids) {
+      const dbAnchor = dbAnchors.find((a) => a.chatJid === jid);
+      if (dbAnchor) {
+        // Use existing message as anchor
+        log.debug('Found DB anchor for chatJid', { jobId, chatJid: jid, anchorId: dbAnchor.messageKey.id });
+        anchors.push(dbAnchor);
+      } else {
+        // No messages in DB - create anchor without message ID
+        // This will trigger fetchHistory without anchor (fetch recent messages)
+        log.debug('No DB anchor for chatJid, will fetch recent', { jobId, chatJid: jid });
+        anchors.push({
+          chatJid: jid,
+          messageKey: { remoteJid: jid, id: '', fromMe: false },
+          timestamp: Date.now(),
+        });
+      }
+    }
+    return anchors;
   }
 
   // Discover chats known to Baileys but not in DB

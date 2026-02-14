@@ -2280,17 +2280,46 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     msg: WAMessage,
     syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
   ): Promise<void> {
-    if (!msg.key?.id || !msg.key?.remoteJid) return;
+    if (!msg.key?.id || !msg.key?.remoteJid) {
+      this.logger.debug('Skipping history message without key', { instanceId, hasKey: !!msg.key });
+      return;
+    }
 
     const timestamp = this.getMessageTimestamp(msg);
 
     // Filter by date range if specified
-    if (syncState?.since && timestamp < syncState.since) return;
-    if (syncState?.until && timestamp > syncState.until) return;
+    if (syncState?.since && timestamp < syncState.since) {
+      this.logger.debug('Skipping history message - before since', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: new Date(timestamp).toISOString(),
+        since: new Date(syncState.since).toISOString(),
+      });
+      return;
+    }
+    if (syncState?.until && timestamp > syncState.until) {
+      this.logger.debug('Skipping history message - after until', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: new Date(timestamp).toISOString(),
+        until: new Date(syncState.until).toISOString(),
+      });
+      return;
+    }
 
     // Extract basic content info
     const content = this.extractHistoryMessageContent(msg);
-    if (!content) return;
+    if (!content) {
+      this.logger.debug('Skipping history message - no extractable content', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        messageKeys: Object.keys(msg.message || {}),
+      });
+      return;
+    }
 
     const chatId = msg.key.remoteJid;
     const { id: senderId } = fromJid(msg.key.fromMe ? chatId : msg.key.participant || chatId);
@@ -2314,6 +2343,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // No active sync job - this is initial connection history sync
       // Emit the message so it gets stored in the database
       // Note: We store isFromMe messages too for history completeness
+
+      this.logger.debug('Emitting history message from initial sync', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId,
+        from: senderId,
+        contentType: content.type,
+        isFromMe,
+      });
 
       // Build rawPayload with chatName from cache
       const rawPayload: Record<string, unknown> = {
