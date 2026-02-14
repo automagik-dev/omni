@@ -2,6 +2,7 @@
 
 > Audited: 2026-02-13 by Group A  
 > Scope: Every feature in both plugins, classified with file-level evidence  
+> **Related:** [Parity Matrix](../../../docs/channel-parity/telegram-whatsapp.md) (canonical reference)  
 
 ## Legend
 

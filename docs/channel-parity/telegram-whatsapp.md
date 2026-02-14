@@ -7,6 +7,10 @@ This document maps every declared `ChannelCapabilities` flag and every observabl
 across both plugins, classifying each as **match**, **degrade** (graceful fallback possible),
 **blocked** (library/platform limitation), or **out-of-scope** (not applicable to the channel).
 
+**Related documents:**
+- [Full audit notes with file-level evidence](../../.genie/wishes/channel-parity-telegram-whatsapp/audit-notes.md)
+- [Follow-up wishes](#13-follow-up-wishes) (8 implementation tasks below)
+
 ---
 
 ## 1. `ChannelCapabilities` Flag Alignment
@@ -251,3 +255,52 @@ Delivery receipts (TG), read receipts (TG), mark-as-read (TG), inbound typing (T
 inbound delete (TG), group creation (TG), profile update (TG), contacts sync (TG),
 custom emoji reactions (both), interactive buttons (WA/Baileys), threads (WA),
 slash commands (WA).
+
+---
+
+## 13. Follow-up Wishes
+
+**8 implementation tasks** created from this audit, prioritized by impact:
+
+| # | Slug | Complexity | Priority | Description |
+|---|------|------------|----------|-------------|
+| 1 | [parity-streaming](../../.genie/wishes/parity-streaming/wish.md) | L | 🔴 HIGH | WhatsApp StreamSender (progressive edits) — biggest UX gap |
+| 2 | [parity-reactions](../../.genie/wishes/parity-reactions/wish.md) | S | ✅ SHIPPED | Wire WhatsApp reaction send through plugin |
+| 3 | [parity-identity](../../.genie/wishes/parity-identity/wish.md) | S | ✅ SHIPPED | Wire Telegram contact/location/sticker/forward send |
+| 4 | [parity-media](../../.genie/wishes/parity-media/wish.md) | M | 🟡 READY | Telegram sticker send + media download to disk |
+| 5 | [parity-groups](../../.genie/wishes/parity-groups/wish.md) | M | 🟡 READY | Flip WhatsApp canHandleGroups + wire Telegram threads/broadcast |
+| 6 | [parity-interactive-ui](../../.genie/wishes/parity-interactive-ui/wish.md) | M | 🟡 READY | Telegram buttons/polls/slash commands |
+| 7 | [parity-receipts](../../.genie/wishes/parity-receipts/wish.md) | M | 🟢 BLOCKED | Canonical receipt events (mostly library-blocked) |
+| 8 | [baileys-resilience](../../.genie/wishes/baileys-resilience/wish.md) | L | 🟢 STRATEGIC | Version pinning + abstraction layer |
+
+### Execution Recommendations
+
+**Quick wins (ship first):**
+- ✅ parity-reactions (SHIPPED)
+- ✅ parity-identity (SHIPPED)
+- ✅ parity-streaming (SHIPPED)
+- parity-groups (M) — mostly capability flips + event wiring
+- parity-media (M) — sticker send is trivial, download is ~2hr
+
+**Biggest impact (prioritize next):**
+- parity-interactive-ui (M) — unlocks agent automation with buttons/polls
+- parity-groups (M) — threads enable multi-topic bots
+
+**Strategic (schedule later):**
+- baileys-resilience (L) — insulates from library churn
+- parity-receipts (M) — mostly blocked until libraries ship receipt events
+
+### Dependency Graph
+
+```
+parity-streaming → (none)
+parity-reactions → (none)
+parity-identity → (none)
+parity-media → (none)
+parity-groups → (none)
+parity-interactive-ui → (none — but benefits from parity-groups for forum polls)
+parity-receipts → (blocked by library support)
+baileys-resilience → (should run before breaking changes, no hard dependency)
+```
+
+All wishes are **independent** — can be executed in parallel or any order.
