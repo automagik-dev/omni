@@ -416,7 +416,7 @@ async function handleMessageReceived(
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
   const platformTimestamp = extractPlatformTimestamp(rawPayload, eventTimestamp);
 
-  const { created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
+  const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
     source: 'realtime',
     messageType: mapContentType(payload.content.type),
     textContent: sanitizeText(payload.content.text),
@@ -437,6 +437,19 @@ async function handleMessageReceived(
     rawPayload,
   });
 
+  // Telegram and WhatsApp edits can arrive as "message.received" with a stable externalId.
+  // When we detect an edit, update the existing unified message instead of treating it as a duplicate.
+  if (!created && rawPayload?.isEdited === true) {
+    const editedAtMs = rawPayload?.editDate;
+    const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
+    await services.messages.recordEdit(
+      message.id,
+      sanitizeText(payload.content.text) ?? '',
+      editedAt,
+      truncate(payload.from, 255) ?? undefined,
+    );
+  }
+
   if (created) {
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
   }
@@ -447,16 +460,18 @@ async function handleMessageReceived(
     await services.chats.recordParticipantActivity(chat.id, activityUserId);
   }
 
-  // Step 7: Update chat lastMessageAt and preview
-  const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
-  services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
-    log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
-  });
+  // Step 7: Update chat lastMessageAt and preview (edits should not bump recency)
+  if (rawPayload?.isEdited !== true) {
+    const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
+    services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
+      log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
+    });
 
-  // Step 8: Update lastMessageAt on instance (for reconnect gap detection)
-  services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
-    log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
-  });
+    // Step 8: Update lastMessageAt on instance (for reconnect gap detection)
+    services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
+      log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
+    });
+  }
 }
 
 /**

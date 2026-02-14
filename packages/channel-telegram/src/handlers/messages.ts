@@ -106,7 +106,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const chatId = String(msg.chat.id);
     const userId = toPlatformUserId(from.id);
     const externalId = String(msg.message_id);
-    const text = msg.text ?? msg.caption ?? '';
+    const content = extractTelegramMessageContent(msg);
 
     log.debug('Received edited message', { instanceId, chatId, externalId });
 
@@ -119,8 +119,10 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
       chatId,
       userId,
       {
-        type: 'text',
-        text,
+        type: content.type,
+        text: content.text,
+        mediaUrl: content.mediaFileId,
+        mimeType: content.mimeType,
       },
       undefined,
       {
@@ -134,6 +136,8 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         isDM: msg.chat.type === 'private',
         isEdited: true,
         editDate: (msg.edit_date ?? msg.date) * 1000,
+        mediaFileId: content.mediaFileId,
+        filename: content.filename,
       },
       (msg.edit_date ?? msg.date) * 1000,
     );

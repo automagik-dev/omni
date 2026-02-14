@@ -346,7 +346,7 @@ async function processMessageSync(
   let anchors: WAnchor[] = [];
 
   if (channelType === 'whatsapp-baileys') {
-    const dbAnchors = config.chatJids?.length ? [] : await buildWhatsAppAnchors(instanceId, services);
+    const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
     anchors = resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors);
     log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length });
   }
