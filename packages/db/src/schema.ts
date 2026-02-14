@@ -744,6 +744,10 @@ export const chats = pgTable(
   (table) => ({
     instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
     canonicalIdIdx: index('chats_canonical_id_idx').on(table.canonicalId),
+    // Prevents duplicate canonical chats within an instance
+    instanceCanonicalIdx: uniqueIndex('chats_instance_canonical_unique_idx')
+      .on(table.instanceId, table.canonicalId)
+      .where(sql`${table.canonicalId} IS NOT NULL`),
     chatTypeIdx: index('chats_type_idx').on(table.chatType),
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),

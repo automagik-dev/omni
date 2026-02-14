@@ -374,59 +374,105 @@ export class ChatService {
     externalId: string,
     defaults: Omit<NewChat, 'instanceId' | 'externalId'>,
   ): Promise<{ chat: Chat; created: boolean }> {
-    // Primary lookup: exact externalId match
-    const existing = await this.getByExternalId(instanceId, externalId);
-    if (existing) {
-      return { chat: existing, created: false };
-    }
+    const maxRetries = 2;
 
-    // Secondary lookup: check if another chat has this as its canonicalId
-    // (e.g., an @lid chat that was previously resolved to this phone JID)
-    const [byCanonical] = await this.db
-      .select()
-      .from(chats)
-      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
-      .limit(1);
-    if (byCanonical) {
-      return { chat: byCanonical, created: false };
-    }
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // Layer 1: exact externalId match
+      const existing = await this.getByExternalId(instanceId, externalId);
+      if (existing) {
+        return { chat: existing, created: false };
+      }
 
-    // Secondary lookup: check chatIdMappings for LID↔phone mappings
-    if (externalId.endsWith('@s.whatsapp.net')) {
-      // Phone JID arrived — check if a LID chat exists for it
-      const [mapping] = await this.db
+      // Layer 2a: check if another chat has this externalId as its canonicalId
+      // (e.g., an @lid chat that was previously resolved to this phone JID)
+      const [byCanonical] = await this.db
         .select()
-        .from(chatIdMappings)
-        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
+        .from(chats)
+        .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
         .limit(1);
-      if (mapping) {
-        const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
-        if (lidChat) {
-          return { chat: lidChat, created: false };
+      if (byCanonical) {
+        return { chat: byCanonical, created: false };
+      }
+
+      // Layer 2b: if we're trying to set a canonicalId, check if a chat with that canonicalId already exists
+      // (handles concurrent creation with same canonicalId but different externalIds)
+      if (defaults.canonicalId) {
+        const [existingCanonical] = await this.db
+          .select()
+          .from(chats)
+          .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, defaults.canonicalId)))
+          .limit(1);
+        if (existingCanonical) {
+          return { chat: existingCanonical, created: false };
         }
       }
-    } else if (externalId.endsWith('@lid')) {
-      // LID arrived — check if a phone chat exists for it
-      const [mapping] = await this.db
-        .select()
-        .from(chatIdMappings)
-        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
-        .limit(1);
-      if (mapping) {
-        const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
-        if (phoneChat) {
-          return { chat: phoneChat, created: false };
+
+      // Layer 3: check chatIdMappings for LID↔phone mappings
+      if (externalId.endsWith('@s.whatsapp.net')) {
+        // Phone JID arrived — check if a LID chat exists for it
+        const [mapping] = await this.db
+          .select()
+          .from(chatIdMappings)
+          .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
+          .limit(1);
+        if (mapping) {
+          const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
+          if (lidChat) {
+            return { chat: lidChat, created: false };
+          }
         }
+      } else if (externalId.endsWith('@lid')) {
+        // LID arrived — check if a phone chat exists for it
+        const [mapping] = await this.db
+          .select()
+          .from(chatIdMappings)
+          .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
+          .limit(1);
+        if (mapping) {
+          const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
+          if (phoneChat) {
+            return { chat: phoneChat, created: false };
+          }
+        }
+      }
+
+      try {
+        // Attempt to create chat
+        const chat = await this.create({
+          instanceId,
+          externalId,
+          ...defaults,
+        });
+
+        return { chat, created: true };
+      } catch (error) {
+        // Check if error is unique constraint violation on canonicalId
+        const isUniqueViolation =
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === '23505' &&
+          (('constraint' in error &&
+            typeof error.constraint === 'string' &&
+            error.constraint === 'chats_instance_canonical_unique_idx') ||
+            ('constraint_name' in error &&
+              typeof error.constraint_name === 'string' &&
+              error.constraint_name === 'chats_instance_canonical_unique_idx') ||
+            ('message' in error &&
+              typeof error.message === 'string' &&
+              error.message.includes('chats_instance_canonical_unique_idx')));
+
+        if (isUniqueViolation && attempt < maxRetries) {
+          // Concurrent request created chat with same canonicalId - retry lookup
+          continue;
+        }
+
+        // Different error or max retries exceeded
+        throw error;
       }
     }
 
-    const chat = await this.create({
-      instanceId,
-      externalId,
-      ...defaults,
-    });
-
-    return { chat, created: true };
+    throw new Error(`Failed to create or find chat after ${maxRetries + 1} attempts: ${externalId}`);
   }
 
   /**
@@ -477,7 +523,7 @@ export class ChatService {
       .set({
         lastMessageAt: timestamp,
         lastMessagePreview: safePreview.substring(0, 500),
-        messageCount: sql`${chats.messageCount} + 1`,
+        // messageCount increment removed - already incremented in messages.create() transaction
         updatedAt: new Date(),
       })
       .where(eq(chats.id, chatId));

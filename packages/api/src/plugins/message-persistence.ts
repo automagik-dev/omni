@@ -304,7 +304,8 @@ async function postProcessChat(
   rawPayload: Record<string, unknown> | undefined,
   isFromMe: boolean,
 ): Promise<void> {
-  // Populate canonicalId for phone-based chats (enables search by phone number)
+  // Populate canonicalId ONLY if not already set
+  // (Usually set during creation, but handle legacy chats or edge cases)
   if (chatExternalId.endsWith('@s.whatsapp.net') && !chat.canonicalId) {
     await services.chats.update(chat.id, { canonicalId: chatExternalId });
     chat.canonicalId = chatExternalId;
@@ -376,10 +377,14 @@ async function handleMessageReceived(
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
   const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
 
+  // Determine canonicalId upfront for phone-based chats
+  const canonicalId = chatExternalId.endsWith('@s.whatsapp.net') ? chatExternalId : undefined;
+
   const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
     chatType,
     channel,
     name: effectiveName,
+    canonicalId, // Set during creation to leverage unique constraint
   });
 
   // Post-process chat: canonicalId, LID mapping, name updates
