@@ -116,4 +116,14 @@ describe('markdownToTelegramHtml', () => {
     const result = markdownToTelegramHtml('hello ** world');
     expect(result).toContain('**');
   });
+
+  // ---- Intraword emphasis ----
+  test('does not apply underscore emphasis inside words', () => {
+    expect(markdownToTelegramHtml('foo_bar_baz')).toBe('foo_bar_baz');
+    expect(markdownToTelegramHtml('_foo_bar_')).toBe('<i>foo_bar</i>');
+  });
+
+  test('does not apply asterisk emphasis inside numbers/words', () => {
+    expect(markdownToTelegramHtml('2*3*4')).toBe('2*3*4');
+  });
 });

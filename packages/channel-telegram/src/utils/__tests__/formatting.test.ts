@@ -78,4 +78,48 @@ describe('splitHtmlMessage', () => {
     expect(rejoined).toContain('<pre><code>code</code></pre>');
     expect(rejoined).toContain('<blockquote>quote</blockquote>');
   });
+
+  test('keeps inline tags balanced per chunk when splitting', () => {
+    const html = `<b>${'x'.repeat(5000)}</b>`;
+    const chunks = splitHtmlMessage(html, 1000);
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const validateBalanced = (chunk: string) => {
+      const stack: string[] = [];
+      const tagRe = /<\/?([a-z0-9]+)(?:\s[^>]*)?>/gi;
+      while (true) {
+        const m = tagRe.exec(chunk);
+        if (!m) break;
+        const raw = m[0] ?? '';
+        const name = (m[1] ?? '').toLowerCase();
+        if (!name || name === 'br') continue;
+        if (raw.startsWith('</')) {
+          const top = stack[stack.length - 1];
+          expect(top).toBe(name);
+          stack.pop();
+        } else if (!raw.endsWith('/>')) {
+          stack.push(name);
+        }
+      }
+      expect(stack).toEqual([]);
+    };
+
+    for (const chunk of chunks) {
+      validateBalanced(chunk);
+      expect(chunk.length).toBeLessThanOrEqual(1000);
+      // Should still be bold content in each chunk.
+      expect(chunk).toContain('<b>');
+      expect(chunk).toContain('</b>');
+    }
+  });
+
+  test('preserves nested inline tags across chunk boundaries', () => {
+    const html = `<b>hello <i>${'y'.repeat(5000)}</i> world</b>`;
+    const chunks = splitHtmlMessage(html, 900);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk).toContain('<b>');
+      expect(chunk).toContain('</b>');
+    }
+  });
 });

@@ -68,6 +68,8 @@ function applyInlineDecorations(text: string): string {
   let i = 0;
   let buffer = '';
 
+  const isAlphaNumeric = (ch: string | undefined) => !!ch && /[0-9A-Za-z]/.test(ch);
+
   while (i < text.length) {
     const two = text.slice(i, i + 2);
 
@@ -83,6 +85,15 @@ function applyInlineDecorations(text: string): string {
 
     const one = text[i];
     if (one === '*' || one === '_') {
+      // Avoid intraword emphasis: foo_bar_baz, 2*3*4 should stay literal.
+      const prev = i > 0 ? text[i - 1] : undefined;
+      const next = i + 1 < text.length ? text[i + 1] : undefined;
+      if (isAlphaNumeric(prev) && isAlphaNumeric(next)) {
+        buffer += one;
+        i += 1;
+        continue;
+      }
+
       flushText(buffer);
       buffer = '';
       const marker = one as '*' | '_';

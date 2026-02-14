@@ -103,6 +103,166 @@ function splitPlainByBoundaries(text: string, maxLength: number): string[] {
   return chunks;
 }
 
+type HtmlToken = { type: 'tag' | 'text'; value: string };
+
+function tokenizeHtml(value: string): HtmlToken[] {
+  const tokens: HtmlToken[] = [];
+  const tagRe = /<[^>]+>/g;
+  let last = 0;
+  while (true) {
+    const match = tagRe.exec(value);
+    if (!match) break;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (start > last) tokens.push({ type: 'text', value: value.slice(last, start) });
+    tokens.push({ type: 'tag', value: match[0] });
+    last = end;
+  }
+
+  if (last < value.length) tokens.push({ type: 'text', value: value.slice(last) });
+  return tokens;
+}
+
+function isSelfClosingTag(tag: string): boolean {
+  return /\/>$/.test(tag) || /^<\s*(br|hr)\b/i.test(tag);
+}
+
+function parseOpeningTag(tag: string): { name: string; raw: string } | null {
+  if (!/^</.test(tag) || /^<\//.test(tag) || isSelfClosingTag(tag)) return null;
+  const m = tag.match(/^<\s*([a-z0-9]+)\b[^>]*>$/i);
+  if (!m?.[1]) return null;
+  return { name: m[1].toLowerCase(), raw: tag };
+}
+
+function parseClosingTag(tag: string): { name: string } | null {
+  const m = tag.match(/^<\s*\/\s*([a-z0-9]+)\s*>$/i);
+  if (!m?.[1]) return null;
+  return { name: m[1].toLowerCase() };
+}
+
+function closingTagsFor(stack: Array<{ name: string; raw: string }>): string {
+  let suffix = '';
+  for (let i = stack.length - 1; i >= 0; i -= 1) suffix += `</${stack[i]?.name ?? ''}>`;
+  return suffix;
+}
+
+function reopeningTagsFor(stack: Array<{ name: string; raw: string }>): string {
+  return stack.map((t) => t.raw).join('');
+}
+
+function takeTextChunk(text: string, budget: number): { chunk: string; rest: string } {
+  if (text.length <= budget) return { chunk: text, rest: '' };
+
+  let splitAt = text.lastIndexOf('\n\n', budget);
+  if (splitAt > 0) splitAt += 2;
+
+  if (splitAt <= 0) {
+    splitAt = text.lastIndexOf('\n', budget);
+    if (splitAt > 0) splitAt += 1;
+  }
+
+  // Prefer not to split too early; otherwise hard cut.
+  if (splitAt <= 0 || splitAt < budget * 0.5) splitAt = budget;
+
+  return { chunk: text.slice(0, splitAt), rest: text.slice(splitAt) };
+}
+
+/**
+ * Split HTML while keeping each chunk valid Telegram HTML by ensuring inline tags are balanced.
+ *
+ * Assumes input is valid HTML (tags are balanced in the full string). We close/reopen open inline tags
+ * at chunk boundaries to avoid unbalanced tags per message chunk.
+ */
+function splitPlainHtmlPreservingTags(value: string, maxLength: number): string[] {
+  if (value.length <= maxLength) return [value];
+
+  const tokens = tokenizeHtml(value);
+  const chunks: string[] = [];
+  const openStack: Array<{ name: string; raw: string }> = [];
+
+  let current = reopeningTagsFor(openStack);
+
+  const flush = () => {
+    if (!current) return;
+    const suffix = closingTagsFor(openStack);
+    const combined = current + suffix;
+    if (combined.length > maxLength) {
+      // Should be extremely rare (would imply an enormous tag stack). Fallback to best-effort splitting.
+      chunks.push(...splitPlainByBoundaries(combined, maxLength));
+    } else {
+      chunks.push(combined);
+    }
+    current = reopeningTagsFor(openStack);
+  };
+
+  const canAppend = (part: string) => {
+    const suffixLen = closingTagsFor(openStack).length;
+    return current.length + part.length + suffixLen <= maxLength;
+  };
+
+  for (const token of tokens) {
+    if (token.type === 'tag') {
+      const close = parseClosingTag(token.value);
+      const open = parseOpeningTag(token.value);
+
+      // If adding this tag would overflow, flush first (keeping stack as-is).
+      if (open) {
+        const prospectiveSuffixLen = closingTagsFor([...openStack, open]).length;
+        if (current.length + token.value.length + prospectiveSuffixLen > maxLength) flush();
+      } else if (!canAppend(token.value)) {
+        flush();
+      }
+
+      current += token.value;
+
+      if (close) {
+        const idx = [...openStack].reverse().findIndex((t) => t.name === close.name);
+        if (idx >= 0) {
+          // Pop up to the matched tag.
+          openStack.splice(openStack.length - 1 - idx, idx + 1);
+        }
+      } else if (open) {
+        openStack.push(open);
+      }
+      continue;
+    }
+
+    // Text token
+    let remaining = token.value;
+    while (remaining) {
+      if (canAppend(remaining)) {
+        current += remaining;
+        remaining = '';
+        break;
+      }
+
+      const suffixLen = closingTagsFor(openStack).length;
+      const budget = maxLength - current.length - suffixLen;
+
+      if (budget <= 0) {
+        flush();
+        continue;
+      }
+
+      const { chunk, rest } = takeTextChunk(remaining, budget);
+      current += chunk;
+      remaining = rest;
+      flush();
+    }
+  }
+
+  // Final chunk
+  if (current) {
+    const suffix = closingTagsFor(openStack);
+    const combined = current + suffix;
+    if (combined.length > maxLength) chunks.push(...splitPlainByBoundaries(combined, maxLength));
+    else chunks.push(combined);
+  }
+
+  // Defensive: never return empty.
+  return chunks.length > 0 ? chunks : [''];
+}
+
 function splitWrappedContent(prefix: string, content: string, suffix: string, maxLength: number): string[] {
   const budget = maxLength - prefix.length - suffix.length;
   if (budget <= 0) {
@@ -265,7 +425,7 @@ class ChunkAccumulator {
 }
 
 function processPlainSegment(acc: ChunkAccumulator, segment: HtmlSegment, maxLength: number): void {
-  const plainParts = splitPlainByBoundaries(segment.value, maxLength);
+  const plainParts = splitPlainHtmlPreservingTags(segment.value, maxLength);
   acc.appendParts(plainParts);
 }
 
