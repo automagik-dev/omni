@@ -1238,6 +1238,8 @@ export interface SyncJobConfig {
   since?: string;
   /** Explicit until timestamp (ISO string) */
   until?: string;
+  /** Specific chat JIDs to fetch history for (WhatsApp only) */
+  chatJids?: string[];
 }
 
 /**

@@ -1869,6 +1869,12 @@ const resyncSchema = z.object({
     .optional()
     .describe('Backfill start time (ISO 8601 or relative duration like "2h", "30m"). Default: 2h ago'),
   until: z.string().optional().describe('Backfill end time (ISO 8601). Default: now'),
+  chatJids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Specific WhatsApp chat JIDs to fetch history for (e.g. ["5511999999999@s.whatsapp.net"]). Useful for recovering chats not in the database.',
+    ),
 });
 
 /**
@@ -1924,7 +1930,7 @@ function parseSince(since: string | undefined): Date {
  */
 instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSchema), async (c) => {
   const id = c.req.param('id');
-  const { since, until } = c.req.valid('json');
+  const { since, until, chatJids } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   const eventBus = c.get('eventBus');
@@ -1948,6 +1954,7 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
       config: {
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
+        ...(chatJids?.length ? { chatJids } : {}),
       },
     });
 

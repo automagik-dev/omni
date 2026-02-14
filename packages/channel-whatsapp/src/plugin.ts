@@ -1324,6 +1324,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   ): Promise<void> {
     for (const anchor of anchors) {
       try {
+        this.logger.debug('Fetching history for anchor', {
+          instanceId,
+          chatJid: anchor.chatJid,
+          hasMessageId: !!anchor.messageKey.id,
+          timestamp: anchor.timestamp,
+        });
         await sock.fetchMessageHistory(count, anchor.messageKey, anchor.timestamp);
         await new Promise((resolve) => setTimeout(resolve, 300));
       } catch (error) {
@@ -1920,16 +1926,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!c.id) continue;
 
+      // Always cache the JID — even without a name — so getKnownChatJids() discovers all chats
       const name = c.displayName || c.name;
-      if (name) {
-        cache.set(c.id, name);
-      }
+      cache.set(c.id, name ?? c.id);
 
       // Sync unread count from WhatsApp
       if (c.unreadCount !== undefined) {
         this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
+
+    this.logger.debug('Cached chats from upsert', {
+      instanceId,
+      totalCached: cache.size,
+      newBatch: chats.length,
+    });
   }
 
   /**
@@ -1948,9 +1959,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
 
+      // Always ensure the JID is in the cache for discovery
       const name = u.displayName || u.name;
-      if (name) {
-        cache.set(u.id, name);
+      if (name || !cache.has(u.id)) {
+        cache.set(u.id, name ?? u.id);
       }
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
@@ -2226,10 +2238,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       instanceId,
       messageCount: messages.length,
       contactCount: contacts.length,
+      chatCount: history.chats.length,
       progress: progress ?? 'unknown',
       isLatest,
       syncType,
     });
+
+    // Process chats from history sync — ensures all chats are discoverable
+    if (history.chats.length > 0) {
+      this.handleChatsUpsert(instanceId, history.chats);
+    }
 
     // Process contacts from history sync
     if (contacts.length > 0) {
