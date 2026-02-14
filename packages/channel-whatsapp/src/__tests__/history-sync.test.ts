@@ -11,15 +11,21 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import type { BaileysEventMap } from '@whiskeysockets/baileys';
 
+interface MockEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
 describe('Baileys History Sync', () => {
   let mockEventBus: EventBus;
-  let publishedEvents: Array<{ type: string; payload: unknown }>;
+  let publishedEvents: MockEvent[];
 
   beforeEach(() => {
     publishedEvents = [];
 
     mockEventBus = {
-      publish: mock(async (event: unknown) => {
+      publish: mock(async (event: MockEvent) => {
         publishedEvents.push(event);
       }),
       subscribe: mock(() => {}),
@@ -70,9 +76,9 @@ describe('Baileys History Sync', () => {
 
     // Verify events were published
     expect(publishedEvents.length).toBe(2);
-    expect(publishedEvents[0].type).toBe('message.received');
-    expect(publishedEvents[1].type).toBe('message.received');
-    expect(publishedEvents[0].metadata?.source).toBe('sync');
+    expect(publishedEvents[0]?.type).toBe('message.received');
+    expect(publishedEvents[1]?.type).toBe('message.received');
+    expect(publishedEvents[0]?.metadata?.source).toBe('sync');
   });
 
   test('should handle active fetch callback without emitting duplicate events', async () => {
@@ -87,7 +93,7 @@ describe('Baileys History Sync', () => {
 
     // Callback should process messages directly
     // NOT emit events (to prevent double storage)
-    const callback = async (messages: unknown[]) => {
+    const callback = async (messages: unknown[]): Promise<number> => {
       // Messages stored directly via services.messages.create()
       // Do NOT publish events
       return messages.length;
@@ -129,9 +135,9 @@ describe('Baileys History Sync', () => {
 
     // Verify unread event was published
     expect(publishedEvents.length).toBe(1);
-    expect(publishedEvents[0].type).toBe('custom.chat.unread-updated');
-    expect(publishedEvents[0].payload.chatId).toBe('553496835777@s.whatsapp.net');
-    expect(publishedEvents[0].payload.unreadCount).toBe(5);
+    expect(publishedEvents[0]?.type).toBe('custom.chat.unread-updated');
+    expect((publishedEvents[0]?.payload as { chatId?: string })?.chatId).toBe('553496835777@s.whatsapp.net');
+    expect((publishedEvents[0]?.payload as { unreadCount?: number })?.unreadCount).toBe(5);
   });
 
   test('should discover all chats from chats.upsert event', async () => {
@@ -202,7 +208,7 @@ describe('Baileys History Sync', () => {
       },
     });
 
-    expect(publishedEvents[0].metadata.source).toBe('sync');
+    expect(publishedEvents[0]?.metadata?.source).toBe('sync');
 
     publishedEvents = [];
 
@@ -223,7 +229,7 @@ describe('Baileys History Sync', () => {
       },
     });
 
-    expect(publishedEvents[0].metadata.source).toBe('realtime');
+    expect(publishedEvents[0]?.metadata?.source).toBe('realtime');
   });
 
   test('should handle LID messages in history sync', async () => {
@@ -249,7 +255,8 @@ describe('Baileys History Sync', () => {
     });
 
     expect(publishedEvents.length).toBe(1);
-    expect(publishedEvents[0].payload.message.key.remoteJid).toContain('@lid');
+    const lidPayload = publishedEvents[0]?.payload as { message?: { key?: { remoteJid?: string } } };
+    expect(lidPayload?.message?.key?.remoteJid).toContain('@lid');
   });
 
   test('should not publish events for messages that fail to store', async () => {
@@ -301,7 +308,7 @@ describe('Baileys Chat Discovery', () => {
   });
 
   test('should handle empty chats.upsert event', () => {
-    const chatsUpsert: unknown[] = [];
+    const chatsUpsert: Array<{ id: string }> = [];
     const jids = chatsUpsert.map((chat) => chat.id);
 
     expect(jids.length).toBe(0);
