@@ -846,6 +846,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     chatId: string,
     replyToMessageId?: string,
     chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
   ): StreamSender {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
@@ -856,6 +857,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
       throttleMs,
+      formatMode: options?.formatMode,
     });
   }
 

@@ -37,6 +37,8 @@ const CURSOR = '▍';
 export interface WhatsAppStreamSenderOptions {
   /** Throttle interval for edits in ms (default 2500) */
   throttleMs?: number;
+  /** Format mode: 'convert' applies markdown→WhatsApp syntax, 'passthrough' sends raw text */
+  formatMode?: 'convert' | 'passthrough';
 }
 
 export class WhatsAppStreamSender implements StreamSender {
@@ -47,6 +49,7 @@ export class WhatsAppStreamSender implements StreamSender {
   private lastRenderedText = '';
   private editFailed = false;
   private readonly throttleMs: number;
+  private readonly formatMode: 'convert' | 'passthrough';
 
   constructor(
     private readonly sock: WASocket,
@@ -56,6 +59,7 @@ export class WhatsAppStreamSender implements StreamSender {
     options?: WhatsAppStreamSenderOptions,
   ) {
     this.throttleMs = options?.throttleMs ?? DEFAULT_THROTTLE_MS;
+    this.formatMode = options?.formatMode ?? 'convert';
   }
 
   async onThinkingDelta(_delta: StreamDelta & { phase: 'thinking' }): Promise<void> {
@@ -100,9 +104,9 @@ export class WhatsAppStreamSender implements StreamSender {
       return;
     }
 
-    // Convert markdown to WhatsApp syntax for final render
-    const converted = markdownToWhatsApp(finalContent);
-    const chunks = splitWhatsAppMessage(converted, MAX_MESSAGE_LENGTH);
+    // Convert markdown to WhatsApp syntax for final render (unless passthrough mode)
+    const text = this.formatMode !== 'passthrough' ? markdownToWhatsApp(finalContent) : finalContent;
+    const chunks = splitWhatsAppMessage(text, MAX_MESSAGE_LENGTH);
 
     if (this.messageId && !this.editFailed) {
       await this.finalizeWithEdit(chunks);

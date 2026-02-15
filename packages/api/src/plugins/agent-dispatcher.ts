@@ -892,6 +892,7 @@ interface StreamCapabilities {
     chatId: string,
     replyToMessageId?: string,
     chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
   ) => StreamSender;
 }
 
@@ -1003,7 +1004,8 @@ async function dispatchViaStreamingProvider(
   };
 
   const chatType = determineChatType(chatId, channel);
-  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType);
+  const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 

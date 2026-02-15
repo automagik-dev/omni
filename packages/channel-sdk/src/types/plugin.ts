@@ -168,6 +168,7 @@ export interface ChannelPlugin {
     chatId: string,
     replyToMessageId?: string,
     chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
   ): StreamSender;
 
   /**

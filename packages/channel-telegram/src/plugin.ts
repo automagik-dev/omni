@@ -378,11 +378,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
     chatId: string,
     replyToMessageId?: string,
     chatType?: 'dm' | 'group' | 'channel',
+    _options?: { formatMode?: 'convert' | 'passthrough' },
   ): StreamSender {
     const bot = getBot(instanceId);
     if (!bot) {
       throw new Error(`No bot for instance ${instanceId}`);
     }
+    // Note: Telegram stream sender doesn't apply markdown→HTML conversion in onFinal
+    // (it uses raw text or HTML-escaped text for thinking blocks). Format mode is
+    // accepted for interface parity but not yet applied here.
     return new TelegramStreamSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined, chatType);
   }
 
