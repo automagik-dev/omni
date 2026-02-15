@@ -21,7 +21,7 @@ import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
 import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
-import { setupMessageHandlers } from './handlers/messages';
+import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
@@ -2319,6 +2319,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         messageKeys: Object.keys(msg.message || {}),
       });
       return;
+    }
+
+    // Download media if present (same as realtime messages)
+    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id);
+    if (mediaResult) {
+      content.mediaUrl = mediaResult.mediaUrl;
+      // Note: content doesn't have mediaLocalPath field, but mediaUrl is enough for storage
     }
 
     const chatId = msg.key.remoteJid;

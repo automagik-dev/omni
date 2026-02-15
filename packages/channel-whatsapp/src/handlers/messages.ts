@@ -506,7 +506,7 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
  * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
  * Returns:   /api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
  */
-async function tryDownloadMedia(
+export async function tryDownloadMedia(
   msg: WAMessage,
   instanceId: string,
   externalId: string,
