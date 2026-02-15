@@ -1,15 +1,12 @@
 /**
  * SDK Client Integration Tests
  *
- * These tests verify the SDK works correctly against a running API.
- * Run with: bun test (with API running at http://localhost:8882)
+ * Unit tests run always. Integration tests use a mock API server.
  */
 
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { MOCK_API_KEY, startMockApi, stopMockApi } from '../../../cli/src/__tests__/mock-api';
 import { OmniApiError, type OmniClient, OmniConfigError, createOmniClient } from '../index';
-
-const API_URL = process.env.API_URL || 'http://localhost:8882';
-const API_KEY = process.env.OMNI_API_KEY || process.env.API_KEY || 'test-key';
 
 describe('createOmniClient', () => {
   test('throws OmniConfigError when baseUrl is missing', () => {
@@ -22,8 +19,8 @@ describe('createOmniClient', () => {
 
   test('creates client with valid config', () => {
     const client = createOmniClient({
-      baseUrl: API_URL,
-      apiKey: API_KEY,
+      baseUrl: 'http://localhost:8882',
+      apiKey: 'some-key',
     });
     expect(client).toBeDefined();
     expect(client.instances).toBeDefined();
@@ -40,11 +37,11 @@ describe('createOmniClient', () => {
   test('normalizes trailing slash in baseUrl', () => {
     const client1 = createOmniClient({
       baseUrl: 'http://localhost:8882/',
-      apiKey: API_KEY,
+      apiKey: 'some-key',
     });
     const client2 = createOmniClient({
       baseUrl: 'http://localhost:8882',
-      apiKey: API_KEY,
+      apiKey: 'some-key',
     });
     // Both should work identically
     expect(client1).toBeDefined();
@@ -100,15 +97,20 @@ describe('OmniApiError', () => {
   });
 });
 
-// Integration tests - require running API
-describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)('SDK Integration', () => {
+// Integration tests — use mock API server
+describe('SDK Integration', () => {
   let client: OmniClient;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    const mock = await startMockApi();
     client = createOmniClient({
-      baseUrl: API_URL,
-      apiKey: API_KEY,
+      baseUrl: mock.url,
+      apiKey: MOCK_API_KEY,
     });
+  });
+
+  afterAll(() => {
+    stopMockApi();
   });
 
   test('system.health returns health status', async () => {
