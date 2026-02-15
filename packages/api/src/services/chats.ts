@@ -65,36 +65,6 @@ export class ChatService {
     private eventBus: EventBus | null,
   ) {}
 
-  private isCanonicalUniqueViolation(error: unknown): boolean {
-    if (!error || typeof error !== 'object') return false;
-    if (!('code' in error) || (error as { code?: unknown }).code !== '23505') return false;
-
-    const constraint =
-      ('constraint' in error && typeof (error as { constraint?: unknown }).constraint === 'string'
-        ? (error as { constraint: string }).constraint
-        : undefined) ??
-      ('constraint_name' in error && typeof (error as { constraint_name?: unknown }).constraint_name === 'string'
-        ? (error as { constraint_name: string }).constraint_name
-        : undefined);
-
-    if (constraint === 'chats_instance_canonical_unique_idx') return true;
-
-    const message =
-      'message' in error && typeof (error as { message?: unknown }).message === 'string'
-        ? (error as { message: string }).message
-        : '';
-    return message.includes('chats_instance_canonical_unique_idx');
-  }
-
-  private async getByCanonicalId(instanceId: string, canonicalId: string): Promise<Chat | null> {
-    const [result] = await this.db
-      .select()
-      .from(chats)
-      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, canonicalId)))
-      .limit(1);
-    return result ?? null;
-  }
-
   /**
    * List chats with filtering and pagination
    */
@@ -407,15 +377,63 @@ export class ChatService {
     const maxRetries = 2;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      // Smart lookup handles externalId, canonicalId, and WhatsApp LID↔phone mappings.
-      const existing = await this.findByExternalIdSmart(instanceId, externalId);
-      if (existing) return { chat: existing, created: false };
+      // Layer 1: exact externalId match
+      const existing = await this.getByExternalId(instanceId, externalId);
+      if (existing) {
+        return { chat: existing, created: false };
+      }
 
-      // If we're trying to set a canonicalId, check if a chat with that canonicalId already exists
+      // Layer 2a: check if another chat has this externalId as its canonicalId
+      // (e.g., an @lid chat that was previously resolved to this phone JID)
+      const [byCanonical] = await this.db
+        .select()
+        .from(chats)
+        .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
+        .limit(1);
+      if (byCanonical) {
+        return { chat: byCanonical, created: false };
+      }
+
+      // Layer 2b: if we're trying to set a canonicalId, check if a chat with that canonicalId already exists
       // (handles concurrent creation with same canonicalId but different externalIds)
       if (defaults.canonicalId) {
-        const existingCanonical = await this.getByCanonicalId(instanceId, defaults.canonicalId);
-        if (existingCanonical) return { chat: existingCanonical, created: false };
+        const [existingCanonical] = await this.db
+          .select()
+          .from(chats)
+          .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, defaults.canonicalId)))
+          .limit(1);
+        if (existingCanonical) {
+          return { chat: existingCanonical, created: false };
+        }
+      }
+
+      // Layer 3: check chatIdMappings for LID↔phone mappings
+      if (externalId.endsWith('@s.whatsapp.net')) {
+        // Phone JID arrived — check if a LID chat exists for it
+        const [mapping] = await this.db
+          .select()
+          .from(chatIdMappings)
+          .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
+          .limit(1);
+        if (mapping) {
+          const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
+          if (lidChat) {
+            return { chat: lidChat, created: false };
+          }
+        }
+      } else if (externalId.endsWith('@lid')) {
+        // LID arrived — check if a phone chat exists for it
+        const [mapping] = await this.db
+          .select()
+          .from(chatIdMappings)
+          .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
+          .limit(1);
+        if (mapping) {
+          const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
+          if (phoneChat) {
+            return { chat: phoneChat, created: false };
+          }
+        }
       }
 
       try {
@@ -428,7 +446,23 @@ export class ChatService {
 
         return { chat, created: true };
       } catch (error) {
-        if (this.isCanonicalUniqueViolation(error) && attempt < maxRetries) {
+        // Check if error is unique constraint violation on canonicalId
+        const isUniqueViolation =
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === '23505' &&
+          (('constraint' in error &&
+            typeof error.constraint === 'string' &&
+            error.constraint === 'chats_instance_canonical_unique_idx') ||
+            ('constraint_name' in error &&
+              typeof error.constraint_name === 'string' &&
+              error.constraint_name === 'chats_instance_canonical_unique_idx') ||
+            ('message' in error &&
+              typeof error.message === 'string' &&
+              error.message.includes('chats_instance_canonical_unique_idx')));
+
+        if (isUniqueViolation && attempt < maxRetries) {
           // Concurrent request created chat with same canonicalId - retry lookup
           continue;
         }

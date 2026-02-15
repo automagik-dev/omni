@@ -250,64 +250,6 @@ type WAnchor = {
  * Resolve WhatsApp anchors for a sync job
  * Either uses explicit chatJids or builds from DB + Baileys discovery
  */
-function buildAnchorsForExplicitChatJids(jobId: string, chatJids: string[], dbAnchors: WAnchor[]): WAnchor[] {
-  log.info('Using explicit chatJids for sync', { jobId, chatJids });
-
-  const anchors: WAnchor[] = [];
-  for (const jid of chatJids) {
-    const dbAnchor = dbAnchors.find((a) => a.chatJid === jid);
-    if (dbAnchor) {
-      log.debug('Found DB anchor for chatJid', { jobId, chatJid: jid, anchorId: dbAnchor.messageKey.id });
-      anchors.push(dbAnchor);
-      continue;
-    }
-
-    // No messages in DB - create anchor without message ID. This triggers fetchHistory without an anchor.
-    log.debug('No DB anchor for chatJid, will fetch recent', { jobId, chatJid: jid });
-    anchors.push({
-      chatJid: jid,
-      messageKey: { remoteJid: jid, id: '', fromMe: false },
-      timestamp: Date.now(),
-    });
-  }
-
-  return anchors;
-}
-
-function hasKnownChatJids(plugin: unknown): plugin is { getKnownChatJids: (id: string) => string[] } {
-  return (
-    typeof plugin === 'object' &&
-    plugin !== null &&
-    'getKnownChatJids' in plugin &&
-    typeof (plugin as { getKnownChatJids?: unknown }).getKnownChatJids === 'function'
-  );
-}
-
-function discoverAnchorsFromPlugin(
-  jobId: string,
-  instanceId: string,
-  plugin: unknown,
-  dbAnchors: WAnchor[],
-): WAnchor[] {
-  if (!hasKnownChatJids(plugin)) return [];
-
-  const dbJids = new Set(dbAnchors.map((a) => a.chatJid));
-  const knownJids = plugin.getKnownChatJids(instanceId);
-
-  const discovered: WAnchor[] = [];
-  for (const jid of knownJids) {
-    if (dbJids.has(jid)) continue;
-    if (jid.includes('@newsletter') || jid.includes('@broadcast')) continue;
-    discovered.push({ chatJid: jid, messageKey: { remoteJid: jid, id: '', fromMe: false }, timestamp: Date.now() });
-  }
-
-  if (discovered.length > 0) {
-    log.info('Discovered chats from Baileys not in DB', { jobId, discoveredCount: discovered.length });
-  }
-
-  return discovered;
-}
-
 function resolveWhatsAppAnchors(
   jobId: string,
   instanceId: string,
@@ -317,11 +259,50 @@ function resolveWhatsAppAnchors(
 ): WAnchor[] {
   // Explicit chatJids take priority
   if (config.chatJids?.length) {
-    return buildAnchorsForExplicitChatJids(jobId, config.chatJids, dbAnchors);
+    log.info('Using explicit chatJids for sync', { jobId, chatJids: config.chatJids });
+
+    // For each requested chatJid, try to find an existing anchor from DB
+    const anchors: WAnchor[] = [];
+    for (const jid of config.chatJids) {
+      const dbAnchor = dbAnchors.find((a) => a.chatJid === jid);
+      if (dbAnchor) {
+        // Use existing message as anchor
+        log.debug('Found DB anchor for chatJid', { jobId, chatJid: jid, anchorId: dbAnchor.messageKey.id });
+        anchors.push(dbAnchor);
+      } else {
+        // No messages in DB - create anchor without message ID
+        // This will trigger fetchHistory without anchor (fetch recent messages)
+        log.debug('No DB anchor for chatJid, will fetch recent', { jobId, chatJid: jid });
+        anchors.push({
+          chatJid: jid,
+          messageKey: { remoteJid: jid, id: '', fromMe: false },
+          timestamp: Date.now(),
+        });
+      }
+    }
+    return anchors;
   }
 
-  // Default: use DB anchors + discover chats known to Baileys but not in DB.
-  return [...dbAnchors, ...discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors)];
+  // Discover chats known to Baileys but not in DB
+  const anchors = [...dbAnchors];
+  if (
+    'getKnownChatJids' in (plugin as object) &&
+    typeof (plugin as { getKnownChatJids?: unknown }).getKnownChatJids === 'function'
+  ) {
+    const dbJids = new Set(dbAnchors.map((a) => a.chatJid));
+    const knownJids = (plugin as { getKnownChatJids: (id: string) => string[] }).getKnownChatJids(instanceId);
+    let discoveredCount = 0;
+    for (const jid of knownJids) {
+      if (!dbJids.has(jid) && !jid.includes('@newsletter') && !jid.includes('@broadcast')) {
+        anchors.push({ chatJid: jid, messageKey: { remoteJid: jid, id: '', fromMe: false }, timestamp: Date.now() });
+        discoveredCount++;
+      }
+    }
+    if (discoveredCount > 0) {
+      log.info('Discovered chats from Baileys not in DB', { jobId, discoveredCount });
+    }
+  }
+  return anchors;
 }
 
 /**

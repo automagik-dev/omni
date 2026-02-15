@@ -349,72 +349,6 @@ function resolveSenderDisplayName(
   );
 }
 
-async function maybeFindOrCreateParticipant(
-  services: Services,
-  chatId: string,
-  from: string | undefined,
-  rawPayload: Record<string, unknown> | undefined,
-  personId: string | undefined,
-  platformIdentityId: string | undefined,
-): Promise<Awaited<ReturnType<typeof services.chats.findOrCreateParticipant>> | undefined> {
-  if (!from) return undefined;
-
-  const participantUserId = truncate(from, 255) ?? from;
-  return services.chats.findOrCreateParticipant(chatId, participantUserId, {
-    displayName: truncate(rawPayload?.pushName as string | undefined, 255),
-    personId,
-    platformIdentityId,
-  });
-}
-
-async function maybeRecordMessageEdit(
-  services: Services,
-  created: boolean,
-  rawPayload: Record<string, unknown> | undefined,
-  messageId: string,
-  newText: string | undefined,
-  platformTimestamp: Date,
-  from: string | undefined,
-): Promise<void> {
-  if (created) return;
-  if (rawPayload?.isEdited !== true) return;
-
-  const editedAtMs = rawPayload.editDate;
-  const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
-  await services.messages.recordEdit(messageId, newText ?? '', editedAt, truncate(from, 255) ?? undefined);
-}
-
-async function maybeRecordParticipantActivity(
-  services: Services,
-  chatId: string,
-  from: string | undefined,
-): Promise<void> {
-  if (!from) return;
-  const activityUserId = truncate(from, 255) ?? from;
-  await services.chats.recordParticipantActivity(chatId, activityUserId);
-}
-
-function maybeUpdateRecency(
-  services: Services,
-  instanceId: string,
-  chatId: string,
-  rawPayload: Record<string, unknown> | undefined,
-  payload: MessageReceivedPayload,
-  platformTimestamp: Date,
-): void {
-  // Edits should not bump recency.
-  if (rawPayload?.isEdited === true) return;
-
-  const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
-  services.chats.updateLastMessage(chatId, preview, platformTimestamp).catch((error) => {
-    log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
-  });
-
-  services.instances.updateLastMessageAt(instanceId, platformTimestamp).catch((error) => {
-    log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
-  });
-}
-
 /**
  * Handle message.received event - main processing logic
  */
@@ -470,14 +404,15 @@ async function handleMessageReceived(
   const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
 
   // Step 3: Find or create participant (with identity links)
-  const participantResult = await maybeFindOrCreateParticipant(
-    services,
-    chat.id,
-    payload.from,
-    rawPayload,
-    personId,
-    platformIdentityId,
-  );
+  let participantResult: Awaited<ReturnType<typeof services.chats.findOrCreateParticipant>> | undefined;
+  if (payload.from) {
+    const participantUserId = truncate(payload.from, 255) ?? payload.from;
+    participantResult = await services.chats.findOrCreateParticipant(chat.id, participantUserId, {
+      displayName: truncate(rawPayload?.pushName as string | undefined, 255),
+      personId,
+      platformIdentityId,
+    });
+  }
 
   // Step 4: Resolve sender display name (fallback chain: pushName > participant > undefined)
   const senderDisplayName = resolveSenderDisplayName(rawPayload, participantResult);
@@ -509,25 +444,39 @@ async function handleMessageReceived(
 
   // Telegram and WhatsApp edits can arrive as "message.received" with a stable externalId.
   // When we detect an edit, update the existing unified message instead of treating it as a duplicate.
-  await maybeRecordMessageEdit(
-    services,
-    created,
-    rawPayload,
-    message.id,
-    sanitizeText(payload.content.text) ?? undefined,
-    platformTimestamp,
-    payload.from,
-  );
+  if (!created && rawPayload?.isEdited === true) {
+    const editedAtMs = rawPayload?.editDate;
+    const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
+    await services.messages.recordEdit(
+      message.id,
+      sanitizeText(payload.content.text) ?? '',
+      editedAt,
+      truncate(payload.from, 255) ?? undefined,
+    );
+  }
 
   if (created) {
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
   }
 
   // Step 6: Record participant activity
-  await maybeRecordParticipantActivity(services, chat.id, payload.from);
+  if (payload.from) {
+    const activityUserId = truncate(payload.from, 255) ?? payload.from;
+    await services.chats.recordParticipantActivity(chat.id, activityUserId);
+  }
 
-  // Step 7/8: Update chat + instance recency (edits should not bump recency)
-  maybeUpdateRecency(services, metadata.instanceId, chat.id, rawPayload, payload, platformTimestamp);
+  // Step 7: Update chat lastMessageAt and preview (edits should not bump recency)
+  if (rawPayload?.isEdited !== true) {
+    const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
+    services.chats.updateLastMessage(chat.id, preview, platformTimestamp).catch((error) => {
+      log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
+    });
+
+    // Step 8: Update lastMessageAt on instance (for reconnect gap detection)
+    services.instances.updateLastMessageAt(metadata.instanceId, platformTimestamp).catch((error) => {
+      log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
+    });
+  }
 }
 
 /**
