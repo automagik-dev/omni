@@ -17,16 +17,18 @@ export async function sendPoll(
     isAnonymous?: boolean;
   },
   replyToMessageId?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const question = poll.question;
-  const options = poll.options;
+  const pollOptions = poll.options;
 
-  const result = await bot.api.sendPoll(chatId, question, options, {
+  const result = await bot.api.sendPoll(chatId, question, pollOptions, {
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     allows_multiple_answers: poll.multiSelect ?? false,
     is_anonymous: poll.isAnonymous ?? true,
+    ...(options ?? {}),
   });
 
-  log.debug('Sent poll', { chatId, messageId: result.message_id, options: options.length });
+  log.debug('Sent poll', { chatId, messageId: result.message_id, options: pollOptions.length });
   return result.message_id;
 }

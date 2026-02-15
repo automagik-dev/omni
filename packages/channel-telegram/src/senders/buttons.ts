@@ -4,6 +4,7 @@
 
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike } from '../grammy-shim';
+import { markdownToTelegramHtml } from '../utils/markdown-to-html';
 import { sendTextMessage } from './text';
 
 const log = createLogger('telegram:sender:buttons');
@@ -40,22 +41,24 @@ export async function sendInlineButtons(
   buttons: TelegramInlineButton[],
   replyToMessageId?: number,
   formatMode: 'convert' | 'passthrough' = 'convert',
+  options?: Record<string, unknown>,
 ): Promise<number> {
   if (!buttons.length) {
-    return sendTextMessage(bot, chatId, text, replyToMessageId, formatMode);
+    return sendTextMessage(bot, chatId, text, replyToMessageId, formatMode, options);
   }
 
   // Keep formatting behavior consistent with sendTextMessage.
   // For now, no splitting when buttons present (Telegram inline keyboards apply per message).
   //
-  // NOTE: parse_mode handling is done here only when formatMode !== 'passthrough'.
-  // When formatMode === 'convert', the caller should already provide HTML.
-  const payloadText = text || ' ';
+  // Convert markdown → Telegram HTML, consistent with sendTextMessage behaviour.
+  const useConversion = formatMode !== 'passthrough';
+  const payloadText = useConversion ? markdownToTelegramHtml(text || ' ') : text || ' ';
 
   const result = await bot.api.sendMessage(chatId, payloadText, {
     ...(formatMode !== 'passthrough' ? { parse_mode: 'HTML' as const } : {}),
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     reply_markup: buildInlineKeyboard(buttons),
+    ...(options ?? {}),
   });
 
   log.debug('Sent inline buttons', { chatId, messageId: result.message_id, buttons: buttons.length });

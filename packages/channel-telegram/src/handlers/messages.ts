@@ -106,7 +106,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         isMention,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
-        localPath: local?.localPath,
+        mediaLocalPath: local?.localPath,
 
         // Cross-channel rawPayload contract
         displayName,
@@ -164,7 +164,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         editDate: (msg.edit_date ?? msg.date) * 1000,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
-        localPath: local?.localPath,
+        mediaLocalPath: local?.localPath,
       },
       (msg.edit_date ?? msg.date) * 1000,
     );

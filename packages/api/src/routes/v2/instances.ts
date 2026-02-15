@@ -167,6 +167,23 @@ function persistedTokenForChannel(instance: {
   }
 }
 
+/**
+ * Map channel type to its token DB column name.
+ * Returns undefined for channels that don't store tokens.
+ */
+function channelTokenField(channel: string): string | undefined {
+  switch (channel) {
+    case 'telegram':
+      return 'telegramBotToken';
+    case 'discord':
+      return 'discordBotToken';
+    case 'slack':
+      return 'slackBotToken';
+    default:
+      return undefined;
+  }
+}
+
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
   mode: 'filtered' as const,
@@ -562,8 +579,12 @@ instancesRoutes.post(
       );
     }
 
-    // Update database
-    const updated = await services.instances.update(id, { isActive: true });
+    // Update database — persist token if a new one was provided
+    const tokenField = body.token ? channelTokenField(instance.channel) : undefined;
+    const updated = await services.instances.update(id, {
+      isActive: true,
+      ...(tokenField ? { [tokenField]: body.token } : {}),
+    });
 
     return c.json({
       data: {

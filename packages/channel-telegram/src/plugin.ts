@@ -72,23 +72,24 @@ async function dispatchMedia(
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const caption = content.caption ?? content.text;
   const url = content.mediaUrl ?? '';
 
   switch (content.type) {
     case 'image':
-      return sendPhoto(bot, chatId, url, caption, replyParam);
+      return sendPhoto(bot, chatId, url, caption, replyParam, options);
     case 'audio':
-      return sendAudio(bot, chatId, url, caption, replyParam);
+      return sendAudio(bot, chatId, url, caption, replyParam, options);
     case 'video':
-      return sendVideo(bot, chatId, url, caption, replyParam);
+      return sendVideo(bot, chatId, url, caption, replyParam, options);
     case 'document':
-      return sendDocument(bot, chatId, url, caption, content.filename, replyParam);
+      return sendDocument(bot, chatId, url, caption, content.filename, replyParam, options);
     case 'sticker':
-      return sendSticker(bot, chatId, url, replyParam);
+      return sendSticker(bot, chatId, url, replyParam, options);
     default:
-      return sendTextMessage(bot, chatId, content.text ?? '[Unsupported content]', replyParam);
+      return sendTextMessage(bot, chatId, content.text ?? '[Unsupported content]', replyParam, undefined, options);
   }
 }
 
@@ -104,26 +105,25 @@ async function dispatchContent(
   threadId?: string,
   formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<number | null> {
-  const _maybeThread = threadId ? { message_thread_id: Number(threadId) } : undefined;
+  const threadOptions = threadId ? { message_thread_id: Number(threadId) } : undefined;
 
   if (content.type === 'text') {
     // If buttons are present, send a single message with InlineKeyboard.
     if (content.buttons?.length) {
-      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode);
+      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, threadOptions);
     }
-    return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode);
+    return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, threadOptions);
   }
   if (content.type === 'poll') {
     if (!content.poll) {
-      return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode);
+      return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode, threadOptions);
     }
-    return sendPoll(bot, chatId, content.poll, replyParam);
+    return sendPoll(bot, chatId, content.poll, replyParam, threadOptions);
   }
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
   if (content.type === 'contact') return dispatchContact(bot, chatId, content, replyParam);
   if (content.type === 'location') return dispatchLocation(bot, chatId, content, replyParam);
-  // Note: threadId is handled on the caller for supported senders.
-  return dispatchMedia(bot, chatId, content, replyParam);
+  return dispatchMedia(bot, chatId, content, replyParam, threadOptions);
 }
 
 /**
