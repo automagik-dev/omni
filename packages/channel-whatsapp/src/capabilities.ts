@@ -40,8 +40,8 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   // Streaming (progressive response edits)
   canStreamResponse: true,
 
-  // Group/broadcast (deferred)
-  canHandleGroups: false, // Defer to future wish
+  // Group/broadcast
+  canHandleGroups: true, // Groups work de facto (handles @g.us JIDs, participant resolution)
   canHandleBroadcast: false, // Defer to future wish
 
   // Limits
