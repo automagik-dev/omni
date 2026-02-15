@@ -442,13 +442,14 @@ export function createSendCommand(): Command {
     .option('--voice-id <id>', 'ElevenLabs voice ID for TTS')
     .option('--presence-delay <ms>', 'Recording presence duration in ms', Number.parseInt)
     .action(async (options: SendOptions) => {
-      const instanceId = await validateSendOptions(options);
-
+      // Validate message type first (before instance lookup)
       const messageType = getMessageType(options);
       if (!messageType) {
         output.error('No message type specified. Use --text, --media, --reaction, etc.');
         return;
       }
+
+      const instanceId = await validateSendOptions(options);
 
       const client = getClient();
 
