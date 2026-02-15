@@ -24,15 +24,32 @@ function runGit(command: string): string {
   }
 }
 
-function resolveBuildNumber(): number {
-  const raw = process.env.OMNI_BUILD_NUMBER ?? process.env.BUILD_NUMBER ?? '1';
-  const parsed = Number.parseInt(raw, 10);
-
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid build number: ${raw}. Expected a positive integer.`);
+/**
+ * Derive build number from git tags for today.
+ * Counts existing v2.YYYYMMDD.* tags and returns count + 1.
+ * Env var OMNI_BUILD_NUMBER overrides if set.
+ */
+function resolveBuildNumber(yyyymmdd: string): number {
+  // Explicit env var override (for manual/CI use)
+  const envOverride = process.env.OMNI_BUILD_NUMBER ?? process.env.BUILD_NUMBER;
+  if (envOverride) {
+    const parsed = Number.parseInt(envOverride, 10);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error(`Invalid build number: ${envOverride}. Expected a positive integer.`);
+    }
+    return parsed;
   }
 
-  return parsed;
+  // Derive from git tags: count v2.YYYYMMDD.* tags (both -dev and release)
+  const tagPattern = `v2.${yyyymmdd}.*`;
+  const tagOutput = runGit(`git tag --list '${tagPattern}'`);
+
+  if (!tagOutput || tagOutput === 'unknown') {
+    return 1;
+  }
+
+  const tagCount = tagOutput.split('\n').filter((t) => t.trim().length > 0).length;
+  return tagCount + 1;
 }
 
 function resolveDate(): string {
@@ -62,12 +79,12 @@ function resolveBranch(): string {
 }
 
 function main(): void {
-  const buildNumber = resolveBuildNumber();
   const date = resolveDate();
+  const yyyymmdd = date.replaceAll('-', '');
+  const buildNumber = resolveBuildNumber(yyyymmdd);
   const commit = resolveCommit();
   const branch = resolveBranch();
 
-  const yyyymmdd = date.replaceAll('-', '');
   const version = `2.${yyyymmdd}.${buildNumber}`;
 
   const artifact: VersionArtifact = {

@@ -270,6 +270,10 @@ db-reset:
 version:
 	bun run scripts/generate-version.ts
 
+sync-versions: version
+	@VERSION=$$(cat version.json | bun -e 'const v=await Bun.stdin.json();console.log(v.version)') && \
+	bun scripts/sync-versions.ts $$VERSION
+
 build: version
 	bun run build
 
