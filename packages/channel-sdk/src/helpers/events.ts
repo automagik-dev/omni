@@ -32,7 +32,9 @@ export interface EmitMessageReceivedParams {
     type: ContentType;
     text?: string;
     mediaUrl?: string;
+    localPath?: string;
     mimeType?: string;
+    isVoiceNote?: boolean;
   };
 
   /** ID of message this is replying to */

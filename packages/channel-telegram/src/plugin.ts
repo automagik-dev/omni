@@ -33,8 +33,10 @@ import {
   sendAudio,
   sendContact,
   sendDocument,
+  sendInlineButtons,
   sendLocation,
   sendPhoto,
+  sendPoll,
   sendSticker,
   sendTextMessage,
   sendVideo,
@@ -99,12 +101,28 @@ async function dispatchContent(
   chatId: string,
   content: OutgoingMessage['content'],
   replyParam?: number,
+  threadId?: string,
   formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<number | null> {
-  if (content.type === 'text') return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode);
+  const _maybeThread = threadId ? { message_thread_id: Number(threadId) } : undefined;
+
+  if (content.type === 'text') {
+    // If buttons are present, send a single message with InlineKeyboard.
+    if (content.buttons?.length) {
+      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode);
+    }
+    return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode);
+  }
+  if (content.type === 'poll') {
+    if (!content.poll) {
+      return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode);
+    }
+    return sendPoll(bot, chatId, content.poll, replyParam);
+  }
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
   if (content.type === 'contact') return dispatchContact(bot, chatId, content, replyParam);
   if (content.type === 'location') return dispatchLocation(bot, chatId, content, replyParam);
+  // Note: threadId is handled on the caller for supported senders.
   return dispatchMedia(bot, chatId, content, replyParam);
 }
 
@@ -180,11 +198,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
       throw new Error('Telegram bot token is required in credentials.token or options.token');
     }
 
+    const commands = (config.options?.commands as TelegramConfig['commands'] | undefined) ?? undefined;
+
     const telegramConfig: TelegramConfig = {
       token,
       mode,
       webhookUrl,
       webhookSecret,
+      commands,
     };
 
     this.logger.info('Connecting Telegram instance', { instanceId, mode: telegramConfig.mode });
@@ -210,6 +231,19 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
     // Initialize bot (fetches bot info)
     await bot.init();
+
+    // Register slash commands (optional)
+    if (telegramConfig.commands?.length) {
+      try {
+        await bot.api.setMyCommands(telegramConfig.commands);
+        this.logger.info('Registered Telegram slash commands', {
+          instanceId,
+          commands: telegramConfig.commands.map((c) => c.command),
+        });
+      } catch (error) {
+        this.logger.warn('Failed to register Telegram slash commands', { instanceId, error: String(error) });
+      }
+    }
 
     const botInfo = bot.botInfo;
     if (!botInfo) {
@@ -288,7 +322,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
       if (correlationId) this.captureT10(correlationId);
 
       const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      const messageId = await dispatchContent(bot, chatId, content, replyParam, formatMode);
+      const messageId = await dispatchContent(bot, chatId, content, replyParam, message.threadId, formatMode);
 
       // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
       if (correlationId) this.captureT11(correlationId);
@@ -355,6 +389,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
   /**
    * Forward a message from one chat to another
    */
+  async exportChatInviteLink(instanceId: string, chatId: string): Promise<string> {
+    const bot = getBot(instanceId);
+    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+
+    return bot.api.exportChatInviteLink(chatId);
+  }
+
   async forwardMessage(instanceId: string, fromChatId: string, toChatId: string, messageId: string): Promise<string> {
     const bot = getBot(instanceId);
     if (!bot) throw new Error(`No bot for instance ${instanceId}`);
@@ -478,7 +519,9 @@ export class TelegramPlugin extends BaseChannelPlugin {
       type: string;
       text?: string;
       mediaUrl?: string;
+      localPath?: string;
       mimeType?: string;
+      isVoiceNote?: boolean;
     },
     replyToId: string | undefined,
     rawPayload: Record<string, unknown>,

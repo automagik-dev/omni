@@ -20,6 +20,7 @@ export async function sendTextMessage(
   text: string,
   replyToMessageId?: number,
   formatMode: MessageFormatMode = 'convert',
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const useConversion = formatMode !== 'passthrough';
   const payload = useConversion ? markdownToTelegramHtml(text) : text;
@@ -33,6 +34,7 @@ export async function sendTextMessage(
       ...(useConversion ? { parse_mode: 'HTML' as const } : {}),
       // Only reply to original for first chunk
       ...(i === 0 && replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+      ...(options ?? {}),
     });
     lastMessageId = result.message_id;
   }

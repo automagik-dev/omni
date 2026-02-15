@@ -8,6 +8,7 @@
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
+import { tryDownloadTelegramMedia } from '../utils/media-download';
 import { extractTelegramMessageContent } from './extract-content';
 
 const log = createLogger('telegram:channel-posts');
@@ -31,6 +32,18 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
 
     log.debug('Received channel post', { instanceId, chatId, externalId, threadId });
 
+    const local =
+      content.mediaFileId && content.type !== 'text'
+        ? await tryDownloadTelegramMedia({
+            bot,
+            instanceId,
+            externalId,
+            fileId: content.mediaFileId,
+            mimeType: content.mimeType,
+            filename: content.filename,
+          })
+        : null;
+
     await plugin.handleMessageReceived(
       instanceId,
       externalId,
@@ -40,7 +53,9 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
         type: content.type,
         text: content.text ?? '[Channel post]',
         mediaUrl: content.mediaFileId,
+        localPath: local?.localPath,
         mimeType: content.mimeType,
+        isVoiceNote: content.isVoiceNote,
       },
       replyToId,
       {
@@ -52,6 +67,7 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
         isDM: false,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
+        localPath: local?.localPath,
         displayName: msg.chat.title,
         pushName: msg.chat.title,
         chatName: msg.chat.title,
@@ -75,6 +91,18 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
 
     const ts = (msg.edit_date ?? msg.date) * 1000;
 
+    const local =
+      content.mediaFileId && content.type !== 'text'
+        ? await tryDownloadTelegramMedia({
+            bot,
+            instanceId,
+            externalId,
+            fileId: content.mediaFileId,
+            mimeType: content.mimeType,
+            filename: content.filename,
+          })
+        : null;
+
     await plugin.handleMessageReceived(
       instanceId,
       externalId,
@@ -84,7 +112,9 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
         type: content.type,
         text: content.text ?? '[Channel post]',
         mediaUrl: content.mediaFileId,
+        localPath: local?.localPath,
         mimeType: content.mimeType,
+        isVoiceNote: content.isVoiceNote,
       },
       replyToId,
       {
@@ -98,6 +128,7 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
         isDM: false,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
+        localPath: local?.localPath,
         displayName: msg.chat.title,
         pushName: msg.chat.title,
         chatName: msg.chat.title,

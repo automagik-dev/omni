@@ -32,6 +32,23 @@ export interface OutgoingContent {
   /** Target message ID (for reaction type) */
   targetMessageId?: string;
 
+  /** Inline buttons (Telegram, etc.) */
+  buttons?: Array<{
+    text: string;
+    /** Callback payload (e.g. Telegram callback_data). Mutually exclusive with url. */
+    data?: string;
+    /** Link button URL. Mutually exclusive with data. */
+    url?: string;
+  }>;
+
+  /** Poll (Telegram/WhatsApp/etc.) */
+  poll?: {
+    question: string;
+    options: string[];
+    multiSelect?: boolean;
+    isAnonymous?: boolean;
+  };
+
   /** Contact details (for contact type) */
   contact?: {
     name: string;

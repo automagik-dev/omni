@@ -15,6 +15,7 @@ export interface TelegramExtractedContent {
   mediaFileId?: string;
   mimeType?: string;
   filename?: string;
+  isVoiceNote?: boolean;
 }
 
 function extractPhoto(msg: TelegramMessageLike): TelegramExtractedContent | null {
@@ -49,6 +50,7 @@ function extractMedia(msg: TelegramMessageLike): TelegramExtractedContent | null
       text: msg.caption,
       mediaFileId: msg.voice.file_id,
       mimeType: msg.voice.mime_type ?? 'audio/ogg',
+      isVoiceNote: true,
     };
 
   if (msg.video)

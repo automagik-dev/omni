@@ -20,6 +20,9 @@ export interface TelegramConfig {
 
   /** Update types to receive */
   allowedUpdates?: string[];
+
+  /** Slash commands to register via setMyCommands() at startup */
+  commands?: Array<{ command: string; description: string }>;
 }
 
 /**

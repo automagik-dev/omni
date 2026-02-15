@@ -16,10 +16,12 @@ export async function sendPhoto(
   photoUrl: string,
   caption?: string,
   replyToMessageId?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const result = await bot.api.sendPhoto(chatId, photoUrl, {
     caption,
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    ...(options ?? {}),
   });
   log.debug('Sent photo', { chatId, messageId: result.message_id });
   return result.message_id;
@@ -34,10 +36,12 @@ export async function sendAudio(
   audioUrl: string,
   caption?: string,
   replyToMessageId?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const result = await bot.api.sendAudio(chatId, audioUrl, {
     caption,
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    ...(options ?? {}),
   });
   log.debug('Sent audio', { chatId, messageId: result.message_id });
   return result.message_id;
@@ -52,10 +56,12 @@ export async function sendVideo(
   videoUrl: string,
   caption?: string,
   replyToMessageId?: number,
+  _options?: Record<string, unknown>,
 ): Promise<number> {
   const result = await bot.api.sendVideo(chatId, videoUrl, {
     caption,
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    ...(_options ?? {}),
   });
   log.debug('Sent video', { chatId, messageId: result.message_id });
   return result.message_id;
@@ -69,9 +75,11 @@ export async function sendSticker(
   chatId: string,
   stickerUrl: string,
   replyToMessageId?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   const result = await bot.api.sendSticker(chatId, stickerUrl, {
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    ...(options ?? {}),
   });
   log.debug('Sent sticker', { chatId, messageId: result.message_id });
   return result.message_id;
@@ -123,6 +131,7 @@ export async function sendDocument(
   caption?: string,
   filename?: string,
   replyToMessageId?: number,
+  options?: Record<string, unknown>,
 ): Promise<number> {
   let file: unknown = documentUrl;
   if (filename) {
@@ -143,6 +152,7 @@ export async function sendDocument(
   const result = await bot.api.sendDocument(chatId, file, {
     caption,
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+    ...(options ?? {}),
   });
   log.debug('Sent document', { chatId, messageId: result.message_id });
   return result.message_id;

@@ -1640,6 +1640,70 @@ instancesRoutes.post(
 // ============================================================================
 
 /**
+ * GET /instances/:id/chats/:chatId/invite - Export (or retrieve) chat invite link
+ *
+ * WhatsApp: group invite code/link (delegates to getGroupInviteCode)
+ * Telegram: exportChatInviteLink (bot must be admin)
+ */
+instancesRoutes.get('/:id/chats/:chatId/invite', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const chatId = c.req.param('chatId');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin not available' } }, 400);
+  }
+
+  // WhatsApp compatibility: treat chatId as groupJid
+  if ('getGroupInviteCode' in plugin) {
+    try {
+      const code = await (
+        plugin as { getGroupInviteCode: (instanceId: string, groupJid: string) => Promise<string> }
+      ).getGroupInviteCode(id, chatId);
+
+      return c.json({
+        data: {
+          chatId,
+          code,
+          inviteLink: `https://chat.whatsapp.com/${code}`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'INVITE_FAILED', message } }, 500);
+    }
+  }
+
+  if ('exportChatInviteLink' in plugin) {
+    try {
+      const inviteLink = await (
+        plugin as { exportChatInviteLink: (instanceId: string, chatId: string) => Promise<string> }
+      ).exportChatInviteLink(id, chatId);
+
+      return c.json({
+        data: {
+          chatId,
+          inviteLink,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'INVITE_FAILED', message } }, 500);
+    }
+  }
+
+  return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support chat invites' } }, 400);
+});
+
+/**
  * GET /instances/:id/groups/:groupJid/invite - Get group invite code
  */
 instancesRoutes.get('/:id/groups/:groupJid/invite', instanceAccess, async (c) => {

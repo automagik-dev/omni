@@ -89,6 +89,16 @@ export interface TelegramBotLike {
     sendChatAction: (chatId: string, action: string) => Promise<unknown>;
 
     sendMessage: (chatId: string, text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
+    sendPoll: (
+      chatId: string,
+      question: string,
+      options: string[],
+      params?: Record<string, unknown>,
+    ) => Promise<{ message_id: number }>;
+    setMyCommands: (
+      commands: Array<{ command: string; description: string }>,
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>;
     editMessageText: (
       chatId: string,
       messageId: number,
@@ -129,6 +139,8 @@ export interface TelegramBotLike {
     ) => Promise<{ message_id: number }>;
 
     forwardMessage: (toChatId: string, fromChatId: string, messageId: number) => Promise<{ message_id: number }>;
+    exportChatInviteLink: (chatId: string) => Promise<string>;
+
     getMe: () => Promise<{
       id: number;
       is_bot: boolean;
