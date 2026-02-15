@@ -417,7 +417,53 @@ export class MessageService {
   }
 
   /**
+   * Build update data for missing fields from Baileys (source of truth)
+   */
+  private buildMissingFieldsUpdate(
+    existing: Message,
+    defaults: Omit<CreateMessageOptions, 'chatId' | 'externalId'>,
+  ): Partial<NewMessage> | null {
+    const updateData: Partial<NewMessage> = {};
+    let hasUpdates = false;
+
+    if (!existing.mediaUrl && defaults.mediaUrl) {
+      updateData.mediaUrl = defaults.mediaUrl;
+      hasUpdates = true;
+    }
+    if (!existing.mediaLocalPath && defaults.mediaLocalPath) {
+      updateData.mediaLocalPath = defaults.mediaLocalPath;
+      hasUpdates = true;
+    }
+    if (!existing.mediaMimeType && defaults.mediaMimeType) {
+      updateData.mediaMimeType = defaults.mediaMimeType;
+      hasUpdates = true;
+    }
+    if (!existing.transcription && defaults.transcription) {
+      updateData.transcription = defaults.transcription;
+      hasUpdates = true;
+    }
+    if (!existing.imageDescription && defaults.imageDescription) {
+      updateData.imageDescription = defaults.imageDescription;
+      hasUpdates = true;
+    }
+    if (!existing.videoDescription && defaults.videoDescription) {
+      updateData.videoDescription = defaults.videoDescription;
+      hasUpdates = true;
+    }
+    if (!existing.documentExtraction && defaults.documentExtraction) {
+      updateData.documentExtraction = defaults.documentExtraction;
+      hasUpdates = true;
+    }
+
+    return hasUpdates ? updateData : null;
+  }
+
+  /**
    * Find or create a message by external ID
+   *
+   * IMPORTANT: If message exists but has missing fields (e.g. mediaUrl was null in old sync),
+   * this will UPDATE the existing message with data from Baileys (source of truth).
+   * This ensures resyncs can recover incomplete messages.
    */
   async findOrCreate(
     chatId: string,
@@ -425,7 +471,16 @@ export class MessageService {
     defaults: Omit<CreateMessageOptions, 'chatId' | 'externalId'>,
   ): Promise<{ message: Message; created: boolean }> {
     const existing = await this.getByExternalId(chatId, externalId);
+
     if (existing) {
+      // Check if Baileys has data that's missing in our DB (Baileys is source of truth)
+      const updateData = this.buildMissingFieldsUpdate(existing, defaults);
+
+      if (updateData) {
+        const updated = await this.update(existing.id, updateData);
+        return { message: updated, created: false };
+      }
+
       return { message: existing, created: false };
     }
 
