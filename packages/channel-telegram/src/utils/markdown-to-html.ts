@@ -56,6 +56,29 @@ function flushUnmatched(stack: MarkerNode[], root: string[]): void {
   }
 }
 
+function isAlphaNumericChar(ch: string | undefined): boolean {
+  return !!ch && /[0-9A-Za-z]/.test(ch);
+}
+
+function isIntrawordSingleMarker(text: string, index: number): boolean {
+  const prev = index > 0 ? text[index - 1] : undefined;
+  const next = index + 1 < text.length ? text[index + 1] : undefined;
+  return isAlphaNumericChar(prev) && isAlphaNumericChar(next);
+}
+
+function readInlineMarker(text: string, index: number): { marker: InlineMarker; length: number } | null {
+  const two = text.slice(index, index + 2);
+  if (two === '**' || two === '~~') return { marker: two as InlineMarker, length: 2 };
+  const one = text[index];
+  if (one === '*' || one === '_') return { marker: one as InlineMarker, length: 1 };
+  return null;
+}
+
+function toggleMarker(stack: MarkerNode[], root: string[], marker: InlineMarker): void {
+  if (closesTopMarker(stack, marker)) closeMarker(stack, root);
+  else openMarker(stack, marker);
+}
+
 function applyInlineDecorations(text: string): string {
   const stack: MarkerNode[] = [];
   const root: string[] = [];
@@ -68,42 +91,24 @@ function applyInlineDecorations(text: string): string {
   let i = 0;
   let buffer = '';
 
-  const isAlphaNumeric = (ch: string | undefined) => !!ch && /[0-9A-Za-z]/.test(ch);
-
   while (i < text.length) {
-    const two = text.slice(i, i + 2);
-
-    if (two === '**' || two === '~~') {
-      flushText(buffer);
-      buffer = '';
-      const marker = two as '**' | '~~';
-      if (closesTopMarker(stack, marker)) closeMarker(stack, root);
-      else openMarker(stack, marker);
-      i += 2;
-      continue;
-    }
-
-    const one = text[i];
-    if (one === '*' || one === '_') {
+    const marker = readInlineMarker(text, i);
+    if (marker) {
       // Avoid intraword emphasis: foo_bar_baz, 2*3*4 should stay literal.
-      const prev = i > 0 ? text[i - 1] : undefined;
-      const next = i + 1 < text.length ? text[i + 1] : undefined;
-      if (isAlphaNumeric(prev) && isAlphaNumeric(next)) {
-        buffer += one;
+      if ((marker.marker === '*' || marker.marker === '_') && isIntrawordSingleMarker(text, i)) {
+        buffer += text[i] ?? '';
         i += 1;
         continue;
       }
 
       flushText(buffer);
       buffer = '';
-      const marker = one as '*' | '_';
-      if (closesTopMarker(stack, marker)) closeMarker(stack, root);
-      else openMarker(stack, marker);
-      i += 1;
+      toggleMarker(stack, root, marker.marker);
+      i += marker.length;
       continue;
     }
 
-    buffer += one;
+    buffer += text[i] ?? '';
     i += 1;
   }
 

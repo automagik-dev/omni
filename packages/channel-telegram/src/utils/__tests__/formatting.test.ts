@@ -87,20 +87,20 @@ describe('splitHtmlMessage', () => {
     const validateBalanced = (chunk: string) => {
       const stack: string[] = [];
       const tagRe = /<\/?([a-z0-9]+)(?:\s[^>]*)?>/gi;
-      while (true) {
-        const m = tagRe.exec(chunk);
-        if (!m) break;
-        const raw = m[0] ?? '';
-        const name = (m[1] ?? '').toLowerCase();
-        if (!name || name === 'br') continue;
-        if (raw.startsWith('</')) {
-          const top = stack[stack.length - 1];
-          expect(top).toBe(name);
-          stack.pop();
-        } else if (!raw.endsWith('/>')) {
-          stack.push(name);
+      const tags = Array.from(chunk.matchAll(tagRe), (m) => ({
+        raw: m[0] ?? '',
+        name: (m[1] ?? '').toLowerCase(),
+      }));
+
+      for (const tag of tags) {
+        if (!tag.name || tag.name === 'br') continue;
+        if (tag.raw.startsWith('</')) {
+          expect(stack.pop()).toBe(tag.name);
+          continue;
         }
+        if (!tag.raw.endsWith('/>')) stack.push(tag.name);
       }
+
       expect(stack).toEqual([]);
     };
 

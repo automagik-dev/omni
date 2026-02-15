@@ -149,6 +149,24 @@ function resolveChannelToken(data: {
   return data.token ?? data.telegramBotToken ?? data.discordBotToken ?? data.slackBotToken ?? undefined;
 }
 
+function persistedTokenForChannel(instance: {
+  channel: string;
+  telegramBotToken?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+}): string | undefined {
+  switch (instance.channel) {
+    case 'telegram':
+      return instance.telegramBotToken ?? undefined;
+    case 'discord':
+      return instance.discordBotToken ?? undefined;
+    case 'slack':
+      return instance.slackBotToken ?? undefined;
+    default:
+      return undefined;
+  }
+}
+
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
   mode: 'filtered' as const,
@@ -508,39 +526,40 @@ instancesRoutes.post(
 
     // Build connection options
     const connectionOptions: Record<string, unknown> = { forceNewQr };
-    if (body.token) {
-      connectionOptions.token = body.token;
+    const connectToken = body.token ?? persistedTokenForChannel(instance);
+    if (connectToken) {
+      connectionOptions.token = connectToken;
     }
 
     // Trigger connection via channel plugin
-    if (channelRegistry) {
-      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-      if (plugin) {
-        try {
-          await plugin.connect(id, {
-            instanceId: id,
-            credentials: {},
-            options: connectionOptions,
-          });
-        } catch (error) {
-          return c.json(
-            {
-              error: {
-                code: 'CONNECTION_FAILED',
-                message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              },
-            },
-            500,
-          );
-        }
-      } else {
-        return c.json(
-          { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-          400,
-        );
-      }
-    } else {
+    if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin) {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+        400,
+      );
+    }
+
+    try {
+      await plugin.connect(id, {
+        instanceId: id,
+        credentials: {},
+        options: connectionOptions,
+      });
+    } catch (error) {
+      return c.json(
+        {
+          error: {
+            code: 'CONNECTION_FAILED',
+            message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        },
+        500,
+      );
     }
 
     // Update database

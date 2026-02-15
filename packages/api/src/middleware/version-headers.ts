@@ -15,13 +15,50 @@ interface VersionFile {
   commit?: string;
 }
 
+interface PackageJson {
+  version?: string;
+}
+
 interface ServerVersionInfo {
   version: string;
   commit: string;
 }
 
-const FALLBACK_VERSION = '2.0.0';
+const LAST_RESORT_VERSION = '2.0.0-dev.1';
 const FALLBACK_COMMIT = 'unknown';
+
+function loadRepoPackageVersion(): string | undefined {
+  try {
+    for (const candidate of [
+      // Prefer repo root (running from packages/api)
+      join(import.meta.dir, '..', '..', '..', '..', 'package.json'),
+      // Fallback when running from repo root
+      join(process.cwd(), 'package.json'),
+    ]) {
+      if (!existsSync(candidate)) continue;
+      const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as PackageJson;
+      if (parsed.version) return parsed.version;
+    }
+  } catch {
+    // Ignore file/parse errors and fallback below.
+  }
+
+  return undefined;
+}
+
+function loadEnvVersion(): string | undefined {
+  return (
+    process.env.OMNI_VERSION ??
+    process.env.OMNI_SERVER_VERSION ??
+    process.env.npm_package_version ??
+    process.env.PACKAGE_VERSION ??
+    undefined
+  );
+}
+
+function resolveFallbackVersion(): string {
+  return loadRepoPackageVersion() ?? loadEnvVersion() ?? LAST_RESORT_VERSION;
+}
 
 function loadServerVersionInfo(): ServerVersionInfo {
   try {
@@ -35,7 +72,7 @@ function loadServerVersionInfo(): ServerVersionInfo {
 
       const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as VersionFile;
       return {
-        version: parsed.version ?? FALLBACK_VERSION,
+        version: parsed.version ?? resolveFallbackVersion(),
         commit: parsed.commit ?? FALLBACK_COMMIT,
       };
     }
@@ -44,7 +81,7 @@ function loadServerVersionInfo(): ServerVersionInfo {
   }
 
   return {
-    version: FALLBACK_VERSION,
+    version: resolveFallbackVersion(),
     commit: FALLBACK_COMMIT,
   };
 }
