@@ -65,6 +65,10 @@ const createInstanceSchema = z.object({
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
   enableAutoSplit: z.boolean().default(true).describe('Split responses on double newlines'),
+  messageFormatMode: z
+    .enum(['convert', 'passthrough'])
+    .default('convert')
+    .describe('Format conversion: convert markdown to native channel syntax, or passthrough raw text'),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
@@ -103,6 +107,10 @@ const createInstanceSchema = z.object({
     .default(null)
     .describe('Model for response gate (default: gemini-3-flash-preview)'),
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
+  telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
+  discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
+  slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
+  slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -112,10 +120,69 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   agentId: z.string().max(255).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
+  telegramBotToken: z.string().nullable().optional(),
+  discordBotToken: z.string().nullable().optional(),
+  slackBotToken: z.string().nullable().optional(),
+  slackAppToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
 });
+
+/**
+ * Map the generic `token` field to the correct channel-specific DB column.
+ * Also returns the token to use for the plugin connect call.
+ */
+function resolveChannelToken(data: {
+  channel: string;
+  token?: string;
+  telegramBotToken?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+}): string | undefined {
+  // If a generic `token` was provided but no channel-specific field, persist it
+  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken) {
+    if (data.channel === 'telegram') data.telegramBotToken = data.token;
+    else if (data.channel === 'discord') data.discordBotToken = data.token;
+    else if (data.channel === 'slack') data.slackBotToken = data.token;
+  }
+  return data.token ?? data.telegramBotToken ?? data.discordBotToken ?? data.slackBotToken ?? undefined;
+}
+
+function persistedTokenForChannel(instance: {
+  channel: string;
+  telegramBotToken?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+}): string | undefined {
+  switch (instance.channel) {
+    case 'telegram':
+      return instance.telegramBotToken ?? undefined;
+    case 'discord':
+      return instance.discordBotToken ?? undefined;
+    case 'slack':
+      return instance.slackBotToken ?? undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Map channel type to its token DB column name.
+ * Returns undefined for channels that don't store tokens.
+ */
+function channelTokenField(channel: string): string | undefined {
+  switch (channel) {
+    case 'telegram':
+      return 'telegramBotToken';
+    case 'discord':
+      return 'discordBotToken';
+    case 'slack':
+      return 'slackBotToken';
+    default:
+      return undefined;
+  }
+}
 
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
@@ -212,13 +279,16 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
   }
 
+  // Map generic `token` → channel-specific DB column + resolve connect token
+  const connectToken = resolveChannelToken(data);
+
   // Create the database record first
   const instance = await services.instances.create(data);
 
   // Build connection options
   const connectionOptions: Record<string, unknown> = { forceNewQr: true };
-  if (data.token) {
-    connectionOptions.token = data.token;
+  if (connectToken) {
+    connectionOptions.token = connectToken;
   }
 
   // Get the channel plugin and trigger connection
@@ -473,43 +543,48 @@ instancesRoutes.post(
 
     // Build connection options
     const connectionOptions: Record<string, unknown> = { forceNewQr };
-    if (body.token) {
-      connectionOptions.token = body.token;
+    const connectToken = body.token ?? persistedTokenForChannel(instance);
+    if (connectToken) {
+      connectionOptions.token = connectToken;
     }
 
     // Trigger connection via channel plugin
-    if (channelRegistry) {
-      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-      if (plugin) {
-        try {
-          await plugin.connect(id, {
-            instanceId: id,
-            credentials: {},
-            options: connectionOptions,
-          });
-        } catch (error) {
-          return c.json(
-            {
-              error: {
-                code: 'CONNECTION_FAILED',
-                message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              },
-            },
-            500,
-          );
-        }
-      } else {
-        return c.json(
-          { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-          400,
-        );
-      }
-    } else {
+    if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    // Update database
-    const updated = await services.instances.update(id, { isActive: true });
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (!plugin) {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
+        400,
+      );
+    }
+
+    try {
+      await plugin.connect(id, {
+        instanceId: id,
+        credentials: {},
+        options: connectionOptions,
+      });
+    } catch (error) {
+      return c.json(
+        {
+          error: {
+            code: 'CONNECTION_FAILED',
+            message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        },
+        500,
+      );
+    }
+
+    // Update database — persist token if a new one was provided
+    const tokenField = body.token ? channelTokenField(instance.channel) : undefined;
+    const updated = await services.instances.update(id, {
+      isActive: true,
+      ...(tokenField ? { [tokenField]: body.token } : {}),
+    });
 
     return c.json({
       data: {
@@ -1586,6 +1661,70 @@ instancesRoutes.post(
 // ============================================================================
 
 /**
+ * GET /instances/:id/chats/:chatId/invite - Export (or retrieve) chat invite link
+ *
+ * WhatsApp: group invite code/link (delegates to getGroupInviteCode)
+ * Telegram: exportChatInviteLink (bot must be admin)
+ */
+instancesRoutes.get('/:id/chats/:chatId/invite', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const chatId = c.req.param('chatId');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin not available' } }, 400);
+  }
+
+  // WhatsApp compatibility: treat chatId as groupJid
+  if ('getGroupInviteCode' in plugin) {
+    try {
+      const code = await (
+        plugin as { getGroupInviteCode: (instanceId: string, groupJid: string) => Promise<string> }
+      ).getGroupInviteCode(id, chatId);
+
+      return c.json({
+        data: {
+          chatId,
+          code,
+          inviteLink: `https://chat.whatsapp.com/${code}`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'INVITE_FAILED', message } }, 500);
+    }
+  }
+
+  if ('exportChatInviteLink' in plugin) {
+    try {
+      const inviteLink = await (
+        plugin as { exportChatInviteLink: (instanceId: string, chatId: string) => Promise<string> }
+      ).exportChatInviteLink(id, chatId);
+
+      return c.json({
+        data: {
+          chatId,
+          inviteLink,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'INVITE_FAILED', message } }, 500);
+    }
+  }
+
+  return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support chat invites' } }, 400);
+});
+
+/**
  * GET /instances/:id/groups/:groupJid/invite - Get group invite code
  */
 instancesRoutes.get('/:id/groups/:groupJid/invite', instanceAccess, async (c) => {
@@ -1834,6 +1973,12 @@ const resyncSchema = z.object({
     .optional()
     .describe('Backfill start time (ISO 8601 or relative duration like "2h", "30m"). Default: 2h ago'),
   until: z.string().optional().describe('Backfill end time (ISO 8601). Default: now'),
+  chatJids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Specific WhatsApp chat JIDs to fetch history for (e.g. ["5511999999999@s.whatsapp.net"]). Useful for recovering chats not in the database.',
+    ),
 });
 
 /**
@@ -1889,7 +2034,7 @@ function parseSince(since: string | undefined): Date {
  */
 instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSchema), async (c) => {
   const id = c.req.param('id');
-  const { since, until } = c.req.valid('json');
+  const { since, until, chatJids } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   const eventBus = c.get('eventBus');
@@ -1913,6 +2058,7 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
       config: {
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
+        ...(chatJids?.length ? { chatJids } : {}),
       },
     });
 

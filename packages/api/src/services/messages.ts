@@ -352,69 +352,118 @@ export class MessageService {
    * Create a new message
    */
   async create(options: CreateMessageOptions): Promise<Message> {
-    const [created] = await this.db
-      .insert(messages)
-      .values({
-        chatId: options.chatId,
-        externalId: options.externalId,
-        source: options.source,
-        messageType: options.messageType,
-        textContent: options.textContent,
-        platformTimestamp: options.platformTimestamp,
-        // Sender
-        senderPersonId: options.senderPersonId,
-        senderPlatformIdentityId: options.senderPlatformIdentityId,
-        senderPlatformUserId: options.senderPlatformUserId,
-        senderDisplayName: options.senderDisplayName,
-        isFromMe: options.isFromMe ?? false,
-        // Media
-        hasMedia: options.hasMedia ?? false,
-        mediaMimeType: options.mediaMimeType,
-        mediaUrl: options.mediaUrl,
-        mediaLocalPath: options.mediaLocalPath,
-        mediaMetadata: options.mediaMetadata,
-        // Pre-processed content
-        transcription: options.transcription,
-        imageDescription: options.imageDescription,
-        videoDescription: options.videoDescription,
-        documentExtraction: options.documentExtraction,
-        // Reply/Forward
-        replyToMessageId: options.replyToMessageId,
-        replyToExternalId: options.replyToExternalId,
-        quotedText: options.quotedText,
-        quotedSenderName: options.quotedSenderName,
-        isForwarded: options.isForwarded ?? false,
-        forwardedFromExternalId: options.forwardedFromExternalId,
-        // Raw data
-        rawPayload: options.rawPayload,
-        // Event links
-        originalEventId: options.originalEventId,
-        latestEventId: options.originalEventId,
-      })
-      .returning();
+    return await this.db.transaction(async (tx) => {
+      // Insert message
+      const [created] = await tx
+        .insert(messages)
+        .values({
+          chatId: options.chatId,
+          externalId: options.externalId,
+          source: options.source,
+          messageType: options.messageType,
+          textContent: options.textContent,
+          platformTimestamp: options.platformTimestamp,
+          // Sender
+          senderPersonId: options.senderPersonId,
+          senderPlatformIdentityId: options.senderPlatformIdentityId,
+          senderPlatformUserId: options.senderPlatformUserId,
+          senderDisplayName: options.senderDisplayName,
+          isFromMe: options.isFromMe ?? false,
+          // Media
+          hasMedia: options.hasMedia ?? false,
+          mediaMimeType: options.mediaMimeType,
+          mediaUrl: options.mediaUrl,
+          mediaLocalPath: options.mediaLocalPath,
+          mediaMetadata: options.mediaMetadata,
+          // Pre-processed content
+          transcription: options.transcription,
+          imageDescription: options.imageDescription,
+          videoDescription: options.videoDescription,
+          documentExtraction: options.documentExtraction,
+          // Reply/Forward
+          replyToMessageId: options.replyToMessageId,
+          replyToExternalId: options.replyToExternalId,
+          quotedText: options.quotedText,
+          quotedSenderName: options.quotedSenderName,
+          isForwarded: options.isForwarded ?? false,
+          forwardedFromExternalId: options.forwardedFromExternalId,
+          // Raw data
+          rawPayload: options.rawPayload,
+          // Event links
+          originalEventId: options.originalEventId,
+          latestEventId: options.originalEventId,
+        })
+        .returning();
 
-    if (!created) {
-      throw new Error('Failed to create message');
+      if (!created) {
+        throw new Error('Failed to create message');
+      }
+
+      // Update chat stats (in same transaction - ATOMIC)
+      const preview = buildMessagePreview(options);
+      await tx
+        .update(chats)
+        .set({
+          lastMessageAt: options.platformTimestamp,
+          lastMessagePreview: preview,
+          messageCount: sql`${chats.messageCount} + 1`,
+          // Unread count is managed by platform-native events (chat.unread-updated)
+          updatedAt: new Date(),
+        })
+        .where(eq(chats.id, options.chatId));
+
+      return created;
+    });
+  }
+
+  /**
+   * Build update data for missing fields from Baileys (source of truth)
+   */
+  private buildMissingFieldsUpdate(
+    existing: Message,
+    defaults: Omit<CreateMessageOptions, 'chatId' | 'externalId'>,
+  ): Partial<NewMessage> | null {
+    const updateData: Partial<NewMessage> = {};
+    let hasUpdates = false;
+
+    if (!existing.mediaUrl && defaults.mediaUrl) {
+      updateData.mediaUrl = defaults.mediaUrl;
+      hasUpdates = true;
+    }
+    if (!existing.mediaLocalPath && defaults.mediaLocalPath) {
+      updateData.mediaLocalPath = defaults.mediaLocalPath;
+      hasUpdates = true;
+    }
+    if (!existing.mediaMimeType && defaults.mediaMimeType) {
+      updateData.mediaMimeType = defaults.mediaMimeType;
+      hasUpdates = true;
+    }
+    if (!existing.transcription && defaults.transcription) {
+      updateData.transcription = defaults.transcription;
+      hasUpdates = true;
+    }
+    if (!existing.imageDescription && defaults.imageDescription) {
+      updateData.imageDescription = defaults.imageDescription;
+      hasUpdates = true;
+    }
+    if (!existing.videoDescription && defaults.videoDescription) {
+      updateData.videoDescription = defaults.videoDescription;
+      hasUpdates = true;
+    }
+    if (!existing.documentExtraction && defaults.documentExtraction) {
+      updateData.documentExtraction = defaults.documentExtraction;
+      hasUpdates = true;
     }
 
-    // Update chat's last message and stats
-    const preview = buildMessagePreview(options);
-    await this.db
-      .update(chats)
-      .set({
-        lastMessageAt: options.platformTimestamp,
-        lastMessagePreview: preview,
-        messageCount: sql`${chats.messageCount} + 1`,
-        // Unread count is managed by platform-native events (chat.unread-updated)
-        updatedAt: new Date(),
-      })
-      .where(eq(chats.id, options.chatId));
-
-    return created;
+    return hasUpdates ? updateData : null;
   }
 
   /**
    * Find or create a message by external ID
+   *
+   * IMPORTANT: If message exists but has missing fields (e.g. mediaUrl was null in old sync),
+   * this will UPDATE the existing message with data from Baileys (source of truth).
+   * This ensures resyncs can recover incomplete messages.
    */
   async findOrCreate(
     chatId: string,
@@ -422,7 +471,16 @@ export class MessageService {
     defaults: Omit<CreateMessageOptions, 'chatId' | 'externalId'>,
   ): Promise<{ message: Message; created: boolean }> {
     const existing = await this.getByExternalId(chatId, externalId);
+
     if (existing) {
+      // Check if Baileys has data that's missing in our DB (Baileys is source of truth)
+      const updateData = this.buildMissingFieldsUpdate(existing, defaults);
+
+      if (updateData) {
+        const updated = await this.update(existing.id, updateData);
+        return { message: updated, created: false };
+      }
+
       return { message: existing, created: false };
     }
 

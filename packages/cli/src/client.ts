@@ -7,6 +7,7 @@
 import { type OmniClient, createOmniClient } from '@omni/sdk';
 import { hasAuth, loadConfig } from './config.js';
 import * as output from './output.js';
+import { VERSION } from './version.js';
 
 /** Cached client instance */
 let cachedClient: OmniClient | null = null;
@@ -34,6 +35,7 @@ export function getClient(): OmniClient {
   cachedClient = createOmniClient({
     baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
+    cliVersion: VERSION,
   });
 
   return cachedClient;
@@ -62,6 +64,7 @@ export function getOptionalClient(): OmniClient | null {
   cachedClient = createOmniClient({
     baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
+    cliVersion: VERSION,
   });
 
   return cachedClient;

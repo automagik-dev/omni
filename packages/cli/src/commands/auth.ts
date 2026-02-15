@@ -10,6 +10,7 @@ import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, saveConfig } from '../config.js';
 import * as output from '../output.js';
+import { VERSION } from '../version.js';
 
 export function createAuthCommand(): Command {
   const auth = new Command('auth').description('Manage API authentication');
@@ -32,6 +33,7 @@ export function createAuthCommand(): Command {
       const client = createOmniClient({
         baseUrl: config.apiUrl ?? 'http://localhost:8882',
         apiKey: config.apiKey,
+        cliVersion: VERSION,
       });
 
       try {

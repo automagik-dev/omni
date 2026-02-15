@@ -8,13 +8,23 @@
 /** Discord's maximum message length */
 export const MAX_MESSAGE_LENGTH = 2000;
 
-/** Code block overhead (```) - reserved for future code block aware chunking */
-const _CODE_BLOCK_OVERHEAD = 6; // ``` at start and end
+type Segment =
+  | {
+      type: 'text';
+      content: string;
+    }
+  | {
+      type: 'code';
+      language: string;
+      content: string;
+    };
 
 /**
  * Split a message into chunks that fit Discord's limit
  *
- * Splits at natural boundaries (newlines, spaces) when possible.
+ * Splits at natural boundaries (paragraphs, then lines, then hard cut) when possible.
+ * Keeps fenced code blocks intact; if a fenced code block itself exceeds the limit,
+ * it is split and re-wrapped across chunks.
  *
  * @param text - Text to split
  * @param maxLength - Maximum length per chunk (default: 2000)
@@ -25,50 +35,183 @@ export function chunkMessage(text: string, maxLength = MAX_MESSAGE_LENGTH): stri
     return [text];
   }
 
+  const segments = parseSegments(text);
   const chunks: string[] = [];
-  let remaining = text;
+  let current = '';
 
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLength) {
-      chunks.push(remaining);
-      break;
+  const pushCurrent = (): void => {
+    if (current.length > 0) {
+      chunks.push(current);
+      current = '';
+    }
+  };
+
+  const appendAtomic = (part: string): void => {
+    if (part.length > maxLength) {
+      const splitParts = splitLongContent(part, maxLength);
+      for (const splitPart of splitParts) {
+        appendAtomic(splitPart);
+      }
+      return;
     }
 
-    // Find a good split point
-    const splitAt = findSplitPoint(remaining, maxLength);
+    if (current.length === 0) {
+      current = part;
+      return;
+    }
 
-    chunks.push(remaining.substring(0, splitAt));
-    remaining = remaining.substring(splitAt).trimStart();
+    if (current.length + part.length <= maxLength) {
+      current += part;
+      return;
+    }
+
+    pushCurrent();
+    current = part;
+  };
+
+  const appendText = (content: string): void => {
+    let remaining = content;
+
+    while (remaining.length > 0) {
+      const available = maxLength - current.length;
+
+      if (available <= 0) {
+        pushCurrent();
+        continue;
+      }
+
+      if (remaining.length <= available) {
+        current += remaining;
+        break;
+      }
+
+      const splitAt = findSplitPoint(remaining, available);
+      current += remaining.substring(0, splitAt);
+      remaining = remaining.substring(splitAt);
+      pushCurrent();
+    }
+  };
+
+  const appendCodeBlock = (language: string, code: string): void => {
+    const prefix = `\`\`\`${language}\n`;
+    const suffix = '\n```';
+    const wrapped = `${prefix}${code}${suffix}`;
+
+    if (wrapped.length <= maxLength) {
+      appendAtomic(wrapped);
+      return;
+    }
+
+    const availableCode = Math.max(1, maxLength - prefix.length - suffix.length);
+    const codeParts = splitLongContent(code, availableCode);
+
+    for (const codePart of codeParts) {
+      appendAtomic(`${prefix}${codePart}${suffix}`);
+    }
+  };
+
+  for (const segment of segments) {
+    if (segment.type === 'text') {
+      appendText(segment.content);
+      continue;
+    }
+
+    appendCodeBlock(segment.language, segment.content);
   }
+
+  pushCurrent();
 
   return chunks;
 }
 
 /**
- * Find the best split point in text
+ * Parse text into plain text and fenced code block segments.
+ */
+function parseSegments(text: string): Segment[] {
+  const segments: Segment[] = [];
+  const fencedCodeRegex = /```([^\n`]*)\n([\s\S]*?)```/g;
+
+  let lastIndex = 0;
+  let match = fencedCodeRegex.exec(text);
+
+  while (match) {
+    const [fullMatch, rawLanguage, codeContent] = match;
+    const index = match.index;
+
+    if (index > lastIndex) {
+      segments.push({
+        type: 'text',
+        content: text.slice(lastIndex, index),
+      });
+    }
+
+    segments.push({
+      type: 'code',
+      language: (rawLanguage ?? '').trim(),
+      content: codeContent ?? '',
+    });
+
+    lastIndex = index + fullMatch.length;
+    match = fencedCodeRegex.exec(text);
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({
+      type: 'text',
+      content: text.slice(lastIndex),
+    });
+  }
+
+  if (segments.length === 0) {
+    segments.push({ type: 'text', content: text });
+  }
+
+  return segments;
+}
+
+/**
+ * Split long content using preferred boundaries.
+ */
+function splitLongContent(content: string, maxLength: number): string[] {
+  if (content.length <= maxLength) {
+    return [content];
+  }
+
+  const parts: string[] = [];
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLength) {
+      parts.push(remaining);
+      break;
+    }
+
+    const splitAt = findSplitPoint(remaining, maxLength);
+    parts.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  return parts;
+}
+
+/**
+ * Find the best split point in text.
  *
  * Prefers splitting at:
  * 1. Double newline (paragraph break)
  * 2. Single newline
- * 3. Space
- * 4. Hard limit (if no good split found)
+ * 3. Hard limit (if no boundary found)
  */
 function findSplitPoint(text: string, maxLength: number): number {
   // Try double newline (paragraph break)
   let splitAt = text.lastIndexOf('\n\n', maxLength);
-  if (splitAt !== -1 && splitAt > maxLength * 0.5) {
+  if (splitAt !== -1) {
     return splitAt + 2; // Include the newlines
   }
 
   // Try single newline
   splitAt = text.lastIndexOf('\n', maxLength);
-  if (splitAt !== -1 && splitAt > maxLength * 0.5) {
-    return splitAt + 1;
-  }
-
-  // Try space
-  splitAt = text.lastIndexOf(' ', maxLength);
-  if (splitAt !== -1 && splitAt > maxLength * 0.3) {
+  if (splitAt !== -1) {
     return splitAt + 1;
   }
 
@@ -96,7 +239,7 @@ export function chunkCodeBlock(code: string, language = '', maxLength = MAX_MESS
     return [`${prefix}${code}${suffix}`];
   }
 
-  const codeChunks = chunkMessage(code, availableLength);
+  const codeChunks = splitLongContent(code, Math.max(1, availableLength));
   return codeChunks.map((chunk) => `${prefix}${chunk}${suffix}`);
 }
 

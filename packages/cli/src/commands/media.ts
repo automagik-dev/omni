@@ -9,6 +9,10 @@
  * @see media-drive-download wish
  */
 
+import { createWriteStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { Command } from 'commander';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
@@ -34,6 +38,7 @@ interface DownloadOptions {
   message?: string;
   chat?: string;
   external?: string;
+  output?: string;
 }
 
 interface MediaMessage {
@@ -124,6 +129,55 @@ async function apiCall(
   }
 
   return resp.json();
+}
+
+function resolveDownloadUrl(baseUrl: string, downloadUrl: string): string {
+  if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
+  const base = baseUrl.replace(/\/$/, '');
+  const path = downloadUrl.startsWith('/') ? downloadUrl : `/${downloadUrl}`;
+  return `${base}${path}`;
+}
+
+function resolveOutputPath(outputPath: string | undefined, result: DownloadResponse): string {
+  const fallbackName = result.mediaLocalPath ? basename(result.mediaLocalPath) : '';
+  const filename = fallbackName || `${result.messageId}`;
+
+  if (!outputPath) return resolve(process.cwd(), filename);
+
+  const isDirHint = outputPath.endsWith('/') || outputPath.endsWith('\\');
+  const resolved = resolve(outputPath);
+
+  if (isDirHint) return resolve(resolved, filename);
+  if (existsSync(resolved) && statSync(resolved).isDirectory()) return resolve(resolved, filename);
+
+  return resolved;
+}
+
+async function downloadToFile(url: string, apiKey: string, destinationPath: string): Promise<void> {
+  const destDir = dirname(destinationPath);
+  if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
+
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: apiKey ? { 'x-api-key': apiKey } : undefined,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Download failed (${resp.status}): ${text || resp.statusText}`);
+  }
+
+  // Prefer streaming to avoid buffering large media in memory.
+  if (resp.body) {
+    // biome-ignore lint/suspicious/noExplicitAny: Web->Node stream bridge
+    const readable = Readable.fromWeb(resp.body as any);
+    const fileStream = createWriteStream(destinationPath);
+    await pipeline(readable, fileStream);
+    return;
+  }
+
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  await Bun.write(destinationPath, buf);
 }
 
 /** Determine cached status from message */
@@ -263,6 +317,32 @@ function buildMessageRef(options: DownloadOptions): Record<string, string> {
   return { chatId: options.chat ?? '', externalId: options.external ?? '' };
 }
 
+/** Output download result in JSON format */
+function outputJsonResult(result: DownloadResponse, savedTo: string): void {
+  const config = loadConfig();
+  if (process.env.OMNI_FORMAT === 'json' || config.format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.log(
+      JSON.stringify(
+        {
+          success: true,
+          data: {
+            messageId: result.messageId,
+            instanceId: result.instanceId,
+            mediaMimeType: result.mediaMimeType,
+            mediaLocalPath: result.mediaLocalPath,
+            downloadUrl: result.downloadUrl,
+            cached: result.cached,
+            savedTo,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  }
+}
+
 /** Download a single media item */
 async function handleDownload(options: DownloadOptions): Promise<void> {
   // Validate: must provide --message OR (--chat AND --external)
@@ -285,9 +365,25 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
   const response = (await apiCall('messages/media/download', 'POST', body)) as { data: DownloadResponse };
   const result = response.data;
 
+  const config = loadConfig();
+  const baseUrl = (config.apiUrl ?? 'http://localhost:8882').replace(/\/$/, '');
+  const apiKey = config.apiKey ?? '';
+
+  const url = resolveDownloadUrl(baseUrl, result.downloadUrl);
+  const savedTo = resolveOutputPath(options.output, result);
+
+  await downloadToFile(url, apiKey, savedTo);
+
+  // JSON mode output
+  outputJsonResult(result, savedTo);
+  if (process.env.OMNI_FORMAT === 'json' || config.format === 'json') {
+    return;
+  }
+
+  // Human-friendly output
   output.success(`Downloaded: ${result.mediaMimeType}`);
-  output.info(`Local path: ${result.mediaLocalPath}`);
-  output.info(`URL: ${result.downloadUrl}`);
+  output.info(`Saved to: ${savedTo}`);
+  output.info(`Download URL: ${result.downloadUrl}`);
   output.info(`Cached: ${result.cached}`);
 }
 
@@ -298,9 +394,10 @@ async function handleDownload(options: DownloadOptions): Promise<void> {
 export function createMediaCommand(): Command {
   const media = new Command('media').description('Browse and download media items');
 
-  // omni media ls
+  // omni media list (alias: ls)
   media
-    .command('ls')
+    .command('list')
+    .alias('ls')
     .description('List media items with transcriptions/descriptions (use "omni messages get <id>" for full details)')
     .option('--instance <id>', 'Filter by instance UUID')
     .option('--chat <id>', 'Filter by chat UUID')
@@ -327,6 +424,7 @@ export function createMediaCommand(): Command {
     .option('--message <uuid>', 'Message ID (UUID)')
     .option('--chat <uuid>', 'Chat ID (UUID, used with --external)')
     .option('--external <id>', 'External message ID (used with --chat)')
+    .option('--output <path>', 'Save file to specific location (absolute or relative path)')
     .action(async (options: DownloadOptions) => {
       try {
         await handleDownload(options);

@@ -78,8 +78,8 @@ describe('WhatsAppPlugin', () => {
       expect(WHATSAPP_CAPABILITIES.canSendSticker).toBe(true);
     });
 
-    it('defers group handling', () => {
-      expect(WHATSAPP_CAPABILITIES.canHandleGroups).toBe(false);
+    it('supports group handling', () => {
+      expect(WHATSAPP_CAPABILITIES.canHandleGroups).toBe(true);
     });
 
     it('has correct max message length', () => {

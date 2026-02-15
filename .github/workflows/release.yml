@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    name: Auto Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest dev tag
+        id: version
+        run: |
+          DEV_TAG=$(git tag --list "v2.*-dev" --sort=-version:refname | head -1)
+          if [ -z "$DEV_TAG" ]; then
+            echo "No dev tags found, skipping release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DEV_TAG_COMMIT=$(git rev-list -n 1 "$DEV_TAG")
+          MAIN_HEAD=$(git rev-parse refs/heads/main)
+
+          if ! git merge-base --is-ancestor "$DEV_TAG_COMMIT" "$MAIN_HEAD"; then
+            echo "::error::Dev tag $DEV_TAG ($DEV_TAG_COMMIT) is not an ancestor of main HEAD ($MAIN_HEAD)"
+            echo "::error::This indicates the tag was not properly merged to main"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          RELEASE_VERSION="${DEV_TAG%-dev}"
+          echo "dev_tag=${DEV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_VERSION#v}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${RELEASE_VERSION}"
+
+      - name: Get previous release tag
+        id: prev
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          PREV_TAG=$(git tag --list "v2.*" --sort=-version:refname | grep -v "\-dev" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous release tag found, using all history"
+            echo "range=HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "Previous release: ${PREV_TAG}"
+            echo "range=${PREV_TAG}..HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        id: notes
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          RANGE="${{ steps.prev.outputs.range }}"
+          COMMITS=$(git log --pretty=format:"%s" ${RANGE} 2>/dev/null || echo "")
+
+          FEATURES=""
+          FIXES=""
+          TESTS=""
+          OTHER=""
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if echo "$line" | grep -qE "^feat(\(|:)"; then
+              FEATURES="${FEATURES}\n- ${line}"
+            elif echo "$line" | grep -qE "^fix(\(|:)"; then
+              FIXES="${FIXES}\n- ${line}"
+            elif echo "$line" | grep -qE "^test(\(|:)"; then
+              TESTS="${TESTS}\n- ${line}"
+            else
+              OTHER="${OTHER}\n- ${line}"
+            fi
+          done <<< "$COMMITS"
+
+          NOTES=""
+          if [ -n "$FEATURES" ]; then
+            NOTES="${NOTES}### Features\n${FEATURES}\n\n"
+          fi
+          if [ -n "$FIXES" ]; then
+            NOTES="${NOTES}### Fixes\n${FIXES}\n\n"
+          fi
+          if [ -n "$TESTS" ]; then
+            NOTES="${NOTES}### Tests\n${TESTS}\n\n"
+          fi
+          if [ -n "$OTHER" ]; then
+            NOTES="${NOTES}### Other\n${OTHER}\n\n"
+          fi
+
+          if [ -z "$NOTES" ]; then
+            NOTES="No notable changes in this release."
+          fi
+
+          # Write notes to file to avoid escaping issues
+          echo -e "$NOTES" > /tmp/release-notes.md
+          echo "Generated release notes"
+
+      - name: Create release tag
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          RELEASE_TAG="${{ steps.version.outputs.release_tag }}"
+
+          # Check if tag already exists
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists, skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ steps.version.outputs.release_tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          gh release create "$RELEASE_TAG" \
+            --title "Omni ${VERSION}" \
+            --notes-file /tmp/release-notes.md \
+            --target main

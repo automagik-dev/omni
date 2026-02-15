@@ -5,23 +5,25 @@
  */
 
 import { createLogger } from '@omni/core';
-import { Bot } from 'grammy';
+import type { TelegramBotLike } from './grammy-shim';
 
 const log = createLogger('telegram:client');
 
 /** Active bot instances keyed by instance ID */
-const bots = new Map<string, Bot>();
+const bots = new Map<string, TelegramBotLike>();
 
 /**
  * Create a new grammy Bot instance
  */
-export function createBot(instanceId: string, token: string): Bot {
+export async function createBot(instanceId: string, token: string): Promise<TelegramBotLike> {
   if (bots.has(instanceId)) {
     log.warn('Bot already exists for instance, destroying old one', { instanceId });
     destroyBot(instanceId);
   }
 
-  const bot = new Bot(token);
+  // Lazy-load grammy to keep modules importable in tests without loading grammy.
+  const { Bot } = await import('grammy');
+  const bot = new Bot(token) as unknown as TelegramBotLike;
   bots.set(instanceId, bot);
 
   log.info('Created grammy Bot', { instanceId });
@@ -31,7 +33,7 @@ export function createBot(instanceId: string, token: string): Bot {
 /**
  * Get an existing bot instance
  */
-export function getBot(instanceId: string): Bot | undefined {
+export function getBot(instanceId: string): TelegramBotLike | undefined {
   return bots.get(instanceId);
 }
 
@@ -57,7 +59,7 @@ export function isBotReady(instanceId: string): boolean {
 /**
  * Get bot info (requires bot.init() to have been called)
  */
-export function getBotInfo(instanceId: string): Bot['botInfo'] | undefined {
+export function getBotInfo(instanceId: string): TelegramBotLike['botInfo'] | undefined {
   const bot = bots.get(instanceId);
   return bot?.botInfo;
 }

@@ -15,6 +15,7 @@ export function createPersonsCommand(): Command {
   const persons = new Command('persons').description('Search and manage persons');
 
   // omni persons search <query>
+  // Note: --instance flag not added yet - SDK doesn't support instance filtering for persons
   persons
     .command('search <query>')
     .description('Search for persons')

@@ -1,0 +1,40 @@
+// Jenkinsfile.dev — Omni v2 DEV Deploy Pipeline
+// Triggers on push to dev branch via GitHub webhook
+pipeline {
+    agent any
+    options {
+        timeout(time: 5, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+    stages {
+        stage('Deploy to genie-os') {
+            steps {
+                sh '''#!/bin/bash
+                    set -euo pipefail
+                    echo "=========================================="
+                    echo "Omni v2 DEV Deploy to genie-os (10.114.1.111)"
+                    echo "=========================================="
+                    echo "Pusher: ${pusher_name:-manual}"
+                    echo "Commit: ${head_commit_message:-n/a}"
+                    
+                    ssh -o StrictHostKeyChecking=no -o BatchMode=yes genie@10.114.1.111 'bash -lc "
+                        export PATH=\$HOME/.bun/bin:\$HOME/.local/bin:/usr/local/bin:\$PATH
+                        cd /home/genie/workspace/repos/automagik/omni
+                        git fetch origin dev
+                        git checkout dev
+                        git pull origin dev
+                        bun install
+                        bun run scripts/generate-version.ts
+                        bun run build
+                        systemctl --user restart omni-dev.service 2>/dev/null && echo Service restarted || echo No omni-dev service
+                        echo Omni v2 DEV deployed successfully
+                    "'
+                '''
+            }
+        }
+    }
+    post {
+        success { echo 'DEV deploy complete' }
+        failure { echo 'DEV deploy failed' }
+    }
+}

@@ -380,13 +380,20 @@ async function sendTypingPresence(
   }
 }
 
-async function sendTextMessage(channel: ChannelType, instanceId: string, chatId: string, text: string): Promise<void> {
+async function sendTextMessage(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  text: string,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
+): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
 
   await plugin.sendMessage(instanceId, {
     to: chatId,
     content: { type: 'text', text },
+    metadata: { messageFormatMode },
   });
 }
 
@@ -680,6 +687,7 @@ async function sendResponseParts(
   chatId: string,
   parts: string[],
   splitConfig: SplitDelayConfig,
+  messageFormatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -688,7 +696,7 @@ async function sendResponseParts(
   }
 
   for (const [index, chunk] of allChunks.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, chunk);
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode);
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -884,6 +892,7 @@ interface StreamCapabilities {
     chatId: string,
     replyToMessageId?: string,
     chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
   ) => StreamSender;
 }
 
@@ -995,7 +1004,8 @@ async function dispatchViaStreamingProvider(
   };
 
   const chatType = determineChatType(chatId, channel);
-  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType);
+  const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
@@ -1084,7 +1094,8 @@ async function dispatchViaProvider(
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+    const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1154,7 +1165,8 @@ async function dispatchViaLegacy(
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance));
+  const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -1583,7 +1595,8 @@ async function processReactionTrigger(
       const result = await provider.trigger(trigger);
 
       if (result && result.parts.length > 0) {
-        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+        const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
       }
 
       log.info('Reaction trigger response via provider', {
@@ -1634,7 +1647,8 @@ async function processReactionTrigger(
     });
 
     if (result.parts.length > 0) {
-      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance));
+      const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
     }
 
     log.info('Reaction trigger response via legacy runner', {
@@ -2254,13 +2268,23 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
 
     // Use allSettled + 5s top-level timeout so one stuck provider can't block shutdown
     const allCleanup = Promise.allSettled([...disposePromises, ...clientStopPromises]);
-    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) =>
-      setTimeout(() => {
+
+    // Create timeout guard with explicit timeout ID tracking
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) => {
+      timeoutId = setTimeout(() => {
         log.warn('Dispatcher shutdown timed out after 5s, proceeding');
         resolve([]);
-      }, 5_000),
-    );
-    await Promise.race([allCleanup, timeoutGuard]);
+      }, 5_000);
+    });
+
+    try {
+      await Promise.race([allCleanup, timeoutGuard]);
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
 
     providerCache.clear();
     openclawClientPool.clear();

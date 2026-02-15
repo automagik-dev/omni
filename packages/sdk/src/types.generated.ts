@@ -10726,11 +10726,15 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Route deleted */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        success: boolean;
+                    };
+                };
             };
             /** @description Access denied */
             403: {
@@ -11056,6 +11060,27 @@ export interface operations {
                              * @description Metrics timestamp
                              */
                             timestamp: string;
+                        };
+                    };
+                };
+            };
+            /** @description Access denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };

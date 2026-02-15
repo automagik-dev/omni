@@ -19,6 +19,11 @@ export const CORE_EVENT_TYPES = [
   'message.delivered',
   'message.read',
   'message.failed',
+
+  // Interactive UI
+  'message.button_click',
+  'message.poll',
+  'message.poll_vote',
   // Media processing
   'media.received',
   'media.processed',
@@ -148,12 +153,16 @@ export function withTiming(metadata: EventMetadata, checkpoint: string, timestam
 export interface MessageReceivedPayload {
   externalId: string;
   chatId: string;
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
   from: string;
   content: {
     type: ContentType;
     text?: string;
     mediaUrl?: string;
     mimeType?: string;
+    localPath?: string;
+    isVoiceNote?: boolean;
   };
   replyToId?: string;
   rawPayload?: Record<string, unknown>;
@@ -162,6 +171,8 @@ export interface MessageReceivedPayload {
 export interface MessageSentPayload {
   externalId: string;
   chatId: string;
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
   to: string;
   content: {
     type: ContentType;
@@ -189,6 +200,51 @@ export interface MessageFailedPayload {
   error: string;
   errorCode?: string;
   retryable: boolean;
+}
+
+/** Canonical event: inline button clicked (Telegram callback query, etc.) */
+export interface MessageButtonClickPayload {
+  /** Telegram callback_query.id (or equivalent platform id) */
+  callbackQueryId?: string;
+  /** The message that contained the button (if available) */
+  messageId?: string;
+  /** Chat/conversation id where click happened (if available) */
+  chatId?: string;
+  /** User who clicked */
+  from: string;
+  /** Button label shown to user (if available) */
+  text?: string;
+  /** Platform callback payload (e.g., Telegram callback_data) */
+  data?: string;
+  /** Raw platform payload for debugging */
+  rawPayload?: Record<string, unknown>;
+}
+
+/** Canonical event: poll created/received */
+export interface MessagePollPayload {
+  /** Poll id on the platform */
+  pollId: string;
+  /** Chat id where poll belongs (if known) */
+  chatId?: string;
+  /** User who created the poll (if available) */
+  from?: string;
+  question: string;
+  options: string[];
+  /** Whether multiple options can be selected */
+  multiSelect?: boolean;
+  rawPayload?: Record<string, unknown>;
+}
+
+/** Canonical event: poll vote / poll answer */
+export interface MessagePollVotePayload {
+  pollId: string;
+  /** Chat id where poll belongs (if known) */
+  chatId?: string;
+  /** User who voted */
+  from: string;
+  /** Selected option indices */
+  optionIds: number[];
+  rawPayload?: Record<string, unknown>;
 }
 
 /**
@@ -301,6 +357,8 @@ export interface SyncJobConfig {
   since?: string;
   /** Explicit until timestamp (ISO string) */
   until?: string;
+  /** Specific chat JIDs to fetch history for (WhatsApp only) */
+  chatJids?: string[];
 }
 
 export interface SyncJobProgress {
@@ -470,6 +528,9 @@ export interface EventPayloadMap {
   'message.delivered': MessageDeliveredPayload;
   'message.read': MessageReadPayload;
   'message.failed': MessageFailedPayload;
+  'message.button_click': MessageButtonClickPayload;
+  'message.poll': MessagePollPayload;
+  'message.poll_vote': MessagePollVotePayload;
   'media.received': MediaReceivedPayload;
   'media.processed': MediaProcessedPayload;
   'identity.created': IdentityCreatedPayload;

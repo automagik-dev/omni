@@ -3,6 +3,8 @@
  */
 
 import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
+import { splitWhatsAppMessage } from '../utils/split-message';
 
 /**
  * Convert phone number to WhatsApp JID format
@@ -48,14 +50,32 @@ export async function sendTextMessage(
   text: string,
   replyToId?: string,
   mentions?: string[],
+  formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<string | undefined> {
-  const content = buildTextContent(text, mentions);
+  const normalizedText = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+  const chunks = splitWhatsAppMessage(normalizedText);
 
-  const result = await sock.sendMessage(
-    jid,
-    content,
-    replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
-  );
+  let lastMessageId: string | undefined;
 
-  return result?.key?.id ?? undefined;
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index] ?? '';
+    const content = buildTextContent(chunk, mentions);
+
+    const result = await sock.sendMessage(
+      jid,
+      content,
+      index === 0 && replyToId
+        ? {
+            quoted: {
+              key: { id: replyToId, remoteJid: jid, fromMe: false },
+              message: {},
+            },
+          }
+        : undefined,
+    );
+
+    lastMessageId = result?.key?.id ?? lastMessageId;
+  }
+
+  return lastMessageId;
 }

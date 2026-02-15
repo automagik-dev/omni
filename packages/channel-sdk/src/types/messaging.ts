@@ -32,6 +32,23 @@ export interface OutgoingContent {
   /** Target message ID (for reaction type) */
   targetMessageId?: string;
 
+  /** Inline buttons (Telegram, etc.) */
+  buttons?: Array<{
+    text: string;
+    /** Callback payload (e.g. Telegram callback_data). Mutually exclusive with url. */
+    data?: string;
+    /** Link button URL. Mutually exclusive with data. */
+    url?: string;
+  }>;
+
+  /** Poll (Telegram/WhatsApp/etc.) */
+  poll?: {
+    question: string;
+    options: string[];
+    multiSelect?: boolean;
+    isAnonymous?: boolean;
+  };
+
   /** Contact details (for contact type) */
   contact?: {
     name: string;
@@ -56,11 +73,31 @@ export interface OutgoingContent {
 }
 
 /**
+ * Well-known metadata keys for outgoing messages.
+ *
+ * Plugins may read these from `OutgoingMessage.metadata` to adjust behavior.
+ */
+export interface MessageMetadata {
+  /**
+   * Format conversion mode for text messages.
+   * - `'convert'` (default): convert markdown to the channel's native syntax
+   * - `'passthrough'`: send raw text without conversion
+   */
+  messageFormatMode?: 'convert' | 'passthrough';
+
+  /** Additional plugin-specific metadata */
+  [key: string]: unknown;
+}
+
+/**
  * Outgoing message structure
  */
 export interface OutgoingMessage {
   /** Recipient identifier (chat ID, user ID, etc.) */
   to: string;
+
+  /** Optional thread/topic identifier (e.g. Telegram forum topic) */
+  threadId?: string;
 
   /** Message content */
   content: OutgoingContent;
@@ -68,8 +105,8 @@ export interface OutgoingMessage {
   /** ID of message to reply to */
   replyTo?: string;
 
-  /** Additional metadata for the channel */
-  metadata?: Record<string, unknown>;
+  /** Additional metadata for the channel (see MessageMetadata for well-known keys) */
+  metadata?: MessageMetadata;
 }
 
 /**

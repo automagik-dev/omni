@@ -47,19 +47,46 @@ export interface StoredMediaResult {
  */
 function getExtensionFromMime(mimeType: string): string {
   const mimeToExt: Record<string, string> = {
+    // Images
     'image/jpeg': '.jpg',
     'image/png': '.png',
     'image/gif': '.gif',
     'image/webp': '.webp',
+    'image/svg+xml': '.svg',
+    'image/bmp': '.bmp',
+    'image/tiff': '.tiff',
+    // Audio
     'audio/ogg': '.ogg',
     'audio/mpeg': '.mp3',
     'audio/mp4': '.m4a',
     'audio/opus': '.opus',
+    'audio/wav': '.wav',
+    'audio/aac': '.aac',
+    'audio/flac': '.flac',
+    // Video
     'video/mp4': '.mp4',
     'video/webm': '.webm',
+    'video/quicktime': '.mov',
+    'video/x-msvideo': '.avi',
+    'video/x-matroska': '.mkv',
+    // Documents
     'application/pdf': '.pdf',
     'application/msword': '.doc',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'text/plain': '.txt',
+    'text/csv': '.csv',
+    // Archives
+    'application/zip': '.zip',
+    'application/x-rar-compressed': '.rar',
+    'application/vnd.rar': '.rar',
+    'application/x-7z-compressed': '.7z',
+    'application/x-tar': '.tar',
+    'application/gzip': '.gz',
+    'application/x-bzip2': '.bz2',
   };
 
   return mimeToExt[mimeType] ?? '.bin';
@@ -210,20 +237,47 @@ export class MediaStorageService {
   getMimeType(filePath: string): string {
     const ext = extname(filePath).toLowerCase();
     const extToMime: Record<string, string> = {
+      // Images
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
       '.png': 'image/png',
       '.gif': 'image/gif',
       '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      '.bmp': 'image/bmp',
+      '.tiff': 'image/tiff',
+      '.tif': 'image/tiff',
+      // Audio
       '.ogg': 'audio/ogg',
       '.mp3': 'audio/mpeg',
       '.m4a': 'audio/mp4',
       '.opus': 'audio/opus',
+      '.wav': 'audio/wav',
+      '.aac': 'audio/aac',
+      '.flac': 'audio/flac',
+      // Video
       '.mp4': 'video/mp4',
       '.webm': 'video/webm',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.mkv': 'video/x-matroska',
+      // Documents
       '.pdf': 'application/pdf',
       '.doc': 'application/msword',
       '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      // Archives
+      '.zip': 'application/zip',
+      '.rar': 'application/vnd.rar',
+      '.7z': 'application/x-7z-compressed',
+      '.tar': 'application/x-tar',
+      '.gz': 'application/gzip',
+      '.bz2': 'application/x-bzip2',
     };
 
     return extToMime[ext] ?? 'application/octet-stream';

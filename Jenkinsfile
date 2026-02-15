@@ -24,6 +24,7 @@ pipeline {
                         git checkout main
                         git pull origin main
                         bun install
+                        bun run scripts/generate-version.ts
                         bun run build
                         pm2 restart omni-v2-api 2>/dev/null && echo PM2 restarted || echo No PM2 service
                         sleep 5

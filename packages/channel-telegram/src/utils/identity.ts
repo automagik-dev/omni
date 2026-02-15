@@ -4,7 +4,7 @@
  * Maps Telegram user IDs (numeric) to Omni platform identifiers.
  */
 
-import type { User } from 'grammy/types';
+import type { TelegramUser } from '../grammy-shim';
 
 /**
  * Convert Telegram user ID to platform user ID string
@@ -16,7 +16,7 @@ export function toPlatformUserId(userId: number): string {
 /**
  * Build display name from Telegram user object
  */
-export function buildDisplayName(user: User): string {
+export function buildDisplayName(user: TelegramUser): string {
   const parts: string[] = [];
   if (user.first_name) parts.push(user.first_name);
   if (user.last_name) parts.push(user.last_name);
@@ -26,7 +26,7 @@ export function buildDisplayName(user: User): string {
 /**
  * Get username with @ prefix if available
  */
-export function getUsername(user: User): string | undefined {
+export function getUsername(user: TelegramUser): string | undefined {
   return user.username ? `@${user.username}` : undefined;
 }
 

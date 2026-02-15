@@ -53,10 +53,10 @@ export function createContextMiddleware(
     // Set services
     c.set('services', services);
 
-    // Add request ID to response headers
-    c.res.headers.set('x-request-id', requestId);
-
     await next();
+
+    // Set after next() so header survives response replacement
+    c.res.headers.set('x-request-id', requestId);
   });
 
   return { middleware, services };

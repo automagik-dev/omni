@@ -6,19 +6,33 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Bot } from 'grammy';
-import type { MessageReactionUpdated, ReactionType } from 'grammy/types';
+import type { TelegramBotLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
 import { toPlatformUserId } from '../utils/identity';
 
 const log = createLogger('telegram:reactions');
 
+type ReactionType = {
+  type: string;
+  emoji?: string;
+  custom_emoji_id?: string;
+};
+
+type MessageReactionUpdated = {
+  chat: { id: number };
+  message_id: number;
+  user?: { id: number; is_bot: boolean };
+  actor_chat?: { id: number };
+  old_reaction: ReactionType[];
+  new_reaction: ReactionType[];
+};
+
 /**
  * Extract emoji string from a Telegram ReactionType
  */
 function reactionToEmoji(reaction: ReactionType): string {
-  if (reaction.type === 'emoji') return reaction.emoji;
-  if (reaction.type === 'custom_emoji') return reaction.custom_emoji_id;
+  if (reaction.type === 'emoji' && reaction.emoji) return reaction.emoji;
+  if (reaction.type === 'custom_emoji' && reaction.custom_emoji_id) return reaction.custom_emoji_id;
   return '?';
 }
 
@@ -78,9 +92,9 @@ async function processReactionDiff(
 /**
  * Set up reaction handlers for a grammy Bot
  */
-export function setupReactionHandlers(bot: Bot, plugin: TelegramPlugin, instanceId: string): void {
+export function setupReactionHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): void {
   bot.on('message_reaction', async (ctx) => {
-    const update = ctx.messageReaction;
+    const update = (ctx as { messageReaction?: MessageReactionUpdated }).messageReaction;
     if (!update) return;
 
     const userId = resolveUserId(update);

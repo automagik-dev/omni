@@ -103,7 +103,14 @@ export async function sendImageMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    options?.replyToId ? { quoted: { key: { id: options.replyToId, remoteJid: jid } } as never } : undefined,
+    options?.replyToId
+      ? {
+          quoted: {
+            key: { id: options.replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;
@@ -127,7 +134,14 @@ export async function sendAudioMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    options?.replyToId ? { quoted: { key: { id: options.replyToId, remoteJid: jid } } as never } : undefined,
+    options?.replyToId
+      ? {
+          quoted: {
+            key: { id: options.replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;
@@ -151,7 +165,14 @@ export async function sendVideoMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    options?.replyToId ? { quoted: { key: { id: options.replyToId, remoteJid: jid } } as never } : undefined,
+    options?.replyToId
+      ? {
+          quoted: {
+            key: { id: options.replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;
@@ -176,7 +197,14 @@ export async function sendDocumentMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    options?.replyToId ? { quoted: { key: { id: options.replyToId, remoteJid: jid } } as never } : undefined,
+    options?.replyToId
+      ? {
+          quoted: {
+            key: { id: options.replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;
@@ -196,7 +224,14 @@ export async function sendStickerMessage(
   const result = await sock.sendMessage(
     jid,
     content,
-    replyToId ? { quoted: { key: { id: replyToId, remoteJid: jid } } as never } : undefined,
+    replyToId
+      ? {
+          quoted: {
+            key: { id: replyToId, remoteJid: jid, fromMe: false },
+            message: {},
+          },
+        }
+      : undefined,
   );
 
   return result?.key?.id ?? undefined;

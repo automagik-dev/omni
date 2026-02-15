@@ -1020,6 +1020,21 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
+  // Validate that the target message exists (prevent sending reactions to invalid messages).
+  // `messageId` here is the channel/external message id (not the DB UUID).
+  const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
+  if (chat) {
+    const target = await services.messages.getByExternalId(chat.id, messageId);
+    if (!target) {
+      throw new OmniError({
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Target message not found: ${messageId}`,
+        context: { messageId, resourceType: 'Message' },
+        recoverable: false,
+      });
+    }
+  }
+
   // Build outgoing message for reaction
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,

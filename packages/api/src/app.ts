@@ -48,6 +48,7 @@ import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { defaultTimeoutMiddleware } from './middleware/timeout';
+import { versionHeadersMiddleware } from './middleware/version-headers';
 import { healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
@@ -108,6 +109,7 @@ export function createApp(
   );
   app.use('*', secureHeaders());
   app.use('*', contextMiddleware);
+  app.use('*', versionHeadersMiddleware);
 
   // Error handler - must be registered with onError, not as middleware
   app.onError(errorHandler);

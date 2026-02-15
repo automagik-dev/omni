@@ -182,6 +182,8 @@ export interface OmniClientConfig {
   baseUrl: string;
   /** API key for authentication */
   apiKey: string;
+  /** Optional CLI version for request handshake header */
+  cliVersion?: string;
 }
 
 /**
@@ -631,6 +633,41 @@ export interface SendContactBody {
 }
 
 /**
+ * Body for sending a TTS voice note
+ */
+export interface SendTtsBody {
+  instanceId: string;
+  to: string;
+  text: string;
+  voiceId?: string;
+  modelId?: string;
+  stability?: number;
+  similarityBoost?: number;
+  presenceDelay?: number;
+}
+
+/**
+ * TTS voice configuration
+ */
+export interface TtsVoice {
+  voiceId: string;
+  name: string;
+  category?: string;
+  labels?: Record<string, string>;
+}
+
+/**
+ * TTS send response
+ */
+export interface TtsResponse {
+  messageId: string;
+  status: string;
+  audioSizeKb: number;
+  durationMs: number;
+  timestamp: number;
+}
+
+/**
  * Body for sending a location
  */
 export interface SendLocationBody {
@@ -983,20 +1020,27 @@ export function createOmniClient(config: OmniClientConfig) {
     async onRequest({ request }) {
       request.headers.set('x-api-key', config.apiKey);
       request.headers.set('Accept-Encoding', 'identity');
+      if (config.cliVersion) {
+        request.headers.set('x-omni-cli-version', config.cliVersion);
+      }
       return request;
     },
   };
 
   // Helper for direct fetch calls with consistent headers
-  const apiFetch = (url: string, init?: RequestInit) =>
-    fetch(url, {
+  const apiFetch = (url: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set('x-api-key', config.apiKey);
+    headers.set('Accept-Encoding', 'identity');
+    if (config.cliVersion) {
+      headers.set('x-omni-cli-version', config.cliVersion);
+    }
+
+    return fetch(url, {
       ...init,
-      headers: {
-        'x-api-key': config.apiKey,
-        'Accept-Encoding': 'identity',
-        ...init?.headers,
-      },
+      headers,
     });
+  };
 
   // Create openapi-fetch client
   const client = createClient<paths>({ baseUrl: `${baseUrl}/api/v2` });
@@ -1627,6 +1671,30 @@ export function createOmniClient(config: OmniClientConfig) {
         const json = (await resp.json()) as { data?: MarkReadResult };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { chatId: body.chatId, instanceId: body.instanceId, messageCount: body.messageIds.length };
+      },
+
+      /**
+       * List available TTS voices
+       */
+      async listVoices(): Promise<TtsVoice[]> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/tts/voices`, {});
+        const json = (await resp.json()) as { data?: { voices: TtsVoice[] } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data?.voices ?? [];
+      },
+
+      /**
+       * Send a TTS voice note
+       */
+      async sendTts(body: SendTtsBody): Promise<TtsResponse> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: TtsResponse };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { messageId: '', status: 'sent', audioSizeKb: 0, durationMs: 0, timestamp: Date.now() };
       },
     },
 
@@ -2693,6 +2761,9 @@ export function createOmniClient(config: OmniClientConfig) {
         const noCompressionMiddleware: Middleware = {
           async onRequest({ request }) {
             request.headers.set('Accept-Encoding', 'identity');
+            if (config.cliVersion) {
+              request.headers.set('x-omni-cli-version', config.cliVersion);
+            }
             return request;
           },
         };

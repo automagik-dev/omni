@@ -65,14 +65,16 @@ export function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general)
       entry.count++;
     }
 
-    // Set rate limit headers
-    const remaining = Math.max(0, config.maxRequests - entry.count);
-    c.res.headers.set('X-RateLimit-Limit', config.maxRequests.toString());
-    c.res.headers.set('X-RateLimit-Remaining', remaining.toString());
-    c.res.headers.set('X-RateLimit-Reset', Math.ceil(entry.resetAt / 1000).toString());
+    // Helper: set rate-limit headers on any response path
+    const setRateLimitHeaders = () => {
+      const remaining = Math.max(0, config.maxRequests - entry.count);
+      c.res.headers.set('X-RateLimit-Limit', config.maxRequests.toString());
+      c.res.headers.set('X-RateLimit-Remaining', remaining.toString());
+      c.res.headers.set('X-RateLimit-Reset', Math.ceil(entry.resetAt / 1000).toString());
+    };
 
     if (entry.count > config.maxRequests) {
-      return c.json(
+      const res = c.json(
         {
           error: {
             code: 'RATE_LIMITED',
@@ -86,9 +88,15 @@ export function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general)
         },
         429,
       );
+      // Set headers on the 429 response so clients can determine retry timing
+      setRateLimitHeaders();
+      return res;
     }
 
     await next();
+
+    // Set after next() so headers survive response replacement
+    setRateLimitHeaders();
   });
 }
 

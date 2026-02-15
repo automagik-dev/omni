@@ -66,6 +66,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'messages.sendPoll': 'send poll',
   'messages.sendEmbed': 'send embed',
   'messages.sendPresence': 'send presence',
+  'messages.listVoices': 'tts voices',
+  'messages.sendTts': 'send tts',
   'messages.markRead': 'messages read',
   'messages.batchMarkRead': 'messages read --batch',
 

@@ -65,6 +65,36 @@ export class ChatService {
     private eventBus: EventBus | null,
   ) {}
 
+  private isCanonicalUniqueViolation(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    if (!('code' in error) || (error as { code?: unknown }).code !== '23505') return false;
+
+    const constraint =
+      ('constraint' in error && typeof (error as { constraint?: unknown }).constraint === 'string'
+        ? (error as { constraint: string }).constraint
+        : undefined) ??
+      ('constraint_name' in error && typeof (error as { constraint_name?: unknown }).constraint_name === 'string'
+        ? (error as { constraint_name: string }).constraint_name
+        : undefined);
+
+    if (constraint === 'chats_instance_canonical_unique_idx') return true;
+
+    const message =
+      'message' in error && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message
+        : '';
+    return message.includes('chats_instance_canonical_unique_idx');
+  }
+
+  private async getByCanonicalId(instanceId: string, canonicalId: string): Promise<Chat | null> {
+    const [result] = await this.db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, canonicalId)))
+      .limit(1);
+    return result ?? null;
+  }
+
   /**
    * List chats with filtering and pagination
    */
@@ -374,59 +404,41 @@ export class ChatService {
     externalId: string,
     defaults: Omit<NewChat, 'instanceId' | 'externalId'>,
   ): Promise<{ chat: Chat; created: boolean }> {
-    // Primary lookup: exact externalId match
-    const existing = await this.getByExternalId(instanceId, externalId);
-    if (existing) {
-      return { chat: existing, created: false };
-    }
+    const maxRetries = 2;
 
-    // Secondary lookup: check if another chat has this as its canonicalId
-    // (e.g., an @lid chat that was previously resolved to this phone JID)
-    const [byCanonical] = await this.db
-      .select()
-      .from(chats)
-      .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
-      .limit(1);
-    if (byCanonical) {
-      return { chat: byCanonical, created: false };
-    }
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // Smart lookup handles externalId, canonicalId, and WhatsApp LID↔phone mappings.
+      const existing = await this.findByExternalIdSmart(instanceId, externalId);
+      if (existing) return { chat: existing, created: false };
 
-    // Secondary lookup: check chatIdMappings for LID↔phone mappings
-    if (externalId.endsWith('@s.whatsapp.net')) {
-      // Phone JID arrived — check if a LID chat exists for it
-      const [mapping] = await this.db
-        .select()
-        .from(chatIdMappings)
-        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.phoneId, externalId)))
-        .limit(1);
-      if (mapping) {
-        const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
-        if (lidChat) {
-          return { chat: lidChat, created: false };
-        }
+      // If we're trying to set a canonicalId, check if a chat with that canonicalId already exists
+      // (handles concurrent creation with same canonicalId but different externalIds)
+      if (defaults.canonicalId) {
+        const existingCanonical = await this.getByCanonicalId(instanceId, defaults.canonicalId);
+        if (existingCanonical) return { chat: existingCanonical, created: false };
       }
-    } else if (externalId.endsWith('@lid')) {
-      // LID arrived — check if a phone chat exists for it
-      const [mapping] = await this.db
-        .select()
-        .from(chatIdMappings)
-        .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, externalId)))
-        .limit(1);
-      if (mapping) {
-        const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
-        if (phoneChat) {
-          return { chat: phoneChat, created: false };
+
+      try {
+        // Attempt to create chat
+        const chat = await this.create({
+          instanceId,
+          externalId,
+          ...defaults,
+        });
+
+        return { chat, created: true };
+      } catch (error) {
+        if (this.isCanonicalUniqueViolation(error) && attempt < maxRetries) {
+          // Concurrent request created chat with same canonicalId - retry lookup
+          continue;
         }
+
+        // Different error or max retries exceeded
+        throw error;
       }
     }
 
-    const chat = await this.create({
-      instanceId,
-      externalId,
-      ...defaults,
-    });
-
-    return { chat, created: true };
+    throw new Error(`Failed to create or find chat after ${maxRetries + 1} attempts: ${externalId}`);
   }
 
   /**
@@ -477,7 +489,7 @@ export class ChatService {
       .set({
         lastMessageAt: timestamp,
         lastMessagePreview: safePreview.substring(0, 500),
-        messageCount: sql`${chats.messageCount} + 1`,
+        // messageCount increment removed - already incremented in messages.create() transaction
         updatedAt: new Date(),
       })
       .where(eq(chats.id, chatId));

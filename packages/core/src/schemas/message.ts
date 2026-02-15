@@ -111,6 +111,25 @@ export const OutgoingMessageSchema = z.object({
     mimeType: z.string().optional(),
     filename: z.string().optional(),
     caption: z.string().optional(),
+
+    // Extended interactive UI types
+    buttons: z
+      .array(
+        z.object({
+          text: z.string(),
+          data: z.string().optional(),
+          url: z.string().url().optional(),
+        }),
+      )
+      .optional(),
+    poll: z
+      .object({
+        question: z.string(),
+        options: z.array(z.string()).min(2),
+        multiSelect: z.boolean().optional(),
+        isAnonymous: z.boolean().optional(),
+      })
+      .optional(),
   }),
   replyToId: z.string().optional(),
   metadata: MetadataSchema.optional(),

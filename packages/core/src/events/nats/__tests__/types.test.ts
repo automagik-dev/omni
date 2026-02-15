@@ -9,6 +9,9 @@ describe('event types', () => {
       expect(CORE_EVENT_TYPES).toContain('message.delivered');
       expect(CORE_EVENT_TYPES).toContain('message.read');
       expect(CORE_EVENT_TYPES).toContain('message.failed');
+      expect(CORE_EVENT_TYPES).toContain('message.button_click');
+      expect(CORE_EVENT_TYPES).toContain('message.poll');
+      expect(CORE_EVENT_TYPES).toContain('message.poll_vote');
       expect(CORE_EVENT_TYPES).toContain('media.received');
       expect(CORE_EVENT_TYPES).toContain('media.processed');
       expect(CORE_EVENT_TYPES).toContain('identity.created');

@@ -49,5 +49,9 @@ export {
 // Forward
 export { forwardMessage } from './forward';
 
+// Stream sender (progressive response edits)
+export { WhatsAppStreamSender } from './stream';
+export type { WhatsAppStreamSenderOptions } from './stream';
+
 // Unified content builder
 export { buildMessageContent } from './builders';

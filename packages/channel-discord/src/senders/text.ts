@@ -4,6 +4,7 @@
 
 import type { Client, DMChannel, MessageCreateOptions, NewsChannel, TextChannel, ThreadChannel } from 'discord.js';
 import { chunkMessage } from '../utils/chunking';
+import { markdownToDiscord } from '../utils/markdown-to-discord';
 
 type SendableChannel = TextChannel | DMChannel | NewsChannel | ThreadChannel;
 
@@ -28,6 +29,7 @@ export async function sendTextMessage(
   channelId: string,
   text: string,
   replyToId?: string,
+  formatMode: 'convert' | 'passthrough' = 'convert',
 ): Promise<string[]> {
   const channel = await client.channels.fetch(channelId);
   if (!channel || !('send' in channel)) {
@@ -35,7 +37,8 @@ export async function sendTextMessage(
   }
 
   const sendChannel = channel as SendableChannel;
-  const chunks = chunkMessage(text);
+  const formattedText = formatMode === 'passthrough' ? text : markdownToDiscord(text);
+  const chunks = chunkMessage(formattedText);
   const messageIds: string[] = [];
 
   let isFirst = true;

@@ -2,12 +2,30 @@
  * Health check endpoints
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { consumerOffsets, instances } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
 
-const VERSION = '2.0.0';
+// Read version from CI-generated version.json, fallback to hardcoded
+let VERSION = '2.0.0';
+try {
+  // Try multiple paths: monorepo root (dev) and relative to dist (prod)
+  for (const candidate of [
+    join(import.meta.dir, '..', '..', '..', '..', 'version.json'),
+    join(process.cwd(), 'version.json'),
+  ]) {
+    if (existsSync(candidate)) {
+      const vj = JSON.parse(readFileSync(candidate, 'utf-8'));
+      if (vj.version) {
+        VERSION = vj.version;
+        break;
+      }
+    }
+  }
+} catch {}
 const startTime = Date.now();
 
 export const healthRoutes = new Hono<{ Variables: AppVariables }>();

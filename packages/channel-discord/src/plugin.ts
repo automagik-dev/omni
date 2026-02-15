@@ -139,7 +139,12 @@ async function sendTextContent(client: Client, channelId: string, message: Outgo
     text = `${formatMentionsToText(mentions)} ${text}`;
   }
 
-  const messageIds = await sendTextMessage(client, channelId, text, message.replyTo);
+  const formatMode =
+    message.metadata?.messageFormatMode === 'passthrough' || message.metadata?.formatMode === 'passthrough'
+      ? 'passthrough'
+      : 'convert';
+
+  const messageIds = await sendTextMessage(client, channelId, text, message.replyTo, formatMode);
   return messageIds[0] ?? '';
 }
 

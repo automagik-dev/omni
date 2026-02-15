@@ -440,8 +440,10 @@ export function createChatsCommand(): Command {
         const client = getClient();
 
         try {
+          const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+
           const result = await client.chats.list({
-            instanceId: options.instance,
+            instanceId,
             channel: options.channel,
             search: options.search,
             includeArchived: options.archived,
