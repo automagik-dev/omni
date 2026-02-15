@@ -90,13 +90,13 @@ function loadServerVersionInfo(): ServerVersionInfo {
 const SERVER_VERSION_INFO = loadServerVersionInfo();
 
 export const versionHeadersMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
+  const cliVersion = c.req.header('x-omni-cli-version');
+
+  await next();
+
   c.res.headers.set('x-omni-server-version', SERVER_VERSION_INFO.version);
   c.res.headers.set('x-omni-server-commit', SERVER_VERSION_INFO.commit);
-
-  const cliVersion = c.req.header('x-omni-cli-version');
   if (cliVersion && cliVersion !== SERVER_VERSION_INFO.version) {
     c.res.headers.set('x-omni-version-mismatch', 'true');
   }
-
-  await next();
 });

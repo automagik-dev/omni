@@ -2268,13 +2268,23 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
 
     // Use allSettled + 5s top-level timeout so one stuck provider can't block shutdown
     const allCleanup = Promise.allSettled([...disposePromises, ...clientStopPromises]);
-    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) =>
-      setTimeout(() => {
+
+    // Create timeout guard with explicit timeout ID tracking
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutGuard = new Promise<PromiseSettledResult<void>[]>((resolve) => {
+      timeoutId = setTimeout(() => {
         log.warn('Dispatcher shutdown timed out after 5s, proceeding');
         resolve([]);
-      }, 5_000),
-    );
-    await Promise.race([allCleanup, timeoutGuard]);
+      }, 5_000);
+    });
+
+    try {
+      await Promise.race([allCleanup, timeoutGuard]);
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
 
     providerCache.clear();
     openclawClientPool.clear();

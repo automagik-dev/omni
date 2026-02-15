@@ -20,7 +20,7 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
@@ -30,6 +30,16 @@ jobs:
           DEV_TAG=$(git tag --list "v2.*-dev" --sort=-version:refname | head -1)
           if [ -z "$DEV_TAG" ]; then
             echo "No dev tags found, skipping release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DEV_TAG_COMMIT=$(git rev-list -n 1 "$DEV_TAG")
+          MAIN_HEAD=$(git rev-parse refs/heads/main)
+
+          if ! git merge-base --is-ancestor "$DEV_TAG_COMMIT" "$MAIN_HEAD"; then
+            echo "::error::Dev tag $DEV_TAG ($DEV_TAG_COMMIT) is not an ancestor of main HEAD ($MAIN_HEAD)"
+            echo "::error::This indicates the tag was not properly merged to main"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
