@@ -394,20 +394,3 @@ describeWithDb('Multi-Instance Isolation', () => {
       );
   });
 });
-
-describeWithDb.skip('Cross-Instance Linking (Future Feature)', () => {
-  test('placeholder: should link same person across instances when implemented', async () => {
-    // This is a placeholder for future functionality
-    // Currently, instances are intentionally isolated
-    // Future enhancement: Link same person across instances via phone number or email
-
-    expect(true).toBe(true); // Placeholder passes
-  });
-
-  test('placeholder: should consolidate person profiles when implemented', async () => {
-    // Future enhancement: Merge person data from multiple instances
-    // User preference: Which instance is primary source of truth?
-
-    expect(true).toBe(true); // Placeholder passes
-  });
-});
