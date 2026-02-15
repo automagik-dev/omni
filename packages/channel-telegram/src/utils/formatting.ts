@@ -167,6 +167,86 @@ function takeTextChunk(text: string, budget: number): { chunk: string; rest: str
   return { chunk: text.slice(0, splitAt), rest: text.slice(splitAt) };
 }
 
+type OpenTag = { name: string; raw: string };
+type PlainHtmlSplitState = {
+  maxLength: number;
+  chunks: string[];
+  openStack: OpenTag[];
+  current: string;
+};
+
+function appendCombinedChunk(chunks: string[], combined: string, maxLength: number): void {
+  if (combined.length > maxLength) {
+    // Should be extremely rare (would imply an enormous tag stack). Fallback to best-effort splitting.
+    chunks.push(...splitPlainByBoundaries(combined, maxLength));
+  } else {
+    chunks.push(combined);
+  }
+}
+
+function flushPlainHtmlState(state: PlainHtmlSplitState): void {
+  if (!state.current) return;
+  const suffix = closingTagsFor(state.openStack);
+  appendCombinedChunk(state.chunks, state.current + suffix, state.maxLength);
+  state.current = reopeningTagsFor(state.openStack);
+}
+
+function canAppendPlainHtml(state: PlainHtmlSplitState, part: string, nextOpen?: OpenTag): boolean {
+  const suffixLen = nextOpen
+    ? closingTagsFor([...state.openStack, nextOpen]).length
+    : closingTagsFor(state.openStack).length;
+  return state.current.length + part.length + suffixLen <= state.maxLength;
+}
+
+function popStackToMatchingTag(openStack: OpenTag[], name: string): void {
+  const idxFromTop = [...openStack].reverse().findIndex((t) => t.name === name);
+  if (idxFromTop < 0) return;
+  openStack.splice(openStack.length - 1 - idxFromTop, idxFromTop + 1);
+}
+
+function appendTagTokenToState(state: PlainHtmlSplitState, tokenValue: string): void {
+  const close = parseClosingTag(tokenValue);
+  const open = parseOpeningTag(tokenValue);
+
+  // If adding this tag would overflow, flush first (keeping stack as-is).
+  if (open) {
+    if (!canAppendPlainHtml(state, tokenValue, open)) flushPlainHtmlState(state);
+  } else if (!canAppendPlainHtml(state, tokenValue)) {
+    flushPlainHtmlState(state);
+  }
+
+  state.current += tokenValue;
+
+  if (close) {
+    popStackToMatchingTag(state.openStack, close.name);
+    return;
+  }
+
+  if (open) state.openStack.push(open);
+}
+
+function appendTextTokenToState(state: PlainHtmlSplitState, text: string): void {
+  let remaining = text;
+  while (remaining) {
+    if (canAppendPlainHtml(state, remaining)) {
+      state.current += remaining;
+      return;
+    }
+
+    const suffixLen = closingTagsFor(state.openStack).length;
+    const budget = state.maxLength - state.current.length - suffixLen;
+    if (budget <= 0) {
+      flushPlainHtmlState(state);
+      continue;
+    }
+
+    const { chunk, rest } = takeTextChunk(remaining, budget);
+    state.current += chunk;
+    remaining = rest;
+    flushPlainHtmlState(state);
+  }
+}
+
 /**
  * Split HTML while keeping each chunk valid Telegram HTML by ensuring inline tags are balanced.
  *
@@ -177,90 +257,29 @@ function splitPlainHtmlPreservingTags(value: string, maxLength: number): string[
   if (value.length <= maxLength) return [value];
 
   const tokens = tokenizeHtml(value);
-  const chunks: string[] = [];
-  const openStack: Array<{ name: string; raw: string }> = [];
-
-  let current = reopeningTagsFor(openStack);
-
-  const flush = () => {
-    if (!current) return;
-    const suffix = closingTagsFor(openStack);
-    const combined = current + suffix;
-    if (combined.length > maxLength) {
-      // Should be extremely rare (would imply an enormous tag stack). Fallback to best-effort splitting.
-      chunks.push(...splitPlainByBoundaries(combined, maxLength));
-    } else {
-      chunks.push(combined);
-    }
-    current = reopeningTagsFor(openStack);
+  const state: PlainHtmlSplitState = {
+    maxLength,
+    chunks: [],
+    openStack: [],
+    current: '',
   };
-
-  const canAppend = (part: string) => {
-    const suffixLen = closingTagsFor(openStack).length;
-    return current.length + part.length + suffixLen <= maxLength;
-  };
+  state.current = reopeningTagsFor(state.openStack);
 
   for (const token of tokens) {
     if (token.type === 'tag') {
-      const close = parseClosingTag(token.value);
-      const open = parseOpeningTag(token.value);
-
-      // If adding this tag would overflow, flush first (keeping stack as-is).
-      if (open) {
-        const prospectiveSuffixLen = closingTagsFor([...openStack, open]).length;
-        if (current.length + token.value.length + prospectiveSuffixLen > maxLength) flush();
-      } else if (!canAppend(token.value)) {
-        flush();
-      }
-
-      current += token.value;
-
-      if (close) {
-        const idx = [...openStack].reverse().findIndex((t) => t.name === close.name);
-        if (idx >= 0) {
-          // Pop up to the matched tag.
-          openStack.splice(openStack.length - 1 - idx, idx + 1);
-        }
-      } else if (open) {
-        openStack.push(open);
-      }
+      appendTagTokenToState(state, token.value);
       continue;
     }
 
     // Text token
-    let remaining = token.value;
-    while (remaining) {
-      if (canAppend(remaining)) {
-        current += remaining;
-        remaining = '';
-        break;
-      }
-
-      const suffixLen = closingTagsFor(openStack).length;
-      const budget = maxLength - current.length - suffixLen;
-
-      if (budget <= 0) {
-        flush();
-        continue;
-      }
-
-      const { chunk, rest } = takeTextChunk(remaining, budget);
-      current += chunk;
-      remaining = rest;
-      flush();
-    }
+    appendTextTokenToState(state, token.value);
   }
 
   // Final chunk
-  if (current) {
-    const suffix = closingTagsFor(openStack);
-    const combined = current + suffix;
-    if (combined.length > maxLength) chunks.push(...splitPlainByBoundaries(combined, maxLength));
-    else chunks.push(combined);
-  }
+  flushPlainHtmlState(state);
 
   // Defensive: never return empty.
-  return chunks.length > 0 ? chunks : [''];
+  return state.chunks.length > 0 ? state.chunks : [''];
 }
 
 function splitWrappedContent(prefix: string, content: string, suffix: string, maxLength: number): string[] {
