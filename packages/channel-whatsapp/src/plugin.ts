@@ -1651,6 +1651,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle incoming message
    * @internal
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message processing requires many content type checks
   async handleMessageReceived(
     instanceId: string,
     externalId: string,
@@ -1699,6 +1700,38 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
+
+      // Check if any mentioned JID refers to this instance (handles LID→phone resolution)
+      try {
+        const sock = this.sockets.get(instanceId);
+        const ownerJid = sock?.user?.id;
+        if (ownerJid) {
+          const ownerPhone = ownerJid.replace(/:.*$/, '').replace(/@.*$/, '');
+          const lidCache = this.getLidMappingCache(instanceId);
+          // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID mention resolution requires multiple matching strategies
+          const isMentioningInstance = contextInfo.mentionedJid.some((jid) => {
+            // Direct match
+            if (jid === ownerJid) return true;
+            // Phone number match (strip :device and @suffix)
+            const mentionPhone = jid.replace(/:.*$/, '').replace(/@.*$/, '');
+            if (mentionPhone === ownerPhone) return true;
+            // LID resolution: look up LID in cache to get phone JID
+            if (jid.endsWith('@lid')) {
+              const resolvedPhone = lidCache.get(jid);
+              if (resolvedPhone) {
+                const resolved = resolvedPhone.replace(/:.*$/, '').replace(/@.*$/, '');
+                return resolved === ownerPhone;
+              }
+            }
+            return false;
+          });
+          if (isMentioningInstance) {
+            extendedPayload.isMentioningInstance = true;
+          }
+        }
+      } catch {
+        // Non-critical: if socket not available, skip instance mention detection
+      }
     }
 
     // Add structured extended fields if present

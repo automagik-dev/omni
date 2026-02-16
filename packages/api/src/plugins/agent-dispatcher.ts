@@ -318,7 +318,7 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
     return jid === ownerJid || mentionPhone === ownerPhone;
   });
 
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true;
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
 
   // Handle replies to bot messages (same phone number extraction for LID compatibility)
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
@@ -1723,9 +1723,11 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message routing logic requires multiple checks
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
+  chatsService: Services['chats'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
@@ -1761,6 +1763,32 @@ async function shouldProcessMessage(
 
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
+
+  // LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
+  // check DB for LID→phone mappings to detect if any @lid mention maps to the owner
+  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && metadata.instanceId) {
+    const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
+    const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
+    if (lidMentions.length > 0 && instance.ownerIdentifier) {
+      const ownerPhone = instance.ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+      for (const lidJid of lidMentions) {
+        try {
+          const mapping = await chatsService.findLidMapping(metadata.instanceId, lidJid);
+          if (mapping) {
+            const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+            if (resolvedPhone === ownerPhone) {
+              messageContext.mentionsBot = true;
+              log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
+              break;
+            }
+          }
+        } catch {
+          // Non-critical: skip DB lookup failures
+        }
+      }
+    }
+  }
+
   log.debug('Message context built', {
     instanceId: instance.id,
     chatId: payload.chatId,
@@ -2084,7 +2112,14 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
         const metadata = event.metadata;
 
         try {
-          const instance = await shouldProcessMessage(agentRunner, accessService, rateLimiter, payload, metadata);
+          const instance = await shouldProcessMessage(
+            agentRunner,
+            accessService,
+            services.chats,
+            rateLimiter,
+            payload,
+            metadata,
+          );
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');

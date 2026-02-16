@@ -26,6 +26,9 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly mode = 'round-trip' as const;
   private client: ClaudeCodeClient;
 
+  /** Maps internal session keys (e.g. "userId:chatId") → Claude Code session UUIDs */
+  private sessionMap = new Map<string, string>();
+
   constructor(
     readonly id: string,
     readonly name: string,
@@ -61,11 +64,20 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       message = `[${context.sender.displayName}]: ${message}`;
     }
 
+    // Resolve session: map internal session key → Claude Code session UUID
+    const internalSessionKey = context.sessionId;
+    const resolvedSessionId = internalSessionKey ? this.sessionMap.get(internalSessionKey) : undefined;
+
+    log.debug('Session resolution', {
+      internalKey: internalSessionKey,
+      resolvedUuid: resolvedSessionId ?? '(new session)',
+    });
+
     const request: ProviderRequest = {
       message,
       agentId: 'claude-code', // Claude Code IS the agent
       stream: false,
-      sessionId: context.sessionId,
+      sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
     };
@@ -76,6 +88,12 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     });
 
     const response = await this.client.run(request);
+
+    // Store session UUID for future continuity
+    if (internalSessionKey && response.sessionId) {
+      this.sessionMap.set(internalSessionKey, response.sessionId);
+      log.debug('Session mapped', { internalKey: internalSessionKey, claudeSessionId: response.sessionId });
+    }
 
     const parts =
       this.options.enableAutoSplit !== false
