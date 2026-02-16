@@ -782,6 +782,33 @@ async function prependQuotedContext(
 }
 
 /**
+ * Resolve contact name using cache-aside pattern: cache first, DB fallback
+ */
+async function resolveContactName(
+  services: Services,
+  instanceId: string,
+  jid: string,
+  cacheMap: Map<string, string>,
+): Promise<string | null> {
+  // Try cache first (fast path)
+  const cachedName = cacheMap.get(jid);
+  if (cachedName) return cachedName;
+
+  // Cache miss → query database
+  try {
+    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+    if (chat?.name) {
+      log.debug('Contact name from DB fallback', { jid, name: chat.name });
+      return chat.name;
+    }
+  } catch (error) {
+    log.warn('Failed to query DB for contact', { jid, error: String(error) });
+  }
+
+  return null;
+}
+
+/**
  * Replace @phone mentions in text with actual contact names
  * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
  */
@@ -819,21 +846,8 @@ async function replaceMentionsWithContactNames(
     const phoneNumber = phoneMatch[1];
     const mentionPattern = `@${phoneNumber}`;
 
-    // Try Baileys cache first (fast path)
-    let contactName = jidToName.get(jid);
-
-    // Cache miss → fall back to database
-    if (!contactName) {
-      try {
-        const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
-        if (chat?.name) {
-          contactName = chat.name;
-          log.debug('Contact name from DB fallback', { jid, name: contactName });
-        }
-      } catch (error) {
-        log.warn('Failed to query DB for contact', { jid, error: String(error) });
-      }
-    }
+    // Resolve contact name (cache → DB fallback)
+    const contactName = await resolveContactName(services, instanceId, jid, jidToName);
 
     if (contactName) {
       replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
