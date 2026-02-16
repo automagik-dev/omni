@@ -394,11 +394,25 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const participant = metadata.participants?.find((p) => p.id === lookupJid);
 
       if (participant) {
+        // Log available fields to understand what we can use
+        this.logger.debug('Found participant in group', {
+          jid: lookupJid,
+          participantKeys: Object.keys(participant),
+          participant,
+        });
+
         const name = (participant as { notify?: string }).notify || undefined;
         const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
         const phone = phoneMatch?.[1];
         return { name, phone };
       }
+
+      this.logger.debug('Participant not found in group metadata', {
+        groupJid,
+        lookupJid,
+        participantCount: metadata.participants?.length,
+        sampleParticipants: metadata.participants?.slice(0, 2).map((p) => p.id),
+      });
     } catch (error) {
       this.logger.debug('Failed to fetch group metadata', { groupJid, error: String(error) });
     }
