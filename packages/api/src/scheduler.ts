@@ -99,11 +99,11 @@ export function setupScheduler(services: Services): void {
     },
   });
 
-  // Contacts sync - daily at 4 AM (also runs on startup to repopulate caches)
+  // Contacts sync - daily at 4 AM
   scheduler.register({
     name: 'contacts-sync-daily',
     cron: '0 4 * * *', // 4 AM daily
-    runOnStart: true, // Run on startup to repopulate in-memory caches after API restart
+    runOnStart: false,
     handler: async () => {
       const startTime = Date.now();
       try {

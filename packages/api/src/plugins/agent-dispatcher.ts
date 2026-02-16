@@ -783,18 +783,20 @@ async function prependQuotedContext(
 
 /**
  * Replace @phone mentions in text with actual contact names
- * Uses mentionedContacts from Baileys (provided by WhatsApp plugin) for efficient lookup
+ * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
  */
-function replaceMentionsWithContactNames(
+async function replaceMentionsWithContactNames(
+  services: Services,
+  instanceId: string,
   text: string,
   mentionedJids: string[] | undefined,
   mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
-): string {
+): Promise<string> {
   if (!mentionedJids || mentionedJids.length === 0) return text;
 
   log.debug('Starting mention replacement', { text, mentionedJids, mentionedContacts });
 
-  // Create JID → name map from mentionedContacts
+  // Create JID → name map from mentionedContacts (Baileys cache)
   const jidToName = new Map<string, string>();
   if (mentionedContacts) {
     for (const contact of mentionedContacts) {
@@ -817,13 +819,27 @@ function replaceMentionsWithContactNames(
     const phoneNumber = phoneMatch[1];
     const mentionPattern = `@${phoneNumber}`;
 
-    // Look up contact name from mentionedContacts map
-    const contactName = jidToName.get(jid);
+    // Try Baileys cache first (fast path)
+    let contactName = jidToName.get(jid);
+
+    // Cache miss → fall back to database
+    if (!contactName) {
+      try {
+        const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+        if (chat?.name) {
+          contactName = chat.name;
+          log.debug('Contact name from DB fallback', { jid, name: contactName });
+        }
+      } catch (error) {
+        log.warn('Failed to query DB for contact', { jid, error: String(error) });
+      }
+    }
+
     if (contactName) {
       replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
-      log.debug('Replaced mention from Baileys', { pattern: mentionPattern, name: contactName });
+      log.debug('Replaced mention', { pattern: mentionPattern, name: contactName });
     } else {
-      log.debug('No name found for contact', { jid });
+      log.debug('No name found for contact (cache + DB miss)', { jid });
     }
   }
 
@@ -852,7 +868,7 @@ async function prepareAgentContent(
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
 
-  // Replace @phone mentions with actual contact names (using data from Baileys via WhatsApp plugin)
+  // Replace @phone mentions with actual contact names (cache-aside: Baileys cache → DB fallback)
   for (let i = 0; i < messageTexts.length; i++) {
     const msg = messages[i];
     const text = messageTexts[i];
@@ -863,7 +879,13 @@ async function prepareAgentContent(
     const mentionedContacts = rawPayload?.mentionedContacts as Array<{ jid: string; name?: string }> | undefined;
 
     if (mentionedJids && mentionedJids.length > 0) {
-      messageTexts[i] = replaceMentionsWithContactNames(text, mentionedJids, mentionedContacts);
+      messageTexts[i] = await replaceMentionsWithContactNames(
+        services,
+        instance.id,
+        text,
+        mentionedJids,
+        mentionedContacts,
+      );
     }
   }
 
