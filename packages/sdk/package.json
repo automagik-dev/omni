@@ -1,6 +1,6 @@
 {
   "name": "@omni/sdk",
-  "version": "2.20260215.1",
+  "version": "2.20260216.1",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
