@@ -456,7 +456,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       // Try chatNamesCache (from chats.upsert with pushName)
-      const chatName = this.chatNamesCache.get(instanceId)?.get(lookupJid);
+      const chatNamesMap = this.chatNamesCache.get(instanceId);
+      const chatName = chatNamesMap?.get(lookupJid);
+
+      this.logger.debug('Checking chatNamesCache', {
+        lookupJid,
+        hasChatNamesMap: !!chatNamesMap,
+        cacheSize: chatNamesMap?.size,
+        foundName: chatName,
+        sampleKeys: Array.from(chatNamesMap?.keys() ?? []).slice(0, 5),
+      });
+
       if (chatName) {
         const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
         const phone = phoneMatch?.[1];
