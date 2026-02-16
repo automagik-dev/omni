@@ -456,8 +456,10 @@ function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsApp
   }
 
   let replacedText = text;
-  // biome-ignore lint/complexity/useLiteralKeys: accessing private property via type assertion
-  const contactCache = (plugin as { contactsCache: Map<string, Map<string, unknown>> }).contactsCache.get(instanceId);
+  // Access private property via type assertion (safe in this context)
+  const contactCache = (
+    plugin as unknown as { contactsCache: Map<string, Map<string, { name?: string }>> }
+  ).contactsCache.get(instanceId);
   const lidCache = plugin.getLidMappingCache(instanceId);
 
   for (const jid of contextInfo.mentionedJid) {

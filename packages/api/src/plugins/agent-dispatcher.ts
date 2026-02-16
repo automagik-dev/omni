@@ -1054,26 +1054,25 @@ async function buildContextMessages(
 ): Promise<string[]> {
   try {
     // Only provide context for group chats (not DMs)
-    const chat = await services.chats.findById(chatId);
+    const chat = await services.chats.getById(chatId);
     if (!chat || chat.chatType !== 'group') {
       return [];
     }
 
-    // Query recent messages (last 50, ordered by timestamp desc)
-    const recentMessages = await services.messages.list({
+    // Query recent messages (last 50, ordered by timestamp desc by default)
+    const messagesResult = await services.messages.list({
       chatId,
       limit: 50,
-      sort: 'desc',
     });
+
+    const recentMessages = messagesResult.items;
 
     if (!recentMessages || recentMessages.length === 0) {
       return [];
     }
 
-    // Find the last bot response (from this instance)
-    const lastBotMessageIndex = recentMessages.findIndex(
-      (msg) => msg.direction === 'outbound' && msg.instanceId === instance.id,
-    );
+    // Find the last bot response (isFromMe indicates bot-sent messages)
+    const lastBotMessageIndex = recentMessages.findIndex((msg) => msg.isFromMe === true);
 
     // If no bot response found, or it's the most recent message, no context needed
     if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
@@ -1091,7 +1090,7 @@ async function buildContextMessages(
 
     // Format as "[Name - HH:MM] message" (reverse to chronological order)
     return contextMsgs.reverse().map((msg) => {
-      const name = msg.senderDisplayName || msg.senderId || 'Unknown';
+      const name = msg.senderDisplayName || msg.senderPlatformUserId || 'Unknown';
       const time = msg.platformTimestamp
         ? new Date(msg.platformTimestamp).toLocaleTimeString('en-US', {
             hour: '2-digit',
@@ -1635,13 +1634,13 @@ async function processReactionTrigger(
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
-    chatId,
+    chatId: internalChatId,
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
   });
 
-  await sendTypingPresence(channel, instance.id, chatId, 'composing');
+  await sendTypingPresence(channel, instance.id, internalChatId, 'composing');
 
   try {
     // Try new IAgentProvider path first
@@ -1650,7 +1649,11 @@ async function processReactionTrigger(
     if (provider) {
       // Build AgentTrigger for the provider
       const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
-      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', payload.from, chatId);
+      const sessionId = computeSessionId(
+        instance.agentSessionStrategy ?? 'per_user_per_chat',
+        payload.from,
+        internalChatId,
+      );
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -1659,7 +1662,7 @@ async function processReactionTrigger(
         source: {
           channelType: channel,
           instanceId: instance.id,
-          chatId,
+          chatId: internalChatId,
           messageId: payload.messageId,
         },
         sender: {
@@ -1678,12 +1681,19 @@ async function processReactionTrigger(
 
       if (result && result.parts.length > 0) {
         const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
+        await sendResponseParts(
+          channel,
+          instance.id,
+          internalChatId,
+          result.parts,
+          getSplitDelayConfig(instance),
+          _fmtMode,
+        );
       }
 
       log.info('Reaction trigger response via provider', {
         instanceId: instance.id,
-        chatId,
+        chatId: internalChatId,
         emoji: payload.emoji,
         parts: result?.parts.length ?? 0,
         providerId: result?.metadata.providerId,
@@ -1705,18 +1715,18 @@ async function processReactionTrigger(
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
     // Determine chat type and fetch metadata
-    const chatType = determineChatType(chatId, instance.channel);
+    const chatType = determineChatType(internalChatId, instance.channel);
     const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
       services,
       channel,
       instance.id,
       payload.from,
     );
-    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
+    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, internalChatId, chatType);
 
     const result = await services.agentRunner.run({
       instance,
-      chatId,
+      chatId: internalChatId,
       personId,
       senderId: payload.from,
       senderName,
@@ -1730,12 +1740,19 @@ async function processReactionTrigger(
 
     if (result.parts.length > 0) {
       const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
+      await sendResponseParts(
+        channel,
+        instance.id,
+        internalChatId,
+        result.parts,
+        getSplitDelayConfig(instance),
+        _fmtMode,
+      );
     }
 
     log.info('Reaction trigger response via legacy runner', {
       instanceId: instance.id,
-      chatId,
+      chatId: internalChatId,
       emoji: payload.emoji,
       parts: result.parts.length,
       traceId: metadata.traceId,
@@ -1743,12 +1760,12 @@ async function processReactionTrigger(
   } catch (error) {
     log.error('Failed to process reaction trigger', {
       instanceId: instance.id,
-      chatId,
+      chatId: internalChatId,
       error: String(error),
       traceId: metadata.traceId,
     });
   } finally {
-    await sendTypingPresence(channel, instance.id, chatId, 'paused');
+    await sendTypingPresence(channel, instance.id, internalChatId, 'paused');
   }
 }
 
