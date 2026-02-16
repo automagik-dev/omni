@@ -798,8 +798,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           const gapMs = Date.now() - lastMessageAt.getTime();
           const gapMinutes = Math.round(gapMs / 60_000);
 
-          // Only trigger backfill if gap > 5 minutes
-          if (gapMs > 5 * 60 * 1000) {
+          // In dev mode, use higher threshold (60 min) to avoid spam on frequent restarts
+          const isDev = process.env.NODE_ENV === 'development';
+          const gapThresholdMs = isDev ? 60 * 60 * 1000 : 5 * 60 * 1000; // 60 min in dev, 5 min in prod
+
+          // Only trigger backfill if gap exceeds threshold
+          if (gapMs > gapThresholdMs) {
             const channelType = event.metadata.channelType ?? ('whatsapp-baileys' as ChannelType);
 
             // Discord sync requires a specific channelId — skip auto-backfill
