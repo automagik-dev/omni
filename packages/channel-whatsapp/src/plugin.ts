@@ -365,6 +365,45 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Get contact info from Baileys (name, phone) by JID
+   * Resolves LID to PN if needed and queries the internal contact cache
+   */
+  async getContactInfo(instanceId: string, jid: string): Promise<{ name?: string; phone?: string } | null> {
+    try {
+      const sock = this.sockets.get(instanceId);
+      if (!sock) {
+        this.logger.debug('Socket not found for instance', { instanceId });
+        return null;
+      }
+
+      // Resolve LID to PN if needed using Baileys' signalRepository
+      let lookupJid = jid;
+      if (jid.endsWith('@lid')) {
+        const pn = await sock.signalRepository.lidMapping.getPNForLID(jid);
+        if (pn) {
+          lookupJid = pn;
+          this.logger.debug('Resolved LID to PN via Baileys', { lid: jid, pn });
+        }
+      }
+
+      // Look up contact from contactsCache (populated by contacts.upsert events)
+      const contact = this.contactsCache.get(instanceId)?.get(lookupJid);
+      if (!contact) {
+        this.logger.debug('Contact not found in cache', { instanceId, jid: lookupJid });
+        return null;
+      }
+
+      return {
+        name: contact.name || contact.notify || contact.verifiedName || undefined,
+        phone: contact.number,
+      };
+    } catch (error) {
+      this.logger.debug('Failed to get contact info', { instanceId, jid, error: String(error) });
+      return null;
+    }
+  }
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -1700,6 +1739,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
+
+      // Resolve contact names for all mentioned JIDs using Baileys
+      const mentionedContacts: Array<{ jid: string; name?: string }> = [];
+      for (const jid of contextInfo.mentionedJid) {
+        const contactInfo = await this.getContactInfo(instanceId, jid);
+        if (contactInfo?.name) {
+          mentionedContacts.push({ jid, name: contactInfo.name });
+        }
+      }
+      if (mentionedContacts.length > 0) {
+        extendedPayload.mentionedContacts = mentionedContacts;
+      }
 
       // Check if any mentioned JID refers to this instance (handles LID→phone resolution)
       try {

@@ -782,95 +782,48 @@ async function prependQuotedContext(
 }
 
 /**
- * Try to find chat with device ID variations (e.g., 555@s.whatsapp.net vs 555:3@s.whatsapp.net)
+ * Replace @phone mentions in text with actual contact names
+ * Uses mentionedContacts from Baileys (provided by WhatsApp plugin) for efficient lookup
  */
-async function findChatWithDeviceIdFallback(
-  services: Services,
-  instanceId: string,
-  jid: string,
-): Promise<{ id: string; name: string | null; chatType: string; externalId: string } | null> {
-  // Try exact match first
-  let chat = await services.chats.findByExternalIdSmart(instanceId, jid);
-  if (chat) return chat;
+function replaceMentionsWithContactNames(
+  text: string,
+  mentionedJids: string[] | undefined,
+  mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
+): string {
+  if (!mentionedJids || mentionedJids.length === 0) return text;
 
-  // If not found and JID doesn't have device ID, try adding common ones
-  if (!jid.includes(':')) {
-    const [phoneNumber, domain] = jid.split('@');
-    // Try common device IDs
-    for (const deviceId of ['3', '0', '1', '2', '4', '5']) {
-      const jidWithDevice = `${phoneNumber}:${deviceId}@${domain}`;
-      chat = await services.chats.findByExternalIdSmart(instanceId, jidWithDevice);
-      if (chat) {
-        log.debug('Found contact with device ID', { originalJid: jid, foundJid: jidWithDevice });
-        return chat;
+  log.debug('Starting mention replacement', { text, mentionedJids, mentionedContacts });
+
+  // Create JID → name map from mentionedContacts
+  const jidToName = new Map<string, string>();
+  if (mentionedContacts) {
+    for (const contact of mentionedContacts) {
+      if (contact.name) {
+        jidToName.set(contact.jid, contact.name);
       }
     }
   }
 
-  return null;
-}
-
-/**
- * Replace @phone mentions in text with actual contact names from database
- */
-async function replaceMentionsWithContactNames(
-  services: Services,
-  instanceId: string,
-  text: string,
-  mentionedJids: string[] | undefined,
-): Promise<string> {
-  if (!mentionedJids || mentionedJids.length === 0) return text;
-
-  log.debug('Starting mention replacement', { text, mentionedJids });
   let replacedText = text;
 
   for (const jid of mentionedJids) {
-    // Extract phone number from JID (supports @s.whatsapp.net and @lid)
-    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid)$/);
+    // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
+    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
     if (!phoneMatch) {
       log.debug('JID did not match pattern', { jid });
       continue;
     }
 
     const phoneNumber = phoneMatch[1];
-    const isLid = phoneMatch[2] === '@lid';
     const mentionPattern = `@${phoneNumber}`;
 
-    log.debug('Processing mention', { jid, phoneNumber, isLid, mentionPattern });
-
-    // Resolve LID to phone JID if needed
-    let lookupJid = jid;
-    if (isLid) {
-      const resolvedPhone = await services.chats.findLidMapping(instanceId, jid);
-      if (resolvedPhone) {
-        lookupJid = resolvedPhone;
-        log.debug('LID resolved from DB', { lidJid: jid, phoneJid: resolvedPhone });
-      } else {
-        log.debug('LID not found in DB', { lidJid: jid });
-      }
-    }
-
-    // Look up contact name from database with device ID fallback
-    try {
-      log.debug('Looking up contact', { instanceId, lookupJid });
-      const chat = await findChatWithDeviceIdFallback(services, instanceId, lookupJid);
-
-      log.debug('Contact lookup result', {
-        found: !!chat,
-        chatId: chat?.id,
-        name: chat?.name,
-        chatType: chat?.chatType,
-        externalId: chat?.externalId,
-      });
-
-      if (chat?.name) {
-        replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${chat.name}`);
-        log.debug('Replaced mention from DB', { pattern: mentionPattern, name: chat.name });
-      } else {
-        log.debug('No name found for contact', { jid: lookupJid, chatFound: !!chat });
-      }
-    } catch (error) {
-      log.warn('Failed to look up contact name', { jid: lookupJid, error: String(error) });
+    // Look up contact name from mentionedContacts map
+    const contactName = jidToName.get(jid);
+    if (contactName) {
+      replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
+      log.debug('Replaced mention from Baileys', { pattern: mentionPattern, name: contactName });
+    } else {
+      log.debug('No name found for contact', { jid });
     }
   }
 
@@ -899,15 +852,18 @@ async function prepareAgentContent(
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
 
-  // Replace @phone mentions with actual contact names from database
+  // Replace @phone mentions with actual contact names (using data from Baileys via WhatsApp plugin)
   for (let i = 0; i < messageTexts.length; i++) {
     const msg = messages[i];
     const text = messageTexts[i];
     if (!text) continue;
 
-    const mentionedJids = (msg?.payload.rawPayload as Record<string, unknown>)?.mentionedJids as string[] | undefined;
+    const rawPayload = msg?.payload.rawPayload as Record<string, unknown> | undefined;
+    const mentionedJids = rawPayload?.mentionedJids as string[] | undefined;
+    const mentionedContacts = rawPayload?.mentionedContacts as Array<{ jid: string; name?: string }> | undefined;
+
     if (mentionedJids && mentionedJids.length > 0) {
-      messageTexts[i] = await replaceMentionsWithContactNames(services, instance.id, text, mentionedJids);
+      messageTexts[i] = replaceMentionsWithContactNames(text, mentionedJids, mentionedContacts);
     }
   }
 
