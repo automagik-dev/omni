@@ -87,6 +87,13 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     // Check TTL and discard expired sessions
     const internalSessionKey = context.sessionId;
     let resolvedSessionId: string | undefined;
+
+    log.debug('Session lookup', {
+      internalKey: internalSessionKey,
+      hasSessionMap: this.sessionMap.size > 0,
+      sessionMapSize: this.sessionMap.size,
+    });
+
     if (internalSessionKey) {
       const sessionData = this.sessionMap.get(internalSessionKey);
       if (sessionData) {
@@ -98,6 +105,8 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
           log.debug('Session expired', { internalKey: internalSessionKey, age: `${Math.round(age / 1000)}s` });
           this.sessionMap.delete(internalSessionKey);
         }
+      } else {
+        log.debug('No session found in map', { internalKey: internalSessionKey });
       }
     }
 

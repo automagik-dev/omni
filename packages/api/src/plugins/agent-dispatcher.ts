@@ -1054,14 +1054,16 @@ async function buildContextMessages(
 ): Promise<string[]> {
   try {
     // Only provide context for group chats (not DMs)
-    const chat = await services.chats.getById(chatId);
+    // chatId here is the external JID, not internal UUID
+    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
     if (!chat || chat.chatType !== 'group') {
       return [];
     }
 
     // Query recent messages (last 50, ordered by timestamp desc by default)
+    // Use the internal chat.id (UUID) for the query
     const messagesResult = await services.messages.list({
-      chatId,
+      chatId: chat.id,
       limit: 50,
     });
 

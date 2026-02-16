@@ -455,6 +455,12 @@ function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsApp
     return text;
   }
 
+  log.debug('Replacing mentions', {
+    instanceId,
+    originalText: text,
+    mentionedJids: contextInfo.mentionedJid,
+  });
+
   let replacedText = text;
   // Access private property via type assertion (safe in this context)
   const contactCache = (
@@ -462,10 +468,18 @@ function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsApp
   ).contactsCache.get(instanceId);
   const lidCache = plugin.getLidMappingCache(instanceId);
 
+  log.debug('Cache sizes', {
+    contactCacheSize: contactCache?.size ?? 0,
+    lidCacheSize: lidCache.size,
+  });
+
   for (const jid of contextInfo.mentionedJid) {
     // Extract phone number from JID (supports @s.whatsapp.net and @lid)
     const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid)$/);
-    if (!phoneMatch) continue;
+    if (!phoneMatch) {
+      log.debug('JID did not match pattern', { jid });
+      continue;
+    }
 
     const lidNumber = phoneMatch[1];
     const isLid = phoneMatch[2] === '@lid';
@@ -477,6 +491,9 @@ function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsApp
       const resolvedPhone = lidCache.get(jid);
       if (resolvedPhone) {
         lookupJid = resolvedPhone;
+        log.debug('LID resolved', { lidJid: jid, phoneJid: resolvedPhone });
+      } else {
+        log.debug('LID not found in cache', { lidJid: jid });
       }
     }
 
@@ -485,13 +502,19 @@ function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsApp
     const contact = contactCache?.get(lookupJid);
     if (contact?.name) {
       contactName = contact.name;
+      log.debug('Contact found', { jid: lookupJid, name: contactName });
+    } else {
+      log.debug('Contact not found', { jid: lookupJid });
     }
 
     // Replace @lidNumber with @Name if found
     if (contactName) {
       replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
+      log.debug('Replaced mention', { pattern: mentionPattern, name: contactName });
     }
   }
+
+  log.debug('Mention replacement result', { original: text, replaced: replacedText });
 
   return replacedText;
 }
