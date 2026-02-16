@@ -5,6 +5,9 @@
  * Unlike Agno, Claude Code IS the agent — there's no agent discovery.
  */
 
+import type { Database } from '@omni/db';
+import { agentSessions } from '@omni/db';
+import { and, eq, lt } from 'drizzle-orm';
 import { createLogger } from '../logger';
 import type { ClaudeCodeClient, ClaudeCodeConfig } from './claude-code-client';
 import { createClaudeCodeClient } from './claude-code-client';
@@ -27,9 +30,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly schema = 'claude-code' as const;
   readonly mode = 'round-trip' as const;
   private client: ClaudeCodeClient;
-
-  /** Maps internal session keys (e.g. "userId:chatId") → Claude Code session UUIDs + timestamp */
-  private sessionMap = new Map<string, { uuid: string; lastUsed: number }>();
+  private db: Database;
 
   /** Session TTL in milliseconds (default: Infinity = never expire) - sessions older than this are discarded */
   private readonly sessionTtlMs: number;
@@ -39,8 +40,10 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     readonly name: string,
     config: ClaudeCodeConfig,
     private options: ClaudeCodeProviderOptions = {},
+    db: Database,
   ) {
     this.client = createClaudeCodeClient(config);
+    this.db = db;
     // Default: no TTL (sessions never expire unless explicitly configured)
     this.sessionTtlMs = this.options.sessionTtlMs ?? Number.POSITIVE_INFINITY;
   }
@@ -90,23 +93,48 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     log.debug('Session lookup', {
       internalKey: internalSessionKey,
-      hasSessionMap: this.sessionMap.size > 0,
-      sessionMapSize: this.sessionMap.size,
+      instanceId: context.source.instanceId,
     });
 
-    if (internalSessionKey) {
-      const sessionData = this.sessionMap.get(internalSessionKey);
-      if (sessionData) {
-        const age = Date.now() - sessionData.lastUsed;
-        if (age < this.sessionTtlMs) {
-          resolvedSessionId = sessionData.uuid;
-          log.debug('Resuming session', { internalKey: internalSessionKey, age: `${Math.round(age / 1000)}s` });
+    if (internalSessionKey && context.source.instanceId) {
+      // Query database for existing session
+      const [existingSession] = await this.db
+        .select()
+        .from(agentSessions)
+        .where(
+          and(
+            eq(agentSessions.instanceId, context.source.instanceId),
+            eq(agentSessions.sessionKey, internalSessionKey),
+          ),
+        )
+        .limit(1);
+
+      if (existingSession) {
+        // Check if session has expired
+        const now = new Date();
+        const isExpired = existingSession.expiresAt && existingSession.expiresAt < now;
+
+        if (!isExpired) {
+          const providerData = existingSession.providerSessionData as { sessionId?: string };
+          resolvedSessionId = providerData.sessionId;
+          const age = Date.now() - existingSession.lastUsedAt.getTime();
+          log.debug('Resuming session from DB', {
+            internalKey: internalSessionKey,
+            claudeSessionId: resolvedSessionId,
+            age: `${Math.round(age / 1000)}s`,
+          });
         } else {
-          log.debug('Session expired', { internalKey: internalSessionKey, age: `${Math.round(age / 1000)}s` });
-          this.sessionMap.delete(internalSessionKey);
+          log.debug('Session expired', {
+            internalKey: internalSessionKey,
+            expiresAt: existingSession.expiresAt,
+          });
+          // Delete expired session
+          await this.db
+            .delete(agentSessions)
+            .where(eq(agentSessions.id, existingSession.id));
         }
       } else {
-        log.debug('No session found in map', { internalKey: internalSessionKey });
+        log.debug('No session found in DB', { internalKey: internalSessionKey });
       }
     }
 
@@ -131,19 +159,44 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     const response = await this.client.run(request);
 
-    // Store session UUID for future continuity (with timestamp for TTL)
-    if (internalSessionKey && response.sessionId) {
-      this.sessionMap.set(internalSessionKey, { uuid: response.sessionId, lastUsed: Date.now() });
-      log.debug('Session stored', {
+    // Store session UUID in database for future continuity
+    if (internalSessionKey && response.sessionId && context.source.instanceId) {
+      const now = new Date();
+      const expiresAt =
+        this.sessionTtlMs < Number.POSITIVE_INFINITY
+          ? new Date(now.getTime() + this.sessionTtlMs)
+          : null;
+
+      // Insert or update session in database
+      await this.db
+        .insert(agentSessions)
+        .values({
+          instanceId: context.source.instanceId,
+          sessionKey: internalSessionKey,
+          providerSessionData: { sessionId: response.sessionId },
+          lastUsedAt: now,
+          expiresAt,
+        })
+        .onConflictDoUpdate({
+          target: [agentSessions.instanceId, agentSessions.sessionKey],
+          set: {
+            providerSessionData: { sessionId: response.sessionId },
+            lastUsedAt: now,
+            expiresAt,
+            updatedAt: now,
+          },
+        });
+
+      log.debug('Session stored in DB', {
         internalKey: internalSessionKey,
         claudeSessionId: response.sessionId,
-        mapSize: this.sessionMap.size,
-        allKeys: Array.from(this.sessionMap.keys()),
+        expiresAt: expiresAt?.toISOString() ?? 'never',
       });
     } else {
       log.warn('Session not stored', {
         hasInternalKey: !!internalSessionKey,
         hasResponseSessionId: !!response.sessionId,
+        hasInstanceId: !!context.source.instanceId,
         internalKey: internalSessionKey,
         responseSessionId: response.sessionId,
       });

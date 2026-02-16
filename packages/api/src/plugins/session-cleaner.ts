@@ -9,7 +9,7 @@
 
 import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { createAgnoClient, createLogger } from '@omni/core';
-import type { ChannelType } from '@omni/db';
+import type { ChannelType, Database } from '@omni/db';
 import type { Services } from '../services';
 import { computeSessionId } from '../services/agent-runner';
 import { resolveProvider } from './agent-dispatcher';
@@ -54,6 +54,7 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
  */
 async function clearAgentSession(
   services: Services,
+  db: Database,
   instanceId: string,
   from: string,
   chatId: string,
@@ -69,13 +70,13 @@ async function clearAgentSession(
   const providerRecord = await services.providers.getById(instance.agentProviderId);
 
   // Compute session ID using the same strategy as agent-runner
-  const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+  const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
   const sessionId = computeSessionId(sessionStrategy, from, chatId);
 
   // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, etc.)
   // Pass chatId so providers that build their own key format (e.g. OpenClaw)
   // can reconstruct the correct session key instead of using the generic sessionId.
-  const agentProvider = resolveProvider(providerRecord, instance);
+  const agentProvider = resolveProvider(providerRecord, instance, db);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId);
     return { sessionId, sessionStrategy };
@@ -103,7 +104,11 @@ async function clearAgentSession(
 /**
  * Handle trash emoji message event
  */
-async function handleTrashEmojiMessage(services: Services, event: TypedOmniEvent<'message.received'>): Promise<void> {
+async function handleTrashEmojiMessage(
+  services: Services,
+  db: Database,
+  event: TypedOmniEvent<'message.received'>,
+): Promise<void> {
   const { content, chatId, from } = event.payload;
   const { instanceId } = event.metadata;
 
@@ -113,7 +118,7 @@ async function handleTrashEmojiMessage(services: Services, event: TypedOmniEvent
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
 
   try {
-    const { sessionId, sessionStrategy } = await clearAgentSession(services, instanceId, from, chatId);
+    const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, from, chatId);
 
     log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
 
@@ -147,9 +152,9 @@ async function handleTrashEmojiMessage(services: Services, event: TypedOmniEvent
 /**
  * Set up session cleaner - subscribes to message.received and clears sessions on trash emoji
  */
-export async function setupSessionCleaner(eventBus: EventBus, services: Services): Promise<void> {
+export async function setupSessionCleaner(eventBus: EventBus, services: Services, db: Database): Promise<void> {
   try {
-    await eventBus.subscribe('message.received', async (event) => handleTrashEmojiMessage(services, event), {
+    await eventBus.subscribe('message.received', async (event) => handleTrashEmojiMessage(services, db, event), {
       durable: 'session-cleaner',
       queue: 'session-cleaner',
       maxRetries: 2,

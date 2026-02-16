@@ -41,7 +41,7 @@ import {
   generateCorrelationId,
   getJourneyTracker,
 } from '@omni/core';
-import type { AgentProvider } from '@omni/db';
+import type { AgentProvider, Database } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import type { Services } from '../services';
 import {
@@ -1012,10 +1012,11 @@ async function resolveStreamingCapabilities(
   channel: ChannelType,
   chatId: string,
   traceId: string,
+  db: Database,
 ): Promise<StreamCapabilities | null> {
   if (!instance.agentStreamMode) return null;
 
-  const provider = await getAgentProvider(services, instance);
+  const provider = await getAgentProvider(services, instance, db);
   if (!provider?.triggerStream) return null;
 
   const plugin = await getPlugin(channel);
@@ -1080,8 +1081,9 @@ async function dispatchViaStreamingProvider(
   senderName: string | undefined,
   traceId: string,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<boolean> {
-  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId);
+  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId, db);
   if (!resolved) return false;
 
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
@@ -1226,8 +1228,9 @@ async function dispatchViaProvider(
   senderName: string | undefined,
   traceId: string,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<boolean> {
-  const provider = await getAgentProvider(services, instance);
+  const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
 
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
@@ -1363,6 +1366,7 @@ async function processAgentResponse(
   instance: Instance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
+  db: Database,
 ): Promise<void> {
   const firstMessage = messages[0];
   if (!firstMessage) return;
@@ -1420,6 +1424,7 @@ async function processAgentResponse(
         senderName,
         traceId,
         rawEvent,
+        db,
       );
 
       // B-1b: Fall back to accumulate-then-reply
@@ -1436,6 +1441,7 @@ async function processAgentResponse(
           senderName,
           traceId,
           rawEvent,
+          db,
         );
       }
     } catch (providerError) {
@@ -1543,7 +1549,11 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
 }
 
 /** Create a Claude Code agent provider */
-function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+function createClaudeCodeProviderInstance(
+  provider: AgentProvider,
+  instance: Instance,
+  db: Database,
+): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const projectPath = schemaConfig.projectPath as string;
 
@@ -1577,6 +1587,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
     },
+    db,
   );
 }
 
@@ -1599,7 +1610,11 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
  *
  * Exported for use by session-cleaner (provider.resetSession).
  */
-export function resolveProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+export function resolveProvider(
+  provider: AgentProvider,
+  instance: Instance,
+  db: Database,
+): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
   if (cached) return cached;
@@ -1617,7 +1632,7 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
       agentProvider = createOpenClawProviderInstance(provider, instance);
       break;
     case 'claude-code':
-      agentProvider = createClaudeCodeProviderInstance(provider, instance);
+      agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -1636,7 +1651,11 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
 /**
  * Look up provider from DB and resolve to IAgentProvider
  */
-async function getAgentProvider(services: Services, instance: Instance): Promise<IAgentProvider | null> {
+async function getAgentProvider(
+  services: Services,
+  instance: Instance,
+  db: Database,
+): Promise<IAgentProvider | null> {
   if (!instance.agentProviderId) return null;
 
   try {
@@ -1644,7 +1663,7 @@ async function getAgentProvider(services: Services, instance: Instance): Promise
 
     if (!provider?.isActive) return null;
 
-    return resolveProvider(provider, instance);
+    return resolveProvider(provider, instance, db);
   } catch (error) {
     log.warn('Failed to resolve agent provider, falling back to legacy', {
       instanceId: instance.id,
@@ -1719,6 +1738,7 @@ async function processReactionTrigger(
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const externalChatId = payload.chatId;
@@ -1747,7 +1767,7 @@ async function processReactionTrigger(
 
   try {
     // Try new IAgentProvider path first
-    const provider = await getAgentProvider(services, instance);
+    const provider = await getAgentProvider(services, instance, db);
 
     if (provider) {
       // Build AgentTrigger for the provider
@@ -2223,7 +2243,11 @@ async function shouldRespondViaGate(
  * Set up agent dispatcher - subscribes to message AND reaction events
  * Returns a cleanup function that should be called on shutdown.
  */
-export async function setupAgentDispatcher(eventBus: EventBus, services: Services): Promise<DispatcherCleanup> {
+export async function setupAgentDispatcher(
+  eventBus: EventBus,
+  services: Services,
+  db: Database,
+): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
   const rateLimiter = new RateLimiter();
@@ -2284,7 +2308,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
-    await processAgentResponse(services, instance, messages, triggerType);
+    await processAgentResponse(services, instance, messages, triggerType, db);
   });
 
   try {
@@ -2393,6 +2417,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
               traceId,
             },
             event,
+            db,
           );
         } catch (error) {
           log.error('Error processing reaction for dispatch', {
@@ -2446,6 +2471,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
               traceId,
             },
             event,
+            db,
           );
         } catch (error) {
           log.error('Error processing reaction removal for dispatch', {

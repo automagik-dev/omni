@@ -99,6 +99,9 @@ mock.module('@omni/core', () => {
 // Test Fixtures
 // ============================================================================
 
+// Mock database for tests
+const mockDb = {} as any;
+
 function createMockInstance(overrides: Record<string, unknown> = {}) {
   return {
     id: 'inst-1',
@@ -280,7 +283,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
 
@@ -298,7 +301,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       expect(typeof cleanup).toBe('function');
       // Should not throw
@@ -309,7 +312,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Check options for message.received
       const msgCall = eventBus.subscribe.mock.calls.find((call: unknown[]) => call[0] === 'message.received');
@@ -361,7 +364,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const event = createMessageEvent();
       await eventBus.fire('message.received', event);
@@ -378,7 +381,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const event = createMessageEvent({
         payload: {
@@ -400,7 +403,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const event = createMessageEvent({
         metadata: {
@@ -425,7 +428,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -441,7 +444,7 @@ describe('agent-dispatcher', () => {
         },
       });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -462,7 +465,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Send 3 messages — the 3rd should be rate limited
       for (let i = 0; i < 3; i++) {
@@ -504,7 +507,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('reaction.received', createReactionEvent());
 
@@ -533,7 +536,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('reaction.received', createReactionEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -558,7 +561,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire(
         'reaction.received',
@@ -588,7 +591,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('reaction.received', createReactionEvent());
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -617,7 +620,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const rxnEvent = createReactionEvent({
         payload: { messageId: 'msg-dup', chatId: 'chat-1', from: 'user-same', emoji: '\u{1F44D}' },
@@ -657,7 +660,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Different emojis on the same message from the same user → both should process
       await eventBus.fire(
@@ -697,7 +700,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const emojis = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F525}', '\u{1F389}'];
       // Fire 4 different emojis on the same message from different users
@@ -754,7 +757,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Send two messages rapidly
       await eventBus.fire('message.received', createMessageEvent());
@@ -805,7 +808,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire(
         'message.received',
@@ -830,7 +833,7 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('message.received', createMessageEvent());
 
@@ -860,7 +863,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Send a message
       await eventBus.fire('message.received', createMessageEvent());
@@ -913,7 +916,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Buffer a message (debounce set to 5000ms)
       await eventBus.fire('message.received', createMessageEvent());
@@ -954,7 +957,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Message should still work (default)
       await eventBus.fire('message.received', createMessageEvent());
@@ -981,7 +984,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Message should be skipped (not in triggerEvents)
       await eventBus.fire('message.received', createMessageEvent());
@@ -1031,7 +1034,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Send a group message (not a DM) — should be filtered out
       const event = createMessageEvent({
@@ -1074,7 +1077,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // DM chat — should pass filter
       const event = createMessageEvent({
@@ -1110,7 +1113,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1143,7 +1146,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Should not throw
       await eventBus.fire('message.received', createMessageEvent());
@@ -1170,7 +1173,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner, providers });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Should not throw — errors are caught inside processAgentResponse
       await eventBus.fire('message.received', createMessageEvent());
@@ -1201,7 +1204,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       // Should not throw
       await eventBus.fire('reaction.received', createReactionEvent());
@@ -1234,7 +1237,7 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services);
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
       const event = createMessageEvent({
         metadata: {

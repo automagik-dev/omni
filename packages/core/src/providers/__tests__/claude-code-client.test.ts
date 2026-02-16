@@ -210,10 +210,19 @@ describe('ClaudeCodeClient', () => {
 });
 
 describe('ClaudeCodeAgentProvider', () => {
+  // Mock database for tests
+  const mockDb = {} as any;
+
   it('implements IAgentProvider interface', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test Provider', {
-      projectPath: '/test',
-    });
+    const provider = new ClaudeCodeAgentProvider(
+      'test-id',
+      'Test Provider',
+      {
+        projectPath: '/test',
+      },
+      {},
+      mockDb,
+    );
 
     expect(provider.id).toBe('test-id');
     expect(provider.name).toBe('Test Provider');
@@ -225,9 +234,7 @@ describe('ClaudeCodeAgentProvider', () => {
   });
 
   it('canHandle returns true for all trigger types', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', {
-      projectPath: '/test',
-    });
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, {}, mockDb);
 
     const makeTrigger = (type: string) => ({ type }) as unknown as AgentTrigger;
 
@@ -239,9 +246,15 @@ describe('ClaudeCodeAgentProvider', () => {
   });
 
   it('delegates checkHealth to client', async () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', {
-      projectPath: '/nonexistent/path/that/does/not/exist',
-    });
+    const provider = new ClaudeCodeAgentProvider(
+      'test-id',
+      'Test',
+      {
+        projectPath: '/nonexistent/path/that/does/not/exist',
+      },
+      {},
+      mockDb,
+    );
 
     const result = await provider.checkHealth();
     expect(result.healthy).toBe(false);
@@ -254,6 +267,7 @@ describe('ClaudeCodeAgentProvider', () => {
       'Test',
       { projectPath: '/test', model: 'claude-opus-4-6' },
       { timeoutMs: 180_000, enableAutoSplit: false, prefixSenderName: false },
+      mockDb,
     );
 
     expect(provider).toBeDefined();
