@@ -28,7 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'dev' }}
+          # This workflow always writes to `dev`. Always base version bumps on the latest `dev` to avoid
+          # non-fast-forward races when triggered via workflow_run (detached HEAD by SHA).
+          ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
