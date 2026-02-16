@@ -28,8 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # This workflow always writes to `dev`. To avoid non-fast-forward races when triggered by workflow_run
-          # (which checks out by SHA / detached HEAD), always base version bumps on the latest `dev`.
+          # This workflow always writes to `dev`. Always base version bumps on the latest `dev` to avoid
+          # non-fast-forward races when triggered via workflow_run (detached HEAD by SHA).
           ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -78,9 +78,11 @@ jobs:
           if git diff --cached --quiet; then
             echo "No package.json changes to commit"
           else
-            git commit -m "[skip ci] version: ${VERSION}"
+            git commit -m "chore(version): bump to ${VERSION} [skip ci]"
           fi
 
+          # Dev tags use -dev suffix to distinguish from release-please production tags on main.
+          # release-please creates v{version} tags; version.yml creates v{version}-dev tags.
           git tag "v${VERSION}-dev"
           # When triggered via workflow_run we checkout by SHA (detached HEAD). Push the current commit to `dev`
           # explicitly so the version bump commit and its tag are both reachable from the branch.
