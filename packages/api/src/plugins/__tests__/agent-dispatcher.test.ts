@@ -100,7 +100,7 @@ mock.module('@omni/core', () => {
 // ============================================================================
 
 // Mock database for tests
-const mockDb = {} as any;
+const mockDb = {} as unknown as import('@omni/db').Database;
 
 function createMockInstance(overrides: Record<string, unknown> = {}) {
   return {
@@ -283,7 +283,11 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      const cleanup = await setupAgentDispatcher(
+        eventBus as unknown as import('@omni/core').EventBus,
+        services,
+        mockDb,
+      );
 
       expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
 
@@ -301,7 +305,11 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      const cleanup = await setupAgentDispatcher(
+        eventBus as unknown as import('@omni/core').EventBus,
+        services,
+        mockDb,
+      );
 
       expect(typeof cleanup).toBe('function');
       // Should not throw
@@ -312,7 +320,11 @@ describe('agent-dispatcher', () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      const cleanup = await setupAgentDispatcher(
+        eventBus as unknown as import('@omni/core').EventBus,
+        services,
+        mockDb,
+      );
 
       // Check options for message.received
       const msgCall = eventBus.subscribe.mock.calls.find((call: unknown[]) => call[0] === 'message.received');
@@ -916,7 +928,11 @@ describe('agent-dispatcher', () => {
       };
       const services = createMockServices({ agentRunner });
 
-      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      const cleanup = await setupAgentDispatcher(
+        eventBus as unknown as import('@omni/core').EventBus,
+        services,
+        mockDb,
+      );
 
       // Buffer a message (debounce set to 5000ms)
       await eventBus.fire('message.received', createMessageEvent());

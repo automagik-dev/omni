@@ -1146,6 +1146,59 @@ async function dispatchViaStreamingProvider(
 }
 
 /**
+ * Format media message content with emoji and descriptions/transcriptions
+ */
+function formatMediaContent(msg: {
+  messageType: string;
+  hasMedia?: boolean;
+  textContent?: string | null;
+  transcription?: string | null;
+  imageDescription?: string | null;
+  videoDescription?: string | null;
+  documentExtraction?: string | null;
+}): string {
+  if (!msg.hasMedia) {
+    return msg.textContent || '';
+  }
+
+  const mediaEmoji =
+    {
+      image: '🖼️',
+      audio: '🎵',
+      ptt: '🎤', // voice message
+      video: '🎬',
+      document: '📄',
+      sticker: '😀',
+    }[msg.messageType] || '📎';
+
+  const mediaInfo: string[] = [mediaEmoji];
+
+  // Add transcription for audio/voice
+  if (msg.transcription) {
+    mediaInfo.push(`"${msg.transcription}"`);
+  }
+  // Add description for images
+  else if (msg.imageDescription) {
+    mediaInfo.push(msg.imageDescription);
+  }
+  // Add description for videos
+  else if (msg.videoDescription) {
+    mediaInfo.push(msg.videoDescription);
+  }
+  // Add extraction for documents
+  else if (msg.documentExtraction) {
+    mediaInfo.push(msg.documentExtraction.substring(0, 200)); // truncate long extractions
+  }
+
+  // If there's a caption, add it
+  if (msg.textContent) {
+    mediaInfo.push(`Caption: ${msg.textContent}`);
+  }
+
+  return mediaInfo.join(' ');
+}
+
+/**
  * Build context messages from recent chat history for group conversations
  * Returns messages since the last bot response, formatted as "[Name - time] message"
  */
@@ -1203,7 +1256,9 @@ async function buildContextMessages(
             hour12: false,
           })
         : '';
-      const text = msg.textContent || '[Media]';
+
+      const text = formatMediaContent(msg) || `[${msg.messageType}]`;
+
       return `[${name}${time ? ` - ${time}` : ''}] ${text}`;
     });
   } catch (error) {
@@ -1549,11 +1604,7 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
 }
 
 /** Create a Claude Code agent provider */
-function createClaudeCodeProviderInstance(
-  provider: AgentProvider,
-  instance: Instance,
-  db: Database,
-): IAgentProvider {
+function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const projectPath = schemaConfig.projectPath as string;
 
@@ -1582,12 +1633,12 @@ function createClaudeCodeProviderInstance(
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
     },
+    db,
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
     },
-    db,
   );
 }
 
@@ -1610,11 +1661,7 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
  *
  * Exported for use by session-cleaner (provider.resetSession).
  */
-export function resolveProvider(
-  provider: AgentProvider,
-  instance: Instance,
-  db: Database,
-): IAgentProvider | null {
+export function resolveProvider(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
   if (cached) return cached;
@@ -1651,11 +1698,7 @@ export function resolveProvider(
 /**
  * Look up provider from DB and resolve to IAgentProvider
  */
-async function getAgentProvider(
-  services: Services,
-  instance: Instance,
-  db: Database,
-): Promise<IAgentProvider | null> {
+async function getAgentProvider(services: Services, instance: Instance, db: Database): Promise<IAgentProvider | null> {
   if (!instance.agentProviderId) return null;
 
   try {

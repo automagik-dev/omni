@@ -7,7 +7,7 @@
 
 import type { Database } from '@omni/db';
 import { agentSessions } from '@omni/db';
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createLogger } from '../logger';
 import type { ClaudeCodeClient, ClaudeCodeConfig } from './claude-code-client';
 import { createClaudeCodeClient } from './claude-code-client';
@@ -39,8 +39,8 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     readonly id: string,
     readonly name: string,
     config: ClaudeCodeConfig,
-    private options: ClaudeCodeProviderOptions = {},
     db: Database,
+    private options: ClaudeCodeProviderOptions = {},
   ) {
     this.client = createClaudeCodeClient(config);
     this.db = db;
@@ -129,9 +129,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
             expiresAt: existingSession.expiresAt,
           });
           // Delete expired session
-          await this.db
-            .delete(agentSessions)
-            .where(eq(agentSessions.id, existingSession.id));
+          await this.db.delete(agentSessions).where(eq(agentSessions.id, existingSession.id));
         }
       } else {
         log.debug('No session found in DB', { internalKey: internalSessionKey });
@@ -163,9 +161,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     if (internalSessionKey && response.sessionId && context.source.instanceId) {
       const now = new Date();
       const expiresAt =
-        this.sessionTtlMs < Number.POSITIVE_INFINITY
-          ? new Date(now.getTime() + this.sessionTtlMs)
-          : null;
+        this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(now.getTime() + this.sessionTtlMs) : null;
 
       // Insert or update session in database
       await this.db

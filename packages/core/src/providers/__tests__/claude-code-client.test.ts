@@ -211,7 +211,7 @@ describe('ClaudeCodeClient', () => {
 
 describe('ClaudeCodeAgentProvider', () => {
   // Mock database for tests
-  const mockDb = {} as any;
+  const mockDb = {} as unknown as import('@omni/db').Database;
 
   it('implements IAgentProvider interface', () => {
     const provider = new ClaudeCodeAgentProvider(
@@ -220,8 +220,8 @@ describe('ClaudeCodeAgentProvider', () => {
       {
         projectPath: '/test',
       },
-      {},
       mockDb,
+      {},
     );
 
     expect(provider.id).toBe('test-id');
