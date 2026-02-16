@@ -19,6 +19,8 @@ export interface ClaudeCodeProviderOptions {
   enableAutoSplit?: boolean;
   /** Prefix sender name to messages (default: true) */
   prefixSenderName?: boolean;
+  /** Session TTL in ms (default: 3600000 = 1 hour) - sessions older than this are discarded */
+  sessionTtlMs?: number;
 }
 
 export class ClaudeCodeAgentProvider implements IAgentProvider {
@@ -26,8 +28,11 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly mode = 'round-trip' as const;
   private client: ClaudeCodeClient;
 
-  /** Maps internal session keys (e.g. "userId:chatId") → Claude Code session UUIDs */
-  private sessionMap = new Map<string, string>();
+  /** Maps internal session keys (e.g. "userId:chatId") → Claude Code session UUIDs + timestamp */
+  private sessionMap = new Map<string, { uuid: string; lastUsed: number }>();
+
+  /** Session TTL in milliseconds (default: 1 hour) - sessions older than this are discarded */
+  private readonly sessionTtlMs: number;
 
   constructor(
     readonly id: string,
@@ -36,6 +41,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     private options: ClaudeCodeProviderOptions = {},
   ) {
     this.client = createClaudeCodeClient(config);
+    this.sessionTtlMs = this.options.sessionTtlMs ?? 3600000; // 1 hour default
   }
 
   canHandle(_trigger: AgentTrigger): boolean {
@@ -77,8 +83,22 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     }
 
     // Resolve session: map internal session key → Claude Code session UUID
+    // Check TTL and discard expired sessions
     const internalSessionKey = context.sessionId;
-    const resolvedSessionId = internalSessionKey ? this.sessionMap.get(internalSessionKey) : undefined;
+    let resolvedSessionId: string | undefined;
+    if (internalSessionKey) {
+      const sessionData = this.sessionMap.get(internalSessionKey);
+      if (sessionData) {
+        const age = Date.now() - sessionData.lastUsed;
+        if (age < this.sessionTtlMs) {
+          resolvedSessionId = sessionData.uuid;
+          log.debug('Resuming session', { internalKey: internalSessionKey, age: `${Math.round(age / 1000)}s` });
+        } else {
+          log.debug('Session expired', { internalKey: internalSessionKey, age: `${Math.round(age / 1000)}s` });
+          this.sessionMap.delete(internalSessionKey);
+        }
+      }
+    }
 
     log.debug('Session resolution', {
       internalKey: internalSessionKey,
@@ -101,9 +121,9 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     const response = await this.client.run(request);
 
-    // Store session UUID for future continuity
+    // Store session UUID for future continuity (with timestamp for TTL)
     if (internalSessionKey && response.sessionId) {
-      this.sessionMap.set(internalSessionKey, response.sessionId);
+      this.sessionMap.set(internalSessionKey, { uuid: response.sessionId, lastUsed: Date.now() });
       log.debug('Session mapped', { internalKey: internalSessionKey, claudeSessionId: response.sessionId });
     }
 
