@@ -210,8 +210,12 @@ describe('ClaudeCodeClient', () => {
 });
 
 describe('ClaudeCodeAgentProvider', () => {
-  // Mock database for tests
-  const mockDb = {} as unknown as import('@omni/db').Database;
+  // Mock session storage for tests
+  const mockSessionStorage: import('../claude-code-provider').SessionStorage = {
+    getSession: async () => null,
+    upsertSession: async () => {},
+    deleteSession: async () => {},
+  };
 
   it('implements IAgentProvider interface', () => {
     const provider = new ClaudeCodeAgentProvider(
@@ -220,7 +224,7 @@ describe('ClaudeCodeAgentProvider', () => {
       {
         projectPath: '/test',
       },
-      mockDb,
+      mockSessionStorage,
       {},
     );
 
@@ -234,7 +238,7 @@ describe('ClaudeCodeAgentProvider', () => {
   });
 
   it('canHandle returns true for all trigger types', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, {}, mockDb);
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {});
 
     const makeTrigger = (type: string) => ({ type }) as unknown as AgentTrigger;
 
@@ -252,8 +256,8 @@ describe('ClaudeCodeAgentProvider', () => {
       {
         projectPath: '/nonexistent/path/that/does/not/exist',
       },
+      mockSessionStorage,
       {},
-      mockDb,
     );
 
     const result = await provider.checkHealth();
@@ -266,8 +270,8 @@ describe('ClaudeCodeAgentProvider', () => {
       'test-id',
       'Test',
       { projectPath: '/test', model: 'claude-opus-4-6' },
+      mockSessionStorage,
       { timeoutMs: 180_000, enableAutoSplit: false, prefixSenderName: false },
-      mockDb,
     );
 
     expect(provider).toBeDefined();

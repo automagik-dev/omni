@@ -177,9 +177,7 @@
       "version": "2.20260216.7",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.39",
-        "@omni/db": "workspace:*",
         "croner": "^9.1.0",
-        "drizzle-orm": "^0.38.3",
         "nats": "^2.29.3",
         "prom-client": "^15.1.3",
         "zod": "^3.24.1",

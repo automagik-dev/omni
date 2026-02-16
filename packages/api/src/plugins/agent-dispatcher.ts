@@ -53,6 +53,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { getPlugin } from './loader';
+import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
 
@@ -1633,7 +1634,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
     },
-    db,
+    createSessionStorage(db),
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,

@@ -5,13 +5,19 @@
  * Unlike Agno, Claude Code IS the agent — there's no agent discovery.
  */
 
-import type { Database } from '@omni/db';
-import { agentSessions } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
 import { createLogger } from '../logger';
 import type { ClaudeCodeClient, ClaudeCodeConfig } from './claude-code-client';
 import { createClaudeCodeClient } from './claude-code-client';
 import type { AgentTrigger, AgentTriggerResult, IAgentProvider, ProviderRequest } from './types';
+
+/**
+ * Session storage adapter interface - allows core to be database-agnostic
+ */
+export interface SessionStorage {
+  getSession(instanceId: string, sessionKey: string): Promise<{ sessionId: string; lastUsedAt: Date } | null>;
+  upsertSession(instanceId: string, sessionKey: string, sessionId: string, expiresAt: Date | null): Promise<void>;
+  deleteSession(instanceId: string, sessionKey: string): Promise<void>;
+}
 
 const log = createLogger('provider:claude-code');
 
@@ -30,7 +36,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly schema = 'claude-code' as const;
   readonly mode = 'round-trip' as const;
   private client: ClaudeCodeClient;
-  private db: Database;
+  private sessionStorage: SessionStorage;
 
   /** Session TTL in milliseconds (default: Infinity = never expire) - sessions older than this are discarded */
   private readonly sessionTtlMs: number;
@@ -39,11 +45,11 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     readonly id: string,
     readonly name: string,
     config: ClaudeCodeConfig,
-    db: Database,
+    sessionStorage: SessionStorage,
     private options: ClaudeCodeProviderOptions = {},
   ) {
     this.client = createClaudeCodeClient(config);
-    this.db = db;
+    this.sessionStorage = sessionStorage;
     // Default: no TTL (sessions never expire unless explicitly configured)
     this.sessionTtlMs = this.options.sessionTtlMs ?? Number.POSITIVE_INFINITY;
   }
@@ -97,39 +103,28 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     });
 
     if (internalSessionKey && context.source.instanceId) {
-      // Query database for existing session
-      const [existingSession] = await this.db
-        .select()
-        .from(agentSessions)
-        .where(
-          and(
-            eq(agentSessions.instanceId, context.source.instanceId),
-            eq(agentSessions.sessionKey, internalSessionKey),
-          ),
-        )
-        .limit(1);
+      // Query storage for existing session
+      const existingSession = await this.sessionStorage.getSession(context.source.instanceId, internalSessionKey);
 
       if (existingSession) {
-        // Check if session has expired
-        const now = new Date();
-        const isExpired = existingSession.expiresAt && existingSession.expiresAt < now;
+        resolvedSessionId = existingSession.sessionId;
+        const age = Date.now() - existingSession.lastUsedAt.getTime();
 
-        if (!isExpired) {
-          const providerData = existingSession.providerSessionData as { sessionId?: string };
-          resolvedSessionId = providerData.sessionId;
-          const age = Date.now() - existingSession.lastUsedAt.getTime();
+        // Check if session has expired based on TTL
+        if (this.sessionTtlMs < Number.POSITIVE_INFINITY && age >= this.sessionTtlMs) {
+          log.debug('Session expired', {
+            internalKey: internalSessionKey,
+            age: `${Math.round(age / 1000)}s`,
+            ttl: `${Math.round(this.sessionTtlMs / 1000)}s`,
+          });
+          // Delete expired session
+          await this.sessionStorage.deleteSession(context.source.instanceId, internalSessionKey);
+        } else {
           log.debug('Resuming session from DB', {
             internalKey: internalSessionKey,
             claudeSessionId: resolvedSessionId,
             age: `${Math.round(age / 1000)}s`,
           });
-        } else {
-          log.debug('Session expired', {
-            internalKey: internalSessionKey,
-            expiresAt: existingSession.expiresAt,
-          });
-          // Delete expired session
-          await this.db.delete(agentSessions).where(eq(agentSessions.id, existingSession.id));
         }
       } else {
         log.debug('No session found in DB', { internalKey: internalSessionKey });
@@ -157,31 +152,16 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     const response = await this.client.run(request);
 
-    // Store session UUID in database for future continuity
+    // Store session UUID for future continuity
     if (internalSessionKey && response.sessionId && context.source.instanceId) {
-      const now = new Date();
-      const expiresAt =
-        this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(now.getTime() + this.sessionTtlMs) : null;
+      const expiresAt = this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(Date.now() + this.sessionTtlMs) : null;
 
-      // Insert or update session in database
-      await this.db
-        .insert(agentSessions)
-        .values({
-          instanceId: context.source.instanceId,
-          sessionKey: internalSessionKey,
-          providerSessionData: { sessionId: response.sessionId },
-          lastUsedAt: now,
-          expiresAt,
-        })
-        .onConflictDoUpdate({
-          target: [agentSessions.instanceId, agentSessions.sessionKey],
-          set: {
-            providerSessionData: { sessionId: response.sessionId },
-            lastUsedAt: now,
-            expiresAt,
-            updatedAt: now,
-          },
-        });
+      await this.sessionStorage.upsertSession(
+        context.source.instanceId,
+        internalSessionKey,
+        response.sessionId,
+        expiresAt,
+      );
 
       log.debug('Session stored in DB', {
         internalKey: internalSessionKey,
