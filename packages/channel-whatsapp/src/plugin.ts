@@ -1695,6 +1695,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       isFromMe, // Include for message-persistence to use
     };
 
+    // Extract mentionedJids from contextInfo (WhatsApp mentions)
+    const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
+    if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+      extendedPayload.mentionedJids = contextInfo.mentionedJid;
+    }
+
     // Add structured extended fields if present
     if (content.poll) extendedPayload.poll = content.poll;
     if (content.pollVotes) extendedPayload.pollVotes = content.pollVotes;

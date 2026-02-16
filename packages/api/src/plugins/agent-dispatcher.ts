@@ -309,14 +309,22 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
 
   // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
   // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
-  // Fallback: in group chats, if mentionedJids is non-empty, treat as mention — WhatsApp UI
-  // only populates mentionedJids when user explicitly @-tags someone from the picker.
-  const jidMatchesOwner = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
-  const isGroupMention = mentionedJids.length > 0 && chatId.includes('@g.us');
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || isGroupMention;
+  // Extract the phone number part from both formats for comparison
+  const extractPhone = (jid: string) => jid.replace(/@.*$/, '').replace(/^@/, '');
+  const ownerPhone = extractPhone(ownerJid);
 
+  const jidMatchesOwner = mentionedJids.some((jid) => {
+    const mentionPhone = extractPhone(jid);
+    return jid === ownerJid || mentionPhone === ownerPhone;
+  });
+
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true;
+
+  // Handle replies to bot messages (same phone number extraction for LID compatibility)
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant === ownerJid;
+  const isReplyToBot = quotedParticipant
+    ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
+    : false;
 
   return {
     isDirectMessage,
@@ -1541,13 +1549,17 @@ async function processReactionTrigger(
   rawEvent: AgentTrigger['event'],
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-  const chatId = payload.chatId;
+  const externalChatId = payload.chatId;
+
+  // Look up internal chat UUID for route resolution
+  const chat = await services.chats.getByExternalId(baseInstance.id, externalChatId);
+  const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
     services,
     baseInstance,
-    chatId,
+    internalChatId,
     metadata.personId,
   );
 
@@ -1718,8 +1730,14 @@ async function shouldProcessMessage(
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
-  if (!metadata.instanceId) return null;
-  if (payload.from === metadata.platformIdentityId) return null;
+  if (!metadata.instanceId) {
+    log.debug('No instanceId in metadata', { from: payload.from, chatId: payload.chatId });
+    return null;
+  }
+  if (payload.from === metadata.platformIdentityId) {
+    log.debug('Message from self, skipping', { instanceId: metadata.instanceId, from: payload.from });
+    return null;
+  }
 
   // Skip trash emoji messages - handled by session-cleaner plugin
   if (isTrashEmojiOnly(payload.content?.text)) {
@@ -1731,13 +1749,34 @@ async function shouldProcessMessage(
   }
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-  if (!instance?.agentProviderId) return null;
+  if (!instance?.agentProviderId) {
+    log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
+    return null;
+  }
 
-  if (!instanceTriggersOnEvent(instance, 'message.received')) return null;
+  if (!instanceTriggersOnEvent(instance, 'message.received')) {
+    log.debug('Instance does not trigger on message.received', { instanceId: instance.id });
+    return null;
+  }
 
   const messageContext = buildMessageContext(payload, instance);
+  const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
+  log.debug('Message context built', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    isDirectMessage: messageContext.isDirectMessage,
+    mentionsBot: messageContext.mentionsBot,
+    isReplyToBot: messageContext.isReplyToBot,
+    mentionedJids: rawPayloadWithMentions?.mentionedJids,
+  });
+
   if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', { instanceId: instance.id, chatId: payload.chatId });
+    log.debug('Message did not pass reply filter', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      messageContext,
+      filter: instance.agentReplyFilter,
+    });
     return null;
   }
 
@@ -1992,9 +2031,19 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     }
 
     // Resolve agent route and merge with instance defaults
-    const chatId = firstMsg.payload.chatId;
+    const externalChatId = firstMsg.payload.chatId;
     const personId = firstMsg.metadata.personId;
-    const { instance, routeId: _routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, personId);
+
+    // Look up internal chat UUID for route resolution
+    const chat = await services.chats.getByExternalId(instanceId, externalChatId);
+    const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+
+    const { instance, routeId: _routeId } = await resolveEffectiveInstance(
+      services,
+      baseInstance,
+      internalChatId,
+      personId,
+    );
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
