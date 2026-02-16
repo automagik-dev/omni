@@ -20,7 +20,9 @@ jobs:
     steps:
       - name: Check/Create Rolling PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          # GITHUB_TOKEN cannot create PRs (org restriction).
+          # Use a PAT with contents:read + pull-requests:write scopes.
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           # Check if open PR exists (dev -> main)
           PR=$(gh pr list --repo ${{ github.repository }} --base main --head dev --state open --json number --jq '.[0].number')
