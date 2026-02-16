@@ -446,6 +446,53 @@ function getReplyToId(msg: WAMessage): string | undefined {
 }
 
 /**
+ * Replace @mention phone/LID in message text with contact names
+ * WhatsApp mentions appear as @1234567890 in text, matched with contextInfo.mentionedJid
+ */
+function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsAppPlugin, instanceId: string): string {
+  const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+  if (!contextInfo?.mentionedJid || contextInfo.mentionedJid.length === 0) {
+    return text;
+  }
+
+  let replacedText = text;
+  // biome-ignore lint/complexity/useLiteralKeys: accessing private property via type assertion
+  const contactCache = (plugin as { contactsCache: Map<string, Map<string, unknown>> }).contactsCache.get(instanceId);
+
+  for (const jid of contextInfo.mentionedJid) {
+    // Extract phone number from JID (supports @s.whatsapp.net and @lid)
+    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid)$/);
+    if (!phoneMatch) continue;
+
+    const phone = phoneMatch[1];
+    const mentionPattern = `@${phone}`;
+
+    // Look up contact name from cache
+    let contactName: string | undefined;
+
+    // Try direct JID lookup first
+    const contact = contactCache?.get(jid);
+    if (contact?.name) {
+      contactName = contact.name;
+    } else {
+      // Try phone-based JID if this is a LID
+      const phoneJid = `${phone}@s.whatsapp.net`;
+      const phoneContact = contactCache?.get(phoneJid);
+      if (phoneContact?.name) {
+        contactName = phoneContact.name;
+      }
+    }
+
+    // Replace @phone with @Name if found
+    if (contactName) {
+      replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
+    }
+  }
+
+  return replacedText;
+}
+
+/**
  * Determine if a message is from me (outgoing)
  */
 function isFromMe(msg: WAMessage): boolean {
@@ -638,6 +685,14 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 
   const content = extractContent(msg);
   if (!content) return;
+
+  // Replace @phone mentions with @Name in text and captions
+  if (content.text) {
+    content.text = replaceMentionsWithNames(content.text, msg, plugin, instanceId);
+  }
+  if (content.caption) {
+    content.caption = replaceMentionsWithNames(content.caption, msg, plugin, instanceId);
+  }
 
   // Resolve @lid JID to phone-based JID before any event emission
   const { chatId, rawChatId } = resolveChatId(plugin, instanceId, msg);

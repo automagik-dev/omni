@@ -319,6 +319,8 @@ export interface AgentTrigger {
   };
   /** Session ID computed from instance's session strategy */
   sessionId: string;
+  /** Recent message history for context (optional, formatted as "[Name - time] message") */
+  contextMessages?: string[];
 }
 
 /**

@@ -42,6 +42,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     return true;
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Provider orchestration requires multiple content type checks
   async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
     const startTime = Date.now();
 
@@ -62,6 +63,17 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     if (this.options.prefixSenderName !== false && context.sender.displayName) {
       message = `[${context.sender.displayName}]: ${message}`;
+    }
+
+    // Prepend context messages (message history since last bot response)
+    if (context.contextMessages && context.contextMessages.length > 0) {
+      const contextBlock = [
+        '--- Recent conversation context ---',
+        ...context.contextMessages,
+        '--- Current message ---',
+        '',
+      ].join('\n');
+      message = `${contextBlock}${message}`;
     }
 
     // Resolve session: map internal session key → Claude Code session UUID

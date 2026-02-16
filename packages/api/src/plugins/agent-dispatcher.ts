@@ -1043,6 +1043,72 @@ async function dispatchViaStreamingProvider(
 }
 
 /**
+ * Build context messages from recent chat history for group conversations
+ * Returns messages since the last bot response, formatted as "[Name - time] message"
+ */
+async function buildContextMessages(
+  services: Services,
+  instance: Instance,
+  chatId: string,
+  currentMessageId: string,
+): Promise<string[]> {
+  try {
+    // Only provide context for group chats (not DMs)
+    const chat = await services.chats.findById(chatId);
+    if (!chat || chat.chatType !== 'group') {
+      return [];
+    }
+
+    // Query recent messages (last 50, ordered by timestamp desc)
+    const recentMessages = await services.messages.list({
+      chatId,
+      limit: 50,
+      sort: 'desc',
+    });
+
+    if (!recentMessages || recentMessages.length === 0) {
+      return [];
+    }
+
+    // Find the last bot response (from this instance)
+    const lastBotMessageIndex = recentMessages.findIndex(
+      (msg) => msg.direction === 'outbound' && msg.instanceId === instance.id,
+    );
+
+    // If no bot response found, or it's the most recent message, no context needed
+    if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
+      return [];
+    }
+
+    // Get all messages between last bot response and current message (exclude current)
+    const contextMsgs = recentMessages
+      .slice(0, lastBotMessageIndex)
+      .filter((msg) => msg.externalId !== currentMessageId);
+
+    if (contextMsgs.length === 0) {
+      return [];
+    }
+
+    // Format as "[Name - HH:MM] message" (reverse to chronological order)
+    return contextMsgs.reverse().map((msg) => {
+      const name = msg.senderDisplayName || msg.senderId || 'Unknown';
+      const time = msg.platformTimestamp
+        ? new Date(msg.platformTimestamp).toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          })
+        : '';
+      const text = msg.textContent || '[Media]';
+      return `[${name}${time ? ` - ${time}` : ''}] ${text}`;
+    });
+  } catch (error) {
+    log.warn('Failed to build context messages', { error, chatId, instanceId: instance.id });
+    return [];
+  }
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1076,6 +1142,9 @@ async function dispatchViaProvider(
 
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
 
+  // Build context messages for group conversations (messages since last bot response)
+  const contextMessages = await buildContextMessages(services, instance, chatId, messages[0]?.payload.externalId ?? '');
+
   const trigger: AgentTrigger = {
     traceId,
     type: triggerType,
@@ -1095,6 +1164,7 @@ async function dispatchViaProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
+    contextMessages: contextMessages.length > 0 ? contextMessages : undefined,
   };
 
   const result = await provider.trigger(trigger);
