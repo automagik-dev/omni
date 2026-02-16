@@ -78,7 +78,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No package.json changes to commit"
           else
-            git commit -m "[skip ci] version: ${VERSION}"
+            git commit -m "chore(version): bump to ${VERSION} [skip ci]"
           fi
 
           # Dev tags use -dev suffix to distinguish from release-please production tags on main.
