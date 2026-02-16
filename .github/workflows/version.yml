@@ -82,9 +82,7 @@ jobs:
             git commit -m "chore(version): bump to ${VERSION} [skip ci]"
           fi
 
-          # Dev tags use -dev suffix to distinguish from release-please production tags on main.
-          # release-please creates v{version} tags; version.yml creates v{version}-dev tags.
-          git tag "v${VERSION}-dev"
+          git tag "v${VERSION}"
           # When triggered via workflow_run we checkout by SHA (detached HEAD). Push the current commit to `dev`
           # explicitly so the version bump commit and its tag are both reachable from the branch.
-          git push --atomic origin HEAD:refs/heads/dev "refs/tags/v${VERSION}-dev"
+          git push --atomic origin HEAD:refs/heads/dev "refs/tags/v${VERSION}"
