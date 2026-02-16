@@ -446,13 +446,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         }
       }
 
-      // Try cache first (fast path)
+      // Try contactsCache first (fast path - from contacts.upsert events)
       const cachedContact = this.contactsCache.get(instanceId)?.get(lookupJid);
       if (cachedContact) {
         return {
           name: cachedContact.name,
           phone: cachedContact.phone,
         };
+      }
+
+      // Try chatNamesCache (from chats.upsert with pushName)
+      const chatName = this.chatNamesCache.get(instanceId)?.get(lookupJid);
+      if (chatName) {
+        const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
+        const phone = phoneMatch?.[1];
+        return { name: chatName, phone };
       }
 
       // Cache miss - try fetching from group metadata if this is a group chat
