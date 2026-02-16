@@ -134,7 +134,19 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     // Store session UUID for future continuity (with timestamp for TTL)
     if (internalSessionKey && response.sessionId) {
       this.sessionMap.set(internalSessionKey, { uuid: response.sessionId, lastUsed: Date.now() });
-      log.debug('Session mapped', { internalKey: internalSessionKey, claudeSessionId: response.sessionId });
+      log.debug('Session stored', {
+        internalKey: internalSessionKey,
+        claudeSessionId: response.sessionId,
+        mapSize: this.sessionMap.size,
+        allKeys: Array.from(this.sessionMap.keys()),
+      });
+    } else {
+      log.warn('Session not stored', {
+        hasInternalKey: !!internalSessionKey,
+        hasResponseSessionId: !!response.sessionId,
+        internalKey: internalSessionKey,
+        responseSessionId: response.sessionId,
+      });
     }
 
     const parts =
