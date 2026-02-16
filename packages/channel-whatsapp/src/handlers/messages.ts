@@ -445,79 +445,8 @@ function getReplyToId(msg: WAMessage): string | undefined {
   return contextInfo?.stanzaId || undefined;
 }
 
-/**
- * Replace @mention phone/LID in message text with contact names
- * WhatsApp mentions appear as @1234567890 in text, matched with contextInfo.mentionedJid
- */
-function replaceMentionsWithNames(text: string, msg: WAMessage, plugin: WhatsAppPlugin, instanceId: string): string {
-  const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-  if (!contextInfo?.mentionedJid || contextInfo.mentionedJid.length === 0) {
-    return text;
-  }
-
-  log.debug('Replacing mentions', {
-    instanceId,
-    originalText: text,
-    mentionedJids: contextInfo.mentionedJid,
-  });
-
-  let replacedText = text;
-  // Access private property via type assertion (safe in this context)
-  const contactCache = (
-    plugin as unknown as { contactsCache: Map<string, Map<string, { name?: string }>> }
-  ).contactsCache.get(instanceId);
-  const lidCache = plugin.getLidMappingCache(instanceId);
-
-  log.debug('Cache sizes', {
-    contactCacheSize: contactCache?.size ?? 0,
-    lidCacheSize: lidCache.size,
-  });
-
-  for (const jid of contextInfo.mentionedJid) {
-    // Extract phone number from JID (supports @s.whatsapp.net and @lid)
-    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid)$/);
-    if (!phoneMatch) {
-      log.debug('JID did not match pattern', { jid });
-      continue;
-    }
-
-    const lidNumber = phoneMatch[1];
-    const isLid = phoneMatch[2] === '@lid';
-    const mentionPattern = `@${lidNumber}`;
-
-    // Resolve LID to phone JID if needed
-    let lookupJid = jid;
-    if (isLid) {
-      const resolvedPhone = lidCache.get(jid);
-      if (resolvedPhone) {
-        lookupJid = resolvedPhone;
-        log.debug('LID resolved', { lidJid: jid, phoneJid: resolvedPhone });
-      } else {
-        log.debug('LID not found in cache', { lidJid: jid });
-      }
-    }
-
-    // Look up contact name from cache using resolved JID
-    let contactName: string | undefined;
-    const contact = contactCache?.get(lookupJid);
-    if (contact?.name) {
-      contactName = contact.name;
-      log.debug('Contact found', { jid: lookupJid, name: contactName });
-    } else {
-      log.debug('Contact not found', { jid: lookupJid });
-    }
-
-    // Replace @lidNumber with @Name if found
-    if (contactName) {
-      replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
-      log.debug('Replaced mention', { pattern: mentionPattern, name: contactName });
-    }
-  }
-
-  log.debug('Mention replacement result', { original: text, replaced: replacedText });
-
-  return replacedText;
-}
+// Note: replaceMentionsWithNames removed - mention replacement now handled in
+// agent-dispatcher with database lookup for better reliability across API restarts
 
 /**
  * Determine if a message is from me (outgoing)
@@ -713,13 +642,8 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   const content = extractContent(msg);
   if (!content) return;
 
-  // Replace @phone mentions with @Name in text and captions
-  if (content.text) {
-    content.text = replaceMentionsWithNames(content.text, msg, plugin, instanceId);
-  }
-  if (content.caption) {
-    content.caption = replaceMentionsWithNames(content.caption, msg, plugin, instanceId);
-  }
+  // Note: Mention replacement (@phone → @Name) is handled in agent-dispatcher
+  // with database lookup for better reliability across API restarts
 
   // Resolve @lid JID to phone-based JID before any event emission
   const { chatId, rawChatId } = resolveChatId(plugin, instanceId, msg);

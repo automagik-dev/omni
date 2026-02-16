@@ -782,6 +782,53 @@ async function prependQuotedContext(
 }
 
 /**
+ * Replace @phone mentions in text with actual contact names from database
+ */
+async function replaceMentionsWithContactNames(
+  services: Services,
+  instanceId: string,
+  text: string,
+  mentionedJids: string[] | undefined,
+): Promise<string> {
+  if (!mentionedJids || mentionedJids.length === 0) return text;
+
+  let replacedText = text;
+
+  for (const jid of mentionedJids) {
+    // Extract phone number from JID (supports @s.whatsapp.net and @lid)
+    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid)$/);
+    if (!phoneMatch) continue;
+
+    const phoneNumber = phoneMatch[1];
+    const isLid = phoneMatch[2] === '@lid';
+    const mentionPattern = `@${phoneNumber}`;
+
+    // Resolve LID to phone JID if needed
+    let lookupJid = jid;
+    if (isLid) {
+      const resolvedPhone = await services.chats.findLidMapping(instanceId, jid);
+      if (resolvedPhone) {
+        lookupJid = resolvedPhone;
+        log.debug('LID resolved from DB', { lidJid: jid, phoneJid: resolvedPhone });
+      }
+    }
+
+    // Look up contact name from database (chats table stores contact names)
+    try {
+      const chat = await services.chats.getByExternalId(instanceId, lookupJid);
+      if (chat?.name) {
+        replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${chat.name}`);
+        log.debug('Replaced mention from DB', { pattern: mentionPattern, name: chat.name });
+      }
+    } catch (error) {
+      log.debug('Failed to look up contact name', { jid: lookupJid, error: String(error) });
+    }
+  }
+
+  return replacedText;
+}
+
+/**
  * Collect message texts, wait for media processing, and resolve quoted messages.
  * Returns { messageTexts, mediaFiles } ready for the agent runner.
  */
@@ -801,6 +848,15 @@ async function prepareAgentContent(
   }
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
+
+  // Replace @phone mentions with actual contact names from database
+  for (let i = 0; i < messageTexts.length; i++) {
+    const msg = messages[i];
+    const mentionedJids = (msg?.payload.rawPayload as Record<string, unknown>)?.mentionedJids as string[] | undefined;
+    if (mentionedJids && mentionedJids.length > 0) {
+      messageTexts[i] = await replaceMentionsWithContactNames(services, instance.id, messageTexts[i], mentionedJids);
+    }
+  }
 
   return { messageTexts, mediaFiles };
 }
