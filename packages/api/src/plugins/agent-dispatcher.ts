@@ -1088,7 +1088,7 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && !mediaFiles.length) return false;
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
   const replyToId = messages[0]?.payload.externalId;
 
   const trigger: AgentTrigger = {
@@ -1242,7 +1242,7 @@ async function dispatchViaProvider(
     messageTexts.push('[Media message]');
   }
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
 
   // Build context messages for group conversations (messages since last bot response)
   const contextMessages = await buildContextMessages(services, instance, chatId, messages[0]?.payload.externalId ?? '');
@@ -1752,11 +1752,7 @@ async function processReactionTrigger(
     if (provider) {
       // Build AgentTrigger for the provider
       const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
-      const sessionId = computeSessionId(
-        instance.agentSessionStrategy ?? 'per_user_per_chat',
-        payload.from,
-        internalChatId,
-      );
+      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, internalChatId);
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,

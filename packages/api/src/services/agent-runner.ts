@@ -213,9 +213,6 @@ export function computeSessionId(strategy: AgentSessionStrategy, userId: string,
     case 'per_chat':
       // All users in a chat share the session (group memory)
       return chatId;
-    default:
-      // per_user_per_chat: Each user has own session per chat (most isolated)
-      return `${userId}:${chatId}`;
   }
 }
 
