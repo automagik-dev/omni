@@ -394,8 +394,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       return {
-        name: contact.name || contact.notify || contact.verifiedName || undefined,
-        phone: contact.number,
+        name: contact.name,
+        phone: contact.phone,
       };
     } catch (error) {
       this.logger.debug('Failed to get contact info', { instanceId, jid, error: String(error) });
