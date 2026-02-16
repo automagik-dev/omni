@@ -1,9 +1,12 @@
 {
   "name": "omni-v2",
-  "version": "2.20260216.2",
+  "version": "2.20260217.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
