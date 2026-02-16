@@ -852,9 +852,12 @@ async function prepareAgentContent(
   // Replace @phone mentions with actual contact names from database
   for (let i = 0; i < messageTexts.length; i++) {
     const msg = messages[i];
+    const text = messageTexts[i];
+    if (!text) continue;
+
     const mentionedJids = (msg?.payload.rawPayload as Record<string, unknown>)?.mentionedJids as string[] | undefined;
     if (mentionedJids && mentionedJids.length > 0) {
-      messageTexts[i] = await replaceMentionsWithContactNames(services, instance.id, messageTexts[i], mentionedJids);
+      messageTexts[i] = await replaceMentionsWithContactNames(services, instance.id, text, mentionedJids);
     }
   }
 
