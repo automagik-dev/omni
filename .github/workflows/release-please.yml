@@ -18,3 +18,6 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # GITHUB_TOKEN cannot create PRs (org restriction).
+          # Use a PAT with contents:write + pull-requests:write scopes.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}

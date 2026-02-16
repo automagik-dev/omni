@@ -23,6 +23,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'dev' &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
 
     steps:
