@@ -386,6 +386,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private async tryFetchFromGroupParticipants(
     sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
     groupJid: string,
     lookupJid: string,
   ): Promise<{ name?: string; phone?: string } | null> {
@@ -401,7 +402,45 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           participant,
         });
 
-        const name = (participant as { notify?: string }).notify || undefined;
+        // Group participants don't have a name/notify field, but they have phoneNumber
+        // Try to look up the phoneNumber in contactsCache or chatNamesCache
+        const participantPhoneJid = (participant as { phoneNumber?: string }).phoneNumber;
+        let name: string | undefined;
+
+        if (participantPhoneJid) {
+          // Try contactsCache first
+          const contactsCacheMap = this.contactsCache.get(instanceId);
+          this.logger.debug('Checking contactsCache for participant', {
+            jid: lookupJid,
+            phoneJid: participantPhoneJid,
+            hasContactsCache: !!contactsCacheMap,
+            cacheSize: contactsCacheMap?.size ?? 0,
+            sampleKeys: Array.from(contactsCacheMap?.keys() ?? []).slice(0, 5),
+          });
+
+          const cachedContact = contactsCacheMap?.get(participantPhoneJid);
+          if (cachedContact?.name) {
+            name = cachedContact.name;
+            this.logger.debug('Found participant name in contactsCache', {
+              jid: lookupJid,
+              phoneJid: participantPhoneJid,
+              name,
+            });
+          } else {
+            // Try chatNamesCache
+            const chatNamesMap = this.chatNamesCache.get(instanceId);
+            const chatName = chatNamesMap?.get(participantPhoneJid);
+            if (chatName) {
+              name = chatName;
+              this.logger.debug('Found participant name in chatNamesCache', {
+                jid: lookupJid,
+                phoneJid: participantPhoneJid,
+                name,
+              });
+            }
+          }
+        }
+
         const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
         const phone = phoneMatch?.[1];
         return { name, phone };
@@ -480,7 +519,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           jid: lookupJid,
           groupJid,
         });
-        const groupContact = await this.tryFetchFromGroupParticipants(sock, groupJid, lookupJid);
+        const groupContact = await this.tryFetchFromGroupParticipants(sock, instanceId, groupJid, lookupJid);
         if (groupContact) {
           this.cacheContactInfo(instanceId, lookupJid, groupContact.name, groupContact.phone);
           this.logger.debug('Fetched and cached contact from group metadata', {
@@ -1845,6 +1884,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
 
+    // Cache sender's pushName for mention resolution (WAMessage.pushName field)
+    const senderPushName = (rawMessage as { pushName?: string }).pushName;
+    if (senderPushName && from) {
+      // Normalize sender JID to @s.whatsapp.net format for cache consistency
+      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
+
+      // Cache the sender's name so it's available when they're mentioned
+      this.cacheContactInfo(instanceId, normalizedFrom, senderPushName, undefined);
+      this.logger.debug('Cached sender pushName from message', {
+        instanceId,
+        from: normalizedFrom,
+        originalFrom: from,
+        pushName: senderPushName,
+      });
+    }
+
     // Build extended raw payload with structured content data
     const extendedPayload: Record<string, unknown> = {
       ...(rawMessage as unknown as Record<string, unknown>),
@@ -1857,13 +1913,28 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
       // Resolve contact names for all mentioned JIDs using Baileys (pass chatId for group participant lookup)
+      this.logger.debug('Processing mentioned JIDs', {
+        instanceId,
+        chatId,
+        mentionedJids: contextInfo.mentionedJid,
+      });
+
       const mentionedContacts: Array<{ jid: string; name?: string }> = [];
       for (const jid of contextInfo.mentionedJid) {
+        this.logger.debug('Calling getContactInfo', { instanceId, jid, chatId });
         const contactInfo = await this.getContactInfo(instanceId, jid, chatId);
+        this.logger.debug('getContactInfo result', { jid, contactInfo });
         if (contactInfo?.name) {
           mentionedContacts.push({ jid, name: contactInfo.name });
         }
       }
+      this.logger.debug('Finished processing mentioned JIDs', {
+        instanceId,
+        chatId,
+        mentionedContactsCount: mentionedContacts.length,
+        mentionedContacts,
+      });
+
       if (mentionedContacts.length > 0) {
         extendedPayload.mentionedContacts = mentionedContacts;
       }
@@ -2248,6 +2319,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
 
       cache.set(c.id, syncContact);
+
+      this.logger.debug('Cached contact from contacts.upsert', {
+        instanceId,
+        id: c.id,
+        name: syncContact.name,
+        phone,
+        hasLid: !!c.lid,
+      });
 
       // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
       if (c.lid && isUserJid(c.id)) {
