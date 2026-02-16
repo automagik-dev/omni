@@ -31,7 +31,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   /** Maps internal session keys (e.g. "userId:chatId") → Claude Code session UUIDs + timestamp */
   private sessionMap = new Map<string, { uuid: string; lastUsed: number }>();
 
-  /** Session TTL in milliseconds (default: 1 hour) - sessions older than this are discarded */
+  /** Session TTL in milliseconds (default: Infinity = never expire) - sessions older than this are discarded */
   private readonly sessionTtlMs: number;
 
   constructor(
@@ -41,7 +41,8 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     private options: ClaudeCodeProviderOptions = {},
   ) {
     this.client = createClaudeCodeClient(config);
-    this.sessionTtlMs = this.options.sessionTtlMs ?? 3600000; // 1 hour default
+    // Default: no TTL (sessions never expire unless explicitly configured)
+    this.sessionTtlMs = this.options.sessionTtlMs ?? Number.POSITIVE_INFINITY;
   }
 
   canHandle(_trigger: AgentTrigger): boolean {
