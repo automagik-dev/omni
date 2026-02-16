@@ -459,6 +459,47 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Try fetching contact info directly from WhatsApp (business profile or onWhatsApp check)
+   */
+  private async tryFetchFromWhatsApp(
+    sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
+    lookupJid: string,
+    phone: string,
+  ): Promise<{ name?: string; phone?: string } | null> {
+    // Try business profile first (has name info for business accounts)
+    try {
+      const businessProfile = await sock.getBusinessProfile(lookupJid);
+      if (businessProfile) {
+        const businessName = (businessProfile as { verifiedName?: string; email?: string; description?: string })
+          .verifiedName;
+        if (businessName) {
+          this.cacheContactInfo(instanceId, lookupJid, businessName, phone);
+          this.logger.debug('Fetched business profile', { jid: lookupJid, name: businessName });
+          return { name: businessName, phone };
+        }
+      }
+    } catch (_error) {
+      // Not a business account or error fetching - continue to regular check
+      this.logger.debug('No business profile found', { jid: lookupJid });
+    }
+
+    // Fallback to onWhatsApp (just checks existence, usually no name)
+    const results = await sock.onWhatsApp(phone);
+    const result = results?.[0];
+
+    if (result?.exists) {
+      const name = (result as { notify?: string }).notify || undefined;
+      this.cacheContactInfo(instanceId, lookupJid, name, phone);
+      this.logger.debug('Fetched and cached contact from WhatsApp', { jid: lookupJid, name });
+      return { name, phone };
+    }
+
+    this.logger.debug('Contact not found on WhatsApp', { instanceId, phone });
+    return null;
+  }
+
+  /**
    * Get contact info from Baileys (name, phone) by JID
    * Resolves LID to PN if needed and queries the internal contact cache
    * Falls back to fetching from WhatsApp or group metadata if not cached
@@ -520,7 +561,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           groupJid,
         });
         const groupContact = await this.tryFetchFromGroupParticipants(sock, instanceId, groupJid, lookupJid);
-        if (groupContact) {
+        if (groupContact?.name) {
+          // Only return if we actually got a name, not just phone
           this.cacheContactInfo(instanceId, lookupJid, groupContact.name, groupContact.phone);
           this.logger.debug('Fetched and cached contact from group metadata', {
             jid: lookupJid,
@@ -540,18 +582,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       const phone = phoneMatch[1];
-      const results = await sock.onWhatsApp(phone);
-      const result = results?.[0];
-
-      if (result?.exists) {
-        const name = (result as { notify?: string }).notify || undefined;
-        this.cacheContactInfo(instanceId, lookupJid, name, phone);
-        this.logger.debug('Fetched and cached contact from WhatsApp', { jid: lookupJid, name });
-        return { name, phone };
-      }
-
-      this.logger.debug('Contact not found on WhatsApp', { instanceId, phone });
-      return null;
+      return await this.tryFetchFromWhatsApp(sock, instanceId, lookupJid, phone);
     } catch (error) {
       this.logger.debug('Failed to get contact info', { instanceId, jid, error: String(error) });
       return null;
