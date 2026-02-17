@@ -30,7 +30,7 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   canSendText: true,
   canSendMedia: true,
   canSendReaction: true,
-  canSendTyping: true,
+  canSendTyping: false,
 
   // Receipts
   canReceiveReadReceipts: false,

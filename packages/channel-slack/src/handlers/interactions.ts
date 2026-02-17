@@ -65,8 +65,8 @@ export function setupInteractionHandlers(
     });
   });
 
-  // Handle modal submissions
-  app.view(/^omni:/, async ({ ack, view, body }) => {
+  // Handle modal submissions (view_submission)
+  app.view({ callback_id: /^omni:/, type: 'view_submission' }, async ({ ack, view, body }) => {
     await ack();
 
     const callbackId = view.callback_id;
@@ -96,6 +96,26 @@ export function setupInteractionHandlers(
       privateMetadata,
       value: JSON.stringify(values),
       rawPayload: { view_state: stateValues },
+    });
+  });
+
+  // Handle modal close events (view_closed)
+  app.view({ callback_id: /^omni:/, type: 'view_closed' }, async ({ ack, view, body }) => {
+    await ack();
+
+    const callbackId = view.callback_id;
+    const bodyAny = body as unknown as Record<string, unknown>;
+    const userId = bodyAny.user ? ((bodyAny.user as Record<string, unknown>).id as string) : '';
+    const privateMetadata = view.private_metadata || undefined;
+
+    logger.debug('Modal closed', { instanceId, callbackId, userId });
+
+    await callbacks.onInteraction(instanceId, {
+      instanceId,
+      type: 'modal_close',
+      actionId: callbackId,
+      userId,
+      privateMetadata,
     });
   });
 

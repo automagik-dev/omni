@@ -28,7 +28,7 @@ import { setupReactionHandlers } from './handlers/reactions';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { createSlackStreamSender } from './senders/stream';
 import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
-import type { SlackConfig, SlackInteractionPayload } from './types';
+import type { ReplyToMode, SlackConfig, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
 
 /**
@@ -233,11 +233,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): StreamSender {
     const connection = this.getConnection(instanceId);
     const slackConfig = this.slackConfigs.get(instanceId) ?? {};
+    const replyToMode = slackConfig.replyToMode ?? 'off';
+    const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
 
     return createSlackStreamSender({
       client: connection.client,
       channelId: chatId,
-      threadTs: replyToMessageId,
+      threadTs,
       streamMode: resolveStreamMode(slackConfig.streamMode),
       throttleMs: resolveStreamThrottle(slackConfig.streamThrottleMs),
       username: slackConfig.defaultUsername,
@@ -358,6 +360,28 @@ export class SlackPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Resolve thread_ts based on replyToMode config
+   *
+   * - 'off': Only thread if already in a thread context (threadId set)
+   * - 'first': Thread when replyTo is available (first reply creates thread)
+   * - 'all': Always use available thread context (replyTo or threadId)
+   */
+  private resolveThreadTs(
+    replyToMode: ReplyToMode,
+    replyTo: string | undefined,
+    threadId: string | undefined,
+  ): string | undefined {
+    switch (replyToMode) {
+      case 'all':
+      case 'first':
+        return replyTo ?? threadId;
+      default:
+        // 'off' or unrecognized: only thread if already in a thread context
+        return threadId;
+    }
+  }
 
   /**
    * Get the Bolt connection for an instance
@@ -511,7 +535,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       case 'audio':
       case 'video':
       case 'document':
-        return this.sendMediaContent(connection, channelId, message);
+        return this.sendMediaContent(connection, channelId, message, config);
       case 'reaction':
         return this.sendReactionContent(connection, channelId, message);
       default:
@@ -527,7 +551,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     config: SlackConfig,
   ): Promise<string> {
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const threadTs = message.replyTo ?? message.threadId;
+    const replyToMode = config.replyToMode ?? 'off';
+    const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     return sendTextMessage(
       connection.client,
@@ -551,7 +576,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     connection: BoltConnection,
     channelId: string,
     message: OutgoingMessage,
+    config: SlackConfig,
   ): Promise<string> {
+    const replyToMode = config.replyToMode ?? 'off';
+    const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+
     if (message.metadata?.base64) {
       const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
       const filename = message.content.filename || `file-${Date.now()}`;
@@ -561,7 +590,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           channelId,
           content: buffer,
           filename,
-          threadTs: message.replyTo ?? message.threadId,
+          threadTs,
           initialComment: message.content.text || message.content.caption,
         },
         this.logger,
@@ -578,7 +607,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         channelId,
         url: message.content.mediaUrl,
         filename: message.content.filename || `file-${Date.now()}`,
-        threadTs: message.replyTo ?? message.threadId,
+        threadTs,
         initialComment: message.content.text || message.content.caption,
       },
       this.logger,
