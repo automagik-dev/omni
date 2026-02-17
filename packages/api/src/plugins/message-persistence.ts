@@ -325,8 +325,18 @@ async function persistLidMappings(
       log.debug('Failed to persist LID↔phone mapping for LID-canonical chat (non-critical)', { error: String(err) });
     });
     if (!chat.canonicalId) {
-      await services.chats.update(chat.id, { canonicalId: resolvedPhoneJid });
-      chat.canonicalId = resolvedPhoneJid;
+      try {
+        await services.chats.update(chat.id, { canonicalId: resolvedPhoneJid });
+        chat.canonicalId = resolvedPhoneJid;
+      } catch (err) {
+        // Non-critical: unique constraint means a pre-migration phone chat already owns this canonicalId.
+        // The upsertLidMapping call above handles cross-chat reconciliation independently.
+        log.debug('canonicalId backfill skipped — already claimed by another chat', {
+          chatId: chat.id,
+          resolvedPhoneJid,
+          error: String(err),
+        });
+      }
     }
   }
 }
