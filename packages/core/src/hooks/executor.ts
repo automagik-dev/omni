@@ -14,8 +14,8 @@ import { createLogger } from '../logger';
 import { type HookRegistry, getHookRegistry } from './registry';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
-  HookContextSchemas,
   type HookContextMap,
+  HookContextSchemas,
   type HookEvent,
   type HookExecutionOptions,
   type HookExecutionResult,

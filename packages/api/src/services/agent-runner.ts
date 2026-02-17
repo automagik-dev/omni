@@ -439,8 +439,7 @@ export class AgentRunnerService {
     // Apply hook overrides with clear precedence derived from final context state:
     //   agentId (explicit override) > model (model/agent override) > instance original
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    const effectiveAgentId =
-      agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
+    const effectiveAgentId = agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
@@ -606,8 +605,7 @@ export class AgentRunnerService {
     // Apply hook overrides with clear precedence derived from final context state:
     //   agentId (explicit override) > model (model/agent override) > instance original
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    const effectiveAgentId =
-      agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
+    const effectiveAgentId = agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
