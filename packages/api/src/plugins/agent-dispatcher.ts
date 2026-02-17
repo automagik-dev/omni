@@ -1522,17 +1522,17 @@ async function processAgentResponse(
     // Clear agent conversation context in the activity store
     sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
 
-    // Reset provider session state so stateful providers (OpenClaw, ClaudeCode, etc.)
-    // start a fresh conversation context rather than continuing the old one.
-    getAgentProvider(services, instance, db)
-      .then((provider) => {
-        if (provider?.resetSession) {
-          return provider.resetSession(sessionId, chatId, instance.id);
-        }
-      })
-      .catch((err) => {
-        log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
-      });
+    // Await provider session reset before proceeding to dispatch so that the first
+    // post-reset turn sees a clean context. A detached promise would race with the
+    // provider dispatch and the incoming message could still use stale history.
+    try {
+      const provider = await getAgentProvider(services, instance, db);
+      if (provider?.resetSession) {
+        await provider.resetSession(sessionId, chatId, instance.id);
+      }
+    } catch (err) {
+      log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
+    }
 
     // DEC-6: Mandatory session.reset event — include routing metadata so subscribers
     // on 'session.reset.>' receive the event (bare 'session.reset' subject is not matched).
