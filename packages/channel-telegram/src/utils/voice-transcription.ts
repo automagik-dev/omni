@@ -6,6 +6,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { TranscriptionError, WhisperProvider, createLogger } from '@omni/core';
 import type { TranscriptionProvider } from '@omni/core';
 
@@ -83,8 +84,13 @@ export async function transcribeVoiceNote(
   // Determine audio format from MIME type
   const format = mimeTypeToFormat(mimeType);
 
+  // localPath is relative to the media storage root (as returned by tryDownloadTelegramMedia).
+  // Read env at call time so the path resolves correctly regardless of startup order.
+  const mediaBasePath = process.env.MEDIA_STORAGE_PATH || './data/media';
+  const absolutePath = join(mediaBasePath, localPath);
+
   try {
-    const audioBuffer = await readFile(localPath);
+    const audioBuffer = await readFile(absolutePath);
 
     const startTime = performance.now();
     const result = await provider.transcribe(audioBuffer, format);
@@ -108,7 +114,7 @@ export async function transcribeVoiceNote(
     const errorMsg = error instanceof Error ? error.message : String(error);
     const errorCode = error instanceof TranscriptionError ? error.code : 'UNKNOWN';
 
-    log.error('voice_transcription_failed', { error: errorMsg, code: errorCode, localPath });
+    log.error('voice_transcription_failed', { error: errorMsg, code: errorCode, localPath, absolutePath });
 
     return { text: FALLBACK_TEXT, success: false };
   }

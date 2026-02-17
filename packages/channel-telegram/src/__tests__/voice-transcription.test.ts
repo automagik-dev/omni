@@ -38,7 +38,8 @@ describe('Voice Transcription', () => {
   let originalFetch: typeof globalThis.fetch;
   let originalEnv: Record<string, string | undefined>;
   let tmpDir: string;
-  let testAudioPath: string;
+  /** Relative path passed to transcribeVoiceNote (mimics tryDownloadTelegramMedia output) */
+  let testAudioRelPath: string;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -46,12 +47,16 @@ describe('Voice Transcription', () => {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       WHISPER_MODEL: process.env.WHISPER_MODEL,
       OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+      MEDIA_STORAGE_PATH: process.env.MEDIA_STORAGE_PATH,
     };
 
-    // Create a temp audio file
+    // Create a temp dir as the media storage root and write a test audio file.
+    // transcribeVoiceNote receives a relative path and joins it with MEDIA_STORAGE_PATH,
+    // matching the production contract from tryDownloadTelegramMedia.
     tmpDir = mkdtempSync(join(tmpdir(), 'voice-test-'));
-    testAudioPath = join(tmpDir, 'test.ogg');
-    writeFileSync(testAudioPath, Buffer.from('fake-ogg-audio-data'));
+    testAudioRelPath = 'test.ogg';
+    writeFileSync(join(tmpDir, testAudioRelPath), Buffer.from('fake-ogg-audio-data'));
+    process.env.MEDIA_STORAGE_PATH = tmpDir;
 
     // Reset cached provider
     _resetProvider();
@@ -62,6 +67,7 @@ describe('Voice Transcription', () => {
     process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY;
     process.env.WHISPER_MODEL = originalEnv.WHISPER_MODEL;
     process.env.OPENAI_BASE_URL = originalEnv.OPENAI_BASE_URL;
+    process.env.MEDIA_STORAGE_PATH = originalEnv.MEDIA_STORAGE_PATH;
     _resetProvider();
 
     try {
@@ -76,7 +82,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch({ text: 'Hello world', duration: 5.2 });
 
-      const result = await transcribeVoiceNote(testAudioPath, 5, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(true);
       expect(result.text).toBe('[Voice Note Transcription]: Hello world');
@@ -85,7 +91,7 @@ describe('Voice Transcription', () => {
     it('returns fallback when OPENAI_API_KEY is not set', async () => {
       process.env.OPENAI_API_KEY = undefined;
 
-      const result = await transcribeVoiceNote(testAudioPath, 5, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
       expect(result.text).toBe('[Voice note - transcription unavailable]');
@@ -94,7 +100,7 @@ describe('Voice Transcription', () => {
     it('returns fallback when duration exceeds 5 minutes', async () => {
       process.env.OPENAI_API_KEY = 'test-key';
 
-      const result = await transcribeVoiceNote(testAudioPath, 301, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 301, 'audio/ogg');
 
       expect(result.success).toBe(false);
       expect(result.text).toBe('[Voice note - transcription unavailable]');
@@ -104,7 +110,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch({ text: 'Long message', duration: 300 });
 
-      const result = await transcribeVoiceNote(testAudioPath, 300, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 300, 'audio/ogg');
 
       expect(result.success).toBe(true);
       expect(result.text).toContain('Long message');
@@ -114,7 +120,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch(null);
 
-      const result = await transcribeVoiceNote(testAudioPath, 5, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
       expect(result.text).toBe('[Voice note - transcription unavailable]');
@@ -124,7 +130,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch({ text: '', duration: 0 }, 500);
 
-      const result = await transcribeVoiceNote(testAudioPath, 5, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
       expect(result.text).toBe('[Voice note - transcription unavailable]');
@@ -134,7 +140,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch({ text: '   ', duration: 1 });
 
-      const result = await transcribeVoiceNote(testAudioPath, 5, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
       expect(result.text).toBe('[Voice note - transcription unavailable]');
@@ -144,7 +150,7 @@ describe('Voice Transcription', () => {
       process.env.OPENAI_API_KEY = 'test-key';
       globalThis.fetch = createMockFetch({ text: 'No duration info', duration: 10 });
 
-      const result = await transcribeVoiceNote(testAudioPath, undefined, 'audio/ogg');
+      const result = await transcribeVoiceNote(testAudioRelPath, undefined, 'audio/ogg');
 
       expect(result.success).toBe(true);
       expect(result.text).toBe('[Voice Note Transcription]: No duration info');
@@ -156,7 +162,7 @@ describe('Voice Transcription', () => {
 
       for (const mime of ['audio/ogg', 'audio/opus', 'audio/mpeg', 'audio/wav']) {
         _resetProvider();
-        const result = await transcribeVoiceNote(testAudioPath, 5, mime);
+        const result = await transcribeVoiceNote(testAudioRelPath, 5, mime);
         expect(result.success).toBe(true);
       }
     });

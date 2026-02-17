@@ -76,9 +76,9 @@ export async function tryDownloadTelegramMedia(params: {
 
     writeFileSync(fullPath, buffer);
 
-    log.debug('Downloaded Telegram media', { instanceId, externalId, path: fullPath, size: buffer.length });
+    log.debug('Downloaded Telegram media', { instanceId, externalId, path: relativePath, size: buffer.length });
 
-    return { localPath: fullPath };
+    return { localPath: relativePath };
   } catch (error) {
     log.warn('Telegram media download failed, continuing without local file', {
       instanceId,
