@@ -153,7 +153,10 @@ export class ClaudeCodeClient implements IAgentClient {
       options.allowDangerouslySkipPermissions = true;
     }
 
-    if (this.config.allowedTools) {
+    // Request-level tools (depth-aware filtering) take precedence over static config
+    if (request.tools) {
+      options.allowedTools = request.tools;
+    } else if (this.config.allowedTools) {
       options.allowedTools = this.config.allowedTools;
     }
     if (this.config.model) {

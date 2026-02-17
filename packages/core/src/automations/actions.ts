@@ -6,7 +6,7 @@
 
 import {
   type AgentContext,
-  type ChildrenTracker,
+  ChildrenTracker,
   type SpawnLimits,
   checkSpawnAllowed,
   recordCompletion,
@@ -338,18 +338,17 @@ function extractAgentCallContext(
  * When no parent AgentContext is present (top-level automation-triggered call),
  * a synthetic root context is created so depth and breadth limits are enforced
  * from the very first spawn rather than being silently bypassed.
+ *
+ * Depth is always enforced. Breadth tracking requires a persistent childrenTracker;
+ * without one a transient tracker is used so the depth check still fires correctly
+ * (breadth will always pass with 0 recorded children, which is the safe fallback).
  */
 function enforceSpawnGuard(
   agentCallContext: AgentCallContext,
   agentId: string,
   deps: ActionDependencies,
 ): { childContext?: AgentContext; error?: string } {
-  const tracker = deps.childrenTracker;
   const limits = resolveSpawnLimits(deps.spawnLimits);
-
-  if (!tracker) {
-    return {};
-  }
 
   // Use existing parent context, or create a synthetic root context for
   // top-level automation-triggered calls (depth=0, no parent agent).
@@ -359,12 +358,17 @@ function enforceSpawnGuard(
     instanceId: agentCallContext.instanceId,
   };
 
-  const decision = checkSpawnAllowed(parentAgentCtx, limits, tracker);
+  // Depth is enforced unconditionally. When no persistent tracker is configured,
+  // a transient tracker lets checkSpawnAllowed run (breadth will see 0 children
+  // and always pass, but depth limits still protect against runaway chains).
+  const effectiveTracker = deps.childrenTracker ?? new ChildrenTracker();
+
+  const decision = checkSpawnAllowed(parentAgentCtx, limits, effectiveTracker);
   if (!decision.allowed) {
     return { error: decision.reason };
   }
 
-  const childContext = recordSpawn(parentAgentCtx, agentId, tracker);
+  const childContext = recordSpawn(parentAgentCtx, agentId, effectiveTracker);
   agentCallContext.agentContext = childContext;
   return { childContext };
 }

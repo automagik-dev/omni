@@ -198,6 +198,11 @@ export class AgnoClient implements IAgentClient {
       formData.append('user_id', request.userId);
     }
 
+    // Pass depth-aware tool restrictions to the Agno agent when provided
+    if (request.tools?.length) {
+      formData.append('tools', JSON.stringify(request.tools));
+    }
+
     if (request.files?.length) {
       for (const file of request.files) {
         try {
