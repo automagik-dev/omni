@@ -230,4 +230,22 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
     return this.client.checkHealth();
   }
+
+  /** Clear persisted Claude session mapping for a strategy-computed session key. */
+  async resetSession(sessionKey: string, _chatId?: string, instanceId?: string): Promise<void> {
+    if (!instanceId) {
+      log.warn('Claude session reset skipped: missing instanceId', {
+        providerId: this.id,
+        sessionKey,
+      });
+      throw new Error('instanceId is required to reset Claude Code session');
+    }
+
+    await this.sessionStorage.deleteSession(instanceId, sessionKey);
+    log.info('Claude session reset', {
+      providerId: this.id,
+      instanceId,
+      sessionKey,
+    });
+  }
 }

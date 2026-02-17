@@ -281,8 +281,9 @@ export interface IAgentProvider {
 
   /** Optional: Reset/clear a session by session key.
    *  chatId is provided so providers that build their own key format (e.g. OpenClaw)
-   *  can reconstruct the correct session key. */
-  resetSession?(sessionKey: string, chatId?: string): Promise<void>;
+   *  can reconstruct the correct session key.
+   *  instanceId is provided for providers that scope persistence by instance. */
+  resetSession?(sessionKey: string, chatId?: string, instanceId?: string): Promise<void>;
 }
 
 /**
