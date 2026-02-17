@@ -60,7 +60,7 @@ export const DISCORD_CAPABILITIES: ChannelCapabilities = {
   canHandleThreads: true,
   canCreateWebhooks: true,
   canSendViaWebhook: true,
-  canHandleVoice: false, // Future - deferred
+  canHandleVoice: true,
 
   // Limits
   maxMessageLength: 2000,
