@@ -152,6 +152,7 @@ export function startAck(
   // DEC-9: Rate limit check (separate bucket)
   ensureCleanup();
   if (!ackRateLimiter.isAllowed(instanceId)) {
+    // Rate limit exceeded — silently skip ack (DEC-9: cosmetic, no error)
     return noopHandle;
   }
 

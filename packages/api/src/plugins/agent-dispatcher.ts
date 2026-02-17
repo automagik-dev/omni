@@ -1503,11 +1503,13 @@ async function processAgentResponse(
   const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
 
   // ── Session Reset Check (pre-processing) ──
-  const chatType = determineChatType(chatId, channel);
+  const rawChatType = determineChatType(chatId, channel);
+  // Map 'channel' → 'group' for session reset purposes (channels behave like groups)
+  const resetChatType: 'dm' | 'group' | 'thread' = rawChatType === 'channel' ? 'group' : rawChatType;
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
-  const resetResult = checkSessionReset(sessionResetConfig, chatType as 'dm' | 'group' | 'thread', activity);
+  const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
 
   if (resetResult.shouldReset) {
     // Clear agent conversation context (provider will start fresh)
@@ -1524,7 +1526,7 @@ async function processAgentResponse(
       instanceId: instance.id,
       sessionId,
       strategy: resetResult.strategy,
-      chatType,
+      chatType: resetChatType,
       traceId,
     });
   }
