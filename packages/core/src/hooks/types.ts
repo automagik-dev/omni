@@ -128,6 +128,9 @@ export const MAX_HOOK_PRIORITY = 100;
  */
 export type HookHandlerFn<E extends HookEvent = HookEvent> = (
   context: HookContextMap[E],
+  /** AbortSignal fired when the hook exceeds its timeout — handlers should use
+   *  this to cancel in-flight async work (fetch, DB queries, etc.). */
+  signal: AbortSignal,
   // biome-ignore lint/suspicious/noConfusingVoidType: void required for async handler compat
 ) => Promise<HookContextMap[E] | void> | HookContextMap[E] | void;
 

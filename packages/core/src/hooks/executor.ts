@@ -54,16 +54,21 @@ function deepFreeze<T>(obj: T): Readonly<T> {
 
 /**
  * Race a promise against a timeout.
+ * On timeout, aborts `controller` so the handler can self-cancel via its AbortSignal.
  * Returns { result, timedOut }.
  */
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
+  controller: AbortController,
 ): Promise<{ result: T; timedOut: false } | { result: undefined; timedOut: true }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const timeout = new Promise<{ result: undefined; timedOut: true }>((resolve) => {
-    timer = setTimeout(() => resolve({ result: undefined, timedOut: true }), timeoutMs);
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve({ result: undefined, timedOut: true });
+    }, timeoutMs);
   });
 
   try {
@@ -89,10 +94,11 @@ async function executeSingleHook<E extends HookEvent>(
   instanceId: string,
 ): Promise<{ result: HookExecutionResult; returnedContext?: HookContextMap[E] }> {
   const hookStart = performance.now();
+  const controller = new AbortController();
 
   try {
-    const handlerPromise = Promise.resolve(hook.handler(handlerContext));
-    const outcome = await withTimeout(handlerPromise, timeoutMs);
+    const handlerPromise = Promise.resolve(hook.handler(handlerContext, controller.signal));
+    const outcome = await withTimeout(handlerPromise, timeoutMs, controller);
 
     if (outcome.timedOut) {
       const durationMs = performance.now() - hookStart;

@@ -119,13 +119,17 @@ export class HookRegistry {
     const instanceHooks = this.hooks.get(instanceId);
     if (!instanceHooks) return false;
 
+    // Scan all events and remove every occurrence of the ID.
+    // A custom ID may be reused across multiple events, so stopping at the
+    // first match would leave duplicates active and make cleanup nondeterministic.
+    let removed = false;
     for (const [, eventHooks] of instanceHooks) {
       if (eventHooks.delete(hookId)) {
-        return true;
+        removed = true;
       }
     }
 
-    return false;
+    return removed;
   }
 
   /**
