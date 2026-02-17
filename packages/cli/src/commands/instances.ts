@@ -28,6 +28,99 @@ import { resolveInstanceId } from '../resolve.js';
 const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
+/** Set value on body, resolving "null" string to actual null */
+function setVal(body: Record<string, unknown>, key: string, val: unknown): void {
+  if (val === 'null') body[key] = null;
+  else if (val !== undefined) body[key] = val;
+}
+
+/** Set boolean on body (handles Commander's --flag / --no-flag booleans) */
+function setBool(body: Record<string, unknown>, key: string, val: unknown): void {
+  if (val === true) body[key] = true;
+  if (val === false) body[key] = false;
+}
+
+/** Extract agent routing fields from CLI options into body */
+function applyAgentFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'agentProviderId', opts.agentProvider);
+  setVal(body, 'agentId', opts.agent);
+  setVal(body, 'agentType', opts.agentType);
+  if (opts.agentTimeout !== undefined) body.agentTimeout = opts.agentTimeout;
+  setBool(body, 'agentStreamMode', opts.agentStreamMode);
+  setVal(body, 'agentSessionStrategy', opts.agentSessionStrategy);
+  setBool(body, 'agentPrefixSenderName', opts.agentPrefixSenderName);
+  setBool(body, 'agentWaitForMedia', opts.agentWaitForMedia);
+  setBool(body, 'agentSendMediaPath', opts.agentSendMediaPath);
+}
+
+/** Extract reply filter fields from CLI options into body */
+function applyReplyFilter(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  if (opts.clearReplyFilter) {
+    body.agentReplyFilter = null;
+    return;
+  }
+  if (!opts.replyFilterMode) return;
+  const cond: Record<string, unknown> = {};
+  setBool(cond, 'onDm', opts.replyOnDm);
+  setBool(cond, 'onMention', opts.replyOnMention);
+  setBool(cond, 'onReply', opts.replyOnReply);
+  if (opts.replyOnName === true || opts.replyOnName === false) cond.onNameMatch = opts.replyOnName;
+  if (opts.replyNamePatterns) {
+    cond.namePatterns = (opts.replyNamePatterns as string).split(',').map((s) => s.trim());
+  }
+  body.agentReplyFilter = { mode: opts.replyFilterMode, conditions: cond };
+}
+
+/** Extract message formatting fields from CLI options into body */
+function applyFormatFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setBool(body, 'enableAutoSplit', opts.enableAutoSplit);
+  setVal(body, 'messageFormatMode', opts.messageFormatMode);
+}
+
+/** Extract debounce fields from CLI options into body */
+function applyDebounceFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'messageDebounceMode', opts.debounceMode);
+  if (opts.debounceMin !== undefined) body.messageDebounceMinMs = opts.debounceMin;
+  if (opts.debounceMax !== undefined) body.messageDebounceMaxMs = opts.debounceMax;
+  setBool(body, 'messageDebounceRestartOnTyping', opts.debounceRestartOnTyping);
+  if (opts.debounceGroup !== undefined) body.messageDebounceGroupMs = opts.debounceGroup;
+}
+
+/** Extract agent gate fields from CLI options into body */
+function applyGateFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setBool(body, 'agentGateEnabled', opts.agentGate);
+  setVal(body, 'agentGateModel', opts.agentGateModel);
+  setVal(body, 'agentGatePrompt', opts.agentGatePrompt);
+}
+
+/** Extract TTS, access, token, trigger fields from CLI options into body */
+function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'ttsVoiceId', opts.ttsVoice);
+  setVal(body, 'ttsModelId', opts.ttsModel);
+  setVal(body, 'accessMode', opts.accessMode);
+  setVal(body, 'token', opts.token);
+  setVal(body, 'telegramBotToken', opts.telegramToken);
+  setVal(body, 'discordBotToken', opts.discordToken);
+  setVal(body, 'slackBotToken', opts.slackBotToken);
+  setVal(body, 'slackAppToken', opts.slackAppToken);
+  if (opts.triggerEvents !== undefined) {
+    const raw = opts.triggerEvents as string;
+    body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
+  }
+}
+
+/** Build instance body from all CLI options */
+function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  applyAgentFields(body, opts);
+  applyReplyFilter(body, opts);
+  applyFormatFields(body, opts);
+  applyDebounceFields(body, opts);
+  applyGateFields(body, opts);
+  applyMiscFields(body, opts);
+  return body;
+}
+
 async function resolveBase64Image(options: { base64?: string; url?: string }): Promise<string> {
   if (options.base64) return options.base64;
   if (!options.url) throw new Error('Either --base64 or --url is required');
@@ -132,27 +225,78 @@ export function createInstancesCommand(): Command {
   // omni instances create
   instances
     .command('create')
-    .description('Create a new instance')
+    .description('Create a new instance (supports all API fields)')
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
+    // Agent routing
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
-    .action(async (options: { name: string; channel: string; agentProvider?: string; agent?: string }) => {
-      if (!VALID_CHANNELS.includes(options.channel as Channel)) {
-        output.error(`Invalid channel: ${options.channel}`, {
-          validChannels: VALID_CHANNELS,
-        });
+    .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
+    .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
+    .option('--agent-stream-mode', 'Enable streaming responses')
+    .option('--agent-session-strategy <strategy>', 'Session strategy: per_user, per_chat, per_user_per_chat')
+    .option('--agent-prefix-sender-name', 'Prefix messages with sender name')
+    .option('--no-agent-prefix-sender-name', 'Disable sender name prefix')
+    .option('--agent-wait-for-media', 'Wait for media processing before dispatch')
+    .option('--no-agent-wait-for-media', 'Dispatch immediately without waiting for media')
+    .option('--agent-send-media-path', 'Include file path in formatted media text')
+    .option('--no-agent-send-media-path', 'Exclude file path from formatted media text')
+    // Reply filter
+    .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
+    .option('--reply-on-dm', 'Reply to DMs')
+    .option('--no-reply-on-dm', 'Ignore DMs')
+    .option('--reply-on-mention', 'Reply when @mentioned')
+    .option('--no-reply-on-mention', 'Ignore @mentions')
+    .option('--reply-on-reply', 'Reply when message is reply to bot')
+    .option('--no-reply-on-reply', 'Ignore replies')
+    .option('--reply-on-name', 'Reply when bot name appears in text')
+    .option('--no-reply-on-name', 'Ignore name matches')
+    .option('--reply-name-patterns <patterns>', 'Custom name patterns (comma-separated)')
+    // Message formatting
+    .option('--enable-auto-split', 'Split responses on double newlines')
+    .option('--no-enable-auto-split', 'Disable auto-split')
+    .option('--message-format-mode <mode>', 'Format mode: convert or passthrough')
+    // Debounce
+    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, or randomized')
+    .option('--debounce-min <ms>', 'Minimum debounce delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
+    .option('--debounce-group <ms>', 'Group chat debounce in ms', (v) => Number.parseInt(v, 10))
+    // Agent gate
+    .option('--agent-gate', 'Enable LLM response gate')
+    .option('--agent-gate-model <model>', 'Model for response gate')
+    .option('--agent-gate-prompt <prompt>', 'Custom gate prompt')
+    // TTS
+    .option('--tts-voice <id>', 'ElevenLabs voice ID')
+    .option('--tts-model <id>', 'ElevenLabs model ID')
+    // Access control
+    .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
+    // Channel tokens
+    .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
+    .option('--telegram-token <token>', 'Telegram bot token')
+    .option('--discord-token <token>', 'Discord bot token')
+    .option('--slack-bot-token <token>', 'Slack bot token')
+    .option('--slack-app-token <token>', 'Slack app token')
+    // Default
+    .option('--is-default', 'Set as default instance for channel')
+    .action(async (options: Record<string, unknown>) => {
+      const channel = options.channel as string;
+      if (!VALID_CHANNELS.includes(channel as Channel)) {
+        output.error(`Invalid channel: ${channel}`, { validChannels: VALID_CHANNELS });
       }
 
-      const client = getClient();
-
       try {
-        const instance = await client.instances.create({
-          name: options.name,
-          channel: options.channel as Channel,
-          agentProviderId: options.agentProvider,
-          agentId: options.agent,
-        });
+        const body = buildInstanceBody(options);
+        body.name = options.name;
+        body.channel = channel;
+        setBool(body, 'isDefault', options.isDefault);
+
+        const instance = (await apiCall('instances', 'POST', body)) as {
+          id: string;
+          name: string;
+          channel: string;
+          isActive: boolean;
+        };
 
         output.success(`Instance created: ${instance.id}`, {
           id: instance.id,
@@ -503,82 +647,102 @@ export function createInstancesCommand(): Command {
     }
   }
 
-  type InstanceUpdateOptions = {
-    name?: string;
-    agentProvider?: string;
-    removeAgentProvider?: boolean;
-    agent?: string;
-    removeAgent?: boolean;
-    profileName?: string;
-  };
-
-  /** Validate instance update options, returning an error string or null */
-  function validateUpdateOptions(options: InstanceUpdateOptions): string | null {
-    if (options.agentProvider && options.removeAgentProvider) {
-      return 'Cannot use both --agent-provider and --remove-agent-provider together';
-    }
-    if (options.agent && options.removeAgent) {
-      return 'Cannot use both --agent and --remove-agent together';
-    }
-    if (!options.profileName && !buildInstancePayload(options)) {
-      return 'No update options provided. Use --name, --profile-name, --agent-provider, --remove-agent-provider, --agent, or --remove-agent.';
-    }
-    return null;
-  }
-
-  /** Build the instance update payload, or null if no fields need updating */
-  function buildInstancePayload(
-    options: InstanceUpdateOptions,
-  ): { name?: string; agentProviderId?: string | null; agentId?: string | null } | null {
-    const hasUpdate =
-      options.name || options.agentProvider || options.removeAgentProvider || options.agent || options.removeAgent;
-    if (!hasUpdate) return null;
-    return {
-      name: options.name,
-      agentProviderId: options.removeAgentProvider ? null : options.agentProvider,
-      agentId: options.removeAgent ? null : options.agent,
-    };
-  }
-
-  async function handleInstanceUpdate(rawId: string, options: InstanceUpdateOptions): Promise<void> {
-    const validationError = validateUpdateOptions(options);
-    if (validationError) {
-      output.error(validationError);
-      return;
-    }
-
-    const client = getClient();
-
-    try {
-      const id = await resolveInstanceId(rawId);
-
-      if (options.profileName) {
-        await updateProfileName(id, options.profileName);
-        output.success(`Profile name updated to "${options.profileName}"`);
-      }
-
-      const payload = buildInstancePayload(options);
-      if (payload) {
-        await client.instances.update(id, payload);
-        output.success(`Instance updated: ${id}`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      output.error(`Failed to update instance: ${message}`);
-    }
-  }
-
   // omni instances update <id>
   instances
     .command('update <id>')
-    .description('Update an instance')
-    .option('--name <name>', 'New instance name')
-    .option('--agent-provider <id>', 'New agent provider ID')
-    .option('--remove-agent-provider', 'Remove agent provider from instance')
-    .option('--agent <id>', 'New agent ID')
-    .option('--remove-agent', 'Remove agent from instance')
+    .description('Update an instance (supports all API fields)')
+    // Identity
+    .option('--name <name>', 'Instance name')
+    .option('--is-default', 'Set as default instance for channel')
+    .option('--no-is-default', 'Unset as default instance for channel')
+    // Agent routing
+    .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
+    .option('--agent <id>', 'Agent ID (use "null" to clear)')
+    .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
+    .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
+    .option('--agent-stream-mode', 'Enable streaming responses')
+    .option('--no-agent-stream-mode', 'Disable streaming responses')
+    .option('--agent-session-strategy <strategy>', 'Session strategy: per_user, per_chat, per_user_per_chat')
+    .option('--agent-prefix-sender-name', 'Prefix messages with sender name')
+    .option('--no-agent-prefix-sender-name', 'Disable sender name prefix')
+    .option('--agent-wait-for-media', 'Wait for media processing before dispatch')
+    .option('--no-agent-wait-for-media', 'Dispatch immediately without waiting for media')
+    .option('--agent-send-media-path', 'Include file path in formatted media text')
+    .option('--no-agent-send-media-path', 'Exclude file path from formatted media text')
+    // Reply filter
+    .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
+    .option('--reply-on-dm', 'Reply to DMs (requires --reply-filter-mode filtered)')
+    .option('--no-reply-on-dm', 'Ignore DMs')
+    .option('--reply-on-mention', 'Reply when @mentioned')
+    .option('--no-reply-on-mention', 'Ignore @mentions')
+    .option('--reply-on-reply', 'Reply when message is reply to bot')
+    .option('--no-reply-on-reply', 'Ignore replies')
+    .option('--reply-on-name', 'Reply when bot name appears in text')
+    .option('--no-reply-on-name', 'Ignore name matches')
+    .option('--reply-name-patterns <patterns>', 'Custom name patterns (comma-separated)')
+    .option('--clear-reply-filter', 'Remove reply filter (set to null)')
+    // Message formatting
+    .option('--enable-auto-split', 'Split responses on double newlines')
+    .option('--no-enable-auto-split', 'Disable auto-split')
+    .option('--message-format-mode <mode>', 'Format mode: convert or passthrough')
+    // Debounce
+    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, or randomized')
+    .option('--debounce-min <ms>', 'Minimum debounce delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
+    .option('--no-debounce-restart-on-typing', 'Do not restart debounce on typing')
+    .option('--debounce-group <ms>', 'Group chat debounce in ms (use "null" to inherit)', (v) =>
+      v === 'null' ? null : Number.parseInt(v, 10),
+    )
+    // Agent gate
+    .option('--agent-gate', 'Enable LLM response gate')
+    .option('--no-agent-gate', 'Disable LLM response gate')
+    .option('--agent-gate-model <model>', 'Model for response gate (use "null" for default)')
+    .option('--agent-gate-prompt <prompt>', 'Custom gate prompt (use "null" for default)')
+    // TTS
+    .option('--tts-voice <id>', 'ElevenLabs voice ID (use "null" to clear)')
+    .option('--tts-model <id>', 'ElevenLabs model ID (use "null" to clear)')
+    // Access control
+    .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
+    // Channel tokens
+    .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
+    .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')
+    .option('--discord-token <token>', 'Discord bot token (use "null" to clear)')
+    .option('--slack-bot-token <token>', 'Slack bot token (use "null" to clear)')
+    .option('--slack-app-token <token>', 'Slack app token (use "null" to clear)')
+    // Trigger events
+    .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
+    // WhatsApp profile name (separate endpoint)
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
-    .action(handleInstanceUpdate);
+    .action(async (rawId: string, options: Record<string, unknown>) => {
+      const client = getClient();
+
+      try {
+        const id = await resolveInstanceId(rawId);
+
+        // Handle profile name update (separate endpoint)
+        if (options.profileName) {
+          await updateProfileName(id, options.profileName as string);
+          output.success(`Profile name updated to "${options.profileName}"`);
+        }
+
+        // Build update body using shared helpers
+        const body = buildInstanceBody(options);
+        setVal(body, 'name', options.name);
+        setBool(body, 'isDefault', options.isDefault);
+
+        // Send update if there are fields to update
+        if (Object.keys(body).length > 0) {
+          await client.instances.update(id, body);
+          output.success(`Instance updated: ${id}`, body);
+        } else if (!options.profileName) {
+          output.error('No update options provided. Use --help to see all available options.');
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update instance: ${message}`);
+      }
+    });
 
   // omni instances contacts <id>
   instances
