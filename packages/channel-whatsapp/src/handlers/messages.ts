@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
-import { fromJid, isLidJid, isUserJid } from '../jid';
+import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 
@@ -485,16 +485,20 @@ function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMes
 
   // In groups, msg.key.participant is the actual sender
   const senderJid = msg.key.participant || msg.key.remoteJid || chatId;
+  const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
 
-  // LID-first: store bidirectional mapping when participantAlt provides the alternate form
-  if (isLidJid(senderJid)) {
-    const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
-    if (participantAlt && isUserJid(participantAlt)) {
-      plugin.storeLidMapping(instanceId, senderJid, participantAlt);
-    }
+  // Always store bidirectional mapping when participantAlt provides the alternate form
+  if (isLidJid(senderJid) && participantAlt && isUserJid(participantAlt)) {
+    plugin.storeLidMapping(instanceId, senderJid, participantAlt);
   }
 
-  // Keep sender JID as-is (LID stays LID, phone stays phone)
+  // DEC-8: when lidFirstEnabled is disabled, resolve LID sender → phone (legacy behavior)
+  if (!plugin.isLidFirstEnabled(instanceId)) {
+    const lidCache = plugin.getLidMappingCache(instanceId);
+    return resolveToPhoneJidLegacy(senderJid, participantAlt, lidCache);
+  }
+
+  // LID-first: keep sender JID as-is (LID stays LID, phone stays phone)
   return senderJid;
 }
 
@@ -651,10 +655,8 @@ function resolveChatId(
   const rawChatId = msg.key.remoteJid || '';
   const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
 
-  // LID-first: use rawChatId as canonical (no resolution to phone)
-  const chatId = rawChatId;
-
   // Store bidirectional mapping when remoteJidAlt provides the alternate form
+  // (always store mappings regardless of lidFirstEnabled — useful for future enable)
   if (isLidJid(rawChatId) && remoteJidAlt && isUserJid(remoteJidAlt)) {
     plugin.storeLidMapping(instanceId, rawChatId, remoteJidAlt);
     log.debug('Stored LID↔phone mapping from remoteJidAlt', { lid: rawChatId, phone: remoteJidAlt });
@@ -663,7 +665,15 @@ function resolveChatId(
     log.debug('Stored LID↔phone mapping from remoteJidAlt (reverse)', { lid: remoteJidAlt, phone: rawChatId });
   }
 
-  return { chatId, rawChatId };
+  // DEC-8: when lidFirstEnabled is disabled, resolve LID → phone (legacy behavior)
+  if (!plugin.isLidFirstEnabled(instanceId)) {
+    const lidCache = plugin.getLidMappingCache(instanceId);
+    const chatId = resolveToPhoneJidLegacy(rawChatId, remoteJidAlt, lidCache);
+    return { chatId, rawChatId };
+  }
+
+  // LID-first: use rawChatId as canonical (no resolution to phone)
+  return { chatId: rawChatId, rawChatId };
 }
 
 /**

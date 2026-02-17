@@ -180,6 +180,10 @@ export interface WhatsAppConnectionOptions {
   generateHighQualityLinkPreview?: boolean;
   /** Mark online when connecting (default: true) */
   markOnlineOnConnect?: boolean;
+  /** Enable LID-first identity resolution (default: true).
+   *  When false, falls back to legacy phone-based resolution (resolveToPhoneJidLegacy).
+   *  Per-instance rollback flag — DEC-8. */
+  lidFirstEnabled?: boolean;
 }
 
 /**
@@ -330,6 +334,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
   }
 
+  /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
+  private lidFirstEnabledMap = new Map<string, boolean>();
+
   /**
    * LID → phone JID mapping cache per instance.
    * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
@@ -355,6 +362,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Check if LID-first identity resolution is enabled for an instance.
+   * When false, falls back to legacy phone-based resolution (DEC-8 rollback).
+   */
+  isLidFirstEnabled(instanceId: string): boolean {
+    return this.lidFirstEnabledMap.get(instanceId) ?? true;
   }
 
   /**
@@ -755,6 +770,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
+
+    // Store per-instance LID-first flag (DEC-8 rollback)
+    this.lidFirstEnabledMap.set(instanceId, instanceOptions.lidFirstEnabled ?? true);
+
     const socketOptions: Partial<SocketConfig> = {
       // Plugin-level defaults
       ...this.pluginConfig,
@@ -927,6 +946,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // If already a LID or not a user JID, passthrough
     if (!isUserJid(phoneJid)) return phoneJid;
 
+    // DEC-8: skip LID resolution when lidFirstEnabled is disabled (rollback)
+    if (!this.isLidFirstEnabled(instanceId)) return phoneJid;
+
     // Try LID resolution via Baileys signal repository
     try {
       const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
@@ -934,8 +956,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
         return lidJid;
       }
-    } catch {
-      // API not available or error — fall back to phone
+    } catch (error) {
+      this.logger.warn('lid_send_fallback', {
+        originalTarget: to,
+        attemptedPhone: phoneJid,
+        error: String(error),
+        instanceId,
+      });
     }
 
     return phoneJid;

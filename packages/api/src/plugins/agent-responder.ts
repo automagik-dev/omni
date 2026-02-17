@@ -200,17 +200,29 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
     !chatId.includes('@newsletter') &&
     !(rawPayload.isGroup as boolean);
 
+  const chatFormat = chatId.includes('@lid') ? 'lid' : chatId.includes('@g.us') ? 'group' : 'phone';
+  log.debug('dm_detection', { chatId, isDirectMessage, format: chatFormat });
+
   // Check for bot mention
-  // WhatsApp: check if message mentions our JID
+  // WhatsApp: check if message mentions our JID (handles LID↔phone mismatch)
   // Discord: check if message has @mention of our user
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
   const ownerJid = instance.ownerIdentifier ?? '';
-  const mentionsBot = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
+  // Strip device suffix (:XX) and @suffix to extract the raw identifier for comparison
+  const extractId = (jid: string) => jid.replace(/:.*$/, '').replace(/@.*$/, '');
+  const ownerId = extractId(ownerJid);
+  const jidMatchesOwner = mentionedJids.some((jid) => {
+    return jid === ownerJid || extractId(jid) === ownerId;
+  });
+  // Also check plugin-level LID resolution (isMentioningInstance) and platform hints (isMention)
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
 
   // Check if reply to bot message
-  // Look at quoted message sender
+  // Look at quoted message sender (handles LID↔phone mismatch via ID extraction)
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant === ownerJid;
+  const isReplyToBot = quotedParticipant
+    ? quotedParticipant === ownerJid || extractId(quotedParticipant) === ownerId
+    : false;
 
   return {
     isDirectMessage,
