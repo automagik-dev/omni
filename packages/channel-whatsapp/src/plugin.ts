@@ -365,6 +365,332 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Cache contact info for future lookups
+   */
+  private cacheContactInfo(instanceId: string, jid: string, name: string | undefined, phone: string | undefined): void {
+    let cache = this.contactsCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.contactsCache.set(instanceId, cache);
+    }
+    cache.set(jid, {
+      platformUserId: jid,
+      name,
+      phone,
+      isGroup: false,
+    });
+  }
+
+  /**
+   * Try to fetch contact from group participants
+   */
+  private async tryFetchFromGroupParticipants(
+    sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
+    groupJid: string,
+    lookupJid: string,
+    normalizedJid?: string,
+    originalLid?: string,
+  ): Promise<{ name?: string; phone?: string } | null> {
+    try {
+      const metadata = await sock.groupMetadata(groupJid);
+      // Try matching with all possible JID formats: PN, normalized, and LID
+      const participant = metadata.participants?.find(
+        (p) => p.id === lookupJid || p.id === normalizedJid || p.id === originalLid,
+      );
+
+      if (participant) {
+        // Log available fields to understand what we can use
+        this.logger.debug('Found participant in group', {
+          jid: lookupJid,
+          participantKeys: Object.keys(participant),
+          participant,
+        });
+
+        // Group participants don't have a name/notify field, but they have phoneNumber
+        // Try to look up the phoneNumber in contactsCache or chatNamesCache
+        const participantPhoneJid = (participant as { phoneNumber?: string }).phoneNumber;
+        let name: string | undefined;
+
+        if (participantPhoneJid) {
+          // Try contactsCache first
+          const contactsCacheMap = this.contactsCache.get(instanceId);
+          this.logger.debug('Checking contactsCache for participant', {
+            jid: lookupJid,
+            phoneJid: participantPhoneJid,
+            hasContactsCache: !!contactsCacheMap,
+            cacheSize: contactsCacheMap?.size ?? 0,
+            sampleKeys: Array.from(contactsCacheMap?.keys() ?? []).slice(0, 5),
+          });
+
+          const cachedContact = contactsCacheMap?.get(participantPhoneJid);
+          if (cachedContact?.name) {
+            name = cachedContact.name;
+            this.logger.debug('Found participant name in contactsCache', {
+              jid: lookupJid,
+              phoneJid: participantPhoneJid,
+              name,
+            });
+          } else {
+            // Try chatNamesCache
+            const chatNamesMap = this.chatNamesCache.get(instanceId);
+            const chatName = chatNamesMap?.get(participantPhoneJid);
+            if (chatName) {
+              name = chatName;
+              this.logger.debug('Found participant name in chatNamesCache', {
+                jid: lookupJid,
+                phoneJid: participantPhoneJid,
+                name,
+              });
+            }
+          }
+        }
+
+        const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
+        const phone = phoneMatch?.[1];
+        return { name, phone };
+      }
+
+      this.logger.debug('Participant not found in group metadata', {
+        groupJid,
+        lookupJid,
+        participantCount: metadata.participants?.length,
+        sampleParticipants: metadata.participants?.slice(0, 2).map((p) => p.id),
+      });
+    } catch (error) {
+      this.logger.debug('Failed to fetch group metadata', { groupJid, error: String(error) });
+    }
+    return null;
+  }
+
+  /**
+   * Try fetching contact info directly from WhatsApp (business profile or onWhatsApp check)
+   */
+  private async tryFetchFromWhatsApp(
+    sock: ReturnType<typeof this.getSocket>,
+    instanceId: string,
+    lookupJid: string,
+    phone: string,
+  ): Promise<{ name?: string; phone?: string } | null> {
+    this.logger.debug('tryFetchFromWhatsApp called', { instanceId, lookupJid, phone });
+
+    // Convert PN format (e.g., "551151999885:0@s.whatsapp.net") to standard phone JID
+    // getBusinessProfile needs the standard format without the :0 device ID
+    const phoneJid = `${phone}@s.whatsapp.net`;
+
+    // Try business profile first (has name info for business accounts)
+    this.logger.debug('Attempting business profile lookup', { lookupJid, phoneJid });
+    try {
+      const businessProfile = await sock.getBusinessProfile(phoneJid);
+      this.logger.debug('getBusinessProfile returned', {
+        phoneJid,
+        businessProfile,
+        allKeys: Object.keys(businessProfile || {}),
+      });
+      if (businessProfile) {
+        // Check for various name fields that might be present
+        const profile = businessProfile as {
+          verifiedName?: string;
+          verified_name?: string;
+          name?: string;
+          business_name?: string;
+          description?: string;
+        };
+        const businessName = profile.verifiedName || profile.verified_name || profile.name || profile.business_name;
+        this.logger.debug('Checking business name fields', {
+          phoneJid,
+          verifiedName: profile.verifiedName,
+          verified_name: profile.verified_name,
+          name: profile.name,
+          business_name: profile.business_name,
+          finalBusinessName: businessName,
+        });
+        if (businessName) {
+          this.cacheContactInfo(instanceId, lookupJid, businessName, phone);
+          this.logger.debug('Fetched business profile', { jid: phoneJid, name: businessName });
+          return { name: businessName, phone };
+        }
+      }
+    } catch (error) {
+      // Not a business account or error fetching - continue to regular check
+      this.logger.debug('No business profile found', {
+        jid: phoneJid,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Fallback to onWhatsApp (just checks existence, usually no name)
+    const results = await sock.onWhatsApp(phone);
+    const result = results?.[0];
+    this.logger.debug('onWhatsApp result', {
+      phone,
+      result,
+      resultKeys: result ? Object.keys(result) : [],
+    });
+
+    if (result?.exists) {
+      const name = (result as { notify?: string }).notify || undefined;
+      this.cacheContactInfo(instanceId, lookupJid, name, phone);
+      this.logger.debug('Fetched and cached contact from WhatsApp', {
+        jid: lookupJid,
+        name,
+        hasNotify: !!(result as { notify?: string }).notify,
+      });
+      return { name, phone };
+    }
+
+    this.logger.debug('Contact not found on WhatsApp', { instanceId, phone });
+    return null;
+  }
+
+  /**
+   * Check both contactsCache and chatNamesCache for a contact
+   */
+  private checkContactCaches(
+    instanceId: string,
+    lookupJid: string,
+    normalizedJid: string,
+    phone: string | undefined,
+  ): { name?: string; phone?: string } | null {
+    // Try contactsCache first
+    const contactsMap = this.contactsCache.get(instanceId);
+    let cachedContact = contactsMap?.get(lookupJid);
+    if (!cachedContact && normalizedJid !== lookupJid) {
+      cachedContact = contactsMap?.get(normalizedJid);
+    }
+    this.logger.debug('Checking contactsCache', {
+      lookupJid,
+      normalizedJid,
+      hasContactsMap: !!contactsMap,
+      cacheSize: contactsMap?.size,
+      foundContact: cachedContact,
+      sampleKeys: Array.from(contactsMap?.keys() ?? []).slice(0, 5),
+    });
+    if (cachedContact) {
+      return {
+        name: cachedContact.name,
+        phone: cachedContact.phone,
+      };
+    }
+
+    // Try chatNamesCache
+    const chatNamesMap = this.chatNamesCache.get(instanceId);
+    let chatName = chatNamesMap?.get(lookupJid);
+    if (!chatName && normalizedJid !== lookupJid) {
+      chatName = chatNamesMap?.get(normalizedJid);
+    }
+    this.logger.debug('Checking chatNamesCache', {
+      lookupJid,
+      hasChatNamesMap: !!chatNamesMap,
+      cacheSize: chatNamesMap?.size,
+      foundName: chatName,
+      sampleKeys: Array.from(chatNamesMap?.keys() ?? []).slice(0, 5),
+    });
+    if (chatName) {
+      return { name: chatName, phone };
+    }
+
+    return null;
+  }
+
+  /**
+   * Get contact info from Baileys (name, phone) by JID
+   * Resolves LID to PN if needed and queries the internal contact cache
+   * Falls back to fetching from WhatsApp or group metadata if not cached
+   */
+  async getContactInfo(
+    instanceId: string,
+    jid: string,
+    groupJid?: string,
+  ): Promise<{ name?: string; phone?: string } | null> {
+    try {
+      const sock = this.sockets.get(instanceId);
+      if (!sock) {
+        this.logger.debug('Socket not found for instance', { instanceId });
+        return null;
+      }
+
+      // Resolve LID to PN if needed using Baileys' signalRepository
+      let lookupJid = jid;
+      const originalLid = jid.endsWith('@lid') ? jid : undefined;
+      if (originalLid) {
+        const pn = await sock.signalRepository.lidMapping.getPNForLID(originalLid);
+        if (pn) {
+          lookupJid = pn;
+          this.logger.debug('Resolved LID to PN via Baileys', { lid: originalLid, pn });
+        }
+      }
+
+      // Check if this is a self-mention (mentioning the instance owner)
+      const ownerJid = sock.user?.id;
+      const ownerPhone = ownerJid?.split('@')[0]?.split(':')[0];
+      const lookupPhone = lookupJid.split('@')[0]?.split(':')[0];
+      if (ownerPhone && lookupPhone && ownerPhone === lookupPhone) {
+        const ownerName = sock.user?.name;
+        this.logger.debug('Self-mention detected, using instance owner profile', {
+          instanceId,
+          ownerJid,
+          ownerName,
+          lookupJid,
+        });
+        return { name: ownerName, phone: ownerPhone };
+      }
+
+      // Extract phone number for normalized cache lookups
+      const phoneMatch = lookupJid.match(/^(\d+)(:\d+)?@/);
+      const phone = phoneMatch?.[1];
+      const normalizedJid = phone ? `${phone}@s.whatsapp.net` : lookupJid;
+
+      // Check caches first
+      const cached = this.checkContactCaches(instanceId, lookupJid, normalizedJid, phone);
+      if (cached) {
+        return cached;
+      }
+
+      // Cache miss - try fetching from group metadata if this is a group chat
+      if (groupJid?.endsWith('@g.us')) {
+        this.logger.debug('Contact not in cache, checking group participants', {
+          instanceId,
+          jid: lookupJid,
+          originalLid,
+          normalizedJid,
+          groupJid,
+        });
+        const groupContact = await this.tryFetchFromGroupParticipants(
+          sock,
+          instanceId,
+          groupJid,
+          lookupJid,
+          normalizedJid,
+          originalLid,
+        );
+        if (groupContact?.name) {
+          // Only return if we actually got a name, not just phone
+          this.cacheContactInfo(instanceId, lookupJid, groupContact.name, groupContact.phone);
+          this.logger.debug('Fetched and cached contact from group metadata', {
+            jid: lookupJid,
+            name: groupContact.name,
+          });
+          return groupContact;
+        }
+      }
+
+      // Still not found - try fetching from WhatsApp directly
+      this.logger.debug('Contact not in cache or group, fetching from WhatsApp', { instanceId, jid: lookupJid });
+
+      if (!phone) {
+        this.logger.debug('Could not extract phone from JID', { jid: lookupJid });
+        return null;
+      }
+
+      return await this.tryFetchFromWhatsApp(sock, instanceId, lookupJid, phone);
+    } catch (error) {
+      this.logger.debug('Failed to get contact info', { instanceId, jid, error: String(error) });
+      return null;
+    }
+  }
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -1648,9 +1974,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Resolve contextInfo from text and caption-bearing message types.
+   */
+  private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
+    const message = rawMessage.message;
+    return (
+      message?.extendedTextMessage?.contextInfo ??
+      message?.imageMessage?.contextInfo ??
+      message?.videoMessage?.contextInfo ??
+      message?.documentMessage?.contextInfo
+    );
+  }
+
+  /**
    * Handle incoming message
    * @internal
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message processing requires many content type checks
   async handleMessageReceived(
     instanceId: string,
     externalId: string,
@@ -1689,11 +2029,93 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
 
+    // Cache sender's pushName for mention resolution (WAMessage.pushName field)
+    const senderPushName = (rawMessage as { pushName?: string }).pushName;
+    if (senderPushName && from) {
+      // Normalize sender JID to @s.whatsapp.net format for cache consistency
+      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
+
+      // Cache the sender's name so it's available when they're mentioned
+      this.cacheContactInfo(instanceId, normalizedFrom, senderPushName, undefined);
+      this.logger.debug('Cached sender pushName from message', {
+        instanceId,
+        from: normalizedFrom,
+        originalFrom: from,
+        pushName: senderPushName,
+      });
+    }
+
     // Build extended raw payload with structured content data
     const extendedPayload: Record<string, unknown> = {
       ...(rawMessage as unknown as Record<string, unknown>),
       isFromMe, // Include for message-persistence to use
     };
+
+    // Extract mentionedJids from contextInfo (WhatsApp mentions)
+    const contextInfo = this.getMessageContextInfo(rawMessage);
+    if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+      extendedPayload.mentionedJids = contextInfo.mentionedJid;
+
+      // Resolve contact names for all mentioned JIDs using Baileys (pass chatId for group participant lookup)
+      this.logger.debug('Processing mentioned JIDs', {
+        instanceId,
+        chatId,
+        mentionedJids: contextInfo.mentionedJid,
+      });
+
+      const mentionedContacts: Array<{ jid: string; name?: string }> = [];
+      for (const jid of contextInfo.mentionedJid) {
+        this.logger.debug('Calling getContactInfo', { instanceId, jid, chatId });
+        const contactInfo = await this.getContactInfo(instanceId, jid, chatId);
+        this.logger.debug('getContactInfo result', { jid, contactInfo });
+        if (contactInfo?.name) {
+          mentionedContacts.push({ jid, name: contactInfo.name });
+        }
+      }
+      this.logger.debug('Finished processing mentioned JIDs', {
+        instanceId,
+        chatId,
+        mentionedContactsCount: mentionedContacts.length,
+        mentionedContacts,
+      });
+
+      if (mentionedContacts.length > 0) {
+        extendedPayload.mentionedContacts = mentionedContacts;
+      }
+
+      // Check if any mentioned JID refers to this instance (handles LID→phone resolution)
+      try {
+        const sock = this.sockets.get(instanceId);
+        const ownerJid = sock?.user?.id;
+        if (ownerJid) {
+          const ownerPhone = ownerJid.replace(/:.*$/, '').replace(/@.*$/, '');
+          const lidCache = this.getLidMappingCache(instanceId);
+          // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID mention resolution requires multiple matching strategies
+          const isMentioningInstance = contextInfo.mentionedJid.some((jid) => {
+            // Direct match
+            if (jid === ownerJid) return true;
+            // Phone number match (strip :device and @suffix)
+            const mentionPhone = jid.replace(/:.*$/, '').replace(/@.*$/, '');
+            if (mentionPhone === ownerPhone) return true;
+            // LID resolution: look up LID in cache to get phone JID
+            if (jid.endsWith('@lid')) {
+              const resolvedPhone = lidCache.get(jid);
+              if (resolvedPhone) {
+                const resolved = resolvedPhone.replace(/:.*$/, '').replace(/@.*$/, '');
+                return resolved === ownerPhone;
+              }
+            }
+            return false;
+          });
+          if (isMentioningInstance) {
+            extendedPayload.isMentioningInstance = true;
+          }
+        }
+      } catch {
+        // Non-critical: if socket not available, skip instance mention detection
+      }
+    }
 
     // Add structured extended fields if present
     if (content.poll) extendedPayload.poll = content.poll;
@@ -2042,6 +2464,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
 
       cache.set(c.id, syncContact);
+
+      this.logger.debug('Cached contact from contacts.upsert', {
+        instanceId,
+        id: c.id,
+        name: syncContact.name,
+        phone,
+        hasLid: !!c.lid,
+      });
 
       // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
       if (c.lid && isUserJid(c.id)) {

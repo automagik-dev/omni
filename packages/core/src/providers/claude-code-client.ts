@@ -171,8 +171,9 @@ export class ClaudeCodeClient implements IAgentClient {
       options.env = { ...process.env, ANTHROPIC_API_KEY: this.config.apiKey };
     }
 
-    // Resume session if provided
-    if (request.sessionId) {
+    // Resume session if provided (must be a valid UUID — Claude Code SDK requires it)
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (request.sessionId && uuidPattern.test(request.sessionId)) {
       options.resume = request.sessionId;
     }
 

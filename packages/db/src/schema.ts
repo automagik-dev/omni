@@ -64,11 +64,10 @@ export interface AgentReplyFilter {
 
 /**
  * Session strategy for agent memory
- * - per_user: Same session across all chats for this user
+ * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
- * - per_user_per_chat: Each user has own session per chat (most isolated)
  */
-export const agentSessionStrategies = ['per_user', 'per_chat', 'per_user_per_chat'] as const;
+export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
 export const ruleTypes = ['allow', 'deny'] as const;
@@ -344,6 +343,56 @@ export const agentRoutes = pgTable(
 );
 
 // ============================================================================
+// AGENT SESSIONS
+// ============================================================================
+
+/**
+ * Persistent agent session storage for continuity across restarts.
+ * Maps internal session keys to provider-specific session identifiers.
+ *
+ * Session keys are computed based on agentSessionStrategy:
+ * - per_user: userId (e.g., "person-uuid")
+ * - per_chat: chatId (e.g., "120363404569770073@g.us")
+ *
+ * Provider session data is JSON, format depends on provider:
+ * - Claude Code: { uuid: "session-uuid" }
+ * - Agno: { sessionId: "agno-session-id" }
+ * - Custom: any JSON object
+ */
+export const agentSessions = pgTable(
+  'agent_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // Instance reference
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+
+    // Session key computed from strategy (userId or chatId)
+    sessionKey: varchar('session_key', { length: 512 }).notNull(),
+
+    // Provider-specific session data (JSON)
+    providerSessionData: jsonb('provider_session_data').notNull().$type<Record<string, unknown>>(),
+
+    // TTL management
+    lastUsedAt: timestamp('last_used_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at'), // null = never expires
+
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    // Unique constraint: one session per instance+key
+    uniqueSession: uniqueIndex('agent_sessions_instance_key_idx').on(table.instanceId, table.sessionKey),
+
+    // Index for TTL cleanup
+    expiresIdx: index('agent_sessions_expires_idx').on(table.expiresAt),
+    lastUsedIdx: index('agent_sessions_last_used_idx').on(table.lastUsedAt),
+  }),
+);
+
+// ============================================================================
 // API KEYS
 // ============================================================================
 
@@ -508,7 +557,7 @@ export const instances = pgTable(
     /** Session strategy for agent memory */
     agentSessionStrategy: varchar('agent_session_strategy', { length: 20 })
       .notNull()
-      .default('per_user_per_chat')
+      .default('per_chat')
       .$type<AgentSessionStrategy>(),
     /** Prefix messages with sender name: [Name]: message */
     agentPrefixSenderName: boolean('agent_prefix_sender_name').notNull().default(true),
@@ -1562,6 +1611,9 @@ export type NewAgentProvider = typeof agentProviders.$inferInsert;
 
 export type AgentRoute = typeof agentRoutes.$inferSelect;
 export type NewAgentRoute = typeof agentRoutes.$inferInsert;
+
+export type AgentSession = typeof agentSessions.$inferSelect;
+export type NewAgentSession = typeof agentSessions.$inferInsert;
 
 export type Instance = typeof instances.$inferSelect;
 export type NewInstance = typeof instances.$inferInsert;

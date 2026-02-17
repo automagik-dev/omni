@@ -17,12 +17,11 @@ export const AgentTypeOpenAPISchema = z.enum(['agent', 'team', 'workflow']).open
 });
 
 // Agent session strategy enum
-export const AgentSessionStrategyOpenAPISchema = z.enum(['per_user', 'per_chat', 'per_user_per_chat']).openapi({
+export const AgentSessionStrategyOpenAPISchema = z.enum(['per_user', 'per_chat']).openapi({
   description:
     'Session strategy for agent memory:\n' +
     '- **per_user**: Same session across all chats for this user\n' +
-    '- **per_chat**: All users in a chat share the session (group memory)\n' +
-    '- **per_user_per_chat**: Each user has own session per chat (most isolated)',
+    '- **per_chat**: All users in a chat share the session (group memory)',
 });
 
 // Reply filter schema

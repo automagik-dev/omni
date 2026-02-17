@@ -41,7 +41,7 @@ import {
   generateCorrelationId,
   getJourneyTracker,
 } from '@omni/core';
-import type { AgentProvider } from '@omni/db';
+import type { AgentProvider, Database } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import type { Services } from '../services';
 import {
@@ -53,6 +53,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { getPlugin } from './loader';
+import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
 
@@ -309,14 +310,22 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
 
   // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
   // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
-  // Fallback: in group chats, if mentionedJids is non-empty, treat as mention — WhatsApp UI
-  // only populates mentionedJids when user explicitly @-tags someone from the picker.
-  const jidMatchesOwner = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
-  const isGroupMention = mentionedJids.length > 0 && chatId.includes('@g.us');
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || isGroupMention;
+  // Extract the phone number part from both formats for comparison
+  const extractPhone = (jid: string) => jid.replace(/@.*$/, '').replace(/^@/, '');
+  const ownerPhone = extractPhone(ownerJid);
 
+  const jidMatchesOwner = mentionedJids.some((jid) => {
+    const mentionPhone = extractPhone(jid);
+    return jid === ownerJid || mentionPhone === ownerPhone;
+  });
+
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
+
+  // Handle replies to bot messages (same phone number extraction for LID compatibility)
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant === ownerJid;
+  const isReplyToBot = quotedParticipant
+    ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
+    : false;
 
   return {
     isDirectMessage,
@@ -519,7 +528,7 @@ const MEDIA_WAIT_NULL = { content: null, localPath: null } as const;
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
 function checkProcessedColumn(
-  msg: { mediaUrl?: string | null; [key: string]: unknown } | null,
+  msg: { mediaUrl?: string | null; mediaLocalPath?: string | null; [key: string]: unknown } | null,
   column: string,
 ): { content: string; localPath: string | null } | 'error' | 'pending' {
   if (!msg) return 'pending';
@@ -527,9 +536,11 @@ function checkProcessedColumn(
   if (processed == null) return 'pending';
   if (typeof processed === 'string' && processed.startsWith('[error')) return 'error';
   if (processed) {
+    // Use mediaLocalPath (the actual downloaded file path) instead of mediaUrl (the platform file ID)
+    const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
     return {
       content: processed as string,
-      localPath: msg.mediaUrl ? resolve(resolveMediaPath(msg.mediaUrl as string)) : null,
+      localPath,
     };
   }
   return 'pending';
@@ -754,23 +765,121 @@ async function prependQuotedContext(
   instanceId: string,
   chatId: string,
   messages: BufferedMessage[],
-  messageTexts: string[],
+  entries: Array<{ text: string; messageKey: string | null }>,
+  messageKeyByIndex: Map<number, string>,
 ): Promise<void> {
-  for (const m of messages) {
+  for (const [index, m] of messages.entries()) {
     const replyToId = m.payload.replyToId;
     if (!replyToId) continue;
 
     const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId);
     if (!quotedText) continue;
 
-    const replyText = m.payload.content?.text;
-    const idx = replyText ? messageTexts.indexOf(replyText) : -1;
-    if (idx >= 0) {
-      messageTexts[idx] = `${quotedText}\n${messageTexts[idx]}`;
+    const messageKey = messageKeyByIndex.get(index);
+    const idx = messageKey ? entries.findIndex((entry) => entry.messageKey === messageKey) : -1;
+    const existingEntry = idx >= 0 ? entries[idx] : undefined;
+    if (existingEntry) {
+      existingEntry.text = `${quotedText}\n${existingEntry.text}`;
     } else {
-      messageTexts.unshift(quotedText);
+      entries.unshift({ text: quotedText, messageKey: null });
     }
   }
+}
+
+/**
+ * Resolve contact name using cache-aside pattern: cache first, DB fallback
+ */
+async function resolveContactName(
+  services: Services,
+  instanceId: string,
+  jid: string,
+  cacheMap: Map<string, string>,
+): Promise<string | null> {
+  // Try cache first (fast path)
+  const cachedName = cacheMap.get(jid);
+  if (cachedName) return cachedName;
+
+  // Cache miss → query database
+  try {
+    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+    if (chat?.name) {
+      log.debug('Contact name from DB fallback', { jid, name: chat.name });
+      return chat.name;
+    }
+  } catch (error) {
+    log.warn('Failed to query DB for contact', { jid, error: String(error) });
+  }
+
+  return null;
+}
+
+/**
+ * Replace @phone mentions in text with actual contact names
+ * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
+ */
+async function replaceMentionsWithContactNames(
+  services: Services,
+  instanceId: string,
+  text: string,
+  mentionedJids: string[] | undefined,
+  mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
+): Promise<string> {
+  if (!mentionedJids || mentionedJids.length === 0) return text;
+
+  log.debug('Starting mention replacement', { mentionCount: mentionedJids.length });
+
+  // Create JID → name map from mentionedContacts (Baileys cache)
+  const jidToName = new Map<string, string>();
+  if (mentionedContacts) {
+    for (const contact of mentionedContacts) {
+      if (contact.name) {
+        jidToName.set(contact.jid, contact.name);
+      }
+    }
+  }
+
+  let replacedText = text;
+  let resolvedCount = 0;
+  let replacedCount = 0;
+  let unresolvedCount = 0;
+  let skippedCount = 0;
+
+  for (const jid of mentionedJids) {
+    // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
+    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
+    if (!phoneMatch) {
+      skippedCount++;
+      continue;
+    }
+
+    const phoneNumber = phoneMatch[1];
+    const mentionPattern = `@${phoneNumber}`;
+
+    // Resolve contact name (cache → DB fallback)
+    const contactName = await resolveContactName(services, instanceId, jid, jidToName);
+
+    if (contactName) {
+      resolvedCount++;
+      const nextText = replacedText.replaceAll(mentionPattern, `@${contactName}`);
+      if (nextText !== replacedText) {
+        replacedCount++;
+        replacedText = nextText;
+      }
+    } else {
+      unresolvedCount++;
+    }
+  }
+
+  log.debug('Mention replacement complete', {
+    original: text,
+    replaced: replacedText,
+    mentionCount: mentionedJids.length,
+    resolvedCount,
+    replacedCount,
+    unresolvedCount,
+    skippedCount,
+  });
+  return replacedText;
 }
 
 /**
@@ -783,18 +892,60 @@ async function prepareAgentContent(
   messages: BufferedMessage[],
 ): Promise<{ messageTexts: string[]; mediaFiles: ProviderFile[] }> {
   const chatId = messages[0]?.payload.chatId ?? '';
-  const messageTexts = messages.map((m) => m.payload.content?.text).filter((t): t is string => !!t);
+  const messageEntries: Array<{ text: string; messageKey: string | null }> = [];
+  const messageKeyByIndex = new Map<number, string>();
+  const mentionDataByMessageKey = new Map<
+    string,
+    {
+      mentionedJids: string[] | undefined;
+      mentionedContacts: Array<{ jid: string; name?: string }> | undefined;
+    }
+  >();
+
+  for (const [index, msg] of messages.entries()) {
+    const text = msg.payload.content?.text;
+    if (!text) continue;
+
+    const messageKey = msg.payload.externalId || `idx:${index}`;
+    messageKeyByIndex.set(index, messageKey);
+    messageEntries.push({ text, messageKey });
+
+    const rawPayload = msg.payload.rawPayload as Record<string, unknown> | undefined;
+    mentionDataByMessageKey.set(messageKey, {
+      mentionedJids: rawPayload?.mentionedJids as string[] | undefined,
+      mentionedContacts: rawPayload?.mentionedContacts as Array<{ jid: string; name?: string }> | undefined,
+    });
+  }
+
+  for (const entry of messageEntries) {
+    if (!entry.messageKey) continue;
+    const mentionData = mentionDataByMessageKey.get(entry.messageKey);
+    if (!mentionData?.mentionedJids || mentionData.mentionedJids.length === 0) continue;
+
+    entry.text = await replaceMentionsWithContactNames(
+      services,
+      instance.id,
+      entry.text,
+      mentionData.mentionedJids,
+      mentionData.mentionedContacts,
+    );
+  }
+
+  const processedMediaTexts: string[] = [];
   let mediaFiles = extractMediaFiles(messages);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
-    messageTexts.push(...processed);
-    if (processed.length > 0) mediaFiles = [];
+    processedMediaTexts.push(...processed);
+    if (processedMediaTexts.length > 0) mediaFiles = [];
   }
 
-  await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
+  await prependQuotedContext(services, instance.id, chatId, messages, messageEntries, messageKeyByIndex);
 
-  return { messageTexts, mediaFiles };
+  const finalTexts = messageEntries.map((entry) => entry.text);
+  finalTexts.push(...processedMediaTexts);
+
+  return { messageTexts: finalTexts, mediaFiles };
 }
 
 /**
@@ -903,10 +1054,11 @@ async function resolveStreamingCapabilities(
   channel: ChannelType,
   chatId: string,
   traceId: string,
+  db: Database,
 ): Promise<StreamCapabilities | null> {
   if (!instance.agentStreamMode) return null;
 
-  const provider = await getAgentProvider(services, instance);
+  const provider = await getAgentProvider(services, instance, db);
   if (!provider?.triggerStream) return null;
 
   const plugin = await getPlugin(channel);
@@ -971,15 +1123,16 @@ async function dispatchViaStreamingProvider(
   senderName: string | undefined,
   traceId: string,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<boolean> {
-  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId);
+  const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId, db);
   if (!resolved) return false;
 
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
   if (!messageTexts.length && !mediaFiles.length) return false;
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
   const replyToId = messages[0]?.payload.externalId;
 
   const trigger: AgentTrigger = {
@@ -1035,6 +1188,129 @@ async function dispatchViaStreamingProvider(
 }
 
 /**
+ * Format media message content with emoji and descriptions/transcriptions
+ */
+function formatMediaContent(msg: {
+  messageType: string;
+  hasMedia?: boolean;
+  textContent?: string | null;
+  transcription?: string | null;
+  imageDescription?: string | null;
+  videoDescription?: string | null;
+  documentExtraction?: string | null;
+}): string {
+  if (!msg.hasMedia) {
+    return msg.textContent || '';
+  }
+
+  const mediaEmoji =
+    {
+      image: '🖼️',
+      audio: '🎵',
+      ptt: '🎤', // voice message
+      video: '🎬',
+      document: '📄',
+      sticker: '😀',
+    }[msg.messageType] || '📎';
+
+  const mediaInfo: string[] = [mediaEmoji];
+
+  // Add transcription for audio/voice
+  if (msg.transcription) {
+    mediaInfo.push(`"${msg.transcription}"`);
+  }
+  // Add description for images
+  else if (msg.imageDescription) {
+    mediaInfo.push(msg.imageDescription);
+  }
+  // Add description for videos
+  else if (msg.videoDescription) {
+    mediaInfo.push(msg.videoDescription);
+  }
+  // Add extraction for documents
+  else if (msg.documentExtraction) {
+    mediaInfo.push(msg.documentExtraction.substring(0, 200)); // truncate long extractions
+  }
+
+  // If there's a caption, add it
+  if (msg.textContent) {
+    mediaInfo.push(`Caption: ${msg.textContent}`);
+  }
+
+  return mediaInfo.join(' ');
+}
+
+/**
+ * Build context messages from recent chat history for group conversations
+ * Returns messages since the last bot response, formatted as "[Name - time] message"
+ */
+async function buildContextMessages(
+  services: Services,
+  instance: Instance,
+  chatId: string,
+  currentMessageIds: string[],
+): Promise<string[]> {
+  try {
+    // Only provide context for group chats (not DMs)
+    // chatId here is the external JID, not internal UUID
+    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    if (!chat || chat.chatType !== 'group') {
+      return [];
+    }
+
+    // Query recent messages (last 50, ordered by timestamp desc by default)
+    // Use the internal chat.id (UUID) for the query
+    const messagesResult = await services.messages.list({
+      chatId: chat.id,
+      limit: 50,
+    });
+
+    const recentMessages = messagesResult.items;
+
+    if (!recentMessages || recentMessages.length === 0) {
+      return [];
+    }
+
+    // Find the last bot response (isFromMe indicates bot-sent messages)
+    const lastBotMessageIndex = recentMessages.findIndex((msg) => msg.isFromMe === true);
+
+    // If no bot response found, or it's the most recent message, no context needed
+    if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
+      return [];
+    }
+
+    // Get all messages between last bot response and current message (exclude current)
+    const currentMessageIdSet = new Set(currentMessageIds.filter(Boolean));
+    const contextMsgs = recentMessages
+      .slice(0, lastBotMessageIndex)
+      .filter((msg) => !currentMessageIdSet.has(msg.externalId));
+
+    if (contextMsgs.length === 0) {
+      return [];
+    }
+
+    // Format as "[Name - HH:MM] message" (reverse to chronological order)
+    return contextMsgs.reverse().map((msg) => {
+      const name = msg.senderDisplayName || msg.senderPlatformUserId || 'Unknown';
+      const time = msg.platformTimestamp
+        ? new Date(msg.platformTimestamp).toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          })
+        : '';
+
+      const text = formatMediaContent(msg) || `[${msg.messageType}]`;
+
+      return `[${name}${time ? ` - ${time}` : ''}] ${text}`;
+    });
+  } catch (error) {
+    log.warn('Failed to build context messages', { error, chatId, instanceId: instance.id });
+    return [];
+  }
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1050,8 +1326,9 @@ async function dispatchViaProvider(
   senderName: string | undefined,
   traceId: string,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<boolean> {
-  const provider = await getAgentProvider(services, instance);
+  const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
 
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
@@ -1066,7 +1343,11 @@ async function dispatchViaProvider(
     messageTexts.push('[Media message]');
   }
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', senderId, chatId);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+
+  // Build context messages for group conversations (messages since last bot response)
+  const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
+  const contextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1087,6 +1368,7 @@ async function dispatchViaProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
+    contextMessages: contextMessages.length > 0 ? contextMessages : undefined,
   };
 
   const result = await provider.trigger(trigger);
@@ -1183,6 +1465,7 @@ async function processAgentResponse(
   instance: Instance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
+  db: Database,
 ): Promise<void> {
   const firstMessage = messages[0];
   if (!firstMessage) return;
@@ -1240,6 +1523,7 @@ async function processAgentResponse(
         senderName,
         traceId,
         rawEvent,
+        db,
       );
 
       // B-1b: Fall back to accumulate-then-reply
@@ -1256,6 +1540,7 @@ async function processAgentResponse(
           senderName,
           traceId,
           rawEvent,
+          db,
         );
       }
     } catch (providerError) {
@@ -1315,11 +1600,25 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Insta
   let client = openclawClientPool.get(provider.id);
   if (!client) {
     const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+    // FIX-SCOPE: Pass device credentials from schemaConfig if present.
+    // Without device credentials, the gateway strips all declared scopes for shared-token
+    // connections, causing chat.send to fail with "missing scope: operator.write".
+    const deviceConfig =
+      schemaConfig.deviceId && schemaConfig.devicePublicKey && schemaConfig.devicePrivateKey && schemaConfig.deviceToken
+        ? {
+            id: schemaConfig.deviceId as string,
+            publicKey: schemaConfig.devicePublicKey as string,
+            privateKey: schemaConfig.devicePrivateKey as string,
+            token: schemaConfig.deviceToken as string,
+          }
+        : undefined;
+
     const clientConfig: OpenClawClientConfig = {
       url: provider.baseUrl,
       token: provider.apiKey ?? '',
       providerId: provider.id,
       origin: (schemaConfig.origin as string) ?? undefined,
+      device: deviceConfig,
     };
     client = new OpenClawClient(clientConfig);
     client.start(); // DEC-14: lazy connect — starts WS in background
@@ -1363,7 +1662,7 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
 }
 
 /** Create a Claude Code agent provider */
-function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const projectPath = schemaConfig.projectPath as string;
 
@@ -1392,6 +1691,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
     },
+    createSessionStorage(db),
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -1419,7 +1719,7 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
  *
  * Exported for use by session-cleaner (provider.resetSession).
  */
-export function resolveProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+export function resolveProvider(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
   if (cached) return cached;
@@ -1437,7 +1737,7 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
       agentProvider = createOpenClawProviderInstance(provider, instance);
       break;
     case 'claude-code':
-      agentProvider = createClaudeCodeProviderInstance(provider, instance);
+      agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -1456,7 +1756,7 @@ export function resolveProvider(provider: AgentProvider, instance: Instance): IA
 /**
  * Look up provider from DB and resolve to IAgentProvider
  */
-async function getAgentProvider(services: Services, instance: Instance): Promise<IAgentProvider | null> {
+async function getAgentProvider(services: Services, instance: Instance, db: Database): Promise<IAgentProvider | null> {
   if (!instance.agentProviderId) return null;
 
   try {
@@ -1464,7 +1764,7 @@ async function getAgentProvider(services: Services, instance: Instance): Promise
 
     if (!provider?.isActive) return null;
 
-    return resolveProvider(provider, instance);
+    return resolveProvider(provider, instance, db);
   } catch (error) {
     log.warn('Failed to resolve agent provider, falling back to legacy', {
       instanceId: instance.id,
@@ -1539,36 +1839,42 @@ async function processReactionTrigger(
   payload: ReactionReceivedPayload,
   metadata: DispatchMetadata,
   rawEvent: AgentTrigger['event'],
+  db: Database,
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-  const chatId = payload.chatId;
+  const externalChatId = payload.chatId;
+
+  // Look up internal chat UUID for route resolution
+  const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
+  const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
     services,
     baseInstance,
-    chatId,
+    internalChatId,
     metadata.personId,
   );
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
-    chatId,
+    chatId: externalChatId,
+    routeChatId: internalChatId,
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
   });
 
-  await sendTypingPresence(channel, instance.id, chatId, 'composing');
+  await sendTypingPresence(channel, instance.id, externalChatId, 'composing');
 
   try {
     // Try new IAgentProvider path first
-    const provider = await getAgentProvider(services, instance);
+    const provider = await getAgentProvider(services, instance, db);
 
     if (provider) {
       // Build AgentTrigger for the provider
       const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
-      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_user_per_chat', payload.from, chatId);
+      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -1577,7 +1883,7 @@ async function processReactionTrigger(
         source: {
           channelType: channel,
           instanceId: instance.id,
-          chatId,
+          chatId: externalChatId,
           messageId: payload.messageId,
         },
         sender: {
@@ -1596,12 +1902,20 @@ async function processReactionTrigger(
 
       if (result && result.parts.length > 0) {
         const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-        await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
+        await sendResponseParts(
+          channel,
+          instance.id,
+          externalChatId,
+          result.parts,
+          getSplitDelayConfig(instance),
+          _fmtMode,
+        );
       }
 
       log.info('Reaction trigger response via provider', {
         instanceId: instance.id,
-        chatId,
+        chatId: externalChatId,
+        routeChatId: internalChatId,
         emoji: payload.emoji,
         parts: result?.parts.length ?? 0,
         providerId: result?.metadata.providerId,
@@ -1623,18 +1937,18 @@ async function processReactionTrigger(
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
     // Determine chat type and fetch metadata
-    const chatType = determineChatType(chatId, instance.channel);
+    const chatType = determineChatType(externalChatId, instance.channel);
     const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
       services,
       channel,
       instance.id,
       payload.from,
     );
-    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
+    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, externalChatId, chatType);
 
     const result = await services.agentRunner.run({
       instance,
-      chatId,
+      chatId: externalChatId,
       personId,
       senderId: payload.from,
       senderName,
@@ -1648,12 +1962,20 @@ async function processReactionTrigger(
 
     if (result.parts.length > 0) {
       const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      await sendResponseParts(channel, instance.id, chatId, result.parts, getSplitDelayConfig(instance), _fmtMode);
+      await sendResponseParts(
+        channel,
+        instance.id,
+        externalChatId,
+        result.parts,
+        getSplitDelayConfig(instance),
+        _fmtMode,
+      );
     }
 
     log.info('Reaction trigger response via legacy runner', {
       instanceId: instance.id,
-      chatId,
+      chatId: externalChatId,
+      routeChatId: internalChatId,
       emoji: payload.emoji,
       parts: result.parts.length,
       traceId: metadata.traceId,
@@ -1661,12 +1983,13 @@ async function processReactionTrigger(
   } catch (error) {
     log.error('Failed to process reaction trigger', {
       instanceId: instance.id,
-      chatId,
+      chatId: externalChatId,
+      routeChatId: internalChatId,
       error: String(error),
       traceId: metadata.traceId,
     });
   } finally {
-    await sendTypingPresence(channel, instance.id, chatId, 'paused');
+    await sendTypingPresence(channel, instance.id, externalChatId, 'paused');
   }
 }
 
@@ -1711,15 +2034,23 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message routing logic requires multiple checks
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
+  chatsService: Services['chats'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
-  if (!metadata.instanceId) return null;
-  if (payload.from === metadata.platformIdentityId) return null;
+  if (!metadata.instanceId) {
+    log.debug('No instanceId in metadata', { from: payload.from, chatId: payload.chatId });
+    return null;
+  }
+  if (payload.from === metadata.platformIdentityId) {
+    log.debug('Message from self, skipping', { instanceId: metadata.instanceId, from: payload.from });
+    return null;
+  }
 
   // Skip trash emoji messages - handled by session-cleaner plugin
   if (isTrashEmojiOnly(payload.content?.text)) {
@@ -1731,13 +2062,60 @@ async function shouldProcessMessage(
   }
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-  if (!instance?.agentProviderId) return null;
+  if (!instance?.agentProviderId) {
+    log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
+    return null;
+  }
 
-  if (!instanceTriggersOnEvent(instance, 'message.received')) return null;
+  if (!instanceTriggersOnEvent(instance, 'message.received')) {
+    log.debug('Instance does not trigger on message.received', { instanceId: instance.id });
+    return null;
+  }
 
   const messageContext = buildMessageContext(payload, instance);
+  const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
+
+  // LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
+  // check DB for LID→phone mappings to detect if any @lid mention maps to the owner
+  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && metadata.instanceId) {
+    const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
+    const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
+    if (lidMentions.length > 0 && instance.ownerIdentifier) {
+      const ownerPhone = instance.ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+      for (const lidJid of lidMentions) {
+        try {
+          const mapping = await chatsService.findLidMapping(metadata.instanceId, lidJid);
+          if (mapping) {
+            const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+            if (resolvedPhone === ownerPhone) {
+              messageContext.mentionsBot = true;
+              log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
+              break;
+            }
+          }
+        } catch {
+          // Non-critical: skip DB lookup failures
+        }
+      }
+    }
+  }
+
+  log.debug('Message context built', {
+    instanceId: instance.id,
+    chatId: payload.chatId,
+    isDirectMessage: messageContext.isDirectMessage,
+    mentionsBot: messageContext.mentionsBot,
+    isReplyToBot: messageContext.isReplyToBot,
+    mentionedJids: rawPayloadWithMentions?.mentionedJids,
+  });
+
   if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', { instanceId: instance.id, chatId: payload.chatId });
+    log.debug('Message did not pass reply filter', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      messageContext,
+      filter: instance.agentReplyFilter,
+    });
     return null;
   }
 
@@ -1970,7 +2348,11 @@ async function shouldRespondViaGate(
  * Set up agent dispatcher - subscribes to message AND reaction events
  * Returns a cleanup function that should be called on shutdown.
  */
-export async function setupAgentDispatcher(eventBus: EventBus, services: Services): Promise<DispatcherCleanup> {
+export async function setupAgentDispatcher(
+  eventBus: EventBus,
+  services: Services,
+  db: Database,
+): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
   const rateLimiter = new RateLimiter();
@@ -1992,9 +2374,19 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
     }
 
     // Resolve agent route and merge with instance defaults
-    const chatId = firstMsg.payload.chatId;
+    const externalChatId = firstMsg.payload.chatId;
     const personId = firstMsg.metadata.personId;
-    const { instance, routeId: _routeId } = await resolveEffectiveInstance(services, baseInstance, chatId, personId);
+
+    // Look up internal chat UUID for route resolution
+    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+    const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+
+    const { instance, routeId: _routeId } = await resolveEffectiveInstance(
+      services,
+      baseInstance,
+      internalChatId,
+      personId,
+    );
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
@@ -2021,7 +2413,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
-    await processAgentResponse(services, instance, messages, triggerType);
+    await processAgentResponse(services, instance, messages, triggerType, db);
   });
 
   try {
@@ -2035,7 +2427,14 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
         const metadata = event.metadata;
 
         try {
-          const instance = await shouldProcessMessage(agentRunner, accessService, rateLimiter, payload, metadata);
+          const instance = await shouldProcessMessage(
+            agentRunner,
+            accessService,
+            services.chats,
+            rateLimiter,
+            payload,
+            metadata,
+          );
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
@@ -2123,6 +2522,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
               traceId,
             },
             event,
+            db,
           );
         } catch (error) {
           log.error('Error processing reaction for dispatch', {
@@ -2176,6 +2576,7 @@ export async function setupAgentDispatcher(eventBus: EventBus, services: Service
               traceId,
             },
             event,
+            db,
           );
         } catch (error) {
           log.error('Error processing reaction removal for dispatch', {

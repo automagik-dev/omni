@@ -146,7 +146,7 @@ export class OpenClawAgentProvider implements IAgentProvider {
     const startTime = Date.now();
     const agentId = this.config.defaultAgentId;
     // Use context.sessionId (computed from instance's agentSessionStrategy) to preserve
-    // per_user / per_user_per_chat / per_chat isolation. Falls back to chatId if missing.
+    // per_user / per_chat isolation. Falls back to chatId if missing.
     const sessionKey = this.buildSessionKey(agentId, context.sessionId || context.source.chatId);
     const agentTimeoutMs = this.config.agentTimeoutMs ?? 120_000;
     const sendAckTimeoutMs = this.config.sendAckTimeoutMs ?? 10_000;

@@ -105,8 +105,9 @@ export class ProviderService {
     const start = Date.now();
 
     try {
-      // Try to reach the provider's health endpoint
-      const healthUrl = new URL('/health', provider.baseUrl).toString();
+      // For WebSocket-based providers (openclaw schema), convert ws:// → http:// for health probe
+      const baseUrl = provider.baseUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
+      const healthUrl = new URL('/health', baseUrl).toString();
       const response = await fetch(healthUrl, {
         method: 'GET',
         headers: provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {},

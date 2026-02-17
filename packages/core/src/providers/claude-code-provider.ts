@@ -10,6 +10,15 @@ import type { ClaudeCodeClient, ClaudeCodeConfig } from './claude-code-client';
 import { createClaudeCodeClient } from './claude-code-client';
 import type { AgentTrigger, AgentTriggerResult, IAgentProvider, ProviderRequest } from './types';
 
+/**
+ * Session storage adapter interface - allows core to be database-agnostic
+ */
+export interface SessionStorage {
+  getSession(instanceId: string, sessionKey: string): Promise<{ sessionId: string; lastUsedAt: Date } | null>;
+  upsertSession(instanceId: string, sessionKey: string, sessionId: string, expiresAt: Date | null): Promise<void>;
+  deleteSession(instanceId: string, sessionKey: string): Promise<void>;
+}
+
 const log = createLogger('provider:claude-code');
 
 export interface ClaudeCodeProviderOptions {
@@ -19,26 +28,54 @@ export interface ClaudeCodeProviderOptions {
   enableAutoSplit?: boolean;
   /** Prefix sender name to messages (default: true) */
   prefixSenderName?: boolean;
+  /** Session TTL in ms (default: Infinity = never expire) - sessions older than this are discarded */
+  sessionTtlMs?: number;
+}
+
+const MAX_CONTEXT_MESSAGES = 20;
+const MAX_CONTEXT_CHARS = 4000;
+
+function boundContextMessages(contextMessages: string[]): string[] {
+  const bounded = contextMessages.slice(-MAX_CONTEXT_MESSAGES);
+
+  while (bounded.length > 1 && bounded.join('\n').length > MAX_CONTEXT_CHARS) {
+    bounded.shift();
+  }
+
+  if (bounded.length === 1 && bounded[0] && bounded[0].length > MAX_CONTEXT_CHARS) {
+    bounded[0] = bounded[0].slice(bounded[0].length - MAX_CONTEXT_CHARS);
+  }
+
+  return bounded;
 }
 
 export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly schema = 'claude-code' as const;
   readonly mode = 'round-trip' as const;
   private client: ClaudeCodeClient;
+  private sessionStorage: SessionStorage;
+
+  /** Session TTL in milliseconds (default: Infinity = never expire) - sessions older than this are discarded */
+  private readonly sessionTtlMs: number;
 
   constructor(
     readonly id: string,
     readonly name: string,
     config: ClaudeCodeConfig,
+    sessionStorage: SessionStorage,
     private options: ClaudeCodeProviderOptions = {},
   ) {
     this.client = createClaudeCodeClient(config);
+    this.sessionStorage = sessionStorage;
+    // Default: no TTL (sessions never expire unless explicitly configured)
+    this.sessionTtlMs = this.options.sessionTtlMs ?? Number.POSITIVE_INFINITY;
   }
 
   canHandle(_trigger: AgentTrigger): boolean {
     return true;
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Provider orchestration requires multiple content type checks
   async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
     const startTime = Date.now();
 
@@ -61,11 +98,68 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       message = `[${context.sender.displayName}]: ${message}`;
     }
 
+    // Prepend context messages (message history since last bot response)
+    if (context.contextMessages && context.contextMessages.length > 0) {
+      const boundedContext = boundContextMessages(context.contextMessages);
+      const contextBlock = [
+        '--- Recent conversation context ---',
+        ...boundedContext,
+        '--- Current message ---',
+        '',
+      ].join('\n');
+      message = `${contextBlock}${message}`;
+    }
+
+    // Resolve session: map internal session key → Claude Code session UUID
+    // Check TTL and discard expired sessions
+    const internalSessionKey = context.sessionId;
+    let resolvedSessionId: string | undefined;
+
+    log.debug('Session lookup', {
+      internalKey: internalSessionKey,
+      instanceId: context.source.instanceId,
+    });
+
+    if (internalSessionKey && context.source.instanceId) {
+      // Query storage for existing session
+      const existingSession = await this.sessionStorage.getSession(context.source.instanceId, internalSessionKey);
+
+      if (existingSession) {
+        resolvedSessionId = existingSession.sessionId;
+        const age = Date.now() - existingSession.lastUsedAt.getTime();
+
+        // Check if session has expired based on TTL
+        if (this.sessionTtlMs < Number.POSITIVE_INFINITY && age >= this.sessionTtlMs) {
+          log.debug('Session expired', {
+            internalKey: internalSessionKey,
+            age: `${Math.round(age / 1000)}s`,
+            ttl: `${Math.round(this.sessionTtlMs / 1000)}s`,
+          });
+          // Delete expired session
+          await this.sessionStorage.deleteSession(context.source.instanceId, internalSessionKey);
+          resolvedSessionId = undefined;
+        } else {
+          log.debug('Resuming session from DB', {
+            internalKey: internalSessionKey,
+            claudeSessionId: resolvedSessionId,
+            age: `${Math.round(age / 1000)}s`,
+          });
+        }
+      } else {
+        log.debug('No session found in DB', { internalKey: internalSessionKey });
+      }
+    }
+
+    log.debug('Session resolution', {
+      internalKey: internalSessionKey,
+      resolvedUuid: resolvedSessionId ?? '(new session)',
+    });
+
     const request: ProviderRequest = {
       message,
       agentId: 'claude-code', // Claude Code IS the agent
       stream: false,
-      sessionId: context.sessionId,
+      sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
     };
@@ -76,6 +170,32 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     });
 
     const response = await this.client.run(request);
+
+    // Store session UUID for future continuity
+    if (internalSessionKey && response.sessionId && context.source.instanceId) {
+      const expiresAt = this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(Date.now() + this.sessionTtlMs) : null;
+
+      await this.sessionStorage.upsertSession(
+        context.source.instanceId,
+        internalSessionKey,
+        response.sessionId,
+        expiresAt,
+      );
+
+      log.debug('Session stored in DB', {
+        internalKey: internalSessionKey,
+        claudeSessionId: response.sessionId,
+        expiresAt: expiresAt?.toISOString() ?? 'never',
+      });
+    } else {
+      log.warn('Session not stored', {
+        hasInternalKey: !!internalSessionKey,
+        hasResponseSessionId: !!response.sessionId,
+        hasInstanceId: !!context.source.instanceId,
+        internalKey: internalSessionKey,
+        responseSessionId: response.sessionId,
+      });
+    }
 
     const parts =
       this.options.enableAutoSplit !== false
@@ -109,5 +229,23 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
     return this.client.checkHealth();
+  }
+
+  /** Clear persisted Claude session mapping for a strategy-computed session key. */
+  async resetSession(sessionKey: string, _chatId?: string, instanceId?: string): Promise<void> {
+    if (!instanceId) {
+      log.warn('Claude session reset skipped: missing instanceId', {
+        providerId: this.id,
+        sessionKey,
+      });
+      throw new Error('instanceId is required to reset Claude Code session');
+    }
+
+    await this.sessionStorage.deleteSession(instanceId, sessionKey);
+    log.info('Claude session reset', {
+      providerId: this.id,
+      instanceId,
+      sessionKey,
+    });
   }
 }

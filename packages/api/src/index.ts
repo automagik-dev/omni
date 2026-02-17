@@ -289,14 +289,14 @@ async function setupEventBusServices(
 
   // Agent dispatcher (AI agent responses — multi-event, multi-provider)
   try {
-    globalDispatcherCleanup = await setupAgentResponder(eventBus, services);
+    globalDispatcherCleanup = await setupAgentResponder(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
   }
 
   // Session cleaner (clears agent sessions on trash emoji)
   try {
-    await setupSessionCleaner(eventBus, services);
+    await setupSessionCleaner(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up session cleaner', { error: String(error) });
   }

@@ -438,12 +438,28 @@ function extractPhoneFromVcard(vcard: string): string | undefined {
 }
 
 /**
+ * Extract contextInfo from text and caption-bearing message types.
+ */
+function getMessageContextInfo(msg: WAMessage): proto.IContextInfo | null | undefined {
+  const message = msg.message;
+  return (
+    message?.extendedTextMessage?.contextInfo ??
+    message?.imageMessage?.contextInfo ??
+    message?.videoMessage?.contextInfo ??
+    message?.documentMessage?.contextInfo
+  );
+}
+
+/**
  * Get the reply-to message ID if present
  */
 function getReplyToId(msg: WAMessage): string | undefined {
-  const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+  const contextInfo = getMessageContextInfo(msg);
   return contextInfo?.stanzaId || undefined;
 }
+
+// Note: replaceMentionsWithNames removed - mention replacement now handled in
+// agent-dispatcher with database lookup for better reliability across API restarts
 
 /**
  * Determine if a message is from me (outgoing)
@@ -638,6 +654,9 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 
   const content = extractContent(msg);
   if (!content) return;
+
+  // Note: Mention replacement (@phone → @Name) is handled in agent-dispatcher
+  // with database lookup for better reliability across API restarts
 
   // Resolve @lid JID to phone-based JID before any event emission
   const { chatId, rawChatId } = resolveChatId(plugin, instanceId, msg);

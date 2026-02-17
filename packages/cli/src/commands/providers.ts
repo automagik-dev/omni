@@ -3,7 +3,9 @@
  *
  * omni providers list [--active]
  * omni providers get <id>
- * omni providers create --name <name> --schema <schema> --base-url <url> --api-key <key>
+ * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
+ *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
+ *   OpenClaw: --default-agent-id <id>
  * omni providers agents <id>
  * omni providers teams <id>
  * omni providers workflows <id>
@@ -36,7 +38,12 @@ function validateUrlScheme(schema: string, baseUrl: string): string | null {
 }
 
 /** Validate create provider options, returning an error message or null */
-function validateCreateOptions(options: { schema: string; baseUrl: string; defaultAgentId?: string }): string | null {
+function validateCreateOptions(options: {
+  schema: string;
+  baseUrl: string;
+  defaultAgentId?: string;
+  projectPath?: string;
+}): string | null {
   if (!VALID_SCHEMAS.includes(options.schema)) {
     return `Invalid schema: ${options.schema}. Valid: ${[...VALID_SCHEMAS].join(', ')}`;
   }
@@ -45,7 +52,37 @@ function validateCreateOptions(options: { schema: string; baseUrl: string; defau
   if (options.schema === 'openclaw' && !options.defaultAgentId) {
     return 'OpenClaw providers require --default-agent-id.\nExample: omni providers create --schema openclaw --default-agent-id sofia ...';
   }
+  if (options.schema === 'claude-code' && !options.projectPath) {
+    return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
+  }
   return null;
+}
+
+/** Build schema-specific config from CLI options */
+function buildSchemaConfig(options: {
+  schema: string;
+  defaultAgentId?: string;
+  projectPath?: string;
+  maxTurns?: number;
+  permissionMode?: string;
+  model?: string;
+  systemPrompt?: string;
+}): Record<string, unknown> | undefined {
+  const config: Record<string, unknown> = {};
+
+  if (options.schema === 'openclaw') {
+    if (options.defaultAgentId) config.defaultAgentId = options.defaultAgentId;
+  } else if (options.schema === 'claude-code') {
+    config.projectPath = options.projectPath;
+    if (options.maxTurns) config.maxTurns = options.maxTurns;
+    if (options.permissionMode) config.permissionMode = options.permissionMode;
+    if (options.model) config.model = options.model;
+    if (options.systemPrompt) config.systemPrompt = options.systemPrompt;
+  } else if (options.defaultAgentId) {
+    config.defaultAgentId = options.defaultAgentId;
+  }
+
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 /** Get contextual hint for provider health check error */
@@ -118,32 +155,38 @@ export function createProvidersCommand(): Command {
     .requiredOption('--name <name>', 'Provider name (unique)')
     .requiredOption('--schema <schema>', `Provider schema (${VALID_SCHEMAS.join(', ')})`)
     .requiredOption('--base-url <url>', 'API base URL (ws:// or wss:// for openclaw)')
-    .requiredOption('--api-key <key>', 'API key')
+    .option('--api-key <key>', 'API key (optional for claude-code if using env ANTHROPIC_API_KEY)')
     .option('--description <desc>', 'Provider description')
     .option('--timeout <seconds>', 'Default timeout in seconds', Number.parseInt, 60)
     .option('--stream', 'Enable streaming by default')
+    // OpenClaw options
     .option('--default-agent-id <agentId>', 'Default agent ID (required for openclaw)')
+    // Claude Code options
+    .option('--project-path <path>', 'Project directory path (required for claude-code)')
+    .option('--max-turns <number>', 'Max conversation turns (claude-code)', Number.parseInt)
+    .option('--permission-mode <mode>', 'Permission mode: default, acceptEdits, bypassPermissions, plan (claude-code)')
+    .option('--model <model>', 'Model override (claude-code)')
+    .option('--system-prompt <prompt>', 'System prompt prepended to agent (claude-code)')
     .action(
       async (options: {
         name: string;
         schema: string;
         baseUrl: string;
-        apiKey: string;
+        apiKey?: string;
         description?: string;
         timeout?: number;
         stream?: boolean;
         defaultAgentId?: string;
+        projectPath?: string;
+        maxTurns?: number;
+        permissionMode?: string;
+        model?: string;
+        systemPrompt?: string;
       }) => {
         const validationError = validateCreateOptions(options);
         if (validationError) {
           output.error(validationError);
           return;
-        }
-
-        // Build schemaConfig from flags
-        const schemaConfig: Record<string, unknown> = {};
-        if (options.defaultAgentId) {
-          schemaConfig.defaultAgentId = options.defaultAgentId;
         }
 
         const client = getClient();
@@ -157,7 +200,7 @@ export function createProvidersCommand(): Command {
             description: options.description,
             defaultTimeout: options.timeout,
             defaultStream: options.stream ?? true,
-            schemaConfig: Object.keys(schemaConfig).length > 0 ? schemaConfig : undefined,
+            schemaConfig: buildSchemaConfig(options),
           });
 
           output.success(`Created provider: ${provider.id}`);
@@ -167,7 +210,7 @@ export function createProvidersCommand(): Command {
           output.info('\nNext steps:');
           output.info(`  1. Test connectivity:  omni providers test ${provider.id}`);
           output.info(
-            `  2. Assign to instance: omni instances update <instance-id> --agent-provider-id ${provider.id}${options.defaultAgentId ? ` --agent-id ${options.defaultAgentId}` : ''}`,
+            `  2. Assign to instance: omni instances update <instance-id> --agent-provider ${provider.id}${options.defaultAgentId ? ` --agent ${options.defaultAgentId}` : ''}`,
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

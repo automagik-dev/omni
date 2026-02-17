@@ -442,6 +442,19 @@ export class ChatService {
   }
 
   /**
+   * Look up a LID→phone JID mapping from the chatIdMappings table.
+   * Returns the phone JID if found, null otherwise.
+   */
+  async findLidMapping(instanceId: string, lidId: string): Promise<string | null> {
+    const [mapping] = await this.db
+      .select({ phoneId: chatIdMappings.phoneId })
+      .from(chatIdMappings)
+      .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, lidId)))
+      .limit(1);
+    return mapping?.phoneId ?? null;
+  }
+
+  /**
    * Upsert a LID→phone JID mapping into the chatIdMappings table.
    */
   async upsertLidMapping(instanceId: string, lidId: string, phoneId: string): Promise<void> {

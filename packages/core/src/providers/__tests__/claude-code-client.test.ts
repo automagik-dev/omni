@@ -76,14 +76,25 @@ describe('ClaudeCodeClient', () => {
       expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-test-key');
     });
 
-    it('sets resume when sessionId provided', () => {
+    it('sets resume when sessionId is a valid UUID', () => {
+      const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+      const client = new ClaudeCodeClient(baseConfig);
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        sessionId,
+      });
+
+      expect(options.resume).toBe(sessionId);
+    });
+
+    it('does not set resume when sessionId is not a valid UUID', () => {
       const client = new ClaudeCodeClient(baseConfig);
       const options = getBuildOptions(client)({
         ...baseRequest,
         sessionId: 'prev-session-id',
       });
 
-      expect(options.resume).toBe('prev-session-id');
+      expect(options.resume).toBeUndefined();
     });
 
     it('does not set resume when no sessionId', () => {
@@ -210,10 +221,23 @@ describe('ClaudeCodeClient', () => {
 });
 
 describe('ClaudeCodeAgentProvider', () => {
+  // Mock session storage for tests
+  const mockSessionStorage: import('../claude-code-provider').SessionStorage = {
+    getSession: async () => null,
+    upsertSession: async () => {},
+    deleteSession: async () => {},
+  };
+
   it('implements IAgentProvider interface', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test Provider', {
-      projectPath: '/test',
-    });
+    const provider = new ClaudeCodeAgentProvider(
+      'test-id',
+      'Test Provider',
+      {
+        projectPath: '/test',
+      },
+      mockSessionStorage,
+      {},
+    );
 
     expect(provider.id).toBe('test-id');
     expect(provider.name).toBe('Test Provider');
@@ -225,9 +249,7 @@ describe('ClaudeCodeAgentProvider', () => {
   });
 
   it('canHandle returns true for all trigger types', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', {
-      projectPath: '/test',
-    });
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {});
 
     const makeTrigger = (type: string) => ({ type }) as unknown as AgentTrigger;
 
@@ -239,9 +261,15 @@ describe('ClaudeCodeAgentProvider', () => {
   });
 
   it('delegates checkHealth to client', async () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', {
-      projectPath: '/nonexistent/path/that/does/not/exist',
-    });
+    const provider = new ClaudeCodeAgentProvider(
+      'test-id',
+      'Test',
+      {
+        projectPath: '/nonexistent/path/that/does/not/exist',
+      },
+      mockSessionStorage,
+      {},
+    );
 
     const result = await provider.checkHealth();
     expect(result.healthy).toBe(false);
@@ -253,6 +281,7 @@ describe('ClaudeCodeAgentProvider', () => {
       'test-id',
       'Test',
       { projectPath: '/test', model: 'claude-opus-4-6' },
+      mockSessionStorage,
       { timeoutMs: 180_000, enableAutoSplit: false, prefixSenderName: false },
     );
 
