@@ -20,6 +20,7 @@ import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
 import { checkBoltHealth, createBoltConnection, destroyBoltConnection } from './connection/bolt-client';
+import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
@@ -426,7 +427,6 @@ export class SlackPlugin extends BaseChannelPlugin {
               replyToId,
               rawPayload,
               platformTimestamp,
-              connection.botToken,
             );
             if (!content.text) return;
           }
@@ -640,7 +640,6 @@ export class SlackPlugin extends BaseChannelPlugin {
     replyToId: string | undefined,
     rawPayload: Record<string, unknown>,
     platformTimestamp: number | undefined,
-    botToken: string,
   ): Promise<void> {
     const files = rawPayload.files as unknown[] | undefined;
     if (!files || files.length === 0) return;
@@ -657,8 +656,9 @@ export class SlackPlugin extends BaseChannelPlugin {
         from,
         { type: contentType as ContentType, text: content.text, mediaUrl, mimeType: fileInfo.mimeType },
         replyToId,
-        // _slackAuth is read by media-processor to authenticate the download
-        { ...rawPayload, fileInfo, _slackAuth: { botToken } },
+        // botToken is NOT included here — media-processor fetches it from the
+        // instances table by instanceId so credentials never enter the event/DB
+        { ...rawPayload, fileInfo },
         platformTimestamp,
       );
     }
@@ -745,10 +745,27 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Handle slash command
+   * Handle slash command — emit as inbound message.received so downstream
+   * agents can process the command text just like any other message.
    */
-  private async handleCommand(payload: unknown): Promise<void> {
-    this.logger.debug('Command handled', { payload: String(payload) });
-    // Custom events would be published here for downstream processing
+  private async handleCommand(payload: CommandPayload): Promise<void> {
+    this.logger.debug('Command received', {
+      command: payload.command,
+      userId: payload.userId,
+      channelId: payload.channelId,
+    });
+
+    // Combine command + args into a single text string (e.g. "/remind 5min meeting")
+    const text = payload.text ? `${payload.command} ${payload.text}` : payload.command;
+
+    await this.handleMessageReceived(
+      payload.instanceId,
+      payload.triggerId,
+      payload.channelId,
+      payload.userId,
+      { type: 'text', text },
+      undefined,
+      { command: payload.command, responseUrl: payload.responseUrl },
+    );
   }
 }

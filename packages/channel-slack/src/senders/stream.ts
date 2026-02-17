@@ -13,7 +13,7 @@ import type { Logger } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import type { StreamDelta } from '@omni/core';
 import type { ChatPostMessageArguments, WebClient } from '@slack/web-api';
-import { markdownToMrkdwn } from '../markdown';
+import { chunkMessage, markdownToMrkdwn } from '../markdown';
 import type { StreamMode } from '../types';
 
 export interface StreamSenderOptions {
@@ -126,7 +126,9 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
   }
 
   /**
-   * Finalize the message with the complete content
+   * Finalize the message with the complete content.
+   * Chunks text to Slack's 4000-char limit: first chunk updates the draft
+   * (or becomes the initial message), overflow chunks are posted as new messages.
    */
   async function finalize(text: string): Promise<void> {
     finalized = true;
@@ -136,20 +138,28 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
     }
     pendingContent = undefined;
 
+    const chunks = chunkMessage(text);
+    const [firstChunk, ...overflowChunks] = chunks;
+
     if (draftTs) {
-      // Update the existing message with final content
+      // Update the existing draft with the first chunk
       try {
         await client.chat.update({
           channel: channelId,
           ts: draftTs,
-          text: formatText(text),
+          text: formatText(firstChunk),
         });
       } catch (error) {
         logger.error('Stream: failed to finalize message', { error: String(error) });
       }
     } else {
-      // No draft yet, send as new message
-      await sendInitial(text);
+      // No draft yet, send first chunk as new message
+      await sendInitial(firstChunk);
+    }
+
+    // Post overflow chunks as new messages in the same thread
+    for (const chunk of overflowChunks) {
+      await sendInitial(chunk);
     }
   }
 
