@@ -5,6 +5,7 @@
  * and converts them to Omni message.received events.
  */
 
+import { createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
@@ -13,6 +14,9 @@ import { tryDownloadTelegramMedia } from '../utils/media-download';
 import { extractTelegramMessageContent } from './extract-content';
 
 const log = createLogger('telegram:messages');
+
+/** Shared dedupe cache for all Telegram instances */
+const dedupeCache = createInboundDedupeCache();
 
 /**
  * Check if a message contains a bot mention
@@ -68,6 +72,22 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const displayName = buildDisplayName(from);
 
     const content = extractTelegramMessageContent(msg);
+
+    // ── Sanitize inbound text ──
+    if (content.text) {
+      const sanitized = sanitizeMessage(content.text, log, {
+        instanceId,
+        messageId: externalId,
+      });
+      if (!sanitized.ok) return; // Drop messages with null bytes or exceeding max length
+      content.text = sanitized.text;
+    }
+
+    // ── Dedupe check ──
+    if (dedupeCache.isDuplicate(instanceId, externalId, 'telegram', log)) {
+      return; // Duplicate — drop silently
+    }
+
     const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
 
     const botInfo = bot.botInfo;

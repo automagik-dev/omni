@@ -11,6 +11,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
@@ -19,6 +20,12 @@ import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 
 const log = createLogger('whatsapp:messages');
+
+/** Shared dedupe cache for all WhatsApp instances (cache key includes instanceId) */
+const dedupeCache = createInboundDedupeCache();
+
+/** Download size guard — 50MB default */
+const downloadGuard = createDownloadGuard();
 
 /**
  * Extract message content from a WAMessage
@@ -539,6 +546,12 @@ export async function tryDownloadMedia(
     }
     if (!result) return null;
 
+    // Check download size before writing to disk
+    downloadGuard.checkSize(result.buffer.length, log, {
+      instanceId,
+      channel: 'whatsapp',
+    });
+
     // Build path matching MediaStorageService layout
     const now = new Date();
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -654,6 +667,22 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 
   const content = extractContent(msg);
   if (!content) return;
+
+  // ── Sanitize inbound text ──
+  if (content.text) {
+    const sanitized = sanitizeMessage(content.text, log, {
+      instanceId,
+      messageId: msg.key.id || undefined,
+    });
+    if (!sanitized.ok) return; // Drop messages with null bytes or exceeding max length
+    content.text = sanitized.text;
+  }
+
+  // ── Dedupe check ──
+  const externalIdForDedupe = msg.key.id || '';
+  if (externalIdForDedupe && dedupeCache.isDuplicate(instanceId, externalIdForDedupe, 'whatsapp', log)) {
+    return; // Duplicate — drop silently
+  }
 
   // Note: Mention replacement (@phone → @Name) is handled in agent-dispatcher
   // with database lookup for better reliability across API restarts
