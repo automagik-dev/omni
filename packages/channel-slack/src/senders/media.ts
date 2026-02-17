@@ -46,7 +46,9 @@ export async function uploadFile(client: WebClient, options: MediaUploadOptions,
     const result = await client.files.uploadV2(uploadArgs as unknown as Parameters<typeof client.files.uploadV2>[0]);
 
     const resultAny = result as unknown as Record<string, unknown>;
-    const fileId = (resultAny.file as Record<string, unknown>)?.id as string | undefined;
+    // files.uploadV2 returns a `files` array, not a `file` object
+    const files = resultAny.files as Array<Record<string, unknown>> | undefined;
+    const fileId = files?.[0]?.id as string | undefined;
     logger.debug('File uploaded successfully', { fileId, filename: options.filename });
     return fileId ?? '';
   } catch (error) {

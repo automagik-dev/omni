@@ -48,9 +48,13 @@ export function setupInteractionHandlers(
       interactionType = 'select';
     }
 
-    // For select menus, extract selected option
+    // For select menus, extract selected value from various select types
     const selectedOption = act.selected_option as Record<string, unknown> | undefined;
-    const selectedValue = selectedOption?.value as string | undefined;
+    const selectedUser = act.selected_user as string | undefined;
+    const selectedChannel = act.selected_channel as string | undefined;
+    const selectedConversation = act.selected_conversation as string | undefined;
+    const selectedValue =
+      (selectedOption?.value as string | undefined) ?? selectedUser ?? selectedChannel ?? selectedConversation;
 
     logger.debug('Interaction received', { instanceId, actionId, interactionType, userId });
 

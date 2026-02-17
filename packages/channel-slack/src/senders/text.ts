@@ -42,6 +42,13 @@ export interface TextSendOptions {
 export async function sendTextMessage(client: WebClient, options: TextSendOptions, logger: Logger): Promise<string> {
   const formattedText = options.formatMode === 'passthrough' ? options.text : markdownToMrkdwn(options.text);
 
+  if (options.ephemeral && !options.ephemeralUserId) {
+    throw new SlackError(
+      SlackErrorCode.SEND_FAILED,
+      'Ephemeral message requires ephemeralUserId — omitting it would send the message publicly',
+    );
+  }
+
   const chunks = chunkMessage(formattedText);
   let lastTs = '';
 

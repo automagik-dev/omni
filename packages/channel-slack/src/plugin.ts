@@ -100,20 +100,20 @@ export class SlackPlugin extends BaseChannelPlugin {
     });
 
     const slackConfig = (config.options ?? {}) as SlackConfig;
-    const botToken = slackConfig.botToken ?? (config.credentials?.botToken as string);
-    const appToken = slackConfig.appToken ?? (config.credentials?.appToken as string);
-    const signingSecret = slackConfig.signingSecret ?? (config.credentials?.signingSecret as string | undefined);
-
-    if (!botToken || !appToken) {
-      throw new SlackError(
-        SlackErrorCode.INVALID_TOKEN,
-        'Both botToken (xoxb-...) and appToken (xapp-...) are required for Socket Mode',
-      );
-    }
-
-    this.slackConfigs.set(instanceId, slackConfig);
 
     try {
+      const botToken = slackConfig.botToken ?? (config.credentials?.botToken as string);
+      const appToken = slackConfig.appToken ?? (config.credentials?.appToken as string);
+      const signingSecret = slackConfig.signingSecret ?? (config.credentials?.signingSecret as string | undefined);
+
+      if (!botToken || !appToken) {
+        throw new SlackError(
+          SlackErrorCode.INVALID_TOKEN,
+          'Both botToken (xoxb-...) and appToken (xapp-...) are required for Socket Mode',
+        );
+      }
+
+      this.slackConfigs.set(instanceId, slackConfig);
       const connection = await createBoltConnection(
         { botToken, appToken, signingSecret, retryConfig: slackConfig.retryConfig },
         this.logger,
