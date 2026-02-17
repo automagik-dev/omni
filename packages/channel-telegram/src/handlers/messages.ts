@@ -265,15 +265,20 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
   // Buffer an album message and reserve a chatQueue slot on its first arrival.
   // Extracted to keep the bot.on('message') handler below complexity limits.
-  function bufferAlbumMessage(msg: TelegramMessageLike, chatId: string, threadId: string | undefined): void {
-    const from = msg.from!; // caller already guards against undefined
+  // Caller must have already verified from and mediaGroupId are non-null.
+  function bufferAlbumMessage(
+    msg: TelegramMessageLike,
+    from: NonNullable<TelegramMessageLike['from']>,
+    mediaGroupId: string,
+    chatId: string,
+    threadId: string | undefined,
+  ): void {
     const userId = toPlatformUserId(from.id);
     const externalId = String(msg.message_id);
     const displayName = buildDisplayName(from);
     const content = extractTelegramMessageContent(msg);
     const botInfo = bot.botInfo;
     const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
-    const mediaGroupId = msg.media_group_id!;
 
     const isNewGroup = !pendingFlushes.has(mediaGroupId);
 
@@ -345,7 +350,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     // --- Media group buffering: batch album messages ---
     if (msg.media_group_id) {
-      bufferAlbumMessage(msg, chatId, threadId);
+      bufferAlbumMessage(msg, from, msg.media_group_id, chatId, threadId);
       return; // Don't process individually — will be flushed by buffer
     }
 
