@@ -23,6 +23,9 @@ export interface TelegramConfig {
 
   /** Slash commands to register via setMyCommands() at startup */
   commands?: Array<{ command: string; description: string }>;
+
+  /** Enable automatic voice note transcription (default: false — opt-in) */
+  voiceTranscription?: boolean;
 }
 
 /**

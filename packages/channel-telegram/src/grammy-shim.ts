@@ -59,7 +59,7 @@ export interface TelegramMessageLike {
 
   photo?: TelegramPhotoSize[];
   audio?: TelegramFileBase;
-  voice?: TelegramFileBase;
+  voice?: TelegramFileBase & { duration?: number };
   video?: TelegramFileBase;
   video_note?: TelegramFileBase;
   document?: TelegramFileBase;

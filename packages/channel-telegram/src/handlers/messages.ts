@@ -3,6 +3,8 @@
  *
  * Handles incoming messages (text, media, stickers, etc.)
  * and converts them to Omni message.received events.
+ *
+ * Voice notes are optionally transcribed before agent dispatch (preflight).
  */
 
 import { createLogger } from '@omni/core';
@@ -10,6 +12,8 @@ import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
 import { buildDisplayName, toPlatformUserId } from '../utils/identity';
 import { tryDownloadTelegramMedia } from '../utils/media-download';
+import { transcribeVoiceNote } from '../utils/voice-transcription';
+import type { TelegramExtractedContent } from './extract-content';
 import { extractTelegramMessageContent } from './extract-content';
 
 const log = createLogger('telegram:messages');
@@ -52,6 +56,25 @@ function buildChatName(msg: TelegramMessageLike, displayName: string): string | 
 }
 
 /**
+ * Attempt preflight voice transcription if enabled.
+ * Returns the text to use for message content (transcribed or original).
+ */
+async function tryTranscribeVoice(
+  content: TelegramExtractedContent,
+  localPath: string | undefined,
+  plugin: TelegramPlugin,
+  instanceId: string,
+): Promise<string | undefined> {
+  if (!content.isVoiceNote) return content.text;
+  if (!plugin.isVoiceTranscriptionEnabled(instanceId)) return content.text;
+  if (!localPath) return content.text;
+
+  const mimeType = content.mimeType ?? 'audio/ogg';
+  const result = await transcribeVoiceNote(localPath, content.voiceDurationSeconds, mimeType);
+  return result.text;
+}
+
+/**
  * Set up message handlers for a grammy Bot
  */
 export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): void {
@@ -86,6 +109,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     const local = await downloadIfMedia({ bot, instanceId, externalId, content });
 
+    // Preflight voice transcription: convert audio → text before agent dispatch
+    const messageText = await tryTranscribeVoice(content, local?.localPath, plugin, instanceId);
+
     await plugin.handleMessageReceived(
       instanceId,
       externalId,
@@ -93,7 +119,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
       userId,
       {
         type: content.type,
-        text: content.text,
+        text: messageText,
         mediaUrl: content.mediaFileId,
         localPath: local?.localPath,
         mimeType: content.mimeType,

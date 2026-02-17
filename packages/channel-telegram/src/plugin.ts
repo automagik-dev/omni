@@ -200,12 +200,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
     const commands = (config.options?.commands as TelegramConfig['commands'] | undefined) ?? undefined;
 
+    const voiceTranscription = config.options?.voiceTranscription === true;
+
     const telegramConfig: TelegramConfig = {
       token,
       mode,
       webhookUrl,
       webhookSecret,
       commands,
+      voiceTranscription,
     };
 
     this.logger.info('Connecting Telegram instance', { instanceId, mode: telegramConfig.mode });
@@ -722,6 +725,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
     throw new Error(
       `Webhook mode is not yet supported for Telegram instance ${instanceId}. Use polling mode instead (set mode: "polling" in instance config). Webhook support requires an HTTP endpoint to receive Telegram updates.`,
     );
+  }
+
+  /**
+   * Check if voice transcription is enabled for an instance
+   */
+  isVoiceTranscriptionEnabled(instanceId: string): boolean {
+    return this.configs.get(instanceId)?.voiceTranscription === true;
   }
 
   /**
