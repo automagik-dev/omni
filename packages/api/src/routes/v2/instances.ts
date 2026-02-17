@@ -2342,7 +2342,15 @@ instancesRoutes.get('/:id/guilds/:guildId/config', instanceAccess, async (c) => 
 
   const instance = await services.instances.getById(id);
   const overrides = (instance.guildConfigOverrides as Record<string, Record<string, unknown>>) ?? {};
-  const guildConfig = overrides[guildId] ?? {};
+
+  // Build resolved config: instance-level defaults layered under guild-specific overrides.
+  // Without merging defaults, callers that use this as source-of-truth for a PUT can
+  // inadvertently clear inherited instance settings (e.g. agentReplyFilter).
+  const instanceDefaults: Record<string, unknown> = {};
+  if (instance.agentReplyFilter) instanceDefaults.agentReplyFilter = instance.agentReplyFilter;
+  if (instance.discordPresence) instanceDefaults.presence = instance.discordPresence;
+
+  const guildConfig = { ...instanceDefaults, ...(overrides[guildId] ?? {}) };
 
   // Cache the result
   guildConfigCache.set(cacheKey, { data: guildConfig, expiresAt: Date.now() + GUILD_CONFIG_TTL });
@@ -2365,13 +2373,13 @@ instancesRoutes.put(
     const apiKey = c.get('apiKey');
 
     const instance = await services.instances.getById(id);
-    const overrides = { ...((instance.guildConfigOverrides as Record<string, unknown>) ?? {}) };
-    const oldConfig = overrides[guildId] ?? {};
-    const action = overrides[guildId] ? 'update' : 'create';
+    const existingOverrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+    const oldConfig = existingOverrides[guildId] ?? {};
+    const action = existingOverrides[guildId] ? 'update' : 'create';
 
-    overrides[guildId] = newConfig;
-
-    await services.instances.update(id, { guildConfigOverrides: overrides });
+    // Atomic jsonb_set — avoids read-modify-write race where concurrent requests
+    // for different guild IDs both read the same snapshot and one clobbers the other.
+    await services.instances.setGuildConfigOverride(id, guildId, newConfig);
 
     // Write-through cache invalidation
     invalidateGuildCache(id, guildId);
@@ -2412,16 +2420,15 @@ instancesRoutes.delete('/:id/guilds/:guildId/config', instanceAccess, async (c) 
   const apiKey = c.get('apiKey');
 
   const instance = await services.instances.getById(id);
-  const overrides = { ...((instance.guildConfigOverrides as Record<string, unknown>) ?? {}) };
-  const oldConfig = overrides[guildId];
+  const existingOverrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+  const oldConfig = existingOverrides[guildId];
 
   if (!oldConfig) {
     return c.json({ data: { guildId, message: 'No overrides to remove' } });
   }
 
-  delete overrides[guildId];
-
-  await services.instances.update(id, { guildConfigOverrides: overrides });
+  // Atomic JSONB key removal — avoids read-modify-write race.
+  await services.instances.deleteGuildConfigOverride(id, guildId);
 
   // Write-through cache invalidation
   invalidateGuildCache(id, guildId);

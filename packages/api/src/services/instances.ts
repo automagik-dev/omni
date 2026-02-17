@@ -152,6 +152,35 @@ export class InstanceService {
   }
 
   /**
+   * Atomically set a single guild config override using jsonb_set.
+   * Avoids the read-modify-write race where two concurrent requests for different
+   * guild IDs can clobber each other by both reading the same snapshot.
+   */
+  async setGuildConfigOverride(instanceId: string, guildId: string, config: Record<string, unknown>): Promise<void> {
+    await this.db
+      .update(instances)
+      .set({
+        guildConfigOverrides: sql`jsonb_set(COALESCE(guild_config_overrides, '{}'), ARRAY[${guildId}], ${JSON.stringify(config)}::jsonb, true)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(instances.id, instanceId));
+  }
+
+  /**
+   * Atomically delete a single guild config override using the JSONB - operator.
+   * Avoids the read-modify-write race for the same reason as setGuildConfigOverride.
+   */
+  async deleteGuildConfigOverride(instanceId: string, guildId: string): Promise<void> {
+    await this.db
+      .update(instances)
+      .set({
+        guildConfigOverrides: sql`COALESCE(guild_config_overrides, '{}') - ${guildId}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(instances.id, instanceId));
+  }
+
+  /**
    * Delete an instance
    */
   async delete(id: string): Promise<void> {

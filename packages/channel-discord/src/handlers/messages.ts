@@ -14,11 +14,7 @@ import type { ContentType } from '@omni/core/types';
 import { ChannelType, type Client, type Message, type PartialMessage } from 'discord.js';
 import type { DiscordPlugin } from '../plugin';
 import type { ExtractedContent } from '../types';
-import {
-  type ForwardedAttachment,
-  downloadForwardedAttachment,
-  extractForwardedAttachments,
-} from './forwarded-attachments';
+import { type ForwardedAttachment, extractForwardedAttachments } from './forwarded-attachments';
 
 const log = createLogger('discord:messages');
 
@@ -176,11 +172,9 @@ async function tryExtractForwardedContent(
     return { content: null, attachments };
   }
 
-  const buffer = await downloadForwardedAttachment(firstAttachment);
-  if (!buffer) {
-    return { content: null, attachments };
-  }
-
+  // Build content from the attachment metadata — do NOT download the file.
+  // The emitted payload carries the CDN URL; downloading just to validate
+  // reachability wastes bandwidth and spikes memory for large files.
   const mediaType = getMediaType(firstAttachment.contentType);
   const content: ExtractedContent = {
     type: mediaType,
@@ -296,8 +290,7 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
   // PublicThread while its parent is GuildForum (15) or GuildMedia (16). We must check
   // both the channel type and its parent type to correctly identify forum/media posts.
   const GUILD_MEDIA_TYPE = 16;
-  const parentType =
-    'parent' in message.channel ? (message.channel.parent?.type as number | undefined) : undefined;
+  const parentType = 'parent' in message.channel ? (message.channel.parent?.type as number | undefined) : undefined;
   const isForumOrMedia =
     (message.channel.type as number) === ChannelType.GuildForum ||
     (message.channel.type as number) === GUILD_MEDIA_TYPE ||
