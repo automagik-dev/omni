@@ -38,9 +38,13 @@ export function redactString(value: string): string {
 /**
  * Deep-redact sensitive values from an object (log entry data).
  * Returns a new object with redacted strings.
- * Uses a WeakSet to detect and safely handle circular references.
+ *
+ * Cycle detection: tracks only objects in the current recursion path
+ * (not all previously seen objects), so non-cyclic shared references
+ * (two sibling fields pointing to the same object) are redacted correctly
+ * rather than being collapsed to '[Circular]'.
  */
-export function redactObject<T>(obj: T, visited = new WeakSet<object>()): T {
+export function redactObject<T>(obj: T, pathSet = new WeakSet<object>()): T {
   if (obj === null || obj === undefined) return obj;
 
   if (typeof obj === 'string') {
@@ -48,11 +52,16 @@ export function redactObject<T>(obj: T, visited = new WeakSet<object>()): T {
   }
 
   if (typeof obj === 'object') {
-    if (visited.has(obj as object)) return '[Circular]' as unknown as T;
-    visited.add(obj as object);
+    // Only objects in the active recursion path are circular
+    if (pathSet.has(obj as object)) return '[Circular]' as unknown as T;
 
+    // Arrays: recurse into elements (must be checked before non-plain guard
+    // since Array.prototype !== Object.prototype)
     if (Array.isArray(obj)) {
-      return obj.map((item) => redactObject(item, visited)) as T;
+      pathSet.add(obj as object);
+      const result = obj.map((item) => redactObject(item, pathSet)) as T;
+      pathSet.delete(obj as object);
+      return result;
     }
 
     // Preserve non-plain objects (Date, Error, URL, RegExp, Buffer, etc.) as-is.
@@ -64,11 +73,14 @@ export function redactObject<T>(obj: T, visited = new WeakSet<object>()): T {
       return obj;
     }
 
-    const result: Record<string, unknown> = {};
+    // Mark as being in the current path before recursing, then unmark on the way out.
+    pathSet.add(obj as object);
+    const plain: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      result[key] = redactObject(value, visited);
+      plain[key] = redactObject(value, pathSet);
     }
-    return result as T;
+    pathSet.delete(obj as object);
+    return plain as T;
   }
 
   return obj;

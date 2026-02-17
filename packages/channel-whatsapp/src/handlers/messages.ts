@@ -18,6 +18,7 @@ import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from
 import { fromJid, isLidJid, resolveToPhoneJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
+import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
 
@@ -538,6 +539,15 @@ export async function tryDownloadMedia(
   if (!mediaInfo) return null;
 
   try {
+    // Enforce size limit from message metadata BEFORE downloading.
+    // WhatsApp proto fileLength is server-declared and available without
+    // fetching the payload, preventing the full buffer from being allocated
+    // for oversized media.
+    const declaredSize = getMediaSize(msg);
+    if (declaredSize !== undefined) {
+      downloadGuard.checkSize(declaredSize, log, { instanceId, channel: 'whatsapp' });
+    }
+
     // Try download with retry — iOS/macOS media sometimes needs a second attempt
     let result = await downloadMediaToBuffer(msg);
     if (!result) {
@@ -546,7 +556,7 @@ export async function tryDownloadMedia(
     }
     if (!result) return null;
 
-    // Check download size before writing to disk
+    // Also verify actual buffer size after download (declared size may be absent or differ)
     downloadGuard.checkSize(result.buffer.length, log, {
       instanceId,
       channel: 'whatsapp',

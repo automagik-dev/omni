@@ -127,6 +127,17 @@ describe('redactObject', () => {
     expect(result.self).toBe('[Circular]');
   });
 
+  test('preserves non-cyclic shared references (not collapsed to [Circular])', () => {
+    const shared = { url: 'postgres://user:pass@host/db' };
+    const entry = { a: shared, b: shared };
+    const result = redactObject(entry) as { a: typeof shared; b: typeof shared };
+    // Both fields should be independently redacted, not one becoming '[Circular]'
+    expect(result.a).not.toBe('[Circular]');
+    expect(result.b).not.toBe('[Circular]');
+    expect(result.a.url).toContain('[REDACTED_URL]');
+    expect(result.b.url).toContain('[REDACTED_URL]');
+  });
+
   test('handles circular arrays without stack overflow', () => {
     const arr: unknown[] = [1, 2];
     arr.push(arr); // circular reference
