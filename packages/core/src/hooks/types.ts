@@ -90,6 +90,19 @@ export const BeforeMessageWriteContextSchema = z.object({
 });
 
 // ============================================================================
+// Hook Context Schema Map
+// ============================================================================
+
+/** Zod schemas keyed by hook event — used by the executor to validate mutable
+ *  hook return values before committing them to the pipeline context. */
+export const HookContextSchemas: Record<HookEvent, z.ZodTypeAny> = {
+  before_agent_start: BeforeAgentStartContextSchema,
+  llm_input: LLMInputContextSchema,
+  llm_output: LLMOutputContextSchema,
+  before_message_write: BeforeMessageWriteContextSchema,
+};
+
+// ============================================================================
 // Hook Context Types (derived from Zod)
 // ============================================================================
 

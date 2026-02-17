@@ -9,10 +9,12 @@
  * - Performance timing logged at DEBUG level
  */
 
+import type { z } from 'zod';
 import { createLogger } from '../logger';
 import { type HookRegistry, getHookRegistry } from './registry';
 import {
   DEFAULT_HOOK_TIMEOUT_MS,
+  HookContextSchemas,
   type HookContextMap,
   type HookEvent,
   type HookExecutionOptions,
@@ -183,13 +185,41 @@ export async function executeHooks<E extends HookEvent>(
   const results: HookExecutionResult[] = [];
 
   for (const hook of hooks) {
-    const handlerContext = frozenContext ?? currentContext;
+    // For read-only hooks: use the pre-frozen clone shared across all hooks.
+    // For mutable hooks: clone the current context snapshot so that a hook
+    // mutating `ctx` in-place cannot pollute the pipeline if it times out or throws.
+    const handlerContext = frozenContext ?? (structuredClone(currentContext) as HookContextMap[E]);
     const { result, returnedContext } = await executeSingleHook(hook, handlerContext, timeoutMs, event, instanceId);
-    results.push(result);
 
-    // For mutable hooks, apply returned context if present
     if (!isReadOnly && returnedContext !== undefined) {
-      currentContext = returnedContext;
+      // Validate the returned context against the event's Zod schema before
+      // committing it to the pipeline. A malformed return (from a JS hook or a
+      // buggy TS hook) is rejected and recorded as an error rather than
+      // silently propagated to downstream stages.
+      const schema = HookContextSchemas[event] as z.ZodTypeAny;
+      const parsed = schema.safeParse(returnedContext);
+      if (parsed.success) {
+        currentContext = parsed.data as HookContextMap[E];
+        results.push(result);
+      } else {
+        const errorMessage = `Hook returned invalid context: ${(parsed.error as z.ZodError).message}`;
+        log.warn('Hook returned invalid context shape, rejecting update', {
+          hookId: hook.id,
+          hookName: hook.name,
+          event,
+          instanceId,
+          errors: (parsed.error as z.ZodError).errors,
+        });
+        results.push({
+          hookId: result.hookId,
+          hookName: result.hookName,
+          status: 'error',
+          durationMs: result.durationMs,
+          error: errorMessage,
+        });
+      }
+    } else {
+      results.push(result);
     }
   }
 
