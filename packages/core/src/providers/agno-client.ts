@@ -198,8 +198,11 @@ export class AgnoClient implements IAgentClient {
       formData.append('user_id', request.userId);
     }
 
-    // Pass depth-aware tool restrictions to the Agno agent when provided
-    if (request.tools?.length) {
+    // Pass depth-aware tool restrictions to the Agno agent when provided.
+    // Use !== undefined (not .length) so an empty array is still sent —
+    // filterToolsByDepth can legitimately return [] when all tools are blocked,
+    // and omitting the field would let Agno fall back to its default tool set.
+    if (request.tools !== undefined) {
       formData.append('tools', JSON.stringify(request.tools));
     }
 

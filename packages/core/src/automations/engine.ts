@@ -8,6 +8,7 @@
  * - Action execution
  */
 
+import { ChildrenTracker } from '../agents/spawn-guard';
 import type { EventBus, Subscription } from '../events/bus';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
@@ -89,6 +90,12 @@ export class AutomationEngine {
   private eventBus: EventBus | null = null;
   private deps: ActionDependencies;
   private logger: ExecutionLogger | null = null;
+  /**
+   * Shared tracker for breadth limiting across all call_agent executions.
+   * Persists for the lifetime of the engine so maxChildrenPerAgent accumulates
+   * correctly across separate automation firings.
+   */
+  private readonly childrenTracker: ChildrenTracker = new ChildrenTracker();
 
   constructor(private config: EngineConfig) {
     this.deps = {
@@ -105,6 +112,11 @@ export class AutomationEngine {
     this.deps = {
       eventBus,
       sendMessage: deps.sendMessage,
+      callAgent: deps.callAgent,
+      spawnLimits: deps.spawnLimits,
+      // Use caller-provided tracker if given; otherwise use the engine's own
+      // persistent tracker so breadth limits accumulate across executions.
+      childrenTracker: deps.childrenTracker ?? this.childrenTracker,
     };
     this.automations = automations.filter((a) => a.enabled);
 
