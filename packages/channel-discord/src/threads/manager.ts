@@ -10,10 +10,9 @@
 import { createLogger } from '@omni/core';
 import {
   ChannelType,
+  type BaseGuildTextChannel,
   type Client,
   type ForumChannel,
-  type NewsChannel,
-  type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
 
@@ -86,7 +85,7 @@ export async function createThread(
     );
   }
 
-  const textChannel = channel as TextChannel | NewsChannel;
+  const textChannel = channel as BaseGuildTextChannel;
   const threadType = mapThreadType(options.type ?? 'public');
 
   log.debug('Creating thread', {
@@ -101,7 +100,6 @@ export async function createThread(
     const message = await textChannel.messages.fetch(options.startMessageId);
     const thread = await message.startThread({
       name: options.name,
-      type: threadType,
       autoArchiveDuration: options.autoArchiveMinutes,
       reason: options.reason,
     });

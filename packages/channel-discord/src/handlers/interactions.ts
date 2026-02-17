@@ -11,7 +11,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Client, GuildMember, Interaction } from 'discord.js';
+import type { Client, GuildMember, Interaction, MessageComponentInteraction } from 'discord.js';
 import { checkInteractionAuth } from '../auth/interaction-auth';
 import { getComponentRegistry } from '../components/registry';
 import type { DiscordPlugin } from '../plugin';
@@ -74,11 +74,9 @@ async function isComponentInteractionAuthorized(
     // Component interactions (buttons/selects) use deferUpdate; modal submits use deferReply.
     try {
       if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
-        await interaction.deferUpdate();
-      } else if ('deferReply' in interaction && typeof interaction.deferReply === 'function') {
-        await (interaction as { deferReply: (opts: { ephemeral: boolean }) => Promise<void> }).deferReply({
-          ephemeral: true,
-        });
+        await (interaction as MessageComponentInteraction).deferUpdate();
+      } else if (isModalSubmit(interaction)) {
+        await interaction.deferReply({ ephemeral: true });
       }
     } catch (_) {
       // Ignore if already replied
@@ -237,8 +235,9 @@ async function processEntitySelectMenu(
           messageId,
         });
         try {
-          if (!interaction.replied && !interaction.deferred) {
-            await interaction.deferUpdate();
+          const ci = interaction as MessageComponentInteraction;
+          if (!ci.replied && !ci.deferred) {
+            await ci.deferUpdate();
           }
         } catch (_) {
           // Ignore
