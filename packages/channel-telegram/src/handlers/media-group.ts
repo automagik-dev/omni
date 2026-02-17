@@ -145,6 +145,17 @@ export class MediaGroupBuffer {
   }
 
   /**
+   * Cancel all pending buffers without calling onFlush.
+   * Use on instance disconnect to prevent stale processing after teardown.
+   */
+  destroy(): void {
+    for (const entry of this.buffers.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.buffers.clear();
+  }
+
+  /**
    * Get the number of pending media groups.
    */
   get pendingCount(): number {

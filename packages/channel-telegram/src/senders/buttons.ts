@@ -107,15 +107,18 @@ export async function sendInlineButtons(
   formatMode: 'convert' | 'passthrough' = 'convert',
   options?: Record<string, unknown>,
 ): Promise<number> {
-  // Determine chat type from options (passed by plugin.ts via threadOptions or metadata)
+  // Extract chatType for scope filtering — strip it before forwarding to Telegram API
   const chatType = options?.chatType as 'dm' | 'group' | 'channel' | 'private' | 'supergroup' | undefined;
+  const apiOptions: Record<string, unknown> = Object.fromEntries(
+    Object.entries(options ?? {}).filter(([k]) => k !== 'chatType'),
+  );
 
   // Filter buttons by scope
   const visibleButtons = filterButtonsByScope(buttons, chatType);
 
   // If no buttons remain after filtering, send as plain text
   if (!visibleButtons.length) {
-    return sendTextMessage(bot, chatId, text, replyToMessageId, formatMode, options);
+    return sendTextMessage(bot, chatId, text, replyToMessageId, formatMode, apiOptions);
   }
 
   const useConversion = formatMode !== 'passthrough';
@@ -125,7 +128,7 @@ export async function sendInlineButtons(
     ...(formatMode !== 'passthrough' ? { parse_mode: 'HTML' as const } : {}),
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     reply_markup: buildInlineKeyboard(visibleButtons),
-    ...(options ?? {}),
+    ...apiOptions,
   });
 
   log.debug('Sent inline buttons', {

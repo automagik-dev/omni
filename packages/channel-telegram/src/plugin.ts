@@ -111,14 +111,14 @@ async function dispatchContent(
   chatType?: string,
 ): Promise<number | null> {
   const threadOptions = threadId ? { message_thread_id: Number(threadId) } : undefined;
-  // Merge chatType into options so button scoping can filter by chat type
-  const baseOptions = { ...threadOptions, ...(chatType ? { chatType } : {}) };
+  // baseOptions carries only valid Telegram API parameters (e.g. message_thread_id)
+  const baseOptions = threadOptions ? { ...threadOptions } : undefined;
 
   if (content.type === 'text') {
-    // If buttons are present, send a single message with InlineKeyboard.
-    // baseOptions includes chatType for button scope filtering.
     if (content.buttons?.length) {
-      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, baseOptions);
+      // Pass chatType only for button scope filtering inside sendInlineButtons
+      const buttonOptions = { ...(baseOptions ?? {}), ...(chatType ? { chatType } : {}) };
+      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, buttonOptions);
     }
     return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, baseOptions);
   }
@@ -221,6 +221,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
   /** Active bot instances mapped by instanceId */
   private configs = new Map<string, TelegramConfig>();
+  /** Cleanup functions for active message handler closures (timers, buffers) */
+  private cleanups = new Map<string, () => void>();
 
   // ────────────────────────────────────────────────────────────
   // Lifecycle
@@ -231,6 +233,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
   }
 
   protected override async onDestroy(): Promise<void> {
+    for (const cleanup of this.cleanups.values()) cleanup();
+    this.cleanups.clear();
     this.configs.clear();
     this.logger.info('Telegram plugin destroyed');
   }
@@ -275,7 +279,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
     });
 
     // Set up handlers before starting
-    setupMessageHandlers(bot, this, instanceId);
+    const cleanupMessages = setupMessageHandlers(bot, this, instanceId);
+    this.cleanups.set(instanceId, cleanupMessages);
     setupChannelPostHandlers(bot, this, instanceId);
     setupReactionHandlers(bot, this, instanceId);
     setupInteractiveHandlers(bot, this, instanceId);
@@ -333,6 +338,10 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
   async disconnect(instanceId: string): Promise<void> {
     this.logger.info('Disconnecting Telegram instance', { instanceId });
+
+    // Cancel pending album buffers and deferred flushes before teardown
+    this.cleanups.get(instanceId)?.();
+    this.cleanups.delete(instanceId);
 
     destroyBot(instanceId);
     this.configs.delete(instanceId);

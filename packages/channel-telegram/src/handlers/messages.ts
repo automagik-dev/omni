@@ -175,7 +175,7 @@ async function processInboundMessage(
  * - Media group buffer: album messages batched into single agent call
  * - Reaction levels: ack/minimal/extensive reactions on inbound messages
  */
-export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): void {
+export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): () => void {
   const chatQueue = getChatQueue(instanceId);
 
   // Deferred flush signals: mediaGroupId → resolver.
@@ -418,4 +418,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
   });
 
   log.info('Message handlers set up', { instanceId, integrations: ['reactions', 'media-group', 'sequential-queue'] });
+
+  return () => {
+    mediaGroupBuffer.destroy();
+    pendingFlushes.clear();
+  };
 }
