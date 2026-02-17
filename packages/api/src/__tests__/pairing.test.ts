@@ -179,7 +179,7 @@ describeWithDb('Pairing Flow', () => {
       expect(request).not.toBeNull();
       const requestId = request?.id as string;
 
-      const allowRule = await accessService.approvePairingRequest(requestId);
+      const allowRule = await accessService.approvePairingRequest(requestId, testInstanceId);
       expect(allowRule.ruleType).toBe('allow');
       expect(allowRule.platformUserId).toBe('approve-user-1');
       expect(allowRule.instanceId).toBe(testInstanceId);
@@ -191,7 +191,7 @@ describeWithDb('Pairing Flow', () => {
       expect(request).not.toBeNull();
       const requestId = request?.id as string;
 
-      await accessService.denyPairingRequest(requestId, 'Suspicious activity');
+      await accessService.denyPairingRequest(requestId, testInstanceId, 'Suspicious activity');
 
       // Request should be deleted
       try {
@@ -207,12 +207,12 @@ describeWithDb('Pairing Flow', () => {
       expect(request).not.toBeNull();
       const requestId = request?.id as string;
 
-      const allowRule = await accessService.approvePairingRequest(requestId);
+      const allowRule = await accessService.approvePairingRequest(requestId, testInstanceId);
       cleanupRuleIds.push(allowRule.id);
 
       // Second approval should fail (request deleted)
       try {
-        await accessService.approvePairingRequest(requestId);
+        await accessService.approvePairingRequest(requestId, testInstanceId);
         expect(true).toBe(false); // Should not reach here
       } catch (err) {
         expect(err).toBeDefined();
@@ -224,11 +224,11 @@ describeWithDb('Pairing Flow', () => {
       expect(request).not.toBeNull();
       const requestId = request?.id as string;
 
-      await accessService.denyPairingRequest(requestId);
+      await accessService.denyPairingRequest(requestId, testInstanceId);
 
       // Second denial should fail (request deleted)
       try {
-        await accessService.denyPairingRequest(requestId);
+        await accessService.denyPairingRequest(requestId, testInstanceId);
         expect(true).toBe(false); // Should not reach here
       } catch (err) {
         expect(err).toBeDefined();

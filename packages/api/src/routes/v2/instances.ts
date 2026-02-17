@@ -2125,13 +2125,14 @@ instancesRoutes.post(
   instanceAccess,
   zValidator('json', pairingActionSchema),
   async (c) => {
+    const id = c.req.param('id');
     const requestId = c.req.param('requestId');
     const { action, reason } = c.req.valid('json');
     const services = c.get('services');
 
     try {
       if (action === 'approve') {
-        const rule = await services.access.approvePairingRequest(requestId);
+        const rule = await services.access.approvePairingRequest(requestId, id);
         return c.json({
           data: {
             action: 'approve',
@@ -2141,7 +2142,7 @@ instancesRoutes.post(
         });
       }
 
-      await services.access.denyPairingRequest(requestId, reason);
+      await services.access.denyPairingRequest(requestId, id, reason);
       return c.json({
         data: {
           action: 'deny',

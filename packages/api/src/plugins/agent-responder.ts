@@ -551,6 +551,19 @@ async function processIncomingMessage(
       reason: accessResult.reason,
       action: accessResult.rule?.action,
     });
+
+    // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
+    // Fire-and-forget: pairing request creation must not block message processing.
+    if (accessResult.mode === 'allowlist' && !accessResult.rule) {
+      accessService.requestPairing(instance.id, payload.from ?? '').catch((err) => {
+        log.warn('Failed to create pairing request', {
+          instanceId: instance.id,
+          from: payload.from,
+          error: String(err),
+        });
+      });
+    }
+
     await handleAccessDenied(channel, instance.id, payload.chatId, accessResult);
     return;
   }

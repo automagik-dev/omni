@@ -312,50 +312,83 @@ export class AccessService {
   /**
    * Approve a pairing request.
    * Creates an 'allow' rule for the user and deletes the pairing request.
-   * One-time-use: replaying after approval throws.
+   * One-time-use and instance-scoped: concurrent approvals and cross-instance
+   * access are both rejected atomically inside a transaction.
    */
-  async approvePairingRequest(requestId: string): Promise<AccessRule> {
-    const request = await this.getById(requestId);
+  async approvePairingRequest(requestId: string, instanceId: string): Promise<AccessRule> {
+    const allowRule = await this.db.transaction(async (tx) => {
+      // Fetch the request with instance scoping to prevent cross-tenant access
+      const [request] = await tx
+        .select()
+        .from(accessRules)
+        .where(
+          and(
+            eq(accessRules.id, requestId),
+            eq(accessRules.instanceId, instanceId),
+            eq(accessRules.ruleType, 'pending_pairing'),
+          ),
+        )
+        .limit(1);
 
-    if (request.ruleType !== 'pending_pairing') {
-      throw new Error('Rule is not a pending pairing request');
-    }
+      if (!request) {
+        throw new NotFoundError('AccessRule', requestId);
+      }
 
-    // Check if expired
-    if (request.expiresAt && request.expiresAt < new Date()) {
-      throw new Error('Pairing request has expired');
-    }
+      // Check if expired
+      if (request.expiresAt && request.expiresAt < new Date()) {
+        throw new Error('Pairing request has expired');
+      }
 
-    // Check one-time-use: metadata should not have 'consumed' flag
-    const metadata = request.metadata as Record<string, unknown> | null;
-    if (metadata?.consumed) {
-      throw new Error('Pairing code has already been used');
-    }
+      // Atomically mark as consumed — only succeeds if not already consumed.
+      // This prevents duplicate allow-rule creation under concurrent approve calls.
+      const [consumed] = await tx
+        .update(accessRules)
+        .set({
+          metadata: {
+            ...(request.metadata as Record<string, unknown> | null),
+            consumed: true,
+            consumedAt: Date.now(),
+            consumedAction: 'approve',
+          },
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(accessRules.id, requestId),
+            sql`(${accessRules.metadata}->>'consumed' IS NULL OR ${accessRules.metadata}->>'consumed' != 'true')`,
+          ),
+        )
+        .returning();
 
-    // Mark as consumed to prevent replay
-    await this.db
-      .update(accessRules)
-      .set({
-        metadata: { ...metadata, consumed: true, consumedAt: Date.now(), consumedAction: 'approve' },
-        updatedAt: new Date(),
-      })
-      .where(eq(accessRules.id, requestId));
+      if (!consumed) {
+        throw new Error('Pairing code has already been used');
+      }
 
-    // Create allow rule for the user
-    const allowRule = await this.create({
-      instanceId: request.instanceId,
-      ruleType: 'allow',
-      platformUserId: request.platformUserId,
-      priority: 0,
-      enabled: true,
-      action: 'allow',
-      reason: 'Approved via pairing request',
+      // Create allow rule for the user (within the same transaction)
+      const [created] = await tx
+        .insert(accessRules)
+        .values({
+          instanceId: request.instanceId,
+          ruleType: 'allow',
+          platformUserId: request.platformUserId,
+          priority: 0,
+          enabled: true,
+          action: 'allow',
+          reason: 'Approved via pairing request',
+        })
+        .returning();
+
+      if (!created) {
+        throw new Error('Failed to create allow rule');
+      }
+
+      // Delete the consumed pairing request
+      await tx.delete(accessRules).where(eq(accessRules.id, requestId));
+
+      return created;
     });
 
-    // Delete the pairing request
-    await this.db.delete(accessRules).where(eq(accessRules.id, requestId));
-
-    // Invalidate cache
+    // Invalidate cache outside the transaction
     await this.cache?.clear();
 
     return allowRule;
@@ -364,45 +397,64 @@ export class AccessService {
   /**
    * Deny a pairing request.
    * Stores deny reason in metadata audit log and deletes the request.
-   * One-time-use: replaying after denial throws.
+   * One-time-use and instance-scoped: concurrent denials and cross-instance
+   * access are both rejected atomically inside a transaction.
    */
-  async denyPairingRequest(requestId: string, reason?: string): Promise<void> {
-    const request = await this.getById(requestId);
+  async denyPairingRequest(requestId: string, instanceId: string, reason?: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      // Fetch the request with instance scoping to prevent cross-tenant access
+      const [request] = await tx
+        .select()
+        .from(accessRules)
+        .where(
+          and(
+            eq(accessRules.id, requestId),
+            eq(accessRules.instanceId, instanceId),
+            eq(accessRules.ruleType, 'pending_pairing'),
+          ),
+        )
+        .limit(1);
 
-    if (request.ruleType !== 'pending_pairing') {
-      throw new Error('Rule is not a pending pairing request');
-    }
+      if (!request) {
+        throw new NotFoundError('AccessRule', requestId);
+      }
 
-    // Check if expired
-    if (request.expiresAt && request.expiresAt < new Date()) {
-      throw new Error('Pairing request has expired');
-    }
+      // Check if expired
+      if (request.expiresAt && request.expiresAt < new Date()) {
+        throw new Error('Pairing request has expired');
+      }
 
-    // Check one-time-use
-    const metadata = request.metadata as Record<string, unknown> | null;
-    if (metadata?.consumed) {
-      throw new Error('Pairing code has already been used');
-    }
+      // Atomically mark as consumed — only succeeds if not already consumed.
+      // This prevents double-deny or approve-after-deny races.
+      const [consumed] = await tx
+        .update(accessRules)
+        .set({
+          metadata: {
+            ...(request.metadata as Record<string, unknown> | null),
+            consumed: true,
+            consumedAt: Date.now(),
+            consumedAction: 'deny',
+            denyReason: reason,
+          },
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(accessRules.id, requestId),
+            sql`(${accessRules.metadata}->>'consumed' IS NULL OR ${accessRules.metadata}->>'consumed' != 'true')`,
+          ),
+        )
+        .returning();
 
-    // Mark as consumed to prevent replay, then delete
-    await this.db
-      .update(accessRules)
-      .set({
-        metadata: {
-          ...metadata,
-          consumed: true,
-          consumedAt: Date.now(),
-          consumedAction: 'deny',
-          denyReason: reason,
-        },
-        updatedAt: new Date(),
-      })
-      .where(eq(accessRules.id, requestId));
+      if (!consumed) {
+        throw new Error('Pairing code has already been used');
+      }
 
-    // Delete the pairing request
-    await this.db.delete(accessRules).where(eq(accessRules.id, requestId));
+      // Delete the consumed pairing request
+      await tx.delete(accessRules).where(eq(accessRules.id, requestId));
+    });
 
-    // Invalidate cache
+    // Invalidate cache outside the transaction
     await this.cache?.clear();
   }
 
