@@ -5,7 +5,7 @@
  * Uses the pluggable TranscriptionProvider from @omni/core.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { TranscriptionError, WhisperProvider, createLogger } from '@omni/core';
 import type { TranscriptionProvider } from '@omni/core';
 
@@ -84,7 +84,7 @@ export async function transcribeVoiceNote(
   const format = mimeTypeToFormat(mimeType);
 
   try {
-    const audioBuffer = readFileSync(localPath);
+    const audioBuffer = await readFile(localPath);
 
     const startTime = performance.now();
     const result = await provider.transcribe(audioBuffer, format);

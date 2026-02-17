@@ -5,8 +5,15 @@
  * Uses plain fetch (no SDK dependency) to keep @omni/core lean.
  */
 
+import { z } from 'zod';
+
 import { TranscriptionError } from './transcription';
 import type { TranscriptionProvider, TranscriptionResult } from './transcription';
+
+const WhisperApiResponseSchema = z.object({
+  text: z.string().optional(),
+  duration: z.number().optional(),
+});
 
 /**
  * Configuration for the Whisper provider
@@ -93,11 +100,14 @@ export class WhisperProvider implements TranscriptionProvider {
       });
 
       if (!response.ok) {
-        const errorBody = await response.text().catch(() => 'Unknown error');
+        const errorBody = await response
+          .text()
+          .then((t) => t.slice(0, 1024))
+          .catch(() => 'Unknown error');
         throw new TranscriptionError(`Whisper API error (${response.status}): ${errorBody}`, 'API_ERROR');
       }
 
-      const data = (await response.json()) as { text?: string; duration?: number };
+      const data = WhisperApiResponseSchema.parse(await response.json());
       return { text: data.text ?? '', duration: data.duration ?? 0 };
     } catch (error) {
       throw wrapError(error, this.timeoutMs);
