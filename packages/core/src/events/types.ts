@@ -39,6 +39,7 @@ export const CORE_EVENT_TYPES = [
   // Access control
   'access.allowed',
   'access.denied',
+  'access.pairing_requested',
   // Presence
   'presence.typing',
   'presence.online',
@@ -346,6 +347,14 @@ export interface AccessDeniedPayload {
   action: 'block' | 'silent_block';
 }
 
+export interface AccessPairingRequestedPayload {
+  instanceId: string;
+  platformUserId: string;
+  pairingCode: string;
+  requestId: string;
+  expiresAt: number;
+}
+
 /**
  * Sync event payloads
  */
@@ -542,6 +551,7 @@ export interface EventPayloadMap {
   'instance.qr_code': InstanceQrCodePayload;
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
+  'access.pairing_requested': AccessPairingRequestedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

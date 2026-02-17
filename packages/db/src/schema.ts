@@ -70,7 +70,7 @@ export interface AgentReplyFilter {
 export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
-export const ruleTypes = ['allow', 'deny'] as const;
+export const ruleTypes = ['allow', 'deny', 'pending_pairing'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
 export const accessModes = ['disabled', 'blocklist', 'allowlist'] as const;
@@ -1126,7 +1126,7 @@ export const accessRules = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
-    ruleType: varchar('rule_type', { length: 10 }).notNull().$type<RuleType>(),
+    ruleType: varchar('rule_type', { length: 20 }).notNull().$type<RuleType>(),
 
     // ---- Matching Criteria ----
     phonePattern: varchar('phone_pattern', { length: 50 }), // E.164 with optional wildcard
@@ -1143,6 +1143,9 @@ export const accessRules = pgTable(
     action: varchar('action', { length: 20 }).notNull().default('block'), // 'block' | 'allow' | 'silent_block'
     blockMessage: text('block_message'),
 
+    // ---- Pairing metadata (for pending_pairing rules) ----
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -1152,6 +1155,7 @@ export const accessRules = pgTable(
     phoneIdx: index('access_rules_phone_idx').on(table.phonePattern),
     ruleTypeIdx: index('access_rules_type_idx').on(table.ruleType),
     uniqueRule: uniqueIndex('access_rules_unique_idx').on(table.instanceId, table.phonePattern, table.ruleType),
+    pairingIdx: index('idx_access_rules_pairing').on(table.instanceId, table.ruleType, table.expiresAt),
   }),
 );
 

@@ -5,20 +5,52 @@
  * - disabled: No access control, all users allowed
  * - blocklist: Default allow, deny matching rules (default)
  * - allowlist: Default deny, allow matching rules
+ *
+ * Pairing flow (for allowlist mode):
+ * - Unknown sender triggers pairing request with 6-char code (A-Z, 0-9)
+ * - Owner approves/denies via API or CLI
+ * - Max 3 pending requests per instance, 1 hour expiry
  */
 
 import type { CacheProvider, EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules } from '@omni/db';
-import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { CacheKeys } from '../cache/cache-keys';
+
+/** Default pairing request expiry: 1 hour */
+const DEFAULT_PAIRING_EXPIRY_MS = 60 * 60 * 1000;
+
+/** Max pending pairing requests per instance */
+const MAX_PENDING_PER_INSTANCE = 3;
+
+/** Pairing code character set: A-Z, 0-9 (36 chars, no lowercase) */
+const PAIRING_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+/** Pairing code length: 6 chars = 2.1B combinations */
+const PAIRING_CODE_LENGTH = 6;
 
 export interface CheckAccessResult {
   allowed: boolean;
   rule?: AccessRule;
   reason: string;
   mode: AccessMode;
+}
+
+export interface PairingRequest {
+  id: string;
+  instanceId: string;
+  platformUserId: string;
+  pairingCode: string;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+export interface PairingActionResult {
+  action: 'approve' | 'deny';
+  ruleId?: string;
+  reason?: string;
 }
 
 export class AccessService {
@@ -150,10 +182,302 @@ export class AccessService {
     return result;
   }
 
+  // ==========================================================================
+  // PAIRING FLOW
+  // ==========================================================================
+
+  /**
+   * Generate a 6-character uppercase alphanumeric pairing code.
+   * Character set: A-Z, 0-9 (36 chars, 2.1B combinations).
+   */
+  static generatePairingCode(): string {
+    let code = '';
+    for (let i = 0; i < PAIRING_CODE_LENGTH; i++) {
+      const randomIndex = Math.floor(Math.random() * PAIRING_CODE_CHARS.length);
+      code += PAIRING_CODE_CHARS[randomIndex];
+    }
+    return code;
+  }
+
+  /**
+   * Request a pairing code for an unknown sender in allowlist mode.
+   *
+   * - If sender already has a pending request, reuse existing code
+   * - Max 3 pending requests per instance enforced
+   * - Expired requests are auto-cleaned
+   * - Returns the pairing request or null if rate-limited
+   */
+  async requestPairing(
+    instanceId: string,
+    platformUserId: string,
+    options: { expiryMs?: number } = {},
+  ): Promise<PairingRequest | null> {
+    const expiryMs = options.expiryMs ?? DEFAULT_PAIRING_EXPIRY_MS;
+
+    // Clean expired requests first
+    await this.cleanExpiredPairingRequests(instanceId);
+
+    // Check if sender already has a pending request — reuse existing code
+    const existing = await this.findPendingPairingForUser(instanceId, platformUserId);
+    if (existing) {
+      const metadata = existing.metadata as Record<string, unknown> | null;
+      return {
+        id: existing.id,
+        instanceId: existing.instanceId!,
+        platformUserId: existing.platformUserId!,
+        pairingCode: (metadata?.pairingCode as string) ?? '',
+        expiresAt: existing.expiresAt!,
+        createdAt: existing.createdAt,
+      };
+    }
+
+    // Rate limit: max pending per instance
+    const pendingCount = await this.countPendingPairingRequests(instanceId);
+    if (pendingCount >= MAX_PENDING_PER_INSTANCE) {
+      return null; // Rate-limited
+    }
+
+    // Generate code and create pairing request
+    const pairingCode = AccessService.generatePairingCode();
+    const expiresAt = new Date(Date.now() + expiryMs);
+
+    const rule = await this.create({
+      instanceId,
+      ruleType: 'pending_pairing',
+      platformUserId,
+      priority: 0,
+      enabled: true,
+      action: 'block',
+      expiresAt,
+      metadata: {
+        pairingCode,
+        requestedAt: Date.now(),
+      },
+    });
+
+    // Publish pairing requested event
+    if (this.eventBus) {
+      await this.eventBus.publish('access.pairing_requested', {
+        instanceId,
+        platformUserId,
+        pairingCode,
+        requestId: rule.id,
+        expiresAt: expiresAt.getTime(),
+      });
+    }
+
+    return {
+      id: rule.id,
+      instanceId,
+      platformUserId,
+      pairingCode,
+      expiresAt,
+      createdAt: rule.createdAt,
+    };
+  }
+
+  /**
+   * List pending pairing requests for an instance.
+   * Only returns non-expired pending_pairing rules.
+   */
+  async listPendingPairingRequests(instanceId: string): Promise<PairingRequest[]> {
+    // Clean expired first
+    await this.cleanExpiredPairingRequests(instanceId);
+
+    const rules = await this.db
+      .select()
+      .from(accessRules)
+      .where(
+        and(
+          eq(accessRules.instanceId, instanceId),
+          eq(accessRules.ruleType, 'pending_pairing'),
+          gt(accessRules.expiresAt, new Date()),
+        ),
+      )
+      .orderBy(desc(accessRules.createdAt));
+
+    return rules.map((rule) => {
+      const metadata = rule.metadata as Record<string, unknown> | null;
+      return {
+        id: rule.id,
+        instanceId: rule.instanceId!,
+        platformUserId: rule.platformUserId!,
+        pairingCode: (metadata?.pairingCode as string) ?? '',
+        expiresAt: rule.expiresAt!,
+        createdAt: rule.createdAt,
+      };
+    });
+  }
+
+  /**
+   * Approve a pairing request.
+   * Creates an 'allow' rule for the user and deletes the pairing request.
+   * One-time-use: replaying after approval throws.
+   */
+  async approvePairingRequest(requestId: string): Promise<AccessRule> {
+    const request = await this.getById(requestId);
+
+    if (request.ruleType !== 'pending_pairing') {
+      throw new Error('Rule is not a pending pairing request');
+    }
+
+    // Check if expired
+    if (request.expiresAt && request.expiresAt < new Date()) {
+      throw new Error('Pairing request has expired');
+    }
+
+    // Check one-time-use: metadata should not have 'consumed' flag
+    const metadata = request.metadata as Record<string, unknown> | null;
+    if (metadata?.consumed) {
+      throw new Error('Pairing code has already been used');
+    }
+
+    // Mark as consumed to prevent replay
+    await this.db
+      .update(accessRules)
+      .set({
+        metadata: { ...metadata, consumed: true, consumedAt: Date.now(), consumedAction: 'approve' },
+        updatedAt: new Date(),
+      })
+      .where(eq(accessRules.id, requestId));
+
+    // Create allow rule for the user
+    const allowRule = await this.create({
+      instanceId: request.instanceId,
+      ruleType: 'allow',
+      platformUserId: request.platformUserId,
+      priority: 0,
+      enabled: true,
+      action: 'allow',
+      reason: 'Approved via pairing request',
+    });
+
+    // Delete the pairing request
+    await this.db.delete(accessRules).where(eq(accessRules.id, requestId));
+
+    // Invalidate cache
+    await this.cache?.clear();
+
+    return allowRule;
+  }
+
+  /**
+   * Deny a pairing request.
+   * Stores deny reason in metadata audit log and deletes the request.
+   * One-time-use: replaying after denial throws.
+   */
+  async denyPairingRequest(requestId: string, reason?: string): Promise<void> {
+    const request = await this.getById(requestId);
+
+    if (request.ruleType !== 'pending_pairing') {
+      throw new Error('Rule is not a pending pairing request');
+    }
+
+    // Check if expired
+    if (request.expiresAt && request.expiresAt < new Date()) {
+      throw new Error('Pairing request has expired');
+    }
+
+    // Check one-time-use
+    const metadata = request.metadata as Record<string, unknown> | null;
+    if (metadata?.consumed) {
+      throw new Error('Pairing code has already been used');
+    }
+
+    // Mark as consumed to prevent replay, then delete
+    await this.db
+      .update(accessRules)
+      .set({
+        metadata: {
+          ...metadata,
+          consumed: true,
+          consumedAt: Date.now(),
+          consumedAction: 'deny',
+          denyReason: reason,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(accessRules.id, requestId));
+
+    // Delete the pairing request
+    await this.db.delete(accessRules).where(eq(accessRules.id, requestId));
+
+    // Invalidate cache
+    await this.cache?.clear();
+  }
+
+  // ==========================================================================
+  // PAIRING HELPERS
+  // ==========================================================================
+
+  /**
+   * Find existing pending pairing request for a specific user on an instance.
+   */
+  private async findPendingPairingForUser(instanceId: string, platformUserId: string): Promise<AccessRule | null> {
+    const [result] = await this.db
+      .select()
+      .from(accessRules)
+      .where(
+        and(
+          eq(accessRules.instanceId, instanceId),
+          eq(accessRules.ruleType, 'pending_pairing'),
+          eq(accessRules.platformUserId, platformUserId),
+          gt(accessRules.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+
+    return result ?? null;
+  }
+
+  /**
+   * Count pending (non-expired) pairing requests for an instance.
+   */
+  private async countPendingPairingRequests(instanceId: string): Promise<number> {
+    const [result] = await this.db
+      .select({ count: count() })
+      .from(accessRules)
+      .where(
+        and(
+          eq(accessRules.instanceId, instanceId),
+          eq(accessRules.ruleType, 'pending_pairing'),
+          gt(accessRules.expiresAt, new Date()),
+        ),
+      );
+
+    return result?.count ?? 0;
+  }
+
+  /**
+   * Clean expired pairing requests for an instance.
+   */
+  private async cleanExpiredPairingRequests(instanceId: string): Promise<void> {
+    await this.db
+      .delete(accessRules)
+      .where(
+        and(
+          eq(accessRules.instanceId, instanceId),
+          eq(accessRules.ruleType, 'pending_pairing'),
+          sql`${accessRules.expiresAt} <= now()`,
+        ),
+      );
+  }
+
+  // ==========================================================================
+  // ACCESS EVALUATION
+  // ==========================================================================
+
   /**
    * Evaluate access mode against a matching rule (or lack thereof).
+   *
+   * GUARD: pending_pairing rules MUST NOT be evaluated as access decisions.
+   * If a matching rule has ruleType 'pending_pairing', it throws an error.
    */
   private evaluateMode(mode: AccessMode, matchingRule: AccessRule | undefined): CheckAccessResult {
+    if (matchingRule?.ruleType === 'pending_pairing') {
+      throw new Error('pending_pairing rules cannot be used as access decisions');
+    }
+
     if (!matchingRule) {
       const defaultAllowed = mode === 'blocklist';
       return {
@@ -185,6 +509,7 @@ export class AccessService {
 
   /**
    * Get all applicable rules for an instance, ordered by priority desc then newest first.
+   * Excludes pending_pairing rules from access evaluation.
    */
   private async getApplicableRules(instanceId: string): Promise<AccessRule[]> {
     return this.db
@@ -194,6 +519,7 @@ export class AccessService {
         and(
           or(eq(accessRules.instanceId, instanceId), isNull(accessRules.instanceId)),
           eq(accessRules.enabled, true),
+          ne(accessRules.ruleType, 'pending_pairing'),
           or(isNull(accessRules.expiresAt), sql`${accessRules.expiresAt} > now()`),
         ),
       )

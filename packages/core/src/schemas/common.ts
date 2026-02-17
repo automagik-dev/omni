@@ -107,7 +107,7 @@ export const ProviderSchemaEnum = z.enum(PROVIDER_SCHEMAS);
 /**
  * Rule type enum
  */
-export const RuleTypeSchema = z.enum(['allow', 'deny']);
+export const RuleTypeSchema = z.enum(['allow', 'deny', 'pending_pairing']);
 
 /**
  * Access mode enum - controls how access rules are evaluated
