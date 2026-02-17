@@ -14,7 +14,8 @@ import { join } from 'node:path';
 import { spawn } from 'bun';
 import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
 
-const CLI_PATH = join(import.meta.dir, '../../bin/omni');
+// Use source entry point directly — avoids stale dist/index.js issues
+const CLI_PATH = join(import.meta.dir, '../index.ts');
 
 // Temp config dir for tests
 const TEST_CONFIG_DIR = join(tmpdir(), `.omni-test-${Date.now()}`);
