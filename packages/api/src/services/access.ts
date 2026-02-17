@@ -206,6 +206,10 @@ export class AccessService {
    * - Max 3 pending requests per instance enforced
    * - Expired requests are auto-cleaned
    * - Returns the pairing request or null if rate-limited
+   *
+   * The read-count-insert sequence is wrapped in a transaction with a
+   * per-instance advisory lock so concurrent denied messages cannot both
+   * race past the `pendingCount < MAX` check and create duplicates.
    */
   async requestPairing(
     instanceId: string,
@@ -214,66 +218,115 @@ export class AccessService {
   ): Promise<PairingRequest | null> {
     const expiryMs = options.expiryMs ?? DEFAULT_PAIRING_EXPIRY_MS;
 
-    // Clean expired requests first
-    await this.cleanExpiredPairingRequests(instanceId);
+    // Run the check + insert atomically under a per-instance advisory lock.
+    // pg_advisory_xact_lock serializes concurrent calls for the same instance
+    // and is released automatically when the transaction ends.
+    const txResult = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${instanceId}))`);
 
-    // Check if sender already has a pending request — reuse existing code
-    const existing = await this.findPendingPairingForUser(instanceId, platformUserId);
-    if (existing) {
-      const metadata = existing.metadata as Record<string, unknown> | null;
+      // Clean expired requests
+      await tx.delete(accessRules).where(
+        and(
+          eq(accessRules.instanceId, instanceId),
+          eq(accessRules.ruleType, 'pending_pairing'),
+          sql`${accessRules.expiresAt} <= now()`,
+        ),
+      );
+
+      // Reuse existing code if sender already has a pending request
+      const [existing] = await tx
+        .select()
+        .from(accessRules)
+        .where(
+          and(
+            eq(accessRules.instanceId, instanceId),
+            eq(accessRules.ruleType, 'pending_pairing'),
+            eq(accessRules.platformUserId, platformUserId),
+            gt(accessRules.expiresAt, new Date()),
+          ),
+        )
+        .limit(1);
+
+      if (existing) {
+        const metadata = existing.metadata as Record<string, unknown> | null;
+        return {
+          request: {
+            id: existing.id,
+            instanceId: existing.instanceId ?? instanceId,
+            platformUserId: existing.platformUserId ?? platformUserId,
+            pairingCode: (metadata?.pairingCode as string) ?? '',
+            expiresAt: existing.expiresAt ?? new Date(Date.now() + expiryMs),
+            createdAt: existing.createdAt,
+          } satisfies PairingRequest,
+          isNew: false,
+        };
+      }
+
+      // Rate limit: max pending per instance
+      const [countResult] = await tx
+        .select({ count: count() })
+        .from(accessRules)
+        .where(
+          and(
+            eq(accessRules.instanceId, instanceId),
+            eq(accessRules.ruleType, 'pending_pairing'),
+            gt(accessRules.expiresAt, new Date()),
+          ),
+        );
+
+      if ((countResult?.count ?? 0) >= MAX_PENDING_PER_INSTANCE) {
+        return null; // Rate-limited
+      }
+
+      // Generate code and insert new pairing request
+      const pairingCode = AccessService.generatePairingCode();
+      const expiresAt = new Date(Date.now() + expiryMs);
+
+      const [rule] = await tx
+        .insert(accessRules)
+        .values({
+          instanceId,
+          ruleType: 'pending_pairing',
+          platformUserId,
+          priority: 0,
+          enabled: true,
+          action: 'block',
+          expiresAt,
+          metadata: { pairingCode, requestedAt: Date.now() },
+        })
+        .returning();
+
+      if (!rule) {
+        throw new Error('Failed to create pairing request');
+      }
+
       return {
-        id: existing.id,
-        instanceId: existing.instanceId ?? instanceId,
-        platformUserId: existing.platformUserId ?? platformUserId,
-        pairingCode: (metadata?.pairingCode as string) ?? '',
-        expiresAt: existing.expiresAt ?? new Date(Date.now() + expiryMs),
-        createdAt: existing.createdAt,
+        request: {
+          id: rule.id,
+          instanceId,
+          platformUserId,
+          pairingCode,
+          expiresAt,
+          createdAt: rule.createdAt,
+        } satisfies PairingRequest,
+        isNew: true,
       };
-    }
-
-    // Rate limit: max pending per instance
-    const pendingCount = await this.countPendingPairingRequests(instanceId);
-    if (pendingCount >= MAX_PENDING_PER_INSTANCE) {
-      return null; // Rate-limited
-    }
-
-    // Generate code and create pairing request
-    const pairingCode = AccessService.generatePairingCode();
-    const expiresAt = new Date(Date.now() + expiryMs);
-
-    const rule = await this.create({
-      instanceId,
-      ruleType: 'pending_pairing',
-      platformUserId,
-      priority: 0,
-      enabled: true,
-      action: 'block',
-      expiresAt,
-      metadata: {
-        pairingCode,
-        requestedAt: Date.now(),
-      },
     });
 
-    // Publish pairing requested event
-    if (this.eventBus) {
+    if (!txResult) return null;
+
+    // Publish event outside the transaction so it only fires on commit
+    if (txResult.isNew && this.eventBus) {
       await this.eventBus.publish('access.pairing_requested', {
         instanceId,
         platformUserId,
-        pairingCode,
-        requestId: rule.id,
-        expiresAt: expiresAt.getTime(),
+        pairingCode: txResult.request.pairingCode,
+        requestId: txResult.request.id,
+        expiresAt: txResult.request.expiresAt.getTime(),
       });
     }
 
-    return {
-      id: rule.id,
-      instanceId,
-      platformUserId,
-      pairingCode,
-      expiresAt,
-      createdAt: rule.createdAt,
-    };
+    return txResult.request;
   }
 
   /**

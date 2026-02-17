@@ -105,9 +105,12 @@ export const JobStatusSchema = z.enum(['pending', 'running', 'completed', 'faile
 export const ProviderSchemaEnum = z.enum(PROVIDER_SCHEMAS);
 
 /**
- * Rule type enum
+ * Rule type enum — public API values only.
+ * `pending_pairing` is an internal state managed exclusively by the pairing
+ * flow and is intentionally excluded to prevent clients from creating or
+ * filtering pairing-state rows via the public access-rules API.
  */
-export const RuleTypeSchema = z.enum(['allow', 'deny', 'pending_pairing']);
+export const RuleTypeSchema = z.enum(['allow', 'deny']);
 
 /**
  * Access mode enum - controls how access rules are evaluated
