@@ -532,6 +532,8 @@ export const instances = pgTable(
     discordSlashCommandsEnabled: boolean('discord_slash_commands_enabled').default(true),
     discordWebhookUrl: text('discord_webhook_url'),
     discordPermissions: integer('discord_permissions'),
+    /** Per-guild configuration overrides: Record<guildId, GuildConfigOverride> */
+    guildConfigOverrides: jsonb('guild_config_overrides').$type<Record<string, unknown>>(),
 
     // ---- Slack Configuration ----
     slackBotToken: text('slack_bot_token'),

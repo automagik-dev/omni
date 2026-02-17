@@ -2237,6 +2237,243 @@ instancesRoutes.post(
 );
 
 // ============================================================================
+// GUILD CONFIG ENDPOINTS (Discord per-server overrides)
+// ============================================================================
+
+const guildConfigOverrideSchema = z.object({
+  agentReplyFilter: z
+    .object({
+      mode: z.enum(['all', 'filtered']).optional(),
+      conditions: z
+        .object({
+          onDm: z.boolean().optional(),
+          onMention: z.boolean().optional(),
+          onReply: z.boolean().optional(),
+          onNameMatch: z.boolean().optional(),
+          namePatterns: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  toolPolicies: z.record(z.string(), z.enum(['allow', 'deny'])).optional(),
+  reactions: z
+    .object({
+      enabled: z.boolean().optional(),
+      allowedEmojis: z.array(z.string()).optional(),
+    })
+    .optional(),
+  maxLines: z.number().int().min(0).optional(),
+  presence: z
+    .object({
+      status: z.enum(['online', 'dnd', 'idle', 'invisible']).optional(),
+      activityText: z.string().max(128).optional(),
+      activityType: z.enum(['Playing', 'Streaming', 'Listening', 'Watching', 'Custom', 'Competing']).optional(),
+    })
+    .optional(),
+});
+
+/** In-memory guild config cache with write-through invalidation */
+const guildConfigCache = new Map<string, { data: Record<string, unknown>; expiresAt: number }>();
+const GUILD_CONFIG_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(instanceId: string, guildId: string): string {
+  return `${instanceId}:${guildId}`;
+}
+
+function invalidateGuildCache(instanceId: string, guildId: string): void {
+  guildConfigCache.delete(getCacheKey(instanceId, guildId));
+}
+
+/**
+ * GET /instances/:id/guilds - List all guilds with their config overrides
+ */
+instancesRoutes.get('/:id/guilds', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const instance = await services.instances.getById(id);
+  const overrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+
+  const guilds = Object.entries(overrides).map(([guildId, config]) => ({
+    guildId,
+    config,
+  }));
+
+  return c.json({ items: guilds });
+});
+
+/**
+ * GET /instances/:id/guilds/:guildId/config - Get resolved config for guild
+ */
+instancesRoutes.get('/:id/guilds/:guildId/config', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const guildId = c.req.param('guildId');
+  const services = c.get('services');
+
+  // Check cache
+  const cacheKey = getCacheKey(id, guildId);
+  const cached = guildConfigCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return c.json({ data: { guildId, config: cached.data, cached: true } });
+  }
+
+  const instance = await services.instances.getById(id);
+  const overrides = (instance.guildConfigOverrides as Record<string, Record<string, unknown>>) ?? {};
+  const guildConfig = overrides[guildId] ?? {};
+
+  // Cache the result
+  guildConfigCache.set(cacheKey, { data: guildConfig, expiresAt: Date.now() + GUILD_CONFIG_TTL });
+
+  return c.json({ data: { guildId, config: guildConfig, cached: false } });
+});
+
+/**
+ * PUT /instances/:id/guilds/:guildId/config - Set guild config overrides
+ */
+instancesRoutes.put(
+  '/:id/guilds/:guildId/config',
+  instanceAccess,
+  zValidator('json', guildConfigOverrideSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const guildId = c.req.param('guildId');
+    const newConfig = c.req.valid('json');
+    const services = c.get('services');
+    const apiKey = c.get('apiKey');
+
+    const instance = await services.instances.getById(id);
+    const overrides = { ...((instance.guildConfigOverrides as Record<string, unknown>) ?? {}) };
+    const oldConfig = overrides[guildId] ?? {};
+    const action = overrides[guildId] ? 'update' : 'create';
+
+    overrides[guildId] = newConfig;
+
+    await services.instances.update(id, { guildConfigOverrides: overrides });
+
+    // Write-through cache invalidation
+    invalidateGuildCache(id, guildId);
+
+    // Audit log
+    log.info('Guild config updated', {
+      instanceId: id,
+      guildId,
+      apiKeyId: apiKey?.id,
+      action,
+      diff: { old: oldConfig, new: newConfig },
+    });
+
+    return c.json({ data: { guildId, config: newConfig, action } });
+  },
+);
+
+/**
+ * DELETE /instances/:id/guilds/:guildId/config - Reset guild to instance defaults
+ */
+instancesRoutes.delete('/:id/guilds/:guildId/config', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const guildId = c.req.param('guildId');
+  const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  const instance = await services.instances.getById(id);
+  const overrides = { ...((instance.guildConfigOverrides as Record<string, unknown>) ?? {}) };
+  const oldConfig = overrides[guildId];
+
+  if (!oldConfig) {
+    return c.json({ data: { guildId, message: 'No overrides to remove' } });
+  }
+
+  delete overrides[guildId];
+
+  await services.instances.update(id, { guildConfigOverrides: overrides });
+
+  // Write-through cache invalidation
+  invalidateGuildCache(id, guildId);
+
+  // Audit log
+  log.info('Guild config deleted', {
+    instanceId: id,
+    guildId,
+    apiKeyId: apiKey?.id,
+    action: 'delete',
+    diff: { old: oldConfig, new: null },
+  });
+
+  return c.json({ data: { guildId, message: 'Guild config reset to instance defaults' } });
+});
+
+/**
+ * GET /instances/:id/guilds/:guildId/audit - Query guild config audit log
+ * NOTE: Audit entries are currently logged via structured logs (log.info).
+ * A dedicated audit table can be added when persistent audit querying is needed.
+ */
+instancesRoutes.get('/:id/guilds/:guildId/audit', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  // Verify instance exists
+  await services.instances.getById(id);
+
+  // Audit events are stored in structured logs for now
+  return c.json({ items: [], meta: { hasMore: false, note: 'Audit log stored in structured logs' } });
+});
+
+// ============================================================================
+// BOT PRESENCE ENDPOINT (Discord)
+// ============================================================================
+
+const presenceSchema = z.object({
+  status: z.enum(['online', 'dnd', 'idle', 'invisible']).default('online'),
+  activityText: z.string().max(128).optional(),
+  activityType: z.enum(['Playing', 'Streaming', 'Listening', 'Watching', 'Custom', 'Competing']).default('Playing'),
+});
+
+/**
+ * PUT /instances/:id/presence - Set bot presence (Discord only)
+ */
+instancesRoutes.put('/:id/presence', instanceAccess, zValidator('json', presenceSchema), async (c) => {
+  const id = c.req.param('id');
+  const presenceData = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (instance.channel !== 'discord') {
+    return c.json(
+      { error: { code: 'INVALID_OPERATION', message: 'Presence is only available for Discord instances' } },
+      400,
+    );
+  }
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get('discord');
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Discord plugin not loaded' } }, 400);
+  }
+
+  // Call setPresence on the plugin
+  if (!('setPresence' in plugin) || typeof plugin.setPresence !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support setPresence' } }, 400);
+  }
+
+  try {
+    await (plugin as { setPresence: (instanceId: string, presence: typeof presenceData) => Promise<void> }).setPresence(
+      id,
+      presenceData,
+    );
+
+    return c.json({ success: true, data: { instanceId: id, presence: presenceData } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'PRESENCE_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
 // Telegram Webhook Ingress
 // ============================================================================
 
