@@ -541,6 +541,8 @@ export const instances = pgTable(
 
     // ---- Telegram Configuration ----
     telegramBotToken: text('telegram_bot_token'),
+    /** Telegram reaction level: off (default), ack, minimal, extensive */
+    telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
     // ---- Agent Provider Reference ----
     agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
