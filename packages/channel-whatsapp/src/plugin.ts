@@ -915,11 +915,38 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Resolve the send target JID.
+   *
+   * LID-first: when sending to a phone number, try to resolve to LID via
+   * Baileys signalRepository.lidMapping.getLIDForPN. Falls back gracefully
+   * to phone JID if no LID mapping exists or the API is unavailable.
+   */
+  private async resolveSendTarget(sock: WASocket, instanceId: string, to: string): Promise<string> {
+    const phoneJid = toJid(to);
+
+    // If already a LID or not a user JID, passthrough
+    if (!isUserJid(phoneJid)) return phoneJid;
+
+    // Try LID resolution via Baileys signal repository
+    try {
+      const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
+      if (lidJid) {
+        this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
+        return lidJid;
+      }
+    } catch {
+      // API not available or error — fall back to phone
+    }
+
+    return phoneJid;
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
-    const jid = toJid(message.to);
+    const jid = await this.resolveSendTarget(sock, instanceId, message.to);
 
     try {
       // ── Reaction dispatch (separate path — not a normal message) ──
