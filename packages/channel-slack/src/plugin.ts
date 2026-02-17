@@ -21,7 +21,7 @@ import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
 import { checkBoltHealth, createBoltConnection, destroyBoltConnection } from './connection/bolt-client';
 import { setupCommandHandlers } from './handlers/commands';
-import { extractFileInfo, getContentTypeFromMime } from './handlers/files';
+import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
@@ -415,29 +415,19 @@ export class SlackPlugin extends BaseChannelPlugin {
           platformTimestamp,
           _meta,
         ) => {
-          // Handle file attachments
           const files = rawPayload.files as unknown[] | undefined;
           if (files && files.length > 0) {
-            const fileInfos = extractFileInfo(files);
-            for (const fileInfo of fileInfos) {
-              const contentType = getContentTypeFromMime(fileInfo.mimeType);
-              await this.handleMessageReceived(
-                instanceId,
-                `${externalId}-file-${fileInfo.id}`,
-                chatId,
-                from,
-                {
-                  type: contentType as ContentType,
-                  text: content.text,
-                  mediaUrl: fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate,
-                  mimeType: fileInfo.mimeType,
-                },
-                replyToId,
-                { ...rawPayload, fileInfo },
-                platformTimestamp,
-              );
-            }
-            // If there was also text, emit the text message too
+            await this.handleInboundFiles(
+              instanceId,
+              externalId,
+              chatId,
+              from,
+              content,
+              replyToId,
+              rawPayload,
+              platformTimestamp,
+              connection.botToken,
+            );
             if (!content.text) return;
           }
 
@@ -628,6 +618,58 @@ export class SlackPlugin extends BaseChannelPlugin {
     const { addReaction } = await import('./tools');
     await addReaction(connection.client, channelId, targetTs, emoji, this.logger);
     return targetTs;
+  }
+
+  /**
+   * Download and emit inbound Slack file attachments.
+   * Slack private URLs require bot-token auth; we download here and emit as
+   * data: URIs so downstream (storeFromUrl) can fetch without Slack auth headers.
+   */
+  private async handleInboundFiles(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    from: string,
+    content: { text?: string },
+    replyToId: string | undefined,
+    rawPayload: Record<string, unknown>,
+    platformTimestamp: number | undefined,
+    botToken: string,
+  ): Promise<void> {
+    const files = rawPayload.files as unknown[] | undefined;
+    if (!files || files.length === 0) return;
+
+    const fileInfos = extractFileInfo(files);
+    for (const fileInfo of fileInfos) {
+      const contentType = getContentTypeFromMime(fileInfo.mimeType);
+      const privateUrl = fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate;
+      let mediaUrl: string | undefined;
+
+      if (privateUrl) {
+        try {
+          const { buffer, mimeType: detectedMime } = await downloadSlackFile(privateUrl, botToken, this.logger);
+          const mime = detectedMime !== 'application/octet-stream' ? detectedMime : fileInfo.mimeType;
+          mediaUrl = `data:${mime};base64,${buffer.toString('base64')}`;
+        } catch (err) {
+          this.logger.warn('Failed to pre-download Slack file; skipping attachment', {
+            fileId: fileInfo.id,
+            error: String(err),
+          });
+          continue;
+        }
+      }
+
+      await this.handleMessageReceived(
+        instanceId,
+        `${externalId}-file-${fileInfo.id}`,
+        chatId,
+        from,
+        { type: contentType as ContentType, text: content.text, mediaUrl, mimeType: fileInfo.mimeType },
+        replyToId,
+        { ...rawPayload, fileInfo },
+        platformTimestamp,
+      );
+    }
   }
 
   /**

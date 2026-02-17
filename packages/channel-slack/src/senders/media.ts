@@ -48,9 +48,19 @@ export async function uploadFile(client: WebClient, options: MediaUploadOptions,
     const resultAny = result as unknown as Record<string, unknown>;
     // files.uploadV2 returns a `files` array, not a `file` object
     const files = resultAny.files as Array<Record<string, unknown>> | undefined;
-    const fileId = files?.[0]?.id as string | undefined;
-    logger.debug('File uploaded successfully', { fileId, filename: options.filename });
-    return fileId ?? '';
+    const firstFile = files?.[0] as Record<string, unknown> | undefined;
+    const fileId = firstFile?.id as string | undefined;
+
+    // Prefer the channel message ts (needed for chat.update/delete/reactions)
+    // files.uploadV2 embeds it under files[0].shares.private[channelId][0].ts
+    const shares = firstFile?.shares as Record<string, unknown> | undefined;
+    const privateShares = shares?.private as Record<string, Array<Record<string, unknown>>> | undefined;
+    const publicShares = shares?.public as Record<string, Array<Record<string, unknown>>> | undefined;
+    const channelEntries = privateShares?.[options.channelId] ?? publicShares?.[options.channelId];
+    const messageTs = channelEntries?.[0]?.ts as string | undefined;
+
+    logger.debug('File uploaded successfully', { fileId, messageTs, filename: options.filename });
+    return messageTs ?? fileId ?? '';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('Failed to upload file', { error: message, filename: options.filename });

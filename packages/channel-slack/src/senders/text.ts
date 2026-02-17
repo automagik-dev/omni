@@ -55,13 +55,15 @@ export async function sendTextMessage(client: WebClient, options: TextSendOption
   for (const chunk of chunks) {
     try {
       if (options.ephemeral && options.ephemeralUserId) {
-        const _result = await client.chat.postEphemeral({
+        const result = await client.chat.postEphemeral({
           channel: options.channelId,
           user: options.ephemeralUserId,
           text: chunk,
           thread_ts: options.threadTs,
         });
-        lastTs = ''; // Ephemeral messages don't have a ts
+        // postEphemeral returns message_ts; use it for a unique per-send ID
+        // so multiple ephemeral sends in the same chat don't collapse onto one DB record
+        lastTs = (result.message_ts as string) ?? `ephemeral-${Date.now()}`;
       } else {
         const args = {
           channel: options.channelId,

@@ -20,6 +20,7 @@ import { SlackError, SlackErrorCode } from '../types';
 export interface BoltConnection {
   app: App;
   client: WebClient;
+  botToken: string;
   botUserId?: string;
   botName?: string;
   teamId?: string;
@@ -88,6 +89,7 @@ export async function createBoltConnection(options: SlackConnectionOptions, logg
   return {
     app,
     client: app.client,
+    botToken: options.botToken,
     botUserId,
     botName,
     teamId,
