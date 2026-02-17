@@ -14,6 +14,11 @@ import type { ContentType } from '@omni/core/types';
 import { ChannelType, type Client, type Message, type PartialMessage } from 'discord.js';
 import type { DiscordPlugin } from '../plugin';
 import type { ExtractedContent } from '../types';
+import {
+  type ForwardedAttachment,
+  downloadForwardedAttachment,
+  extractForwardedAttachments,
+} from './forwarded-attachments';
 
 const log = createLogger('discord:messages');
 
@@ -149,6 +154,53 @@ function getReplyToId(message: Message): string | undefined {
 }
 
 /**
+ * Try to extract content from forwarded/referenced message attachments.
+ * Returns extracted content and attachment metadata if the primary message
+ * has no attachments but the referenced message does.
+ */
+async function tryExtractForwardedContent(
+  message: Message,
+  primaryContent: ExtractedContent | null,
+): Promise<{ content: ExtractedContent | null; attachments: ForwardedAttachment[] }> {
+  if (primaryContent?.mediaUrl || message.attachments.size > 0 || !message.reference?.messageId) {
+    return { content: null, attachments: [] };
+  }
+
+  const attachments = await extractForwardedAttachments(message);
+  if (attachments.length === 0) {
+    return { content: null, attachments: [] };
+  }
+
+  const firstAttachment = attachments[0];
+  if (!firstAttachment) {
+    return { content: null, attachments };
+  }
+
+  const buffer = await downloadForwardedAttachment(firstAttachment);
+  if (!buffer) {
+    return { content: null, attachments };
+  }
+
+  const mediaType = getMediaType(firstAttachment.contentType);
+  const content: ExtractedContent = {
+    type: mediaType,
+    mediaUrl: firstAttachment.url,
+    mimeType: firstAttachment.contentType,
+    filename: firstAttachment.filename,
+    size: firstAttachment.size,
+    text: primaryContent?.text,
+  };
+
+  log.debug('Using forwarded attachment as primary content', {
+    messageId: message.id,
+    filename: firstAttachment.filename,
+    contentType: firstAttachment.contentType,
+  });
+
+  return { content, attachments };
+}
+
+/**
  * Check if message should be processed
  */
 function shouldProcessMessage(message: Message): boolean {
@@ -173,10 +225,37 @@ function isDM(message: Message): boolean {
 }
 
 /**
+ * Resolve the display name for a chat/channel.
+ * For DMs: user display name. For threads: "parent → thread". For channels: channel name.
+ */
+function resolveChatName(message: Message, isDMChannel: boolean, isThread: boolean): string | undefined {
+  if (isDMChannel) {
+    return message.author.displayName || message.author.globalName || message.author.username;
+  }
+  if (isThread && 'parent' in message.channel && message.channel.parent) {
+    const parentName = message.channel.parent.name;
+    const threadName = message.channel.name;
+    return `${parentName} → ${threadName}`;
+  }
+  if ('name' in message.channel) {
+    return message.channel.name ?? undefined;
+  }
+  return undefined;
+}
+
+/**
  * Process a single message
  */
 async function processMessage(plugin: DiscordPlugin, instanceId: string, message: Message): Promise<void> {
-  const content = extractContent(message);
+  let content = extractContent(message);
+
+  // Wire: forwarded attachment extraction from referenced messages
+  const forwarded = await tryExtractForwardedContent(message, content);
+  const forwardedAttachments = forwarded.attachments;
+  if (forwarded.content) {
+    content = forwarded.content;
+  }
+
   if (!content) {
     log.debug('Skipping message with no extractable content', {
       instanceId,
@@ -223,22 +302,18 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     });
   }
 
-  let chatName: string | undefined;
-  if (isDMChannel) {
-    chatName = message.author.displayName || message.author.globalName || message.author.username;
-  } else if (isThread && 'parent' in message.channel && message.channel.parent) {
-    const parentName = message.channel.parent.name;
-    const threadName = message.channel.name;
-    chatName = `${parentName} → ${threadName}`;
-  } else if ('name' in message.channel) {
-    chatName = message.channel.name ?? undefined;
-  }
+  const chatName = resolveChatName(message, isDMChannel, isThread);
+
+  // Wire: resolve per-guild config overrides for this message's guild
+  const guildId = message.guild?.id;
+  const guildConfig = guildId ? plugin.getGuildConfig(instanceId, guildId) : undefined;
 
   // Build extended content for raw payload
   const extendedPayload: Record<string, unknown> = {
     messageId: message.id,
     channelId: chatId,
-    guildId: message.guild?.id,
+    guildId,
+    guildConfig, // Per-guild config overrides (agentReplyFilter, maxLines, toolPolicies, etc.)
     authorId: from,
     authorTag: message.author.tag,
     // displayName is used by agent-responder for sender name prefixing
@@ -249,6 +324,7 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     isGroup: !isDMChannel,
     isThread,
     isForumOrMedia, // Downstream consumers should skip auto-thread creation for forum/media channels
+    forwardedAttachments: forwardedAttachments.length > 0 ? forwardedAttachments : undefined,
     createdAt: message.createdTimestamp,
     isDM: isDMChannel,
     hasEmbeds: message.embeds.length > 0,

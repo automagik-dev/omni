@@ -13,6 +13,7 @@ import type {
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
+import type { GuildConfigOverride } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import { ActivityType } from 'discord.js';
 import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
@@ -30,6 +31,7 @@ import {
   setupReactionHandlers,
 } from './handlers';
 import { sendMediaBuffer, sendMediaMessage } from './senders/media';
+import { mediaDedup } from './senders/media-dedup';
 import { addReaction, removeReaction } from './senders/reaction';
 import { deleteMessage as deleteTextMessage, editTextMessage, sendTextMessage } from './senders/text';
 import type {
@@ -151,6 +153,7 @@ async function sendTextContent(client: Client, channelId: string, message: Outgo
 
 /**
  * Send media content (image, audio, video, document)
+ * Includes media deduplication check to prevent duplicate sends within TTL window.
  */
 async function sendMediaContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
   const content = message.content;
@@ -158,6 +161,12 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
 
   if (base64) {
     const buffer = Buffer.from(base64, 'base64');
+
+    // Wire: media dedup — skip sending if this exact media was sent recently
+    if (mediaDedup.checkAndMark(buffer)) {
+      return ''; // Deduped — MediaDedup logs at DEBUG level
+    }
+
     const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
     return sendMediaBuffer(client, channelId, buffer, {
       filename,
@@ -168,6 +177,12 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
 
   if (!content.mediaUrl) {
     throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL or base64 required');
+  }
+
+  // Wire: media dedup for URL-based media — hash the URL as a content proxy
+  const urlBuffer = Buffer.from(content.mediaUrl);
+  if (mediaDedup.checkAndMark(urlBuffer)) {
+    return ''; // Deduped — same URL sent recently
   }
 
   return sendMediaMessage(client, channelId, content.mediaUrl, {
@@ -348,6 +363,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
 
   /** Plugin configuration */
   private pluginConfig: DiscordConfig = {};
+
+  /** Per-instance guild config overrides cache: instanceId → (guildId → config) */
+  private guildConfigCache = new Map<string, Record<string, GuildConfigOverride>>();
 
   /**
    * Plugin-specific initialization
@@ -632,6 +650,52 @@ export class DiscordPlugin extends BaseChannelPlugin {
     });
 
     this.logger.info('Bot presence updated', { instanceId, presence });
+  }
+
+  /**
+   * Set guild config overrides for an instance.
+   * Called by API routes when guild config is created/updated.
+   */
+  setGuildConfig(instanceId: string, guildId: string, config: GuildConfigOverride): void {
+    let overrides = this.guildConfigCache.get(instanceId);
+    if (!overrides) {
+      overrides = {};
+      this.guildConfigCache.set(instanceId, overrides);
+    }
+    overrides[guildId] = config;
+    this.logger.debug('Guild config updated in plugin cache', { instanceId, guildId });
+  }
+
+  /**
+   * Remove guild config overrides for an instance (reset to defaults).
+   * Called by API routes when guild config is deleted.
+   */
+  removeGuildConfig(instanceId: string, guildId: string): void {
+    const overrides = this.guildConfigCache.get(instanceId);
+    if (overrides) {
+      delete overrides[guildId];
+      this.logger.debug('Guild config removed from plugin cache', { instanceId, guildId });
+    }
+  }
+
+  /**
+   * Get resolved guild config for a specific guild.
+   * Returns the guild-specific overrides, or undefined if no overrides exist.
+   */
+  getGuildConfig(instanceId: string, guildId: string): GuildConfigOverride | undefined {
+    return this.guildConfigCache.get(instanceId)?.[guildId];
+  }
+
+  /**
+   * Load guild config overrides from instance data into plugin cache.
+   * Called during connection setup.
+   */
+  loadGuildConfigs(instanceId: string, overrides: Record<string, GuildConfigOverride>): void {
+    this.guildConfigCache.set(instanceId, { ...overrides });
+    this.logger.debug('Guild configs loaded into plugin cache', {
+      instanceId,
+      guildCount: Object.keys(overrides).length,
+    });
   }
 
   /**

@@ -374,6 +374,16 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
   });
+
+  // Wire: load guild config overrides into plugin before connection
+  const createPlugin = getPluginFromRegistry(channelRegistry, data.channel);
+  if (createPlugin && 'loadGuildConfigs' in createPlugin && instance.guildConfigOverrides) {
+    (createPlugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+      instance.id,
+      instance.guildConfigOverrides as Record<string, unknown>,
+    );
+  }
+
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
   return c.json({ data: instance }, 201);
@@ -639,6 +649,14 @@ instancesRoutes.post(
       return c.json(
         { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
         400,
+      );
+    }
+
+    // Wire: load guild config overrides into plugin before connection
+    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+        id,
+        instance.guildConfigOverrides as Record<string, unknown>,
       );
     }
 
@@ -2353,6 +2371,19 @@ instancesRoutes.put(
     // Write-through cache invalidation
     invalidateGuildCache(id, guildId);
 
+    // Wire: push guild config to channel plugin for runtime consumption
+    const channelRegistry = c.get('channelRegistry');
+    if (channelRegistry) {
+      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+      if (plugin && 'setGuildConfig' in plugin) {
+        (plugin as { setGuildConfig: (iId: string, gId: string, cfg: unknown) => void }).setGuildConfig(
+          id,
+          guildId,
+          newConfig,
+        );
+      }
+    }
+
     // Audit log
     log.info('Guild config updated', {
       instanceId: id,
@@ -2389,6 +2420,15 @@ instancesRoutes.delete('/:id/guilds/:guildId/config', instanceAccess, async (c) 
 
   // Write-through cache invalidation
   invalidateGuildCache(id, guildId);
+
+  // Wire: remove guild config from channel plugin cache
+  const channelRegistry = c.get('channelRegistry');
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin && 'removeGuildConfig' in plugin) {
+      (plugin as { removeGuildConfig: (iId: string, gId: string) => void }).removeGuildConfig(id, guildId);
+    }
+  }
 
   // Audit log
   log.info('Guild config deleted', {
