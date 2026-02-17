@@ -25,6 +25,30 @@ import {
 const log = createLogger('hooks:executor');
 
 // ============================================================================
+// Deep Freeze Helper
+// ============================================================================
+
+/**
+ * Recursively freeze an object and all nested objects/arrays.
+ * Enforces the read-only contract on hook contexts by preventing
+ * mutations to nested references (arrays, nested objects, etc.)
+ * that a shallow Object.freeze would leave mutable.
+ */
+function deepFreeze<T>(obj: T): Readonly<T> {
+  if (obj === null || typeof obj !== 'object') {
+    return obj as Readonly<T>;
+  }
+  // Freeze nested values depth-first so children are immutable before parent
+  for (const key of Object.keys(obj as object)) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val !== null && typeof val === 'object' && !Object.isFrozen(val)) {
+      deepFreeze(val);
+    }
+  }
+  return Object.freeze(obj as object) as Readonly<T>;
+}
+
+// ============================================================================
 // Timeout Helper
 // ============================================================================
 
@@ -145,8 +169,9 @@ export async function executeHooks<E extends HookEvent>(
     return { context, results: [], totalDurationMs: performance.now() - pipelineStart };
   }
 
-  // For read-only hooks, freeze the context so handlers can't mutate it
-  const frozenContext = isReadOnly ? (Object.freeze({ ...context }) as HookContextMap[E]) : undefined;
+  // For read-only hooks, deep-freeze a shallow copy of the context so handlers
+  // cannot mutate nested references (arrays, nested objects) either.
+  const frozenContext = isReadOnly ? (deepFreeze({ ...context }) as HookContextMap[E]) : undefined;
   let currentContext = context;
   const results: HookExecutionResult[] = [];
 

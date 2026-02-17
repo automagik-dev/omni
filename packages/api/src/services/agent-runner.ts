@@ -433,9 +433,13 @@ export class AgentRunnerService {
       agentId: instance.agentId,
     });
 
-    // Apply hook overrides: provider and agent ID can be changed by hooks
+    // Apply hook overrides: provider and agent ID can be changed by hooks.
+    // Honor both 'agentId' and 'model' fields: if 'agentId' was unchanged by the
+    // hook, fall back to 'model' (which a hook may have updated instead).
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    const effectiveAgentId = agentStartCtx.context.agentId ?? instance.agentId;
+    const hookAgentId = agentStartCtx.context.agentId;
+    const effectiveAgentId =
+      (hookAgentId !== instance.agentId ? hookAgentId : agentStartCtx.context.model) ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
@@ -596,7 +600,11 @@ export class AgentRunnerService {
     });
 
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    const effectiveAgentId = agentStartCtx.context.agentId ?? instance.agentId;
+    // Honor both 'agentId' and 'model' fields: if 'agentId' was unchanged by the
+    // hook, fall back to 'model' (which a hook may have updated instead).
+    const hookAgentIdStream = agentStartCtx.context.agentId;
+    const effectiveAgentId =
+      (hookAgentIdStream !== instance.agentId ? hookAgentIdStream : agentStartCtx.context.model) ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
