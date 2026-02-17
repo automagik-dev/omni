@@ -13,6 +13,7 @@
 import { createLogger } from '@omni/core';
 import type { Client, GuildMember, Interaction } from 'discord.js';
 import { checkInteractionAuth } from '../auth/interaction-auth';
+import { getComponentRegistry } from '../components/registry';
 import type { DiscordPlugin } from '../plugin';
 import {
   isAutocomplete,
@@ -69,10 +70,15 @@ async function isComponentInteractionAuthorized(
       guildId: interaction.guildId,
       reason: authResult.reason,
     });
-    // Acknowledge silently so Discord doesn't show "Interaction failed"
+    // Acknowledge silently so Discord doesn't show "Interaction failed".
+    // Component interactions (buttons/selects) use deferUpdate; modal submits use deferReply.
     try {
       if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
         await interaction.deferUpdate();
+      } else if ('deferReply' in interaction && typeof interaction.deferReply === 'function') {
+        await (interaction as { deferReply: (opts: { ephemeral: boolean }) => Promise<void> }).deferReply({
+          ephemeral: true,
+        });
       }
     } catch (_) {
       // Ignore if already replied
@@ -214,6 +220,36 @@ async function processEntitySelectMenu(
   interaction: Interaction,
 ): Promise<void> {
   if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+
+  // Enforce registry TTL: only process interactions for registered, non-expired components.
+  // Unregistered components pass through for backward compatibility; registered-but-expired
+  // interactions are rate-limited and suppressed after 3 attempts per 60s per user.
+  const messageId = (interaction as { message?: { id: string } }).message?.id;
+  if (messageId) {
+    const registry = getComponentRegistry();
+    if (!registry.has(instanceId, messageId)) {
+      // Component not (or no longer) in the registry
+      const userId = interaction.user.id;
+      if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
+        log.debug('Suppressing expired entity select interaction (rate limit)', {
+          instanceId,
+          userId,
+          messageId,
+        });
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.deferUpdate();
+          }
+        } catch (_) {
+          // Ignore
+        }
+        return;
+      }
+    } else {
+      // Component is registered and valid — resolve it to enforce consume/reusable behavior
+      registry.resolve(instanceId, messageId);
+    }
+  }
 
   const base = extractBasePayload(interaction, instanceId);
 
