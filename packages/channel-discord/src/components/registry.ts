@@ -169,6 +169,10 @@ export class ComponentRegistry {
     if (shouldConsume) {
       this.entries.delete(key);
       this.removeFromInsertionOrder(key);
+    } else {
+      // Refresh LRU recency: move accessed key to the back of insertion order
+      this.removeFromInsertionOrder(key);
+      this.insertionOrder.push(key);
     }
 
     return entry;
@@ -218,6 +222,9 @@ export class ComponentRegistry {
       this.expiredCount++;
       return false;
     }
+    // Refresh LRU recency on access
+    this.removeFromInsertionOrder(key);
+    this.insertionOrder.push(key);
     return true;
   }
 

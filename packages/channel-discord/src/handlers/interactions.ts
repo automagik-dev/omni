@@ -11,7 +11,8 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Client, Interaction } from 'discord.js';
+import type { Client, GuildMember, Interaction } from 'discord.js';
+import { checkInteractionAuth } from '../auth/interaction-auth';
 import type { DiscordPlugin } from '../plugin';
 import {
   isAutocomplete,
@@ -156,6 +157,41 @@ async function processEntitySelectMenu(
   instanceId: string,
   interaction: Interaction,
 ): Promise<void> {
+  // Extract member role IDs for authorization check
+  const member = interaction.member;
+  const userRoleIds: string[] = member
+    ? Array.isArray(member.roles)
+      ? member.roles // APIInteractionGuildMember: string[]
+      : [...(member as GuildMember).roles.cache.keys()] // GuildMember: Collection
+    : [];
+
+  const authResult = checkInteractionAuth(
+    {
+      userId: interaction.user.id,
+      guildId: interaction.guildId ?? undefined,
+      userRoleIds,
+    },
+    plugin.getInteractionAuthConfig(instanceId),
+  );
+
+  if (!authResult.allowed) {
+    log.debug('Entity select interaction denied by auth', {
+      instanceId,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      reason: authResult.reason,
+    });
+    // Acknowledge the interaction silently so Discord doesn't show "failed"
+    try {
+      if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
+        await interaction.deferUpdate();
+      }
+    } catch (_) {
+      // Ignore if already replied
+    }
+    return;
+  }
+
   const base = extractBasePayload(interaction, instanceId);
 
   let selectType: 'user' | 'role' | 'channel' | 'mentionable';

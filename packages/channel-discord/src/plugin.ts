@@ -17,6 +17,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import type { Client, Message, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
+import { type InteractionAuthConfig } from './auth/interaction-auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
 import { createClient, destroyClient, getBotUser, isClientReady } from './client';
 import {
@@ -349,6 +350,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Plugin configuration */
   private pluginConfig: DiscordConfig = {};
 
+  /** Per-instance interaction auth configs */
+  private instanceAuthConfigs = new Map<string, InteractionAuthConfig>();
+
   /**
    * Plugin-specific initialization
    */
@@ -412,6 +416,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
       await saveToken(this.storage, instanceId, token);
     }
 
+    // Store interaction auth config if provided
+    if (config.options?.interactionAuth) {
+      this.instanceAuthConfigs.set(instanceId, config.options.interactionAuth as InteractionAuthConfig);
+    }
+
     // Create and setup client
     await this.createConnection(instanceId, config, token);
   }
@@ -465,6 +474,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Destroy client
     await destroyClient(client);
     this.clients.delete(instanceId);
+    this.instanceAuthConfigs.delete(instanceId);
 
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
@@ -1028,6 +1038,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
       throw new DiscordError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} not ready`);
     }
     return client;
+  }
+
+  /** Get the interaction auth config for an instance (undefined = allow all) */
+  getInteractionAuthConfig(instanceId: string): InteractionAuthConfig | undefined {
+    return this.instanceAuthConfigs.get(instanceId);
   }
 
   // ─────────────────────────────────────────────────────────────

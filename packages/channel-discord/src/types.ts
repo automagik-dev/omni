@@ -15,6 +15,7 @@ import type {
   UserContextMenuCommandInteraction,
   UserSelectMenuInteraction,
 } from 'discord.js';
+import type { InteractionAuthConfig } from './auth/interaction-auth';
 
 // ─────────────────────────────────────────────────────────────
 // Connection options
@@ -26,6 +27,8 @@ import type {
 export interface DiscordConnectionOptions {
   /** Bot token (required for initial connect, then stored) */
   token?: string;
+  /** Role-based authorization for component interactions (optional, default: allow all) */
+  interactionAuth?: InteractionAuthConfig;
 }
 
 /**
