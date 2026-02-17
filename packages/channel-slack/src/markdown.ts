@@ -41,11 +41,11 @@ export function markdownToMrkdwn(markdown: string): string {
   // Convert strikethrough: ~~text~~ → ~text~
   text = text.replace(/~~(.+?)~~/g, '~$1~');
 
+  // Convert images first: ![alt](url) → <url|alt> (must be before links)
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<$2|$1>');
+
   // Convert links: [text](url) → <url|text>
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
-
-  // Convert images: ![alt](url) → <url|alt>
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<$2|$1>');
 
   // Convert blockquotes: > text → > text (same in mrkdwn, but ensure single >)
   text = text.replace(/^>\s?/gm, '> ');
