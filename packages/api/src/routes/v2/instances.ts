@@ -351,12 +351,17 @@ instancesRoutes.delete('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  // Disconnect via channel plugin first
+  // Disconnect and clear auth via channel plugin first
   if (channelRegistry) {
     const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
     if (plugin) {
       try {
-        await plugin.disconnect(id);
+        // Use logout() if available (clears stored credentials), otherwise plain disconnect
+        if ('logout' in plugin && typeof (plugin as { logout?: unknown }).logout === 'function') {
+          await (plugin as { logout: (id: string) => Promise<void> }).logout(id);
+        } else {
+          await plugin.disconnect(id);
+        }
       } catch (error) {
         log.error('Failed to disconnect instance before delete', { instanceId: id, error: String(error) });
         // Continue with deletion anyway
