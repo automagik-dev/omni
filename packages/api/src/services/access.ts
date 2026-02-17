@@ -223,10 +223,10 @@ export class AccessService {
       const metadata = existing.metadata as Record<string, unknown> | null;
       return {
         id: existing.id,
-        instanceId: existing.instanceId!,
-        platformUserId: existing.platformUserId!,
+        instanceId: existing.instanceId ?? instanceId,
+        platformUserId: existing.platformUserId ?? platformUserId,
         pairingCode: (metadata?.pairingCode as string) ?? '',
-        expiresAt: existing.expiresAt!,
+        expiresAt: existing.expiresAt ?? new Date(Date.now() + expiryMs),
         createdAt: existing.createdAt,
       };
     }
@@ -300,10 +300,10 @@ export class AccessService {
       const metadata = rule.metadata as Record<string, unknown> | null;
       return {
         id: rule.id,
-        instanceId: rule.instanceId!,
-        platformUserId: rule.platformUserId!,
+        instanceId: rule.instanceId ?? instanceId,
+        platformUserId: rule.platformUserId ?? '',
         pairingCode: (metadata?.pairingCode as string) ?? '',
-        expiresAt: rule.expiresAt!,
+        expiresAt: rule.expiresAt ?? new Date(),
         createdAt: rule.createdAt,
       };
     });
