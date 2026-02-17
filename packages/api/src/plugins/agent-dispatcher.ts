@@ -18,6 +18,7 @@
  */
 
 import { join, resolve } from 'node:path';
+import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
@@ -26,6 +27,7 @@ import {
   ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
+  InMemorySessionActivityStore,
   JOURNEY_STAGES,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
@@ -34,8 +36,10 @@ import {
   type OpenClawProviderConfig,
   type ProviderFile,
   type ReactionReceivedPayload,
+  type SessionResetConfig,
   type StreamDelta,
   WebhookAgentProvider,
+  checkSessionReset,
   createLogger,
   createProviderClient,
   generateCorrelationId,
@@ -1460,12 +1464,20 @@ async function dispatchViaLegacy(
   });
 }
 
+// ============================================================================
+// Session Activity Store (singleton for session reset tracking)
+// ============================================================================
+
+const sessionActivityStore = new InMemorySessionActivityStore();
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Orchestrates ack, session reset, and dispatch pipeline
 async function processAgentResponse(
   services: Services,
   instance: Instance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   db: Database,
+  eventBus: EventBus,
 ): Promise<void> {
   const firstMessage = messages[0];
   if (!firstMessage) return;
@@ -1475,6 +1487,51 @@ async function processAgentResponse(
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
   const traceId = firstMessage.metadata.traceId;
 
+  // ── Reaction Ack (pre-processing, fire-and-forget) ──
+  const inst = instance as Record<string, unknown>;
+  const ackConfig: ReactionAckConfig = {
+    reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
+    reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
+    ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
+  };
+  const plugin = (await getPlugin(channel)) ?? null;
+  // AckProvider: channels that support reactions can expose ack/removeAck
+  // For now we pass null — channel-specific ack providers will be added
+  // when channel parity wishes (D, 7, 8) implement the AckProvider interface
+  const ackProvider: AckProvider | null = null;
+  const messageId = firstMessage.payload.externalId ?? '';
+  const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
+
+  // ── Session Reset Check (pre-processing) ──
+  const chatType = determineChatType(chatId, channel);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
+  const activity = sessionActivityStore.getActivity(instance.id, sessionId);
+  const resetResult = checkSessionReset(sessionResetConfig, chatType as 'dm' | 'group' | 'thread', activity);
+
+  if (resetResult.shouldReset) {
+    // Clear agent conversation context (provider will start fresh)
+    sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
+
+    // DEC-6: Mandatory session.reset event
+    eventBus
+      .publish('session.reset', { instanceId: instance.id, sessionId, timestamp: Date.now() }, {})
+      .catch((err) => {
+        log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
+      });
+
+    log.info('Session reset triggered', {
+      instanceId: instance.id,
+      sessionId,
+      strategy: resetResult.strategy,
+      chatType,
+      traceId,
+    });
+  }
+
+  // Record activity for session tracking (sliding window for idle reset)
+  sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
   if (!personId) {
@@ -1483,6 +1540,7 @@ async function processAgentResponse(
       chatId,
       senderId,
     });
+    ackHandle.remove();
     return;
   }
 
@@ -1553,7 +1611,10 @@ async function processAgentResponse(
       // Fall through to legacy path
     }
 
-    if (handled) return;
+    if (handled) {
+      ackHandle.remove();
+      return;
+    }
 
     // Fallback: legacy agentRunner.run() path
     log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
@@ -1580,6 +1641,8 @@ async function processAgentResponse(
       traceId,
     });
   } finally {
+    // ── Remove Ack (post-processing) ──
+    ackHandle.remove();
     await sendTypingPresence(channel, instance.id, chatId, 'paused');
   }
 }
@@ -2413,7 +2476,7 @@ export async function setupAgentDispatcher(
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
-    await processAgentResponse(services, instance, messages, triggerType, db);
+    await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
   });
 
   try {
