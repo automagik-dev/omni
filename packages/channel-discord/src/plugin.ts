@@ -14,7 +14,8 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { Client, Message, TextBasedChannel } from 'discord.js';
+import { ActivityType } from 'discord.js';
+import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
@@ -594,6 +595,46 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Set bot presence (status + activity) for a Discord instance.
+   * Can be called at runtime without reconnecting.
+   */
+  async setPresence(
+    instanceId: string,
+    presence: {
+      status?: 'online' | 'dnd' | 'idle' | 'invisible';
+      activityText?: string;
+      activityType?: 'Playing' | 'Streaming' | 'Listening' | 'Watching' | 'Custom' | 'Competing';
+    },
+  ): Promise<void> {
+    const client = this.getClient(instanceId);
+
+    const activityTypeMap: Record<string, ActivityType> = {
+      Playing: ActivityType.Playing,
+      Streaming: ActivityType.Streaming,
+      Listening: ActivityType.Listening,
+      Watching: ActivityType.Watching,
+      Custom: ActivityType.Custom,
+      Competing: ActivityType.Competing,
+    };
+
+    const activities = presence.activityText
+      ? [
+          {
+            name: presence.activityText,
+            type: activityTypeMap[presence.activityType ?? 'Playing'] ?? ActivityType.Playing,
+          },
+        ]
+      : [];
+
+    client.user?.setPresence({
+      status: (presence.status ?? 'online') as PresenceStatusData,
+      activities,
+    });
+
+    this.logger.info('Bot presence updated', { instanceId, presence });
+  }
+
+  /**
    * Get the profile of the connected Discord bot.
    * Returns profile info including bot name, avatar, and platform-specific metadata.
    *
@@ -1046,6 +1087,18 @@ export class DiscordPlugin extends BaseChannelPlugin {
         state: 'connected',
         since: new Date(),
       });
+
+      // Set initial presence from config if available
+      const presenceConfig = config.options?.presence as
+        | { status?: string; activityText?: string; activityType?: string }
+        | undefined;
+      if (presenceConfig) {
+        try {
+          await this.setPresence(instanceId, presenceConfig as Parameters<typeof this.setPresence>[1]);
+        } catch (error) {
+          this.logger.warn('Failed to set initial presence', { instanceId, error: String(error) });
+        }
+      }
     }
 
     await this.emitInstanceConnected(instanceId, {
