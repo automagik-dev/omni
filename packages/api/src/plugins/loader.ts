@@ -199,9 +199,12 @@ export async function autoReconnectInstances(db: Database): Promise<{
       const credentials: Record<string, unknown> = {};
       const options: Record<string, unknown> = {};
 
-      // Telegram needs bot token
+      // Telegram needs bot token + feature flags
       if (instance.telegramBotToken) {
         options.token = instance.telegramBotToken;
+      }
+      if (instance.channel === 'telegram') {
+        options.voiceTranscription = instance.telegramVoiceTranscription ?? false;
       }
       // Discord needs bot token
       if (instance.discordBotToken) {

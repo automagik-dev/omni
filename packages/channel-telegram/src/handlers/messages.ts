@@ -67,11 +67,13 @@ async function tryTranscribeVoice(
 ): Promise<string | undefined> {
   if (!content.isVoiceNote) return content.text;
   if (!plugin.isVoiceTranscriptionEnabled(instanceId)) return content.text;
-  // Media download failed — return the fallback marker rather than empty content.text
-  if (!localPath) return VOICE_FALLBACK_TEXT;
+  // Media download failed — preserve caption if present, otherwise use fallback marker
+  if (!localPath) return content.text || VOICE_FALLBACK_TEXT;
 
   const mimeType = content.mimeType ?? 'audio/ogg';
   const result = await transcribeVoiceNote(localPath, content.voiceDurationSeconds, mimeType);
+  // On transcription failure, prefer existing caption over the fallback marker
+  if (!result.success && content.text) return content.text;
   return result.text;
 }
 

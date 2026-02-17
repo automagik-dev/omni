@@ -108,6 +108,10 @@ const createInstanceSchema = z.object({
     .describe('Model for response gate (default: gemini-3-flash-preview)'),
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
   telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
+  telegramVoiceTranscription: z
+    .boolean()
+    .default(false)
+    .describe('Enable preflight voice note transcription via Whisper'),
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
@@ -289,6 +293,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const connectionOptions: Record<string, unknown> = { forceNewQr: true };
   if (connectToken) {
     connectionOptions.token = connectToken;
+  }
+  if (data.channel === 'telegram') {
+    connectionOptions.voiceTranscription = data.telegramVoiceTranscription ?? false;
   }
 
   // Get the channel plugin and trigger connection
@@ -546,6 +553,9 @@ instancesRoutes.post(
     const connectToken = body.token ?? persistedTokenForChannel(instance);
     if (connectToken) {
       connectionOptions.token = connectToken;
+    }
+    if (instance.channel === 'telegram') {
+      connectionOptions.voiceTranscription = instance.telegramVoiceTranscription ?? false;
     }
 
     // Trigger connection via channel plugin

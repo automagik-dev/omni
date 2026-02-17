@@ -541,6 +541,7 @@ export const instances = pgTable(
 
     // ---- Telegram Configuration ----
     telegramBotToken: text('telegram_bot_token'),
+    telegramVoiceTranscription: boolean('telegram_voice_transcription').notNull().default(false),
 
     // ---- Agent Provider Reference ----
     agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
