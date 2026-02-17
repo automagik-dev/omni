@@ -10,8 +10,12 @@
  * - Reconnect log escalation (WARN→INFO→DEBUG→periodic WARN)
  * - ws:// warning for non-localhost (RISK-5)
  * - Log redaction: gateway token never appears in logs (DEC-15)
+ * - Device keypair signing for operator.read + operator.write scopes (FIX-SCOPE)
+ *   Without device credentials, the gateway strips all declared scopes for shared-token
+ *   connections (no-device path). Device signing is required for chat.send to succeed.
  */
 
+import * as nodeCrypto from 'node:crypto';
 import { createLogger } from '../../logger';
 import type {
   AgentEventPayload,
@@ -287,7 +291,9 @@ export class OpenClawClient {
 
   private handleEventFrame(event: EventFrame): void {
     if (event.event === 'connect.challenge') {
-      this.sendConnect();
+      // Gateway sends nonce in challenge payload — must be echoed back in device signature
+      const challengeNonce = (event.payload as Record<string, unknown>)?.nonce as string | undefined;
+      this.sendConnect(challengeNonce);
       return;
     }
 
@@ -359,13 +365,68 @@ export class OpenClawClient {
     }
   }
 
-  private async sendConnect(): Promise<void> {
+  private async sendConnect(challengeNonce?: string): Promise<void> {
     if (this.connectSent || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.connectSent = true;
 
     // DEC-7: Server-side params
     // Gateway accepts role: 'operator' | 'node' (not 'client').
-    // Use operator scope to allow session/chat lifecycle methods used by Omni.
+    // FIX-SCOPE: Without device credentials, the gateway strips all scopes for shared-token
+    // connections (no-device path), causing chat.send to fail with "missing scope: operator.write".
+    // When device credentials are configured, we sign the payload with Ed25519 and send the
+    // device token instead of the gateway token — granting operator.read + operator.write.
+    const role = 'operator';
+    const scopes: string[] = ['operator.read', 'operator.write'];
+
+    let deviceField: Record<string, unknown> | undefined;
+    let authToken: string | undefined = this.config.token;
+
+    if (this.config.device) {
+      const dev = this.config.device;
+      const signedAtMs = Date.now();
+      // Must use the nonce the gateway sent in connect.challenge, not a random one
+      const nonce = challengeNonce ?? nodeCrypto.randomBytes(16).toString('hex');
+      const clientId = 'gateway-client';
+      const clientMode = 'backend';
+
+      // Build payload matching gateway's buildDeviceAuthPayload (v2 with nonce)
+      const payload = [
+        'v2',
+        dev.id,
+        clientId,
+        clientMode,
+        role,
+        scopes.join(','),
+        String(signedAtMs),
+        dev.token,
+        nonce,
+      ].join('|');
+
+      // Sign with Ed25519 private key
+      // PKCS8 DER prefix for raw 32-byte Ed25519 private key (RFC 8410)
+      const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+      const rawPrivKey = Buffer.from(dev.privateKey, 'base64url');
+      const pkcs8Der = Buffer.concat([PKCS8_PREFIX, rawPrivKey]);
+      const privateKey = nodeCrypto.createPrivateKey({ key: pkcs8Der, type: 'pkcs8', format: 'der' });
+      const signature = nodeCrypto.sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
+
+      deviceField = {
+        id: dev.id,
+        publicKey: dev.publicKey,
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+      // Use device token (not gateway token) so gateway takes the device-token auth path
+      authToken = dev.token;
+
+      log.debug('Using device keypair for operator scopes', {
+        providerId: this.config.providerId,
+        deviceId: dev.id,
+        scopes,
+      });
+    }
+
     const params: ConnectParams = {
       minProtocol: 3,
       maxProtocol: 3,
@@ -375,12 +436,13 @@ export class OpenClawClient {
         platform: 'omni',
         mode: 'backend',
       },
-      role: 'operator',
-      scopes: ['operator.admin', 'operator.write'],
+      role,
+      scopes,
       caps: ['tool-events'],
-      auth: this.config.token ? { token: this.config.token } : undefined,
+      auth: authToken ? { token: authToken } : undefined,
       locale: 'en-US',
       userAgent: 'omni-v2/1.0.0',
+      device: deviceField as ConnectParams['device'],
     };
 
     // DEC-15: Log connect frame with redacted auth
@@ -389,6 +451,7 @@ export class OpenClawClient {
       auth: params.auth ? { token: '[REDACTED]' } : undefined,
       scopes: params.scopes,
       mode: params.client.mode,
+      hasDevice: !!deviceField,
     });
 
     try {

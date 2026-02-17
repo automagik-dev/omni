@@ -1557,11 +1557,25 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Insta
   let client = openclawClientPool.get(provider.id);
   if (!client) {
     const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+    // FIX-SCOPE: Pass device credentials from schemaConfig if present.
+    // Without device credentials, the gateway strips all declared scopes for shared-token
+    // connections, causing chat.send to fail with "missing scope: operator.write".
+    const deviceConfig =
+      schemaConfig.deviceId && schemaConfig.devicePublicKey && schemaConfig.devicePrivateKey && schemaConfig.deviceToken
+        ? {
+            id: schemaConfig.deviceId as string,
+            publicKey: schemaConfig.devicePublicKey as string,
+            privateKey: schemaConfig.devicePrivateKey as string,
+            token: schemaConfig.deviceToken as string,
+          }
+        : undefined;
+
     const clientConfig: OpenClawClientConfig = {
       url: provider.baseUrl,
       token: provider.apiKey ?? '',
       providerId: provider.id,
       origin: (schemaConfig.origin as string) ?? undefined,
+      device: deviceConfig,
     };
     client = new OpenClawClient(clientConfig);
     client.start(); // DEC-14: lazy connect — starts WS in background

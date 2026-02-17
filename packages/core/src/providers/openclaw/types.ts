@@ -96,6 +96,14 @@ export interface ConnectParams {
   };
   locale?: string;
   userAgent?: string;
+  /** Device identity for device-token auth (required for operator scopes) */
+  device?: {
+    id: string;
+    publicKey: string;
+    signature: string;
+    signedAt: number;
+    nonce: string;
+  };
 }
 
 export interface HelloPayload {
@@ -142,12 +150,28 @@ export type EventListener = (event: EventFrame) => void;
 export interface OpenClawClientConfig {
   /** WebSocket URL (ws:// or wss://) */
   url: string;
-  /** Gateway authentication token */
+  /** Gateway authentication token (shared secret — used only when no device credentials) */
   token: string;
   /** Provider DB ID for logging and metrics */
   providerId: string;
   /** Optional origin header for connection */
   origin?: string;
+  /**
+   * Device credentials for operator scope auth.
+   * When set, the client connects as a registered device and sends the device token
+   * instead of the gateway shared secret. This grants operator.read + operator.write scopes.
+   * Without device credentials, the gateway strips all declared scopes for shared-token connections.
+   */
+  device?: {
+    /** Device ID (SHA256 hex of the raw Ed25519 public key) */
+    id: string;
+    /** Ed25519 public key (base64url, raw 32-byte key) */
+    publicKey: string;
+    /** Ed25519 private key (base64url, raw 32-byte key) */
+    privateKey: string;
+    /** Device token issued by the gateway (base64url, stored in paired.json) */
+    token: string;
+  };
 }
 
 /**
