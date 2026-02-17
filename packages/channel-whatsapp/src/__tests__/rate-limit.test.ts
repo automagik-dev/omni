@@ -85,6 +85,17 @@ describe('isRateLimitError', () => {
     expect(isRateLimitError(null)).toBe(false);
     expect(isRateLimitError({ message: 'Connection timeout' })).toBe(false);
   });
+
+  test('detects Boom 429 error (output.statusCode)', () => {
+    // Boom errors carry HTTP status under output.statusCode, not top-level statusCode
+    const boomLike = { output: { statusCode: 429, payload: { message: 'Too Many Requests' } } };
+    expect(isRateLimitError(boomLike)).toBe(true);
+  });
+
+  test('does not trigger for Boom non-429 error', () => {
+    const boomLike = { output: { statusCode: 500, payload: { message: 'Internal Server Error' } } };
+    expect(isRateLimitError(boomLike)).toBe(false);
+  });
 });
 
 describe('calculateExponentialBackoff', () => {

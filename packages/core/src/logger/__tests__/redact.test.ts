@@ -102,6 +102,22 @@ describe('redactObject', () => {
     expect(redactObject(true)).toBe(true);
   });
 
+  test('preserves Date objects (not converted to {})', () => {
+    const date = new Date('2024-01-01');
+    const input = { ts: date, msg: 'test' };
+    const result = redactObject(input) as { ts: Date; msg: string };
+    expect(result.ts).toBeInstanceOf(Date);
+    expect(result.ts.toISOString()).toBe(date.toISOString());
+  });
+
+  test('preserves Error objects (not converted to {})', () => {
+    const err = new Error('something failed');
+    const input = { error: err, msg: 'test' };
+    const result = redactObject(input) as { error: Error; msg: string };
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toBe('something failed');
+  });
+
   test('handles circular references without stack overflow', () => {
     const obj: Record<string, unknown> = { name: 'test' };
     obj.self = obj; // circular reference

@@ -55,6 +55,15 @@ export function redactObject<T>(obj: T, visited = new WeakSet<object>()): T {
       return obj.map((item) => redactObject(item, visited)) as T;
     }
 
+    // Preserve non-plain objects (Date, Error, URL, RegExp, Buffer, etc.) as-is.
+    // Object.entries on these types returns [] or only partial data, so deep-copying
+    // via entries strips their semantics entirely (e.g. Date → {}, Error → {}).
+    // Plain objects have Object.prototype or null as their prototype.
+    const proto = Object.getPrototypeOf(obj);
+    if (proto !== Object.prototype && proto !== null) {
+      return obj;
+    }
+
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       result[key] = redactObject(value, visited);

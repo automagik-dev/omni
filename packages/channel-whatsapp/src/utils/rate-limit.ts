@@ -40,8 +40,12 @@ function extractRetryField(err: Record<string, unknown>): number | null {
 }
 
 function extractFromStatusCode(err: Record<string, unknown>): number | null {
+  // Check top-level status fields first
   const statusCode = err.statusCode ?? err.status ?? err.code;
-  if (statusCode !== 429 && statusCode !== '429') return null;
+  // Also check Boom error shape: { output: { statusCode: 429 } }
+  const boomStatusCode = (err.output as Record<string, unknown> | undefined)?.statusCode;
+  const is429 = statusCode === 429 || statusCode === '429' || boomStatusCode === 429;
+  if (!is429) return null;
 
   const data = err.data as Record<string, unknown> | undefined;
   if (data && typeof data.retry_after === 'number') {
@@ -72,8 +76,14 @@ export function isRateLimitError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
 
   const err = error as Record<string, unknown>;
+
+  // Top-level status fields (plain errors, Baileys errors)
   const statusCode = err.statusCode ?? err.status ?? err.code;
   if (statusCode === 429 || statusCode === '429') return true;
+
+  // Boom error shape: { output: { statusCode: 429, ... } }
+  const boomStatusCode = (err.output as Record<string, unknown> | undefined)?.statusCode;
+  if (boomStatusCode === 429) return true;
 
   if (typeof err.retryAfter === 'number' || typeof err.retry_after === 'number') return true;
 
