@@ -1519,40 +1519,53 @@ async function processAgentResponse(
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
 
   if (resetResult.shouldReset) {
-    // Clear agent conversation context in the activity store
-    sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
-
     // Await provider session reset before proceeding to dispatch so that the first
     // post-reset turn sees a clean context. A detached promise would race with the
     // provider dispatch and the incoming message could still use stale history.
+    //
+    // Only advance lastResetAt when the session was actually cleared.  For providers
+    // without resetSession (e.g. Agno, Webhook) the conversation context is not
+    // cleared, so recording a reset would incorrectly suppress future reset attempts
+    // while leaving stale context active.
+    let sessionActuallyReset = false;
     try {
       const provider = await getAgentProvider(services, instance, db);
       if (provider?.resetSession) {
         await provider.resetSession(sessionId, chatId, instance.id);
+        sessionActuallyReset = true;
+      } else if (!provider) {
+        // No IAgentProvider configured — legacy agentRunner path; no provider-level
+        // session state to clear, so treat the reset as complete.
+        sessionActuallyReset = true;
       }
+      // provider exists but lacks resetSession → session not actually cleared; do not record.
     } catch (err) {
       log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
     }
 
-    // DEC-6: Mandatory session.reset event — include routing metadata so subscribers
-    // on 'session.reset.>' receive the event (bare 'session.reset' subject is not matched).
-    eventBus
-      .publish(
-        'session.reset',
-        { instanceId: instance.id, sessionId, timestamp: Date.now() },
-        { instanceId: instance.id, channelType: channel },
-      )
-      .catch((err) => {
-        log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
-      });
+    if (sessionActuallyReset) {
+      sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
 
-    log.info('Session reset triggered', {
-      instanceId: instance.id,
-      sessionId,
-      strategy: resetResult.strategy,
-      chatType: resetChatType,
-      traceId,
-    });
+      // DEC-6: Mandatory session.reset event — include routing metadata so the SESSION
+      // JetStream stream (session.>) captures it and typed subscribers receive it.
+      eventBus
+        .publish(
+          'session.reset',
+          { instanceId: instance.id, sessionId, timestamp: Date.now() },
+          { instanceId: instance.id, channelType: channel },
+        )
+        .catch((err) => {
+          log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
+        });
+
+      log.info('Session reset triggered', {
+        instanceId: instance.id,
+        sessionId,
+        strategy: resetResult.strategy,
+        chatType: resetChatType,
+        traceId,
+      });
+    }
   }
 
   // Record activity for session tracking (sliding window for idle reset)
