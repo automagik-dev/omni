@@ -48,6 +48,10 @@ export * from './components';
 // Commands
 export * from './commands';
 
+// Threads
+export { createThread, createForumPost, archiveThread, addThreadMember } from './threads/manager';
+export type { CreateThreadOptions, CreateForumPostOptions, ThreadType } from './threads/manager';
+
 // Webhooks
 export * from './webhooks';
 
