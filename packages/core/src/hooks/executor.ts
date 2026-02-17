@@ -146,7 +146,7 @@ export async function executeHooks<E extends HookEvent>(
   }
 
   // For read-only hooks, freeze the context so handlers can't mutate it
-  const frozenContext = isReadOnly ? Object.freeze({ ...context }) : undefined;
+  const frozenContext = isReadOnly ? (Object.freeze({ ...context }) as HookContextMap[E]) : undefined;
   let currentContext = context;
   const results: HookExecutionResult[] = [];
 

@@ -14,6 +14,7 @@ import {
   type ProviderFile,
   type StreamChunk,
   createProviderClient,
+  executeHooks,
   isProviderSchemaSupported,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
@@ -389,6 +390,13 @@ export class AgentRunnerService {
 
   /**
    * Run an agent call (sync mode)
+   *
+   * Hook pipeline:
+   * 1. before_agent_start — can modify model/provider selection
+   * 2. llm_input — observe assembled prompt (read-only)
+   * 3. [LLM API call]
+   * 4. llm_output — observe model response (read-only)
+   * 5. before_message_write — can transform response content
    */
   async run(context: AgentRunContext): Promise<AgentRunResult> {
     const {
@@ -414,7 +422,22 @@ export class AgentRunnerService {
       throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    // ── Hook: before_agent_start ──
+    const agentStartCtx = await executeHooks(instance.id, 'before_agent_start', {
+      instanceId: instance.id,
+      chatId,
+      senderId,
+      senderName,
+      model: instance.agentId,
+      provider: instance.agentProviderId,
+      agentId: instance.agentId,
+    });
+
+    // Apply hook overrides: provider and agent ID can be changed by hooks
+    const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
+    const effectiveAgentId = agentStartCtx.context.agentId ?? instance.agentId;
+
+    const client = await this.getClient(effectiveProviderId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -427,9 +450,19 @@ export class AgentRunnerService {
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
+    // ── Hook: llm_input (read-only observation) ──
+    await executeHooks(instance.id, 'llm_input', {
+      instanceId: instance.id,
+      chatId,
+      senderId,
+      messages: formattedMessages,
+      model: effectiveAgentId,
+      provider: effectiveProviderId,
+    });
+
     log.info('Running agent', {
       instanceId: instance.id,
-      agentId: instance.agentId,
+      agentId: effectiveAgentId,
       agentType: instance.agentType,
       messageCount: messages.length,
       sessionStrategy,
@@ -440,11 +473,11 @@ export class AgentRunnerService {
     // Build request — client routes by agentType internally
     const request = {
       message: combinedMessage,
-      agentId: instance.agentId,
+      agentId: effectiveAgentId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: false,
-      sessionId, // Computed based on session strategy
-      userId: personId || senderId, // ← Person UUID (internal identity)
+      sessionId,
+      userId: personId || senderId,
       platform: {
         id: senderId,
         channel: instance.channel as ChannelType,
@@ -468,18 +501,47 @@ export class AgentRunnerService {
 
     const response = await client.run(request);
 
+    // ── Hook: llm_output (read-only observation) ──
+    await executeHooks(instance.id, 'llm_output', {
+      instanceId: instance.id,
+      chatId,
+      response: response.content,
+      usage: response.metrics
+        ? {
+            inputTokens: response.metrics.inputTokens,
+            outputTokens: response.metrics.outputTokens,
+            durationMs: response.metrics.durationMs,
+          }
+        : undefined,
+      model: effectiveAgentId,
+      provider: effectiveProviderId,
+    });
+
     // Split response if enabled
     const parts = splitResponse(response.content, instance.enableAutoSplit ?? true);
+
+    // ── Hook: before_message_write (can transform content) ──
+    const transformedParts: string[] = [];
+    for (const part of parts) {
+      const writeCtx = await executeHooks(instance.id, 'before_message_write', {
+        instanceId: instance.id,
+        chatId,
+        content: part,
+        direction: 'outbound',
+        senderId,
+      });
+      transformedParts.push(writeCtx.context.content);
+    }
 
     log.info('Agent run complete', {
       instanceId: instance.id,
       runId: response.runId,
       status: response.status,
-      parts: parts.length,
+      parts: transformedParts.length,
     });
 
     return {
-      parts,
+      parts: transformedParts,
       metadata: {
         runId: response.runId,
         sessionId: response.sessionId,
@@ -492,6 +554,12 @@ export class AgentRunnerService {
   /**
    * Stream an agent call
    * Yields split parts as they become available
+   *
+   * Hook pipeline (streaming):
+   * 1. before_agent_start — can modify model/provider selection
+   * 2. llm_input — observe assembled prompt (read-only)
+   * 3. [Streaming LLM API call — llm_output not applicable for streaming]
+   * 4. before_message_write — transforms each yielded segment
    */
   async *stream(context: AgentRunContext): AsyncGenerator<string> {
     const {
@@ -516,7 +584,21 @@ export class AgentRunnerService {
       throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    // ── Hook: before_agent_start ──
+    const agentStartCtx = await executeHooks(instance.id, 'before_agent_start', {
+      instanceId: instance.id,
+      chatId,
+      senderId,
+      senderName,
+      model: instance.agentId,
+      provider: instance.agentProviderId,
+      agentId: instance.agentId,
+    });
+
+    const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
+    const effectiveAgentId = agentStartCtx.context.agentId ?? instance.agentId;
+
+    const client = await this.getClient(effectiveProviderId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -529,13 +611,23 @@ export class AgentRunnerService {
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
+    // ── Hook: llm_input (read-only observation) ──
+    await executeHooks(instance.id, 'llm_input', {
+      instanceId: instance.id,
+      chatId,
+      senderId,
+      messages: formattedMessages,
+      model: effectiveAgentId,
+      provider: effectiveProviderId,
+    });
+
     const request = {
       message: combinedMessage,
-      agentId: instance.agentId,
+      agentId: effectiveAgentId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: true,
-      sessionId, // Computed based on session strategy
-      userId: personId || senderId, // ← Person UUID (internal identity)
+      sessionId,
+      userId: personId || senderId,
       platform: {
         id: senderId,
         channel: instance.channel as ChannelType,
@@ -556,8 +648,17 @@ export class AgentRunnerService {
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
     };
 
-    // Client routes by agentType internally
-    yield* processStreamChunks(client.stream(request), enableSplit);
+    // Stream chunks, applying before_message_write hook on each segment
+    for await (const segment of processStreamChunks(client.stream(request), enableSplit)) {
+      const writeCtx = await executeHooks(instance.id, 'before_message_write', {
+        instanceId: instance.id,
+        chatId,
+        content: segment,
+        direction: 'outbound',
+        senderId,
+      });
+      yield writeCtx.context.content;
+    }
   }
 
   /**

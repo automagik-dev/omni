@@ -264,8 +264,8 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'llm_input', context, { timeoutMs: 50 }, registry);
 
       expect(result.results).toHaveLength(1);
-      expect(result.results[0].status).toBe('timeout');
-      expect(result.results[0].hookName).toBe('Slow Hook');
+      expect(result.results[0]?.status).toBe('timeout');
+      expect(result.results[0]?.hookName).toBe('Slow Hook');
     });
 
     test('continues pipeline after timeout', async () => {
@@ -300,8 +300,8 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'llm_input', context, { timeoutMs: 50 }, registry);
 
       expect(result.results).toHaveLength(2);
-      expect(result.results[0].status).toBe('timeout');
-      expect(result.results[1].status).toBe('success');
+      expect(result.results[0]?.status).toBe('timeout');
+      expect(result.results[1]?.status).toBe('success');
       expect(order).toContain('fast');
     });
   });
@@ -327,8 +327,8 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'llm_input', context, undefined, registry);
 
       expect(result.results).toHaveLength(1);
-      expect(result.results[0].status).toBe('error');
-      expect(result.results[0].error).toBe('Hook exploded!');
+      expect(result.results[0]?.status).toBe('error');
+      expect(result.results[0]?.error).toBe('Hook exploded!');
     });
 
     test('continues pipeline after hook error', async () => {
@@ -363,8 +363,8 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'before_message_write', context, undefined, registry);
 
       expect(result.results).toHaveLength(2);
-      expect(result.results[0].status).toBe('error');
-      expect(result.results[1].status).toBe('success');
+      expect(result.results[0]?.status).toBe('error');
+      expect(result.results[1]?.status).toBe('success');
       expect(result.context.content).toBe('modified');
       expect(executed).toEqual(['good']);
     });
@@ -386,8 +386,8 @@ describe('executeHooks', () => {
 
       const result = await executeHooks('inst-1', 'llm_input', context, undefined, registry);
 
-      expect(result.results[0].status).toBe('error');
-      expect(result.results[0].error).toBe('string error');
+      expect(result.results[0]?.status).toBe('error');
+      expect(result.results[0]?.error).toBe('string error');
     });
   });
 
@@ -409,7 +409,7 @@ describe('executeHooks', () => {
 
       const result = await executeHooks('inst-1', 'llm_input', context, undefined, registry);
 
-      expect(result.results[0].durationMs).toBeGreaterThanOrEqual(5);
+      expect(result.results[0]?.durationMs).toBeGreaterThanOrEqual(5);
       expect(result.totalDurationMs).toBeGreaterThanOrEqual(5);
     });
 
@@ -437,10 +437,10 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'llm_input', context, undefined, registry);
 
       expect(result.results).toHaveLength(2);
-      expect(result.results[0].hookId).toBe('hook-1');
-      expect(result.results[0].hookName).toBe('First');
-      expect(result.results[1].hookId).toBe('hook-2');
-      expect(result.results[1].hookName).toBe('Second');
+      expect(result.results[0]?.hookId).toBe('hook-1');
+      expect(result.results[0]?.hookName).toBe('First');
+      expect(result.results[1]?.hookId).toBe('hook-2');
+      expect(result.results[1]?.hookName).toBe('Second');
     });
   });
 
@@ -464,7 +464,7 @@ describe('executeHooks', () => {
       const result = await executeHooks('inst-1', 'before_message_write', context, undefined, registry);
 
       expect(result.context.content).toBe('sync modified');
-      expect(result.results[0].status).toBe('success');
+      expect(result.results[0]?.status).toBe('success');
     });
   });
 });

@@ -128,7 +128,8 @@ export const MAX_HOOK_PRIORITY = 100;
  */
 export type HookHandlerFn<E extends HookEvent = HookEvent> = (
   context: HookContextMap[E],
-) => Promise<HookContextMap[E] | undefined> | HookContextMap[E] | undefined;
+  // biome-ignore lint/suspicious/noConfusingVoidType: void required for async handler compat
+) => Promise<HookContextMap[E] | void> | HookContextMap[E] | void;
 
 /**
  * Registered hook handler with metadata

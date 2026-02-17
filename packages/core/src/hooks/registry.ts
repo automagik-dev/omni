@@ -85,7 +85,7 @@ export class HookRegistry {
       id: hookId,
       event,
       priority,
-      handler: handler as HookHandlerFn,
+      handler: handler as unknown as HookHandlerFn,
       name,
     };
 
@@ -144,7 +144,7 @@ export class HookRegistry {
     if (!eventHooks) return [];
 
     // Convert to array and sort by priority (lower = earlier)
-    return Array.from(eventHooks.values()).sort((a, b) => a.priority - b.priority) as HookHandler<E>[];
+    return Array.from(eventHooks.values()).sort((a, b) => a.priority - b.priority) as unknown as HookHandler<E>[];
   }
 
   /**

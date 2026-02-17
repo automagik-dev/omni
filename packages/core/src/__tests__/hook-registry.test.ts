@@ -42,7 +42,7 @@ describe('HookRegistry', () => {
 
       const hooks = registry.getHooks('inst-1', 'llm_input');
       expect(hooks).toHaveLength(1);
-      expect(hooks[0].priority).toBe(50);
+      expect(hooks[0]?.priority).toBe(50);
     });
 
     test('registers with custom priority', () => {
@@ -53,7 +53,7 @@ describe('HookRegistry', () => {
       });
 
       const hooks = registry.getHooks('inst-1', 'llm_input');
-      expect(hooks[0].priority).toBe(10);
+      expect(hooks[0]?.priority).toBe(10);
     });
 
     test('clamps priority to 0-100 range', () => {
@@ -96,7 +96,7 @@ describe('HookRegistry', () => {
       });
 
       const hooks = registry.getHooks('inst-1', 'before_agent_start');
-      expect(hooks[0].name).toBe('Model Router');
+      expect(hooks[0]?.name).toBe('Model Router');
     });
   });
 
