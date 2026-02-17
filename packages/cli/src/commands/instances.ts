@@ -509,33 +509,59 @@ export function createInstancesCommand(): Command {
     .description('Update an instance')
     .option('--name <name>', 'New instance name')
     .option('--agent-provider <id>', 'New agent provider ID')
+    .option('--remove-agent-provider', 'Remove agent provider from instance')
     .option('--agent <id>', 'New agent ID')
+    .option('--remove-agent', 'Remove agent from instance')
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
     .action(
       async (
         rawId: string,
-        options: { name?: string; agentProvider?: string; agent?: string; profileName?: string },
+        options: {
+          name?: string;
+          agentProvider?: string;
+          removeAgentProvider?: boolean;
+          agent?: string;
+          removeAgent?: boolean;
+          profileName?: string;
+        },
       ) => {
+        // Validate conflicting options
+        if (options.agentProvider && options.removeAgentProvider) {
+          output.error('Cannot use both --agent-provider and --remove-agent-provider together');
+          return;
+        }
+        if (options.agent && options.removeAgent) {
+          output.error('Cannot use both --agent and --remove-agent together');
+          return;
+        }
+
+        const hasInstanceUpdate =
+          options.name || options.agentProvider || options.removeAgentProvider || options.agent || options.removeAgent;
+
+        if (!options.profileName && !hasInstanceUpdate) {
+          output.error(
+            'No update options provided. Use --name, --profile-name, --agent-provider, --remove-agent-provider, --agent, or --remove-agent.',
+          );
+          return;
+        }
+
         const client = getClient();
 
         try {
           const id = await resolveInstanceId(rawId);
+
           if (options.profileName) {
             await updateProfileName(id, options.profileName);
             output.success(`Profile name updated to "${options.profileName}"`);
           }
 
-          if (options.name || options.agentProvider || options.agent) {
+          if (hasInstanceUpdate) {
             await client.instances.update(id, {
               name: options.name,
-              agentProviderId: options.agentProvider,
-              agentId: options.agent,
+              agentProviderId: options.removeAgentProvider ? null : options.agentProvider,
+              agentId: options.removeAgent ? null : options.agent,
             });
             output.success(`Instance updated: ${id}`);
-          }
-
-          if (!options.profileName && !options.name && !options.agentProvider && !options.agent) {
-            output.error('No update options provided. Use --name, --profile-name, --agent-provider, or --agent.');
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

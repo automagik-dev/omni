@@ -76,14 +76,25 @@ describe('ClaudeCodeClient', () => {
       expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-test-key');
     });
 
-    it('sets resume when sessionId provided', () => {
+    it('sets resume when sessionId is a valid UUID', () => {
+      const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+      const client = new ClaudeCodeClient(baseConfig);
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        sessionId,
+      });
+
+      expect(options.resume).toBe(sessionId);
+    });
+
+    it('does not set resume when sessionId is not a valid UUID', () => {
       const client = new ClaudeCodeClient(baseConfig);
       const options = getBuildOptions(client)({
         ...baseRequest,
         sessionId: 'prev-session-id',
       });
 
-      expect(options.resume).toBe('prev-session-id');
+      expect(options.resume).toBeUndefined();
     });
 
     it('does not set resume when no sessionId', () => {
