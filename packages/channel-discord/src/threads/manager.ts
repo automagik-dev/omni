@@ -8,7 +8,14 @@
  */
 
 import { createLogger } from '@omni/core';
-import { ChannelType, type Client, type ForumChannel, type TextChannel, type ThreadChannel } from 'discord.js';
+import {
+  ChannelType,
+  type Client,
+  type ForumChannel,
+  type NewsChannel,
+  type TextChannel,
+  type ThreadChannel,
+} from 'discord.js';
 
 const log = createLogger('discord:threads');
 
@@ -70,11 +77,16 @@ export async function createThread(
   options: CreateThreadOptions,
 ): Promise<ThreadChannel> {
   const channel = await client.channels.fetch(channelId);
-  if (!channel || !('threads' in channel)) {
-    throw new Error(`Channel ${channelId} does not support threads`);
+  if (
+    !channel ||
+    (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)
+  ) {
+    throw new Error(
+      `Channel ${channelId} does not support threads (must be a text or announcement channel)`,
+    );
   }
 
-  const textChannel = channel as TextChannel;
+  const textChannel = channel as TextChannel | NewsChannel;
   const threadType = mapThreadType(options.type ?? 'public');
 
   log.debug('Creating thread', {
@@ -89,6 +101,7 @@ export async function createThread(
     const message = await textChannel.messages.fetch(options.startMessageId);
     const thread = await message.startThread({
       name: options.name,
+      type: threadType,
       autoArchiveDuration: options.autoArchiveMinutes,
       reason: options.reason,
     });
@@ -170,7 +183,7 @@ export async function archiveThread(client: Client, threadId: string): Promise<v
  */
 export async function addThreadMember(client: Client, threadId: string, userId: string): Promise<void> {
   const channel = await client.channels.fetch(threadId);
-  if (!channel || !('members' in channel)) {
+  if (!channel || !channel.isThread()) {
     throw new Error(`Channel ${threadId} is not a thread`);
   }
 

@@ -77,6 +77,24 @@ describe('Thread Manager', () => {
         expect((error as Error).message).toContain('does not support threads');
       }
     });
+
+    test('throws for forum channel passed as text channel ID', async () => {
+      const mod = await import('../threads/manager');
+
+      // Forum channels have `threads` but are not text/announcement channels
+      const fakeClient = {
+        channels: {
+          fetch: async () => ({ type: ChannelType.GuildForum }),
+        },
+      };
+
+      try {
+        await mod.createThread(fakeClient as never, 'forum-channel-id', { name: 'test' });
+        expect(true).toBe(false); // Should not reach here
+      } catch (error) {
+        expect((error as Error).message).toContain('does not support threads');
+      }
+    });
   });
 
   describe('archiveThread error handling', () => {
@@ -110,6 +128,28 @@ describe('Thread Manager', () => {
 
       try {
         await mod.addThreadMember(fakeClient as never, 'invalid-thread', 'user-1');
+        expect(true).toBe(false); // Should not reach here
+      } catch (error) {
+        expect((error as Error).message).toContain('not a thread');
+      }
+    });
+
+    test('throws for text channel that has members property but is not a thread', async () => {
+      const mod = await import('../threads/manager');
+
+      // Text channels have a `members` Collection — the old guard was too broad
+      const fakeClient = {
+        channels: {
+          fetch: async () => ({
+            type: ChannelType.GuildText,
+            members: new Map(), // has `members` but is NOT a thread
+            isThread: () => false,
+          }),
+        },
+      };
+
+      try {
+        await mod.addThreadMember(fakeClient as never, 'text-channel-id', 'user-1');
         expect(true).toBe(false); // Should not reach here
       } catch (error) {
         expect((error as Error).message).toContain('not a thread');
