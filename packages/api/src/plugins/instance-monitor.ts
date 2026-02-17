@@ -104,6 +104,7 @@ async function connectInstance(
     telegramBotToken?: string | null;
     discordBotToken?: string | null;
     guildConfigOverrides?: Record<string, unknown> | null;
+    discordPresence?: Record<string, unknown> | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -129,6 +130,10 @@ async function connectInstance(
   }
   if (instance.discordBotToken) {
     options.token = instance.discordBotToken;
+  }
+  // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
+  if (instance.discordPresence) {
+    options.presence = instance.discordPresence;
   }
 
   await plugin.connect(instance.id, {
@@ -451,6 +456,7 @@ export class InstanceMonitor {
     telegramBotToken?: string | null;
     discordBotToken?: string | null;
     guildConfigOverrides?: Record<string, unknown> | null;
+    discordPresence?: Record<string, unknown> | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;

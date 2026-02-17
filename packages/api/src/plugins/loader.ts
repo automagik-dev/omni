@@ -170,6 +170,7 @@ type ReconnectInstance = {
   telegramBotToken?: string | null;
   telegramReactionLevel?: string | null;
   discordBotToken?: string | null;
+  discordPresence?: Record<string, unknown> | null;
   slackBotToken?: string | null;
   slackAppToken?: string | null;
 };
@@ -192,6 +193,10 @@ function buildReconnectOptions(instance: ReconnectInstance): {
     case 'discord': {
       if (instance.discordBotToken) {
         options.token = instance.discordBotToken;
+      }
+      // Re-apply persisted presence on reconnect (plugin applies it in handleConnected)
+      if (instance.discordPresence) {
+        options.presence = instance.discordPresence;
       }
       break;
     }

@@ -660,6 +660,11 @@ instancesRoutes.post(
       );
     }
 
+    // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
+    if (instance.discordPresence) {
+      connectionOptions.presence = instance.discordPresence;
+    }
+
     const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
     if (errorMessage) {
       return c.json(
@@ -2505,6 +2510,9 @@ instancesRoutes.put('/:id/presence', instanceAccess, zValidator('json', presence
       id,
       presenceData,
     );
+
+    // Persist so reconnect flows can re-apply presence via options.presence.
+    await services.instances.update(id, { discordPresence: presenceData });
 
     return c.json({ success: true, data: { instanceId: id, presence: presenceData } });
   } catch (error) {

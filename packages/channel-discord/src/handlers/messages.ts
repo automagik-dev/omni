@@ -291,14 +291,24 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     message.channel.type === ChannelType.PrivateThread ||
     message.channel.type === ChannelType.AnnouncementThread;
 
-  // Check if channel is Forum or Media type — auto-thread creation should be skipped
+  // Check if channel is Forum or Media type — auto-thread creation should be skipped.
+  // Forum/media posts arrive as PublicThread messages; the channel itself is typed as
+  // PublicThread while its parent is GuildForum (15) or GuildMedia (16). We must check
+  // both the channel type and its parent type to correctly identify forum/media posts.
+  const GUILD_MEDIA_TYPE = 16;
+  const parentType =
+    'parent' in message.channel ? (message.channel.parent?.type as number | undefined) : undefined;
   const isForumOrMedia =
-    (message.channel.type as number) === ChannelType.GuildForum || (message.channel.type as number) === 16; // GuildMedia
+    (message.channel.type as number) === ChannelType.GuildForum ||
+    (message.channel.type as number) === GUILD_MEDIA_TYPE ||
+    parentType === ChannelType.GuildForum ||
+    parentType === GUILD_MEDIA_TYPE;
 
   if (isForumOrMedia) {
     log.debug('Message in forum/media channel — auto-thread creation should be skipped', {
       channelId: chatId,
       channelType: message.channel.type,
+      parentType,
     });
   }
 
