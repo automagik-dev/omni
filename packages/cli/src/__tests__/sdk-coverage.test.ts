@@ -107,6 +107,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'access.createRule': 'access create',
   'access.deleteRule': 'access delete',
   'access.checkAccess': 'access check',
+  'access.listPairingRequests': 'access pending',
+  'access.actionPairingRequest': 'access approve / access deny',
 
   // ============================================================================
   // SETTINGS

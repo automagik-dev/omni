@@ -102,13 +102,13 @@ describeWithDb('Pairing Flow', () => {
       expect(result?.instanceId).toBe(testInstanceId);
       expect(result?.platformUserId).toBe('user-new-1');
       expect(result?.expiresAt).toBeInstanceOf(Date);
-      cleanupRuleIds.push(result?.id);
+      if (result) cleanupRuleIds.push(result.id);
     });
 
     test('second message from same pending sender reuses existing code', async () => {
       const first = await accessService.requestPairing(testInstanceId, 'user-reuse-1');
       expect(first).not.toBeNull();
-      cleanupRuleIds.push(first?.id);
+      if (first) cleanupRuleIds.push(first.id);
 
       const second = await accessService.requestPairing(testInstanceId, 'user-reuse-1');
       expect(second).not.toBeNull();
@@ -177,8 +177,9 @@ describeWithDb('Pairing Flow', () => {
     test('approve creates allow rule', async () => {
       const request = await accessService.requestPairing(testInstanceId, 'approve-user-1');
       expect(request).not.toBeNull();
+      const requestId = request?.id as string;
 
-      const allowRule = await accessService.approvePairingRequest(request?.id);
+      const allowRule = await accessService.approvePairingRequest(requestId);
       expect(allowRule.ruleType).toBe('allow');
       expect(allowRule.platformUserId).toBe('approve-user-1');
       expect(allowRule.instanceId).toBe(testInstanceId);
@@ -188,12 +189,13 @@ describeWithDb('Pairing Flow', () => {
     test('deny deletes request and stores reason', async () => {
       const request = await accessService.requestPairing(testInstanceId, 'deny-user-1');
       expect(request).not.toBeNull();
+      const requestId = request?.id as string;
 
-      await accessService.denyPairingRequest(request?.id, 'Suspicious activity');
+      await accessService.denyPairingRequest(requestId, 'Suspicious activity');
 
       // Request should be deleted
       try {
-        await accessService.getById(request?.id);
+        await accessService.getById(requestId);
         expect(true).toBe(false); // Should not reach here
       } catch (err) {
         expect((err as Error).message).toContain('not found');
@@ -203,13 +205,14 @@ describeWithDb('Pairing Flow', () => {
     test('one-time-use: replaying after approval returns error', async () => {
       const request = await accessService.requestPairing(testInstanceId, 'replay-approve-1');
       expect(request).not.toBeNull();
+      const requestId = request?.id as string;
 
-      const allowRule = await accessService.approvePairingRequest(request?.id);
+      const allowRule = await accessService.approvePairingRequest(requestId);
       cleanupRuleIds.push(allowRule.id);
 
       // Second approval should fail (request deleted)
       try {
-        await accessService.approvePairingRequest(request?.id);
+        await accessService.approvePairingRequest(requestId);
         expect(true).toBe(false); // Should not reach here
       } catch (err) {
         expect(err).toBeDefined();
@@ -219,12 +222,13 @@ describeWithDb('Pairing Flow', () => {
     test('one-time-use: replaying after denial returns error', async () => {
       const request = await accessService.requestPairing(testInstanceId, 'replay-deny-1');
       expect(request).not.toBeNull();
+      const requestId = request?.id as string;
 
-      await accessService.denyPairingRequest(request?.id);
+      await accessService.denyPairingRequest(requestId);
 
       // Second denial should fail (request deleted)
       try {
-        await accessService.denyPairingRequest(request?.id);
+        await accessService.denyPairingRequest(requestId);
         expect(true).toBe(false); // Should not reach here
       } catch (err) {
         expect(err).toBeDefined();

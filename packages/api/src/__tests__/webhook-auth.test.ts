@@ -46,7 +46,7 @@ describe('Webhook Auth Middleware', () => {
     });
 
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('UNAUTHORIZED');
     expect(body.error.message).toBe('Invalid webhook secret token');
     // Verify no extra data leaks
@@ -61,7 +61,7 @@ describe('Webhook Auth Middleware', () => {
     });
 
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('UNAUTHORIZED');
     expect(body.error.message).toBe('Missing webhook secret token');
     // Verify no extra data leaks
@@ -101,7 +101,7 @@ describe('Webhook Auth Middleware', () => {
     });
 
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = (await res.json()) as { error: { code: string; message: string } };
     // Only error field, no leaking of request data
     expect(Object.keys(body)).toEqual(['error']);
     expect(body.error).toBeDefined();
