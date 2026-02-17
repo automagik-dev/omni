@@ -503,6 +503,71 @@ export function createInstancesCommand(): Command {
     }
   }
 
+  type InstanceUpdateOptions = {
+    name?: string;
+    agentProvider?: string;
+    removeAgentProvider?: boolean;
+    agent?: string;
+    removeAgent?: boolean;
+    profileName?: string;
+  };
+
+  /** Validate instance update options, returning an error string or null */
+  function validateUpdateOptions(options: InstanceUpdateOptions): string | null {
+    if (options.agentProvider && options.removeAgentProvider) {
+      return 'Cannot use both --agent-provider and --remove-agent-provider together';
+    }
+    if (options.agent && options.removeAgent) {
+      return 'Cannot use both --agent and --remove-agent together';
+    }
+    if (!options.profileName && !buildInstancePayload(options)) {
+      return 'No update options provided. Use --name, --profile-name, --agent-provider, --remove-agent-provider, --agent, or --remove-agent.';
+    }
+    return null;
+  }
+
+  /** Build the instance update payload, or null if no fields need updating */
+  function buildInstancePayload(
+    options: InstanceUpdateOptions,
+  ): { name?: string; agentProviderId?: string | null; agentId?: string | null } | null {
+    const hasUpdate =
+      options.name || options.agentProvider || options.removeAgentProvider || options.agent || options.removeAgent;
+    if (!hasUpdate) return null;
+    return {
+      name: options.name,
+      agentProviderId: options.removeAgentProvider ? null : options.agentProvider,
+      agentId: options.removeAgent ? null : options.agent,
+    };
+  }
+
+  async function handleInstanceUpdate(rawId: string, options: InstanceUpdateOptions): Promise<void> {
+    const validationError = validateUpdateOptions(options);
+    if (validationError) {
+      output.error(validationError);
+      return;
+    }
+
+    const client = getClient();
+
+    try {
+      const id = await resolveInstanceId(rawId);
+
+      if (options.profileName) {
+        await updateProfileName(id, options.profileName);
+        output.success(`Profile name updated to "${options.profileName}"`);
+      }
+
+      const payload = buildInstancePayload(options);
+      if (payload) {
+        await client.instances.update(id, payload);
+        output.success(`Instance updated: ${id}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      output.error(`Failed to update instance: ${message}`);
+    }
+  }
+
   // omni instances update <id>
   instances
     .command('update <id>')
@@ -513,62 +578,7 @@ export function createInstancesCommand(): Command {
     .option('--agent <id>', 'New agent ID')
     .option('--remove-agent', 'Remove agent from instance')
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
-    .action(
-      async (
-        rawId: string,
-        options: {
-          name?: string;
-          agentProvider?: string;
-          removeAgentProvider?: boolean;
-          agent?: string;
-          removeAgent?: boolean;
-          profileName?: string;
-        },
-      ) => {
-        // Validate conflicting options
-        if (options.agentProvider && options.removeAgentProvider) {
-          output.error('Cannot use both --agent-provider and --remove-agent-provider together');
-          return;
-        }
-        if (options.agent && options.removeAgent) {
-          output.error('Cannot use both --agent and --remove-agent together');
-          return;
-        }
-
-        const hasInstanceUpdate =
-          options.name || options.agentProvider || options.removeAgentProvider || options.agent || options.removeAgent;
-
-        if (!options.profileName && !hasInstanceUpdate) {
-          output.error(
-            'No update options provided. Use --name, --profile-name, --agent-provider, --remove-agent-provider, --agent, or --remove-agent.',
-          );
-          return;
-        }
-
-        const client = getClient();
-
-        try {
-          const id = await resolveInstanceId(rawId);
-
-          if (options.profileName) {
-            await updateProfileName(id, options.profileName);
-            output.success(`Profile name updated to "${options.profileName}"`);
-          }
-
-          if (hasInstanceUpdate) {
-            await client.instances.update(id, {
-              name: options.name,
-              agentProviderId: options.removeAgentProvider ? null : options.agentProvider,
-              agentId: options.removeAgent ? null : options.agent,
-            });
-            output.success(`Instance updated: ${id}`);
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to update instance: ${message}`);
-        }
-      },
-    );
+    .action(handleInstanceUpdate);
 
   // omni instances contacts <id>
   instances
