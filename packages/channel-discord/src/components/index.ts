@@ -25,5 +25,23 @@ export {
   disableSelectMenu,
 } from './select-menus';
 
+// Entity Select Menus (User, Role, Channel, Mentionable)
+export {
+  buildUserSelectMenu,
+  buildRoleSelectMenu,
+  buildChannelSelectMenu,
+  buildMentionableSelectMenu,
+  buildUserSelectMenuRow,
+  buildRoleSelectMenuRow,
+  buildChannelSelectMenuRow,
+  buildMentionableSelectMenuRow,
+  sendUserSelectMessage,
+  sendRoleSelectMessage,
+  sendChannelSelectMessage,
+  sendMentionableSelectMessage,
+  sendEphemeralReply,
+} from './entity-selects';
+export type { EntitySelectMenuOptions, ChannelSelectMenuOptions } from './entity-selects';
+
 // Modals
 export { buildModal, showModal, createSimpleModal, createFormModal } from './modals';

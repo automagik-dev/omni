@@ -16,10 +16,14 @@ import type { DiscordPlugin } from '../plugin';
 import {
   isAutocomplete,
   isButton,
+  isChannelSelectMenu,
   isChatInputCommand,
   isContextMenuCommand,
+  isMentionableSelectMenu,
   isModalSubmit,
+  isRoleSelectMenu,
   isStringSelectMenu,
+  isUserSelectMenu,
 } from '../types';
 
 const log = createLogger('discord:interactions');
@@ -145,6 +149,58 @@ async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, inte
 }
 
 /**
+ * Process entity select menu interaction (user, role, channel, mentionable)
+ */
+async function processEntitySelectMenu(
+  plugin: DiscordPlugin,
+  instanceId: string,
+  interaction: Interaction,
+): Promise<void> {
+  const base = extractBasePayload(interaction, instanceId);
+
+  let selectType: 'user' | 'role' | 'channel' | 'mentionable';
+  let customId: string;
+  let values: string[];
+
+  if (isUserSelectMenu(interaction)) {
+    selectType = 'user';
+    customId = interaction.customId;
+    values = interaction.values.map(String);
+  } else if (isRoleSelectMenu(interaction)) {
+    selectType = 'role';
+    customId = interaction.customId;
+    values = interaction.values.map(String);
+  } else if (isChannelSelectMenu(interaction)) {
+    selectType = 'channel';
+    customId = interaction.customId;
+    values = interaction.values.map(String);
+  } else if (isMentionableSelectMenu(interaction)) {
+    selectType = 'mentionable';
+    customId = interaction.customId;
+    // Mentionable returns users and roles — extract all IDs
+    values = [...interaction.users.keys(), ...interaction.roles.keys()];
+  } else {
+    return;
+  }
+
+  await plugin.handleEntitySelectMenu({
+    ...base,
+    customId,
+    values,
+    selectType,
+  });
+
+  // Defer update
+  try {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.deferUpdate();
+    }
+  } catch (error) {
+    log.warn('Failed to defer entity select menu update', { instanceId, error });
+  }
+}
+
+/**
  * Process modal submission interaction
  */
 async function processModalSubmit(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
@@ -217,6 +273,15 @@ async function routeInteraction(plugin: DiscordPlugin, instanceId: string, inter
   }
   if (isStringSelectMenu(interaction)) {
     await processSelectMenu(plugin, instanceId, interaction);
+    return true;
+  }
+  if (
+    isUserSelectMenu(interaction) ||
+    isRoleSelectMenu(interaction) ||
+    isChannelSelectMenu(interaction) ||
+    isMentionableSelectMenu(interaction)
+  ) {
+    await processEntitySelectMenu(plugin, instanceId, interaction);
     return true;
   }
   if (isModalSubmit(interaction)) {

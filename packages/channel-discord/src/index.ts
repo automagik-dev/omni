@@ -82,6 +82,7 @@ export type {
   ExtractedContent,
   DiscordWebhookInfo,
   WebhookSendOptions,
+  EntitySelectMenuPayload,
   DiscordMessage,
 } from './types';
 
@@ -91,6 +92,10 @@ export {
   isButton,
   isStringSelectMenu,
   isAnySelectMenu,
+  isUserSelectMenu,
+  isRoleSelectMenu,
+  isChannelSelectMenu,
+  isMentionableSelectMenu,
   isModalSubmit,
   isContextMenuCommand,
   isAutocomplete,

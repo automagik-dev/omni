@@ -36,6 +36,7 @@ import type {
   ButtonPayload,
   ContextMenuPayload,
   DiscordConfig,
+  EntitySelectMenuPayload,
   ModalSubmitPayload,
   SelectMenuPayload,
   SlashCommandPayload,
@@ -1367,6 +1368,14 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Handle entity select menu (user, role, channel, mentionable)
+   * @internal
+   */
+  async handleEntitySelectMenu(payload: EntitySelectMenuPayload): Promise<void> {
+    await this.emitCustomEvent('custom.discord.entity_select_menu', payload);
+  }
+
+  /**
    * Handle autocomplete
    * @internal
    */
@@ -1385,6 +1394,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
       | ContextMenuPayload
       | ButtonPayload
       | SelectMenuPayload
+      | EntitySelectMenuPayload
       | ModalSubmitPayload
       | AutocompletePayload,
   ): Promise<void> {

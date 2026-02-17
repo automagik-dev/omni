@@ -6,6 +6,7 @@ import type {
   ButtonInteraction,
   ChannelSelectMenuInteraction,
   ChatInputCommandInteraction,
+  MentionableSelectMenuInteraction,
   Message,
   MessageContextMenuCommandInteraction,
   ModalSubmitInteraction,
@@ -251,11 +252,20 @@ export interface ButtonPayload extends BaseInteractionPayload {
 }
 
 /**
- * Select menu payload
+ * Select menu payload (string select)
  */
 export interface SelectMenuPayload extends BaseInteractionPayload {
   customId: string;
   values: string[];
+}
+
+/**
+ * Entity select menu payload (user, role, channel, mentionable)
+ */
+export interface EntitySelectMenuPayload extends BaseInteractionPayload {
+  customId: string;
+  values: string[];
+  selectType: 'user' | 'role' | 'channel' | 'mentionable';
 }
 
 /**
@@ -371,6 +381,58 @@ export function isStringSelectMenu(interaction: unknown): interaction is StringS
 }
 
 /**
+ * Check if interaction is a user select menu
+ */
+export function isUserSelectMenu(interaction: unknown): interaction is UserSelectMenuInteraction {
+  return (
+    typeof interaction === 'object' &&
+    interaction !== null &&
+    'isUserSelectMenu' in interaction &&
+    typeof (interaction as { isUserSelectMenu: () => boolean }).isUserSelectMenu === 'function' &&
+    (interaction as { isUserSelectMenu: () => boolean }).isUserSelectMenu()
+  );
+}
+
+/**
+ * Check if interaction is a role select menu
+ */
+export function isRoleSelectMenu(interaction: unknown): interaction is RoleSelectMenuInteraction {
+  return (
+    typeof interaction === 'object' &&
+    interaction !== null &&
+    'isRoleSelectMenu' in interaction &&
+    typeof (interaction as { isRoleSelectMenu: () => boolean }).isRoleSelectMenu === 'function' &&
+    (interaction as { isRoleSelectMenu: () => boolean }).isRoleSelectMenu()
+  );
+}
+
+/**
+ * Check if interaction is a channel select menu
+ */
+export function isChannelSelectMenu(interaction: unknown): interaction is ChannelSelectMenuInteraction {
+  return (
+    typeof interaction === 'object' &&
+    interaction !== null &&
+    'isChannelSelectMenu' in interaction &&
+    typeof (interaction as { isChannelSelectMenu: () => boolean }).isChannelSelectMenu === 'function' &&
+    (interaction as { isChannelSelectMenu: () => boolean }).isChannelSelectMenu()
+  );
+}
+
+/**
+ * Check if interaction is a mentionable select menu
+ */
+export function isMentionableSelectMenu(interaction: unknown): interaction is MentionableSelectMenuInteraction {
+  return (
+    typeof interaction === 'object' &&
+    interaction !== null &&
+    'isMentionableSelectMenu' in interaction &&
+    typeof (interaction as { isMentionableSelectMenu: () => boolean }).isMentionableSelectMenu === 'function' &&
+    (interaction as { isMentionableSelectMenu: () => boolean }).isMentionableSelectMenu()
+  );
+}
+
+/**
  * Check if interaction is any select menu
  */
 export function isAnySelectMenu(
@@ -379,7 +441,8 @@ export function isAnySelectMenu(
   | StringSelectMenuInteraction
   | UserSelectMenuInteraction
   | RoleSelectMenuInteraction
-  | ChannelSelectMenuInteraction {
+  | ChannelSelectMenuInteraction
+  | MentionableSelectMenuInteraction {
   return (
     typeof interaction === 'object' &&
     interaction !== null &&
