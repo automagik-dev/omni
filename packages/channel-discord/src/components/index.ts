@@ -43,5 +43,9 @@ export {
 } from './entity-selects';
 export type { EntitySelectMenuOptions, ChannelSelectMenuOptions } from './entity-selects';
 
+// Component Registry
+export { ComponentRegistry, getComponentRegistry, resetComponentRegistry } from './registry';
+export type { ComponentEntry, RegisterOptions, ResolveOptions, RegistryStats } from './registry';
+
 // Modals
 export { buildModal, showModal, createSimpleModal, createFormModal } from './modals';
