@@ -15,9 +15,9 @@
  */
 
 import type { Logger } from '@omni/core';
+import { isValidInstanceId } from './sanitize';
 
-// Validation patterns from wish spec
-const INSTANCE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+// Validation pattern from wish spec
 const EXTERNAL_ID_RE = /^[a-zA-Z0-9_.@:/-]{1,256}$/;
 
 export interface DedupeConfig {
@@ -51,6 +51,9 @@ export interface DedupeCache {
   /** Clear all entries */
   clear(): void;
 
+  /** Stop the background cleanup timer and clear all entries. Call when the cache is no longer needed. */
+  dispose(): void;
+
   /** Current number of entries */
   readonly size: number;
 }
@@ -61,7 +64,7 @@ export interface DedupeCache {
  */
 export function validateCacheKey(instanceId: string, externalId: string): string | null {
   if (!instanceId || !externalId) return null;
-  if (!INSTANCE_ID_RE.test(instanceId)) return null;
+  if (!isValidInstanceId(instanceId)) return null;
   if (!EXTERNAL_ID_RE.test(externalId)) return null;
   return `${instanceId}:${externalId}`;
 }
@@ -88,6 +91,18 @@ export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
   let hitCount = 0;
   let missCount = 0;
   let totalHitLatencyMs = 0;
+
+  // Proactively evict expired entries on a periodic timer so that stale entries
+  // do not accumulate when message traffic stops. The interval is half the TTL,
+  // capped at 60 seconds to avoid very frequent sweeps for short TTLs.
+  // The timer is unref'd so it does not prevent process exit.
+  const cleanupIntervalMs = Math.min(ttlMs / 2, 60_000);
+  const cleanupTimer = setInterval(() => {
+    evictExpired();
+  }, cleanupIntervalMs);
+  if (typeof (cleanupTimer as unknown as { unref?: () => void }).unref === 'function') {
+    (cleanupTimer as unknown as { unref: () => void }).unref();
+  }
 
   function evictExpired(): void {
     const now = Date.now();
@@ -190,10 +205,16 @@ export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
     totalHitLatencyMs = 0;
   }
 
+  function dispose(): void {
+    clearInterval(cleanupTimer);
+    cache.clear();
+  }
+
   return {
     isDuplicate,
     stats,
     clear,
+    dispose,
     get size() {
       return cache.size;
     },

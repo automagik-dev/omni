@@ -154,7 +154,7 @@ describe('createDebounceBridge', () => {
   });
 
   describe('performance', () => {
-    test('debounce timer overhead <5ms p99', async () => {
+    test('debounce timer overhead <50ms p99', async () => {
       const logger = createMockLogger();
       const actualWindowDurations: number[] = [];
       const configuredWindowMs = 50;

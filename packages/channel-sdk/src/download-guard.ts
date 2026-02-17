@@ -79,6 +79,16 @@ export function createDownloadGuard(config?: DownloadGuardConfig): DownloadGuard
       if (!Number.isNaN(size)) {
         checkSize(size, logger, ctx);
       }
+    } else {
+      // Content-Length header is absent: size cannot be verified before the body is read.
+      // Log a warning so operators are aware the guard cannot protect this download.
+      logger.warn('download_size_unknown', {
+        event: 'download_size_unknown',
+        instanceId: ctx?.instanceId,
+        url: ctx?.url,
+        channel: ctx?.channel,
+        message: 'Content-Length header missing; download size cannot be verified before streaming',
+      });
     }
   }
 

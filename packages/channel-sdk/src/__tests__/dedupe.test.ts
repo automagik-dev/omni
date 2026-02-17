@@ -117,7 +117,7 @@ describe('createInboundDedupeCache', () => {
     expect(cache.isDuplicate('inst', 'msg-4', 'wa', logger)).toBe(true);
   });
 
-  test('TTL expiry removes old entries', () => {
+  test('TTL expiry removes old entries', async () => {
     const cache = createInboundDedupeCache({ ttlMs: 50 });
     const logger = createMockLogger();
 
@@ -125,10 +125,7 @@ describe('createInboundDedupeCache', () => {
     expect(cache.isDuplicate('inst', 'msg-1', 'wa', logger)).toBe(true);
 
     // Wait for TTL to expire
-    const start = Date.now();
-    while (Date.now() - start < 60) {
-      /* busy wait for TTL expiry */
-    }
+    await new Promise((resolve) => setTimeout(resolve, 60));
 
     // After TTL, should not be duplicate
     expect(cache.isDuplicate('inst', 'msg-1', 'wa', logger)).toBe(false);

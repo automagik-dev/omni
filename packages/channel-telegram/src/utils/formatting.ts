@@ -237,6 +237,16 @@ function appendTextTokenToState(state: PlainHtmlSplitState, text: string): void 
     const budget = state.maxLength - state.current.length - suffixLen;
     if (budget <= 0) {
       flushPlainHtmlState(state);
+      // After flush, state.current is set to the reopening tags for the open stack.
+      // If the open tag stack alone consumes the entire maxLength, budget would
+      // remain non-positive forever — causing an infinite loop. Guard against this
+      // by hard-cutting remaining text to guarantee progress.
+      const newSuffixLen = closingTagsFor(state.openStack).length;
+      const newBudget = state.maxLength - state.current.length - newSuffixLen;
+      if (newBudget <= 0) {
+        state.chunks.push(remaining.slice(0, state.maxLength));
+        remaining = remaining.slice(state.maxLength);
+      }
       continue;
     }
 

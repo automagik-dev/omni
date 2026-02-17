@@ -106,6 +106,21 @@ describe('checkResponse', () => {
     expect(() => guard.checkResponse(response, logger)).not.toThrow();
   });
 
+  test('logs WARN when content-length header is absent', () => {
+    const guard = createDownloadGuard({ maxSizeBytes: 1000 });
+    const logger = createMockLogger();
+    const response = createMockResponse(null);
+    guard.checkResponse(response, logger, { instanceId: 'inst-1', url: 'https://example.com/file' });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'download_size_unknown',
+      expect.objectContaining({
+        event: 'download_size_unknown',
+        instanceId: 'inst-1',
+        url: 'https://example.com/file',
+      }),
+    );
+  });
+
   test('handles 50MB boundary correctly', () => {
     const guard = createDownloadGuard(); // default 50MB
     const logger = createMockLogger();

@@ -38,22 +38,26 @@ export function redactString(value: string): string {
 /**
  * Deep-redact sensitive values from an object (log entry data).
  * Returns a new object with redacted strings.
+ * Uses a WeakSet to detect and safely handle circular references.
  */
-export function redactObject<T>(obj: T): T {
+export function redactObject<T>(obj: T, visited = new WeakSet<object>()): T {
   if (obj === null || obj === undefined) return obj;
 
   if (typeof obj === 'string') {
     return redactString(obj) as T;
   }
 
-  if (Array.isArray(obj)) {
-    return obj.map((item) => redactObject(item)) as T;
-  }
-
   if (typeof obj === 'object') {
+    if (visited.has(obj as object)) return '[Circular]' as unknown as T;
+    visited.add(obj as object);
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => redactObject(item, visited)) as T;
+    }
+
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      result[key] = redactObject(value);
+      result[key] = redactObject(value, visited);
     }
     return result as T;
   }

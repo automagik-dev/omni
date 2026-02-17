@@ -102,6 +102,24 @@ describe('redactObject', () => {
     expect(redactObject(true)).toBe(true);
   });
 
+  test('handles circular references without stack overflow', () => {
+    const obj: Record<string, unknown> = { name: 'test' };
+    obj.self = obj; // circular reference
+    expect(() => redactObject(obj)).not.toThrow();
+    const result = redactObject(obj) as Record<string, unknown>;
+    expect(result.name).toBe('test');
+    expect(result.self).toBe('[Circular]');
+  });
+
+  test('handles circular arrays without stack overflow', () => {
+    const arr: unknown[] = [1, 2];
+    arr.push(arr); // circular reference
+    expect(() => redactObject(arr)).not.toThrow();
+    const result = redactObject(arr) as unknown[];
+    expect(result[0]).toBe(1);
+    expect(result[2]).toBe('[Circular]');
+  });
+
   test('Telegram bot token in error log shows as [REDACTED_BOT_TOKEN]', () => {
     const logEntry = {
       level: 'error',
