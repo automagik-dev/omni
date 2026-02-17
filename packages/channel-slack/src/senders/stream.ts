@@ -139,7 +139,7 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
     pendingContent = undefined;
 
     const chunks = chunkMessage(text);
-    const [firstChunk, ...overflowChunks] = chunks;
+    const [firstChunk = '', ...overflowChunks] = chunks;
 
     if (draftTs) {
       // Update the existing draft with the first chunk
