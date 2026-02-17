@@ -957,7 +957,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         return lidJid;
       }
     } catch (error) {
-      this.logger.warn('lid_send_fallback', {
+      // LID resolution failure is expected when contact hasn't synced yet — fallback to phone is correct.
+      // Use debug level to avoid production log noise for this routine fallback path.
+      this.logger.debug('lid_send_fallback', {
         originalTarget: to,
         attemptedPhone: phoneJid,
         error: String(error),
