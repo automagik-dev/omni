@@ -13,7 +13,7 @@ import { writeFileSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { _resetProvider, transcribeVoiceNote } from '../utils/voice-transcription';
+import { VOICE_FALLBACK_TEXT, _resetProvider, transcribeVoiceNote } from '../utils/voice-transcription';
 
 /**
  * Creates a mock fetch for Whisper API
@@ -94,7 +94,7 @@ describe('Voice Transcription', () => {
       const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
-      expect(result.text).toBe('[Voice note - transcription unavailable]');
+      expect(result.text).toBe(VOICE_FALLBACK_TEXT);
     });
 
     it('returns fallback when duration exceeds 5 minutes', async () => {
@@ -103,7 +103,7 @@ describe('Voice Transcription', () => {
       const result = await transcribeVoiceNote(testAudioRelPath, 301, 'audio/ogg');
 
       expect(result.success).toBe(false);
-      expect(result.text).toBe('[Voice note - transcription unavailable]');
+      expect(result.text).toBe(VOICE_FALLBACK_TEXT);
     });
 
     it('allows duration up to 300 seconds', async () => {
@@ -123,7 +123,7 @@ describe('Voice Transcription', () => {
       const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
-      expect(result.text).toBe('[Voice note - transcription unavailable]');
+      expect(result.text).toBe(VOICE_FALLBACK_TEXT);
     });
 
     it('returns fallback when API returns error status', async () => {
@@ -133,7 +133,7 @@ describe('Voice Transcription', () => {
       const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
-      expect(result.text).toBe('[Voice note - transcription unavailable]');
+      expect(result.text).toBe(VOICE_FALLBACK_TEXT);
     });
 
     it('returns fallback when transcription text is empty', async () => {
@@ -143,7 +143,7 @@ describe('Voice Transcription', () => {
       const result = await transcribeVoiceNote(testAudioRelPath, 5, 'audio/ogg');
 
       expect(result.success).toBe(false);
-      expect(result.text).toBe('[Voice note - transcription unavailable]');
+      expect(result.text).toBe(VOICE_FALLBACK_TEXT);
     });
 
     it('handles undefined duration (no max check)', async () => {

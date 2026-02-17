@@ -16,7 +16,7 @@ const log = createLogger('telegram:voice-transcription');
 const MAX_DURATION_SECONDS = 300; // 5 minutes
 
 /** Fallback text when transcription is unavailable */
-const FALLBACK_TEXT = '[Voice note - transcription unavailable]';
+export const VOICE_FALLBACK_TEXT = '[Voice note - transcription unavailable]';
 
 /** Lazy-initialized singleton provider */
 let cachedProvider: TranscriptionProvider | null = null;
@@ -73,12 +73,12 @@ export async function transcribeVoiceNote(
       durationSeconds,
       maxDuration: MAX_DURATION_SECONDS,
     });
-    return { text: FALLBACK_TEXT, success: false };
+    return { text: VOICE_FALLBACK_TEXT, success: false };
   }
 
   const provider = getProvider();
   if (!provider) {
-    return { text: FALLBACK_TEXT, success: false };
+    return { text: VOICE_FALLBACK_TEXT, success: false };
   }
 
   // Determine audio format from MIME type
@@ -103,7 +103,7 @@ export async function transcribeVoiceNote(
     });
 
     if (!result.text.trim()) {
-      return { text: FALLBACK_TEXT, success: false };
+      return { text: VOICE_FALLBACK_TEXT, success: false };
     }
 
     return {
@@ -116,7 +116,7 @@ export async function transcribeVoiceNote(
 
     log.error('voice_transcription_failed', { error: errorMsg, code: errorCode, localPath, absolutePath });
 
-    return { text: FALLBACK_TEXT, success: false };
+    return { text: VOICE_FALLBACK_TEXT, success: false };
   }
 }
 

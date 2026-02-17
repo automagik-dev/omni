@@ -12,7 +12,7 @@ import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import type { TelegramPlugin } from '../plugin';
 import { buildDisplayName, toPlatformUserId } from '../utils/identity';
 import { tryDownloadTelegramMedia } from '../utils/media-download';
-import { transcribeVoiceNote } from '../utils/voice-transcription';
+import { VOICE_FALLBACK_TEXT, transcribeVoiceNote } from '../utils/voice-transcription';
 import type { TelegramExtractedContent } from './extract-content';
 import { extractTelegramMessageContent } from './extract-content';
 
@@ -67,7 +67,8 @@ async function tryTranscribeVoice(
 ): Promise<string | undefined> {
   if (!content.isVoiceNote) return content.text;
   if (!plugin.isVoiceTranscriptionEnabled(instanceId)) return content.text;
-  if (!localPath) return content.text;
+  // Media download failed — return the fallback marker rather than empty content.text
+  if (!localPath) return VOICE_FALLBACK_TEXT;
 
   const mimeType = content.mimeType ?? 'audio/ogg';
   const result = await transcribeVoiceNote(localPath, content.voiceDurationSeconds, mimeType);
@@ -164,6 +165,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const displayName = buildDisplayName(from);
     const local = await downloadIfMedia({ bot, instanceId, externalId, content });
 
+    // Preflight voice transcription: keep edited voice notes consistent with new messages
+    const messageText = await tryTranscribeVoice(content, local?.localPath, plugin, instanceId);
+
     await plugin.handleMessageReceived(
       instanceId,
       externalId,
@@ -171,7 +175,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
       userId,
       {
         type: content.type,
-        text: content.text,
+        text: messageText,
         mediaUrl: content.mediaFileId,
         localPath: local?.localPath,
         mimeType: content.mimeType,
