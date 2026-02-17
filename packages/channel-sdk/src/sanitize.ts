@@ -56,14 +56,18 @@ export function sanitizeMessage(
     return { ok: false, text: '', rejected: 'null_byte' };
   }
 
-  // 2. Enforce max length
-  if (text.length > maxLength) {
+  // 2. Enforce max length in UTF-8 bytes (matching the option name maxLengthBytes).
+  // text.length counts UTF-16 code units; multibyte characters (e.g. CJK, emoji)
+  // would bypass the limit if we used that. Buffer.byteLength gives the true UTF-8 size.
+  const textByteLength = Buffer.byteLength(text, 'utf8');
+  if (textByteLength > maxLength) {
     logger.warn('message_rejected_too_long', {
       event: 'message_rejected',
       reason: 'too_long',
       instanceId: opts?.instanceId,
       messageId: opts?.messageId,
       textLengthChars: text.length,
+      textLengthBytes: textByteLength,
       maxLength,
     });
     return { ok: false, text: '', rejected: 'too_long' };

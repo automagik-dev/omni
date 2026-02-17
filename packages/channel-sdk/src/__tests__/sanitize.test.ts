@@ -82,6 +82,25 @@ describe('sanitizeMessage', () => {
     expect(result.rejected).toBe('too_long');
   });
 
+  test('rejects multibyte text exceeding limit in UTF-8 bytes', () => {
+    const logger = createMockLogger();
+    // 'é' is 1 UTF-16 char but 2 UTF-8 bytes. 33_000 copies = 33_000 chars but 66_000 bytes.
+    // The default limit is 65_536 bytes, so this should be rejected even though char count is under.
+    const text = 'é'.repeat(33_000);
+    expect(text.length).toBe(33_000); // char count under limit
+    const result = sanitizeMessage(text, logger);
+    expect(result.ok).toBe(false);
+    expect(result.rejected).toBe('too_long');
+  });
+
+  test('accepts multibyte text at exactly max bytes', () => {
+    const logger = createMockLogger();
+    // 'é' = 2 bytes; 32_768 copies = 65_536 bytes exactly
+    const text = 'é'.repeat(32_768);
+    const result = sanitizeMessage(text, logger);
+    expect(result.ok).toBe(true);
+  });
+
   test('preserves emoji and international text', () => {
     const logger = createMockLogger();
     const result = sanitizeMessage('Hello! Olá! 你好! 👋🌍', logger);

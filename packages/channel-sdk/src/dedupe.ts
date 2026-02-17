@@ -109,9 +109,10 @@ export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
     for (const [key, item] of cache) {
       if (item.expiresAt <= now) {
         cache.delete(key);
-      } else {
-        break;
       }
+      // No early break: the Map is ordered by LRU access time (recordHit does
+      // delete+re-insert to move entries to the end), not by expiration time.
+      // Expired entries can appear anywhere, so we must scan the full cache.
     }
   }
 

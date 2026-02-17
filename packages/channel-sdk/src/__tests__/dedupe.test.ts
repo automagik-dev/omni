@@ -117,6 +117,36 @@ describe('createInboundDedupeCache', () => {
     expect(cache.isDuplicate('inst', 'msg-4', 'wa', logger)).toBe(true);
   });
 
+  test('evicts expired entries scattered after LRU reordering', async () => {
+    // Insert msg-1, then access it (causing LRU reorder: msg-1 moves to end).
+    // msg-2 is inserted after, so the Map order is [msg-2, msg-1].
+    // msg-2 expires first (short TTL), msg-1 has a long TTL.
+    // evictExpired must scan the full Map and not stop at msg-1 (non-expired) before reaching msg-2.
+    const logger = createMockLogger();
+    const cache = createInboundDedupeCache({ ttlMs: 200 });
+
+    // Insert and immediately hit msg-1 to move it to end of Map
+    cache.isDuplicate('inst', 'msg-1', 'wa', logger);
+    cache.isDuplicate('inst', 'msg-1', 'wa', logger); // hit → moves to end
+
+    // Insert msg-2 after msg-1 was hit, but with a near-expiry (we'll let the cache TTL be short)
+    const shortCache = createInboundDedupeCache({ ttlMs: 50 });
+    shortCache.isDuplicate('inst', 'msg-old', 'wa', logger);
+    shortCache.isDuplicate('inst', 'msg-new', 'wa', logger);
+
+    // Access msg-old to move it after msg-new in Map order [msg-new, msg-old]
+    shortCache.isDuplicate('inst', 'msg-old', 'wa', logger);
+
+    // Wait for TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Both should be expired — evictExpired must not stop early
+    expect(shortCache.isDuplicate('inst', 'msg-old', 'wa', logger)).toBe(false);
+    expect(shortCache.isDuplicate('inst', 'msg-new', 'wa', logger)).toBe(false);
+    shortCache.dispose();
+    cache.dispose();
+  });
+
   test('TTL expiry removes old entries', async () => {
     const cache = createInboundDedupeCache({ ttlMs: 50 });
     const logger = createMockLogger();
