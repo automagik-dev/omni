@@ -26,48 +26,56 @@ describe('ChildrenTracker', () => {
   });
 
   test('returns 0 for unknown agent', () => {
-    expect(tracker.getCount('unknown')).toBe(0);
+    expect(tracker.getCount('inst-1', 'unknown')).toBe(0);
   });
 
   test('increments children count', () => {
-    tracker.increment('agent-1');
-    expect(tracker.getCount('agent-1')).toBe(1);
-    tracker.increment('agent-1');
-    expect(tracker.getCount('agent-1')).toBe(2);
+    tracker.increment('inst-1', 'agent-1');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(1);
+    tracker.increment('inst-1', 'agent-1');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(2);
   });
 
   test('decrements children count', () => {
-    tracker.increment('agent-1');
-    tracker.increment('agent-1');
-    tracker.decrement('agent-1');
-    expect(tracker.getCount('agent-1')).toBe(1);
+    tracker.increment('inst-1', 'agent-1');
+    tracker.increment('inst-1', 'agent-1');
+    tracker.decrement('inst-1', 'agent-1');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(1);
   });
 
   test('does not go below 0', () => {
-    tracker.decrement('agent-1');
-    expect(tracker.getCount('agent-1')).toBe(0);
+    tracker.decrement('inst-1', 'agent-1');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(0);
   });
 
   test('cleans up zero entries', () => {
-    tracker.increment('agent-1');
-    tracker.decrement('agent-1');
-    expect(tracker.getCount('agent-1')).toBe(0);
+    tracker.increment('inst-1', 'agent-1');
+    tracker.decrement('inst-1', 'agent-1');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(0);
   });
 
   test('tracks multiple agents independently', () => {
-    tracker.increment('agent-1');
-    tracker.increment('agent-1');
-    tracker.increment('agent-2');
-    expect(tracker.getCount('agent-1')).toBe(2);
-    expect(tracker.getCount('agent-2')).toBe(1);
+    tracker.increment('inst-1', 'agent-1');
+    tracker.increment('inst-1', 'agent-1');
+    tracker.increment('inst-1', 'agent-2');
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(2);
+    expect(tracker.getCount('inst-1', 'agent-2')).toBe(1);
+  });
+
+  test('isolates agents across different instances', () => {
+    tracker.increment('inst-1', 'shared-agent');
+    tracker.increment('inst-1', 'shared-agent');
+    tracker.increment('inst-1', 'shared-agent');
+    // inst-2 should be unaffected by inst-1's count
+    expect(tracker.getCount('inst-2', 'shared-agent')).toBe(0);
   });
 
   test('clear resets all tracking', () => {
-    tracker.increment('agent-1');
-    tracker.increment('agent-2');
+    tracker.increment('inst-1', 'agent-1');
+    tracker.increment('inst-2', 'agent-2');
     tracker.clear();
-    expect(tracker.getCount('agent-1')).toBe(0);
-    expect(tracker.getCount('agent-2')).toBe(0);
+    expect(tracker.getCount('inst-1', 'agent-1')).toBe(0);
+    expect(tracker.getCount('inst-2', 'agent-2')).toBe(0);
   });
 });
 
@@ -129,9 +137,9 @@ describe('checkSpawnAllowed', () => {
       agentId: 'parent-agent',
       instanceId: 'inst-1',
     };
-    // Simulate 5 active children
+    // Simulate 5 active children for this instance
     for (let i = 0; i < 5; i++) {
-      tracker.increment('parent-agent');
+      tracker.increment('inst-1', 'parent-agent');
     }
 
     const decision = checkSpawnAllowed(context, defaultLimits, tracker);
@@ -150,13 +158,28 @@ describe('checkSpawnAllowed', () => {
     };
     // Fill to max
     for (let i = 0; i < 5; i++) {
-      tracker.increment('parent-agent');
+      tracker.increment('inst-1', 'parent-agent');
     }
     // One child completes
-    tracker.decrement('parent-agent');
+    tracker.decrement('inst-1', 'parent-agent');
 
     const decision = checkSpawnAllowed(context, defaultLimits, tracker);
     expect(decision.allowed).toBe(true);
+  });
+
+  test('does not cross-pollute breadth counts across instances', () => {
+    const contextInst1: AgentContext = { agentDepth: 0, agentId: 'shared-agent', instanceId: 'inst-1' };
+    const contextInst2: AgentContext = { agentDepth: 0, agentId: 'shared-agent', instanceId: 'inst-2' };
+    const customLimits: SpawnLimits = { maxSpawnDepth: 3, maxChildrenPerAgent: 2 };
+
+    // Fill inst-1 to max
+    tracker.increment('inst-1', 'shared-agent');
+    tracker.increment('inst-1', 'shared-agent');
+
+    // inst-1 should be blocked
+    expect(checkSpawnAllowed(contextInst1, customLimits, tracker).allowed).toBe(false);
+    // inst-2 should still be allowed
+    expect(checkSpawnAllowed(contextInst2, customLimits, tracker).allowed).toBe(true);
   });
 
   test('custom maxSpawnDepth: 5 allows deeper chains', () => {
@@ -188,8 +211,8 @@ describe('checkSpawnAllowed', () => {
       agentId: 'parent',
       instanceId: 'inst-1',
     };
-    tracker.increment('parent');
-    tracker.increment('parent');
+    tracker.increment('inst-1', 'parent');
+    tracker.increment('inst-1', 'parent');
 
     const decision = checkSpawnAllowed(context, customLimits, tracker);
     expect(decision.allowed).toBe(false);
@@ -203,7 +226,7 @@ describe('checkSpawnAllowed', () => {
       instanceId: 'inst-1',
     };
     for (let i = 0; i < 5; i++) {
-      tracker.increment('agent');
+      tracker.increment('inst-1', 'agent');
     }
 
     const decision = checkSpawnAllowed(context, defaultLimits, tracker);
@@ -234,7 +257,7 @@ describe('recordSpawn', () => {
     expect(child.agentId).toBe('child-1');
     expect(child.parentAgentId).toBe('parent');
     expect(child.instanceId).toBe('inst-1');
-    expect(tracker.getCount('parent')).toBe(1);
+    expect(tracker.getCount('inst-1', 'parent')).toBe(1);
   });
 
   test('depth increments correctly through chain', () => {
@@ -269,10 +292,10 @@ describe('recordCompletion', () => {
       instanceId: 'inst-1',
     };
     const child = recordSpawn(parent, 'child-1', tracker);
-    expect(tracker.getCount('parent')).toBe(1);
+    expect(tracker.getCount('inst-1', 'parent')).toBe(1);
 
     recordCompletion(child, tracker);
-    expect(tracker.getCount('parent')).toBe(0);
+    expect(tracker.getCount('inst-1', 'parent')).toBe(0);
   });
 
   test('no-op for root agent (no parent)', () => {
@@ -283,7 +306,7 @@ describe('recordCompletion', () => {
     };
     // Should not throw
     recordCompletion(root, tracker);
-    expect(tracker.getCount('root')).toBe(0);
+    expect(tracker.getCount('inst-1', 'root')).toBe(0);
   });
 });
 

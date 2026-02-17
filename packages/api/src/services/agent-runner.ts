@@ -9,6 +9,7 @@
  */
 
 import {
+  type AgentContext,
   type IAgentClient,
   ProviderError,
   type ProviderFile,
@@ -58,6 +59,13 @@ export interface AgentRunContext {
   messages: string[];
   /** Optional file attachments (images, audio, documents) */
   files?: ProviderFile[];
+
+  /** Agent nesting context — provides depth for depth-aware tool filtering */
+  agentContext?: AgentContext;
+  /** Depth-aware tool configuration — when set, filters restricted tools at deep nesting levels */
+  depthAwareTools?: DepthAwareToolConfig;
+  /** Tools available to the agent — filtered by depthAwareTools when both are provided */
+  allowedTools?: string[];
 }
 
 export interface AgentRunResult {
@@ -489,6 +497,12 @@ export class AgentRunnerService {
       senderName: prefixEnabled ? senderName : undefined,
     });
 
+    // Apply depth-aware tool filtering when configured
+    const tools =
+      context.allowedTools && context.depthAwareTools
+        ? filterToolsByDepth(context.allowedTools, context.agentContext?.agentDepth ?? 0, context.depthAwareTools)
+        : context.allowedTools;
+
     // Build request — client routes by agentType internally
     const request = {
       message: combinedMessage,
@@ -516,6 +530,7 @@ export class AgentRunnerService {
       },
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
       files,
+      tools,
     };
 
     const response = await client.run(request);
@@ -581,6 +596,12 @@ export class AgentRunnerService {
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
+    // Apply depth-aware tool filtering when configured
+    const tools =
+      context.allowedTools && context.depthAwareTools
+        ? filterToolsByDepth(context.allowedTools, context.agentContext?.agentDepth ?? 0, context.depthAwareTools)
+        : context.allowedTools;
+
     const request = {
       message: combinedMessage,
       agentId: instance.agentId,
@@ -606,6 +627,7 @@ export class AgentRunnerService {
         participantCount,
       },
       timeoutMs: (instance.agentTimeout ?? 60) * 1000,
+      tools,
     };
 
     // Client routes by agentType internally

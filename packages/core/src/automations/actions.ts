@@ -285,12 +285,12 @@ async function executeLogAction(
 
 /**
  * Extract agent call context from automation payload
- * Returns extracted context or error string
+ * Returns extracted context and resolved agentId, or an error string
  */
 function extractAgentCallContext(
   config: CallAgentActionConfig,
   context: TemplateContext,
-): { context: AgentCallContext } | { error: string } {
+): { context: AgentCallContext; resolvedAgentId: string } | { error: string } {
   // Extract instanceId from config or payload
   const instanceId = config.providerId
     ? substituteTemplate(config.providerId, context)
@@ -313,9 +313,9 @@ function extractAgentCallContext(
   const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
   if (!messageContent) return { error: 'message content not found in payload' };
 
-  // Resolve agentId (may be a template)
-  const agentId = substituteTemplate(config.agentId, context);
-  if (!agentId) return { error: 'agentId is required' };
+  // Resolve agentId (may be a template like {{variables.agentId}})
+  const resolvedAgentId = substituteTemplate(config.agentId, context);
+  if (!resolvedAgentId) return { error: 'agentId is required' };
 
   return {
     context: {
@@ -326,6 +326,7 @@ function extractAgentCallContext(
       senderName,
       messages: [messageContent],
     },
+    resolvedAgentId,
   };
 }
 
@@ -333,19 +334,30 @@ function extractAgentCallContext(
  * Enforce spawn guard limits before agent call.
  * Returns error string if spawn is rejected, undefined if allowed.
  * Also records the spawn and attaches child context to agentCallContext.
+ *
+ * When no parent AgentContext is present (top-level automation-triggered call),
+ * a synthetic root context is created so depth and breadth limits are enforced
+ * from the very first spawn rather than being silently bypassed.
  */
 function enforceSpawnGuard(
   agentCallContext: AgentCallContext,
   agentId: string,
   deps: ActionDependencies,
 ): { childContext?: AgentContext; error?: string } {
-  const parentAgentCtx = agentCallContext.agentContext;
   const tracker = deps.childrenTracker;
   const limits = resolveSpawnLimits(deps.spawnLimits);
 
-  if (!parentAgentCtx || !tracker) {
+  if (!tracker) {
     return {};
   }
+
+  // Use existing parent context, or create a synthetic root context for
+  // top-level automation-triggered calls (depth=0, no parent agent).
+  const parentAgentCtx: AgentContext = agentCallContext.agentContext ?? {
+    agentDepth: 0,
+    agentId: `automation:${agentCallContext.instanceId}`,
+    instanceId: agentCallContext.instanceId,
+  };
 
   const decision = checkSpawnAllowed(parentAgentCtx, limits, tracker);
   if (!decision.allowed) {
@@ -380,9 +392,11 @@ async function executeCallAgentAction(
   }
 
   const agentContext = extracted.context;
+  const resolvedAgentId = extracted.resolvedAgentId;
 
-  // Enforce spawn guard (depth + breadth limits)
-  const guard = enforceSpawnGuard(agentContext, config.agentId, deps);
+  // Enforce spawn guard (depth + breadth limits).
+  // Use the already-resolved agentId — config.agentId may be an unresolved template.
+  const guard = enforceSpawnGuard(agentContext, resolvedAgentId, deps);
   if (guard.error) {
     return { success: false, error: guard.error };
   }

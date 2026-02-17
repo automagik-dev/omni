@@ -53,32 +53,40 @@ export const DEFAULT_SPAWN_LIMITS: SpawnLimits = {
 // ============================================================================
 
 /**
- * Tracks active children count per agent ID (in-memory).
- * Each instance of SpawnGuard has its own tracker.
+ * Tracks active children count per agent, scoped by instance ID.
+ * Using a composite key (instanceId + agentId) ensures that two tenants
+ * sharing the same agent ID do not interfere with each other's breadth limits.
  */
 export class ChildrenTracker {
   private children = new Map<string, number>();
 
-  /** Get current children count for an agent */
-  getCount(agentId: string): number {
-    return this.children.get(agentId) ?? 0;
+  /** Build a composite key scoped to the instance */
+  private key(instanceId: string, agentId: string): string {
+    return `${instanceId}:${agentId}`;
+  }
+
+  /** Get current children count for an agent within an instance */
+  getCount(instanceId: string, agentId: string): number {
+    return this.children.get(this.key(instanceId, agentId)) ?? 0;
   }
 
   /** Increment children count when a child is spawned */
-  increment(agentId: string): void {
-    const current = this.getCount(agentId);
-    this.children.set(agentId, current + 1);
+  increment(instanceId: string, agentId: string): void {
+    const k = this.key(instanceId, agentId);
+    const current = this.children.get(k) ?? 0;
+    this.children.set(k, current + 1);
   }
 
   /** Decrement children count when a child completes */
-  decrement(agentId: string): void {
-    const current = this.getCount(agentId);
+  decrement(instanceId: string, agentId: string): void {
+    const k = this.key(instanceId, agentId);
+    const current = this.children.get(k) ?? 0;
     if (current > 0) {
-      this.children.set(agentId, current - 1);
+      this.children.set(k, current - 1);
     }
     // Clean up zero entries
-    if (this.getCount(agentId) === 0) {
-      this.children.delete(agentId);
+    if ((this.children.get(k) ?? 0) === 0) {
+      this.children.delete(k);
     }
   }
 
@@ -116,8 +124,8 @@ export function checkSpawnAllowed(context: AgentContext, limits: SpawnLimits, tr
     return { allowed: false, reason };
   }
 
-  // Check breadth limit (children count)
-  const currentChildren = tracker.getCount(context.agentId);
+  // Check breadth limit (children count), scoped by instanceId for tenant isolation
+  const currentChildren = tracker.getCount(context.instanceId, context.agentId);
   if (currentChildren >= limits.maxChildrenPerAgent) {
     const reason = `Agent spawn rejected: max children ${limits.maxChildrenPerAgent} exceeded for agent ${context.agentId} (current children: ${currentChildren})`;
     logger.warn(reason, {
@@ -143,7 +151,7 @@ export function checkSpawnAllowed(context: AgentContext, limits: SpawnLimits, tr
  * @returns The new AgentContext for the child agent
  */
 export function recordSpawn(parentContext: AgentContext, childAgentId: string, tracker: ChildrenTracker): AgentContext {
-  tracker.increment(parentContext.agentId);
+  tracker.increment(parentContext.instanceId, parentContext.agentId);
 
   const childContext: AgentContext = {
     agentDepth: parentContext.agentDepth + 1,
@@ -171,7 +179,7 @@ export function recordSpawn(parentContext: AgentContext, childAgentId: string, t
  */
 export function recordCompletion(context: AgentContext, tracker: ChildrenTracker): void {
   if (context.parentAgentId) {
-    tracker.decrement(context.parentAgentId);
+    tracker.decrement(context.instanceId, context.parentAgentId);
 
     logger.info('Agent completed', {
       event: 'agent_complete',

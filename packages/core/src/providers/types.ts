@@ -70,6 +70,12 @@ export interface ProviderRequest {
   files?: ProviderFile[];
   /** Request timeout in milliseconds */
   timeoutMs?: number;
+  /**
+   * Allowed tool names for depth-aware filtering.
+   * When provided, the provider should restrict the agent to only these tools.
+   * Populated by filterToolsByDepth in AgentRunnerService when depthAwareTools is configured.
+   */
+  tools?: string[];
 }
 
 export interface ProviderFile {
