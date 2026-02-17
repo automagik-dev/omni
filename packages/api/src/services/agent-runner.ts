@@ -12,9 +12,11 @@ import {
   type IAgentClient,
   ProviderError,
   type ProviderFile,
+  type SpawnLimits,
   type StreamChunk,
   createProviderClient,
   isProviderSchemaSupported,
+  resolveSpawnLimits,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } from '@omni/db';
@@ -304,6 +306,56 @@ async function* processStreamChunks(
       yield buffer.trim();
     }
   }
+}
+
+// ============================================================================
+// Depth-Aware Tool Policy
+// ============================================================================
+
+/** Configuration for depth-aware tool filtering */
+export interface DepthAwareToolConfig {
+  /** Enable depth-aware tool filtering (default: false) */
+  enabled: boolean;
+  /** Spawn limits to determine threshold depth */
+  spawnLimits?: Partial<SpawnLimits>;
+}
+
+/** Tools that are restricted at deeper nesting levels */
+const DEPTH_RESTRICTED_TOOLS = ['callAgent'] as const;
+
+/**
+ * Filter available tools based on agent nesting depth.
+ *
+ * When depthAwareTools is enabled, strips `callAgent` (and other spawn-related tools)
+ * at depth >= maxSpawnDepth - 1. This prevents the deepest agent from even seeing
+ * the spawn option, providing a cleaner UX than runtime rejection.
+ *
+ * @param tools - List of available tool names
+ * @param currentDepth - Current agent nesting depth
+ * @param config - Depth-aware tool configuration
+ * @returns Filtered list of tool names
+ */
+export function filterToolsByDepth(tools: string[], currentDepth: number, config: DepthAwareToolConfig): string[] {
+  // If disabled (default), return all tools unchanged
+  if (!config.enabled) {
+    return tools;
+  }
+
+  const limits = resolveSpawnLimits(config.spawnLimits);
+  const threshold = limits.maxSpawnDepth - 1;
+
+  // At depth >= threshold, strip restricted tools
+  if (currentDepth >= threshold) {
+    log.debug('Depth-aware tool filtering: stripping restricted tools', {
+      currentDepth,
+      threshold,
+      maxSpawnDepth: limits.maxSpawnDepth,
+      removedTools: DEPTH_RESTRICTED_TOOLS,
+    });
+    return tools.filter((tool) => !DEPTH_RESTRICTED_TOOLS.includes(tool as (typeof DEPTH_RESTRICTED_TOOLS)[number]));
+  }
+
+  return tools;
 }
 
 // ============================================================================
