@@ -416,9 +416,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
       await saveToken(this.storage, instanceId, token);
     }
 
-    // Store interaction auth config if provided
+    // Always sync auth config so stale entries don't persist across reconnects
     if (config.options?.interactionAuth) {
       this.instanceAuthConfigs.set(instanceId, config.options.interactionAuth as InteractionAuthConfig);
+    } else {
+      this.instanceAuthConfigs.delete(instanceId);
     }
 
     // Create and setup client

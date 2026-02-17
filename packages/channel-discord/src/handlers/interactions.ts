@@ -30,6 +30,60 @@ import {
 const log = createLogger('discord:interactions');
 
 /**
+ * Extract user role IDs from an interaction for auth checking.
+ * Handles both GuildMember (cache-backed) and APIInteractionGuildMember (string[]).
+ */
+function getUserRoleIds(interaction: Interaction): string[] {
+  const member = interaction.member;
+  if (!member) return [];
+  return Array.isArray(member.roles)
+    ? member.roles // APIInteractionGuildMember: string[]
+    : [...(member as GuildMember).roles.cache.keys()]; // GuildMember: Collection
+}
+
+/**
+ * Check component interaction authorization.
+ *
+ * Returns true if the interaction is allowed.
+ * When denied, defers the interaction silently (so Discord doesn't show "failed")
+ * and returns false — callers should return immediately.
+ */
+async function isComponentInteractionAuthorized(
+  plugin: DiscordPlugin,
+  instanceId: string,
+  interaction: Interaction,
+): Promise<boolean> {
+  const authResult = checkInteractionAuth(
+    {
+      userId: interaction.user.id,
+      guildId: interaction.guildId ?? undefined,
+      userRoleIds: getUserRoleIds(interaction),
+    },
+    plugin.getInteractionAuthConfig(instanceId),
+  );
+
+  if (!authResult.allowed) {
+    log.debug('Component interaction denied by auth', {
+      instanceId,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      reason: authResult.reason,
+    });
+    // Acknowledge silently so Discord doesn't show "Interaction failed"
+    try {
+      if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
+        await interaction.deferUpdate();
+      }
+    } catch (_) {
+      // Ignore if already replied
+    }
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Extract common base payload from interaction
  */
 function extractBasePayload(interaction: Interaction, instanceId: string) {
@@ -106,6 +160,7 @@ async function processContextMenu(plugin: DiscordPlugin, instanceId: string, int
  */
 async function processButton(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isButton(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -130,6 +185,7 @@ async function processButton(plugin: DiscordPlugin, instanceId: string, interact
  */
 async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isStringSelectMenu(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -157,40 +213,7 @@ async function processEntitySelectMenu(
   instanceId: string,
   interaction: Interaction,
 ): Promise<void> {
-  // Extract member role IDs for authorization check
-  const member = interaction.member;
-  const userRoleIds: string[] = member
-    ? Array.isArray(member.roles)
-      ? member.roles // APIInteractionGuildMember: string[]
-      : [...(member as GuildMember).roles.cache.keys()] // GuildMember: Collection
-    : [];
-
-  const authResult = checkInteractionAuth(
-    {
-      userId: interaction.user.id,
-      guildId: interaction.guildId ?? undefined,
-      userRoleIds,
-    },
-    plugin.getInteractionAuthConfig(instanceId),
-  );
-
-  if (!authResult.allowed) {
-    log.debug('Entity select interaction denied by auth', {
-      instanceId,
-      userId: interaction.user.id,
-      guildId: interaction.guildId,
-      reason: authResult.reason,
-    });
-    // Acknowledge the interaction silently so Discord doesn't show "failed"
-    try {
-      if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
-        await interaction.deferUpdate();
-      }
-    } catch (_) {
-      // Ignore if already replied
-    }
-    return;
-  }
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -241,6 +264,7 @@ async function processEntitySelectMenu(
  */
 async function processModalSubmit(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isModalSubmit(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
