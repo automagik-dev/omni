@@ -1503,16 +1503,28 @@ async function processAgentResponse(
   const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
 
   // ── Session Reset Check (pre-processing) ──
+  // Extract raw payload once — used for channel-specific chat-type hints below.
+  const msgRawPayload = firstMessage.payload.rawPayload ?? {};
+
   const rawChatType = determineChatType(chatId, channel);
-  // Map 'channel' → 'group' for session reset purposes (channels behave like groups).
-  // Classify as 'thread' when the message carries a threadId (e.g. Telegram forum topics, Discord threads)
-  // so that sessionReset.thread config is applied instead of falling back to DM/group policy.
-  const hasThread = !!firstMessage.payload.threadId;
+  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
+  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
+  // rawPayload.isGroup=true for guild channels, so override when available.
+  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
+
+  // Classify as 'thread' when the message is from a thread channel.
+  // The SDK top-level threadId field is set by some channels; Discord and others
+  // store thread membership in rawPayload.isThread (message is inside a thread
+  // channel) or rawPayload.threadId (thread identifier).
+  const hasThread = !!(firstMessage.payload.threadId || msgRawPayload.isThread || msgRawPayload.threadId);
+
+  // Map 'channel' → 'group' for session reset purposes (broadcast channels behave
+  // like groups).  Thread takes precedence over group/dm classification.
   const resetChatType: 'dm' | 'group' | 'thread' = hasThread
     ? 'thread'
-    : rawChatType === 'channel'
+    : resolvedChatType === 'channel'
       ? 'group'
-      : rawChatType;
+      : resolvedChatType;
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
