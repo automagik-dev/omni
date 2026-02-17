@@ -169,9 +169,10 @@ export async function executeHooks<E extends HookEvent>(
     return { context, results: [], totalDurationMs: performance.now() - pipelineStart };
   }
 
-  // For read-only hooks, deep-freeze a shallow copy of the context so handlers
-  // cannot mutate nested references (arrays, nested objects) either.
-  const frozenContext = isReadOnly ? (deepFreeze({ ...context }) as HookContextMap[E]) : undefined;
+  // For read-only hooks, deep-clone then deep-freeze the context so that:
+  // 1. Hooks cannot mutate nested references (arrays, objects) — deepFreeze enforces this.
+  // 2. Caller-owned objects are never frozen — structuredClone isolates the copy first.
+  const frozenContext = isReadOnly ? (deepFreeze(structuredClone(context)) as HookContextMap[E]) : undefined;
   let currentContext = context;
   const results: HookExecutionResult[] = [];
 

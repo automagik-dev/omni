@@ -423,6 +423,10 @@ export class AgentRunnerService {
     }
 
     // ── Hook: before_agent_start ──
+    // Note: 'agentId' is intentionally omitted from the initial context so that
+    // the precedence chain below can derive the effective agent from final hook
+    // state without comparing to the original value. Hooks read the current
+    // agent via 'model' and can override via either 'model' or 'agentId'.
     const agentStartCtx = await executeHooks(instance.id, 'before_agent_start', {
       instanceId: instance.id,
       chatId,
@@ -430,16 +434,13 @@ export class AgentRunnerService {
       senderName,
       model: instance.agentId,
       provider: instance.agentProviderId,
-      agentId: instance.agentId,
     });
 
-    // Apply hook overrides: provider and agent ID can be changed by hooks.
-    // Honor both 'agentId' and 'model' fields: if 'agentId' was unchanged by the
-    // hook, fall back to 'model' (which a hook may have updated instead).
+    // Apply hook overrides with clear precedence derived from final context state:
+    //   agentId (explicit override) > model (model/agent override) > instance original
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    const hookAgentId = agentStartCtx.context.agentId;
     const effectiveAgentId =
-      (hookAgentId !== instance.agentId ? hookAgentId : agentStartCtx.context.model) ?? instance.agentId;
+      agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
@@ -589,6 +590,10 @@ export class AgentRunnerService {
     }
 
     // ── Hook: before_agent_start ──
+    // Note: 'agentId' is intentionally omitted from the initial context so that
+    // the precedence chain below can derive the effective agent from final hook
+    // state without comparing to the original value. Hooks read the current
+    // agent via 'model' and can override via either 'model' or 'agentId'.
     const agentStartCtx = await executeHooks(instance.id, 'before_agent_start', {
       instanceId: instance.id,
       chatId,
@@ -596,15 +601,13 @@ export class AgentRunnerService {
       senderName,
       model: instance.agentId,
       provider: instance.agentProviderId,
-      agentId: instance.agentId,
     });
 
+    // Apply hook overrides with clear precedence derived from final context state:
+    //   agentId (explicit override) > model (model/agent override) > instance original
     const effectiveProviderId = agentStartCtx.context.provider ?? instance.agentProviderId;
-    // Honor both 'agentId' and 'model' fields: if 'agentId' was unchanged by the
-    // hook, fall back to 'model' (which a hook may have updated instead).
-    const hookAgentIdStream = agentStartCtx.context.agentId;
     const effectiveAgentId =
-      (hookAgentIdStream !== instance.agentId ? hookAgentIdStream : agentStartCtx.context.model) ?? instance.agentId;
+      agentStartCtx.context.agentId ?? agentStartCtx.context.model ?? instance.agentId;
 
     const client = await this.getClient(effectiveProviderId);
 
