@@ -1,0 +1,28 @@
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute=\"group\") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim }} ({{ commit.scope | default(value="core") }}) - {{ commit.id | truncate(length=7, end="") }}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+
+commit_parsers = [
+  { message = "^feat", group = "🚀 Features" },
+  { message = "^fix", group = "🐛 Bug Fixes" },
+  { message = "^refactor", group = "♻️ Refactoring" },
+  { message = "^perf", group = "⚡ Performance" },
+  { message = "^test", group = "🧪 Testing" },
+  { message = "^doc", group = "📚 Documentation" },
+  { message = "^ci", group = "⚙️ CI/CD" },
+  { message = "^chore\\(version\\)", skip = true },
+  { message = "^chore", group = "🔧 Miscellaneous" },
+  { message = "^Merge", skip = true },
+]
