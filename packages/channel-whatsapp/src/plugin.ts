@@ -28,6 +28,7 @@ import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
+import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 /**
  * Message from history sync
@@ -257,6 +258,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private sentMessageIds = new Map<string, Set<string>>();
   private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
+
+  /** Rate limit managers per instance — handles Baileys 429 backoff */
+  private rateLimitManagers = new Map<string, RateLimitManager>();
+
+  /** Get or create a rate limit manager for an instance */
+  private getRateLimitManager(instanceId: string): RateLimitManager {
+    let manager = this.rateLimitManagers.get(instanceId);
+    if (!manager) {
+      manager = createRateLimitManager(instanceId, this.logger);
+      this.rateLimitManagers.set(instanceId, manager);
+    }
+    return manager;
+  }
 
   /**
    * Enforce a randomized delay between outgoing actions to avoid
@@ -934,6 +948,52 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Apply pre-send processing: humanized delay, typing simulation, audio conversion, markdown formatting
+   */
+  private async preprocessOutgoing(
+    instanceId: string,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<OutgoingMessage> {
+    await this.humanDelay(instanceId);
+
+    // Simulate typing for text/caption messages
+    const textContent = message.content.text || message.content.caption || '';
+    if (textContent.length > 0) {
+      await this.simulateTyping(instanceId, jid, textContent);
+    }
+
+    // Handle audio conversion for voice notes (PTT)
+    let processed = message;
+    if (message.content.type === 'audio' && message.metadata?.ptt === true) {
+      processed = await this.processAudioForVoiceNote(message);
+    }
+
+    // Apply markdown→WhatsApp format conversion for text messages
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    if (processed.content.type === 'text' && formatMode !== 'passthrough' && processed.content.text) {
+      const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+      const converted = markdownToWhatsApp(processed.content.text);
+      processed = { ...processed, content: { ...processed.content, text: converted } };
+    }
+
+    return processed;
+  }
+
+  /**
+   * Wait for rate limit backoff if active
+   */
+  private async waitForRateLimitBackoff(instanceId: string): Promise<RateLimitManager> {
+    const rateLimiter = this.getRateLimitManager(instanceId);
+    const remainingBackoff = rateLimiter.getRemainingBackoff();
+    if (remainingBackoff > 0) {
+      this.logger.debug('Waiting for rate limit backoff', { instanceId, remainingBackoff });
+      await new Promise<void>((r) => setTimeout(r, remainingBackoff));
+    }
+    return rateLimiter;
+  }
+
+  /**
    * Resolve the send target JID.
    *
    * LID-first: when sending to a phone number, try to resolve to LID via
@@ -979,6 +1039,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
     const jid = await this.resolveSendTarget(sock, instanceId, message.to);
+    const rateLimiter = await this.waitForRateLimitBackoff(instanceId);
 
     try {
       // ── Reaction dispatch (separate path — not a normal message) ──
@@ -986,28 +1047,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         return this.dispatchReaction(instanceId, sock, jid, message);
       }
 
-      // Humanized delay — prevent anti-bot detection
-      await this.humanDelay(instanceId);
-
-      // Simulate typing for text/caption messages
-      const textContent = message.content.text || message.content.caption || '';
-      if (textContent.length > 0) {
-        await this.simulateTyping(instanceId, jid, textContent);
-      }
-
-      // Handle audio conversion for voice notes (PTT)
-      let processedMessage = message;
-      if (message.content.type === 'audio' && message.metadata?.ptt === true) {
-        processedMessage = await this.processAudioForVoiceNote(message);
-      }
-
-      // Apply markdown→WhatsApp format conversion for text messages
-      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
-        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
-        const converted = markdownToWhatsApp(processedMessage.content.text);
-        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
-      }
+      const processedMessage = await this.preprocessOutgoing(instanceId, jid, message);
 
       // Build message content based on type
       const content = this.buildContent(processedMessage);
@@ -1041,12 +1081,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         replyToId: message.replyTo,
       });
 
+      // Reset rate limit state on successful send
+      rateLimiter.reset();
+
       return {
         success: true,
         messageId: externalId,
         timestamp: Date.now(),
       };
     } catch (error) {
+      // ── Rate limit detection ──
+      if (isRateLimitError(error)) {
+        rateLimiter.handleRateLimit(error, 0);
+      }
+
       const waError = mapBaileysError(error);
 
       await this.emitMessageFailed({
@@ -1054,14 +1102,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         chatId: jid,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
       });
 
       return {
         success: false,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
         timestamp: Date.now(),
       };
     }

@@ -8,6 +8,7 @@
  * - Operations: edit, delete
  */
 
+import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import { ChannelType, type Client, type Message, type PartialMessage } from 'discord.js';
@@ -15,6 +16,12 @@ import type { DiscordPlugin } from '../plugin';
 import type { ExtractedContent } from '../types';
 
 const log = createLogger('discord:messages');
+
+/** Shared dedupe cache for all Discord instances */
+const dedupeCache = createInboundDedupeCache();
+
+/** Download size guard — 50MB default */
+const downloadGuard = createDownloadGuard();
 
 /**
  * Extract poll content from message
@@ -56,6 +63,13 @@ function extractAttachmentContent(message: Message): ExtractedContent | null {
 
   const contentType = attachment.contentType ?? 'application/octet-stream';
   const mediaType = getMediaType(contentType);
+
+  // Check attachment size before processing
+  try {
+    downloadGuard.checkSize(attachment.size, log, { channel: 'discord' });
+  } catch {
+    return null; // Attachment too large — skip
+  }
 
   const base: ExtractedContent = {
     type: mediaType,
@@ -169,6 +183,21 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
       messageId: message.id,
     });
     return;
+  }
+
+  // ── Sanitize inbound text ──
+  if (content.text) {
+    const sanitized = sanitizeMessage(content.text, log, {
+      instanceId,
+      messageId: message.id,
+    });
+    if (!sanitized.ok) return; // Drop messages with null bytes or exceeding max length
+    content.text = sanitized.text;
+  }
+
+  // ── Dedupe check ──
+  if (dedupeCache.isDuplicate(instanceId, message.id, 'discord', log)) {
+    return; // Duplicate — drop silently
   }
 
   const chatId = message.channel.id;

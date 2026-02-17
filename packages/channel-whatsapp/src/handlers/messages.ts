@@ -11,14 +11,22 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
 import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
+import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
+
+/** Shared dedupe cache for all WhatsApp instances (cache key includes instanceId) */
+const dedupeCache = createInboundDedupeCache();
+
+/** Download size guard — 50MB default */
+const downloadGuard = createDownloadGuard();
 
 /**
  * Extract message content from a WAMessage
@@ -539,6 +547,15 @@ export async function tryDownloadMedia(
   if (!mediaInfo) return null;
 
   try {
+    // Enforce size limit from message metadata BEFORE downloading.
+    // WhatsApp proto fileLength is server-declared and available without
+    // fetching the payload, preventing the full buffer from being allocated
+    // for oversized media.
+    const declaredSize = getMediaSize(msg);
+    if (declaredSize !== undefined) {
+      downloadGuard.checkSize(declaredSize, log, { instanceId, channel: 'whatsapp' });
+    }
+
     // Try download with retry — iOS/macOS media sometimes needs a second attempt
     let result = await downloadMediaToBuffer(msg);
     if (!result) {
@@ -546,6 +563,12 @@ export async function tryDownloadMedia(
       result = await downloadMediaToBuffer(msg);
     }
     if (!result) return null;
+
+    // Also verify actual buffer size after download (declared size may be absent or differ)
+    downloadGuard.checkSize(result.buffer.length, log, {
+      instanceId,
+      channel: 'whatsapp',
+    });
 
     // Build path matching MediaStorageService layout
     const now = new Date();
@@ -687,6 +710,22 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 
   const content = extractContent(msg);
   if (!content) return;
+
+  // ── Sanitize inbound text ──
+  if (content.text) {
+    const sanitized = sanitizeMessage(content.text, log, {
+      instanceId,
+      messageId: msg.key.id || undefined,
+    });
+    if (!sanitized.ok) return; // Drop messages with null bytes or exceeding max length
+    content.text = sanitized.text;
+  }
+
+  // ── Dedupe check ──
+  const externalIdForDedupe = msg.key.id || '';
+  if (externalIdForDedupe && dedupeCache.isDuplicate(instanceId, externalIdForDedupe, 'whatsapp', log)) {
+    return; // Duplicate — drop silently
+  }
 
   // Note: Mention replacement (@phone → @Name) is handled in agent-dispatcher
   // with database lookup for better reliability across API restarts
