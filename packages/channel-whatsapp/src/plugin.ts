@@ -2032,8 +2032,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Cache sender's pushName for mention resolution (WAMessage.pushName field)
     const senderPushName = (rawMessage as { pushName?: string }).pushName;
     if (senderPushName && from) {
-      // Normalize sender JID to @s.whatsapp.net format for cache consistency
-      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      // LID-first: accept any JID format for cache keying (including @lid)
+      // from might be: "555197285829", "555197285829:73", "555197285829@s.whatsapp.net", or "100000001@lid"
       const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
 
       // Cache the sender's name so it's available when they're mentioned
@@ -2419,11 +2419,56 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Extract LID↔phone mappings from a contact and store bidirectionally
+   */
+  private extractContactLidMapping(
+    instanceId: string,
+    contactId: string,
+    lid: string | undefined,
+    phoneNumber: string | undefined,
+  ): void {
+    // Case 1: id=phone@s.whatsapp.net + lid=Y → store Y@lid → phone
+    if (lid && isUserJid(contactId)) {
+      const lidJid = lid.endsWith('@lid') ? lid : `${lid}@lid`;
+      this.storeLidMapping(instanceId, lidJid, contactId);
+    }
+    // Case 2: id=LID@lid + phoneNumber=X → store LID@lid → X@s.whatsapp.net
+    if (contactId.endsWith('@lid') && phoneNumber) {
+      const phoneJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber.replace(/\D/g, '')}@s.whatsapp.net`;
+      this.storeLidMapping(instanceId, contactId, phoneJid);
+    }
+  }
+
+  /**
+   * Build a SyncContact from raw Baileys contact data
+   */
+  private buildSyncContact(c: {
+    id: string;
+    phoneNumber?: string;
+    name?: string;
+    notify?: string;
+    verifiedName?: string;
+    imgUrl?: string | null;
+    status?: string;
+    lid?: string;
+  }): SyncContact {
+    const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
+    return {
+      platformUserId: c.id,
+      name: c.name || c.notify || c.verifiedName || undefined,
+      phone,
+      profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
+      isGroup: c.id.endsWith('@g.us'),
+      isBusiness: !!c.verifiedName,
+      metadata: { lid: c.lid, status: c.status, notify: c.notify, verifiedName: c.verifiedName },
+    };
+  }
+
+  /**
    * Handle contacts upsert (new contacts)
    * @internal
    */
   handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
-    // Get or create contacts cache for this instance
     let cache = this.contactsCache.get(instanceId);
     if (!cache) {
       cache = new Map();
@@ -2442,42 +2487,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         status?: string;
       };
 
-      // Skip group JIDs (they're handled separately)
-      const isGroup = c.id.endsWith('@g.us');
-
-      // Extract phone number from JID if not provided
-      const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
-
-      const syncContact: SyncContact = {
-        platformUserId: c.id,
-        name: c.name || c.notify || c.verifiedName || undefined,
-        phone,
-        profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
-        isGroup,
-        isBusiness: !!c.verifiedName,
-        metadata: {
-          lid: c.lid,
-          status: c.status,
-          notify: c.notify,
-          verifiedName: c.verifiedName,
-        },
-      };
-
+      const syncContact = this.buildSyncContact(c);
       cache.set(c.id, syncContact);
 
       this.logger.debug('Cached contact from contacts.upsert', {
         instanceId,
         id: c.id,
         name: syncContact.name,
-        phone,
+        phone: syncContact.phone,
         hasLid: !!c.lid,
       });
 
-      // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
-      if (c.lid && isUserJid(c.id)) {
-        const lidJid = c.lid.endsWith('@lid') ? c.lid : `${c.lid}@lid`;
-        this.storeLidMapping(instanceId, lidJid, c.id);
-      }
+      this.extractContactLidMapping(instanceId, c.id, c.lid, c.phoneNumber);
     }
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
