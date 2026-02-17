@@ -954,6 +954,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
       if (lidJid) {
         this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
+        // Cache the phone↔LID mapping so the outbound echo (which arrives before DB persistence)
+        // can resolve the LID back to the existing phone chat without creating a duplicate.
+        this.storeLidMapping(instanceId, lidJid, phoneJid);
         return lidJid;
       }
     } catch (error) {

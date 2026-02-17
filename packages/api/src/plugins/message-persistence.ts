@@ -457,6 +457,52 @@ function maybeUpdateRecency(
 }
 
 /**
+ * Find or create the chat for an inbound message.
+ *
+ * For LID-canonical messages (@lid chatExternalId with resolvedPhoneJid in rawPayload):
+ * probes for a pre-existing phone chat BEFORE calling findOrCreate. Without this,
+ * findOrCreate creates a new @lid chat (LID mapping not yet written at that point),
+ * and even after upsertLidMapping the split is permanent — direct externalId matches
+ * win over mapping fallback in findByExternalIdSmart, so phone lookups keep routing
+ * to the old phone chat forever.
+ */
+async function resolveOrCreateChat(
+  services: Services,
+  instanceId: string,
+  chatExternalId: string,
+  chatType: ChatType,
+  channel: ChannelType,
+  effectiveName: string | undefined,
+  canonicalId: string | undefined,
+  rawPayload: Record<string, unknown> | undefined,
+): ReturnType<typeof services.chats.findOrCreate> {
+  const resolvedPhoneJid = rawPayload?.resolvedPhoneJid as string | undefined;
+  if (chatExternalId.endsWith('@lid') && resolvedPhoneJid) {
+    return services.chats.findByExternalIdSmart(instanceId, resolvedPhoneJid).then((phoneChat) => {
+      if (phoneChat) {
+        // Persist mapping so subsequent LID lookups also route to this phone chat
+        services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid).catch((err) => {
+          log.debug('Failed to persist LID mapping during chat pre-check (non-critical)', { error: String(err) });
+        });
+        return { chat: phoneChat, created: false };
+      }
+      return services.chats.findOrCreate(instanceId, chatExternalId, {
+        chatType,
+        channel,
+        name: effectiveName,
+        canonicalId,
+      });
+    });
+  }
+  return services.chats.findOrCreate(instanceId, chatExternalId, {
+    chatType,
+    channel,
+    name: effectiveName,
+    canonicalId,
+  });
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -487,12 +533,16 @@ async function handleMessageReceived(
   // Determine canonicalId upfront for phone-based chats
   const canonicalId = chatExternalId.endsWith('@s.whatsapp.net') ? chatExternalId : undefined;
 
-  const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
+  const { chat, created: chatCreated } = await resolveOrCreateChat(
+    services,
+    metadata.instanceId,
+    chatExternalId,
     chatType,
     channel,
-    name: effectiveName,
-    canonicalId, // Set during creation to leverage unique constraint
-  });
+    effectiveName,
+    canonicalId,
+    rawPayload,
+  );
 
   // Post-process chat: canonicalId, LID mapping, name updates
   await postProcessChat(
