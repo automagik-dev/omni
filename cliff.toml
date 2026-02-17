@@ -71,4 +71,5 @@ commit_parsers = [
   { message = "^chore\\(version\\)", skip = true },
   { message = "^chore", group = "🔧 Miscellaneous" },
   { message = "^Merge", skip = true },
+  { message = ".*", group = "🔧 Miscellaneous" },
 ]
