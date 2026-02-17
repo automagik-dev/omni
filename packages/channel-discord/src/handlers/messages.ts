@@ -212,6 +212,17 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     message.channel.type === ChannelType.PrivateThread ||
     message.channel.type === ChannelType.AnnouncementThread;
 
+  // Check if channel is Forum or Media type — auto-thread creation should be skipped
+  const isForumOrMedia =
+    (message.channel.type as number) === ChannelType.GuildForum || (message.channel.type as number) === 16; // GuildMedia
+
+  if (isForumOrMedia) {
+    log.debug('Message in forum/media channel — auto-thread creation should be skipped', {
+      channelId: chatId,
+      channelType: message.channel.type,
+    });
+  }
+
   let chatName: string | undefined;
   if (isDMChannel) {
     chatName = message.author.displayName || message.author.globalName || message.author.username;
@@ -237,6 +248,7 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     chatName,
     isGroup: !isDMChannel,
     isThread,
+    isForumOrMedia, // Downstream consumers should skip auto-thread creation for forum/media channels
     createdAt: message.createdTimestamp,
     isDM: isDMChannel,
     hasEmbeds: message.embeds.length > 0,
