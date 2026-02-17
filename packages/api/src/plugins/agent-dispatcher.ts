@@ -528,7 +528,7 @@ const MEDIA_WAIT_NULL = { content: null, localPath: null } as const;
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
 function checkProcessedColumn(
-  msg: { mediaUrl?: string | null; [key: string]: unknown } | null,
+  msg: { mediaUrl?: string | null; mediaLocalPath?: string | null; [key: string]: unknown } | null,
   column: string,
 ): { content: string; localPath: string | null } | 'error' | 'pending' {
   if (!msg) return 'pending';
@@ -536,9 +536,11 @@ function checkProcessedColumn(
   if (processed == null) return 'pending';
   if (typeof processed === 'string' && processed.startsWith('[error')) return 'error';
   if (processed) {
+    // Use mediaLocalPath (the actual downloaded file path) instead of mediaUrl (the platform file ID)
+    const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
     return {
       content: processed as string,
-      localPath: msg.mediaUrl ? resolve(resolveMediaPath(msg.mediaUrl as string)) : null,
+      localPath,
     };
   }
   return 'pending';
