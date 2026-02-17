@@ -1,6 +1,6 @@
 {
   "name": "@omni/cli",
-  "version": "2.20260217.2",
+  "version": "2.20260217.3",
   "description": "LLM-optimized CLI for Omni v2",
   "type": "module",
   "bin": {
