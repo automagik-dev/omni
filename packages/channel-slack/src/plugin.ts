@@ -21,7 +21,7 @@ import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
 import { checkBoltHealth, createBoltConnection, destroyBoltConnection } from './connection/bolt-client';
 import { setupCommandHandlers } from './handlers/commands';
-import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
+import { extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
@@ -621,9 +621,15 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Download and emit inbound Slack file attachments.
-   * Slack private URLs require bot-token auth; we download here and emit as
-   * data: URIs so downstream (storeFromUrl) can fetch without Slack auth headers.
+   * Emit inbound Slack file attachments.
+   *
+   * Slack `url_private*` links require bot-token auth.  Rather than downloading
+   * the entire file here (which would copy large files entirely into heap memory
+   * before base64-encoding them into a data: URI), we pass the private URL as
+   * `mediaUrl` and include `_slackAuth.botToken` in `rawPayload`.  The
+   * media-processor plugin reads that field and forwards it as an Authorization
+   * header when it calls `storeFromUrl`, so the download happens exactly once
+   * and never needs to be base64-encoded.
    */
   private async handleInboundFiles(
     instanceId: string,
@@ -642,22 +648,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const fileInfos = extractFileInfo(files);
     for (const fileInfo of fileInfos) {
       const contentType = getContentTypeFromMime(fileInfo.mimeType);
-      const privateUrl = fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate;
-      let mediaUrl: string | undefined;
-
-      if (privateUrl) {
-        try {
-          const { buffer, mimeType: detectedMime } = await downloadSlackFile(privateUrl, botToken, this.logger);
-          const mime = detectedMime !== 'application/octet-stream' ? detectedMime : fileInfo.mimeType;
-          mediaUrl = `data:${mime};base64,${buffer.toString('base64')}`;
-        } catch (err) {
-          this.logger.warn('Failed to pre-download Slack file; skipping attachment', {
-            fileId: fileInfo.id,
-            error: String(err),
-          });
-          continue;
-        }
-      }
+      const mediaUrl = fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate;
 
       await this.handleMessageReceived(
         instanceId,
@@ -666,7 +657,8 @@ export class SlackPlugin extends BaseChannelPlugin {
         from,
         { type: contentType as ContentType, text: content.text, mediaUrl, mimeType: fileInfo.mimeType },
         replyToId,
-        { ...rawPayload, fileInfo },
+        // _slackAuth is read by media-processor to authenticate the download
+        { ...rawPayload, fileInfo, _slackAuth: { botToken } },
         platformTimestamp,
       );
     }

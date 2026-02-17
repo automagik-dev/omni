@@ -78,7 +78,17 @@ export function setupInteractionHandlers(
     const userId = bodyAny.user ? ((bodyAny.user as Record<string, unknown>).id as string) : '';
     const privateMetadata = view.private_metadata || undefined;
 
-    // Extract form values from the view state
+    // Extract form values from the view state.
+    // Each action type exposes its value on a different field:
+    //   plain_text_input       → action.value
+    //   static/external_select → action.selected_option.value
+    //   users/channels/
+    //   conversations_select   → action.selected_user / _channel / _conversation
+    //   datepicker             → action.selected_date
+    //   timepicker             → action.selected_time
+    //   multi_*_select,
+    //   checkboxes             → action.selected_options[] (array of {value})
+    //   radio_buttons          → action.selected_option.value
     const stateValues = view.state?.values ?? {};
     const values: Record<string, string> = {};
     for (const [_blockId, block] of Object.entries(stateValues)) {
@@ -86,7 +96,17 @@ export function setupInteractionHandlers(
       for (const [actionId, action] of Object.entries(blockObj)) {
         const val = action.value as string | undefined;
         const selectedOpt = action.selected_option as Record<string, unknown> | undefined;
-        values[actionId] = val ?? (selectedOpt?.value as string) ?? '';
+        const selectedOpts = action.selected_options as Array<Record<string, unknown>> | undefined;
+        values[actionId] =
+          val ??
+          (selectedOpt?.value as string | undefined) ??
+          (action.selected_user as string | undefined) ??
+          (action.selected_channel as string | undefined) ??
+          (action.selected_conversation as string | undefined) ??
+          (action.selected_date as string | undefined) ??
+          (action.selected_time as string | undefined) ??
+          (selectedOpts ? JSON.stringify(selectedOpts.map((o) => o.value)) : undefined) ??
+          '';
       }
     }
 

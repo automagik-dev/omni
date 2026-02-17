@@ -134,6 +134,7 @@ async function resolveMediaPath(
   externalId: string,
   content: MessageReceivedPayload['content'],
   mimeType: string,
+  rawPayload?: Record<string, unknown>,
 ): Promise<MediaResolution | null> {
   // Wait briefly for message-persistence to create the DB row (race condition:
   // both media-processor and message-persistence subscribe to message.received)
@@ -167,12 +168,20 @@ async function resolveMediaPath(
   // If no local path, try to download from URL
   if (!filePath && content.mediaUrl) {
     try {
+      // Build fetch options — rawPayload._slackAuth carries a Slack bot token
+      // when the URL is a Slack private link that requires Bearer auth.
+      const slackAuth = rawPayload?._slackAuth as { botToken?: string } | undefined;
+      const fetchOptions: RequestInit | undefined = slackAuth?.botToken
+        ? { headers: { Authorization: `Bearer ${slackAuth.botToken}` } }
+        : undefined;
+
       const result = await ctx.mediaStorage.storeFromUrl(
         instanceId,
         message.id,
         content.mediaUrl,
         mimeType,
         message.platformTimestamp ?? undefined,
+        fetchOptions,
       );
       filePath = result.localPath;
       await ctx.mediaStorage.updateMessageLocalPath(message.id, filePath);
@@ -266,7 +275,15 @@ async function processMessageMedia(
     return;
   }
 
-  const media = await resolveMediaPath(ctx, instanceId, payload.chatId, externalId, content, mimeType);
+  const media = await resolveMediaPath(
+    ctx,
+    instanceId,
+    payload.chatId,
+    externalId,
+    content,
+    mimeType,
+    payload.rawPayload,
+  );
   if (!media) return;
 
   log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
