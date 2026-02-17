@@ -47,5 +47,31 @@ export type { EntitySelectMenuOptions, ChannelSelectMenuOptions } from './entity
 export { ComponentRegistry, getComponentRegistry, resetComponentRegistry } from './registry';
 export type { ComponentEntry, RegisterOptions, ResolveOptions, RegistryStats } from './registry';
 
+// Components v2 Containers (feature-flagged)
+export {
+  buildTextDisplay,
+  buildFile,
+  buildFileFromArray,
+  buildSection,
+  buildMediaGallery,
+  buildSeparator,
+  buildContainer,
+  buildComponentsV2Message,
+  COMPONENTS_V2_FLAG,
+} from './containers';
+export type {
+  RawComponent,
+  TextDisplayOptions,
+  FileOptions,
+  SectionOptions,
+  SectionAccessory,
+  ThumbnailAccessory,
+  ButtonAccessory,
+  MediaGalleryOptions,
+  MediaGalleryItem,
+  SeparatorOptions,
+  ContainerOptions,
+} from './containers';
+
 // Modals
 export { buildModal, showModal, createSimpleModal, createFormModal } from './modals';
