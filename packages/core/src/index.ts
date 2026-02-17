@@ -66,3 +66,6 @@ export * from './cache';
 
 // Tracing
 export * from './tracing';
+
+// Agents
+export * from './agents';

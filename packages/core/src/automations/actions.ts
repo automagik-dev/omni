@@ -4,6 +4,15 @@
  * Actions are the "do Y" part of "when X happens, do Y".
  */
 
+import {
+  type AgentContext,
+  type ChildrenTracker,
+  type SpawnLimits,
+  checkSpawnAllowed,
+  recordCompletion,
+  recordSpawn,
+  resolveSpawnLimits,
+} from '../agents/spawn-guard';
 import type { EventBus } from '../events/bus';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { createLogger } from '../logger';
@@ -52,6 +61,8 @@ export interface AgentCallContext {
   senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
+  /** Agent nesting context (for spawn guard) */
+  agentContext?: AgentContext;
 }
 
 /**
@@ -65,6 +76,10 @@ export interface ActionDependencies {
    * The response is stored in variables for use in subsequent actions.
    */
   callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  /** Spawn limits for agent nesting (per-instance config) */
+  spawnLimits?: Partial<SpawnLimits>;
+  /** Children tracker for breadth limiting */
+  childrenTracker?: ChildrenTracker;
 }
 
 /**
@@ -315,9 +330,39 @@ function extractAgentCallContext(
 }
 
 /**
+ * Enforce spawn guard limits before agent call.
+ * Returns error string if spawn is rejected, undefined if allowed.
+ * Also records the spawn and attaches child context to agentCallContext.
+ */
+function enforceSpawnGuard(
+  agentCallContext: AgentCallContext,
+  agentId: string,
+  deps: ActionDependencies,
+): { childContext?: AgentContext; error?: string } {
+  const parentAgentCtx = agentCallContext.agentContext;
+  const tracker = deps.childrenTracker;
+  const limits = resolveSpawnLimits(deps.spawnLimits);
+
+  if (!parentAgentCtx || !tracker) {
+    return {};
+  }
+
+  const decision = checkSpawnAllowed(parentAgentCtx, limits, tracker);
+  if (!decision.allowed) {
+    return { error: decision.reason };
+  }
+
+  const childContext = recordSpawn(parentAgentCtx, agentId, tracker);
+  agentCallContext.agentContext = childContext;
+  return { childContext };
+}
+
+/**
  * Execute a call_agent action
  * Invokes an AI agent and returns the response for use in subsequent actions.
  * This is a composable building block - use send_message to send the response.
+ *
+ * Spawn guard: checks depth and breadth limits before spawning.
  */
 async function executeCallAgentAction(
   config: CallAgentActionConfig,
@@ -336,11 +381,18 @@ async function executeCallAgentAction(
 
   const agentContext = extracted.context;
 
+  // Enforce spawn guard (depth + breadth limits)
+  const guard = enforceSpawnGuard(agentContext, config.agentId, deps);
+  if (guard.error) {
+    return { success: false, error: guard.error };
+  }
+
   logger.debug('Executing call_agent action', {
     instanceId: agentContext.instanceId,
     chatId: agentContext.chatId,
     senderId: agentContext.senderId,
     agentId: config.agentId,
+    depth: agentContext.agentContext?.agentDepth ?? 0,
   });
 
   try {
@@ -365,6 +417,11 @@ async function executeCallAgentAction(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Call agent action failed', { error: errorMessage });
     return { success: false, error: errorMessage };
+  } finally {
+    // Record completion to decrement children count
+    if (guard.childContext && deps.childrenTracker) {
+      recordCompletion(guard.childContext, deps.childrenTracker);
+    }
   }
 }
 
