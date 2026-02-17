@@ -96,7 +96,7 @@ export function buildFileFromArray(files: Array<{ url: string }>, spoiler?: bool
   if (files.length === 0) {
     throw new Error('File component requires at least 1 attachment');
   }
-  return buildFile({ file: files[0], spoiler });
+  return buildFile({ file: files[0] as { url: string }, spoiler });
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -133,7 +133,7 @@ describe('Components v2 Containers', () => {
         items: [{ url: 'https://example.com/nsfw.png', spoiler: true }],
       });
       const items = gallery.items as Array<{ spoiler: boolean }>;
-      expect(items[0].spoiler).toBe(true);
+      expect(items[0]?.spoiler).toBe(true);
     });
   });
 

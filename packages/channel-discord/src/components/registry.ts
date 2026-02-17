@@ -317,7 +317,7 @@ export class ComponentRegistry {
     // First try to evict expired entries
     const now = Date.now();
     for (let i = 0; i < this.insertionOrder.length; i++) {
-      const key = this.insertionOrder[i];
+      const key = this.insertionOrder[i] as string;
       const entry = this.entries.get(key);
       if (entry && now > entry.expiresAt) {
         this.entries.delete(key);
@@ -329,7 +329,7 @@ export class ComponentRegistry {
 
     // No expired entries, evict oldest by insertion order
     const oldestKey = this.insertionOrder.shift();
-    if (oldestKey) {
+    if (oldestKey !== undefined) {
       this.entries.delete(oldestKey);
     }
   }
