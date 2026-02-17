@@ -121,7 +121,7 @@ function createMockInstance(overrides: Record<string, unknown> = {}) {
         onNameMatch: false,
       },
     },
-    agentSessionStrategy: 'per_user_per_chat',
+    agentSessionStrategy: 'per_chat',
     agentPrefixSenderName: true,
     triggerEvents: ['message.received'],
     triggerReactions: null,
@@ -213,11 +213,17 @@ function createMockServices(overrides: Record<string, unknown> = {}) {
     resolve: mock(async () => null),
   };
 
+  const chats = {
+    getByExternalId: mock(async () => null),
+    findByExternalIdSmart: mock(async () => null),
+  };
+
   return {
     agentRunner,
     access,
     providers,
     routeResolver,
+    chats,
     ...overrides,
   } as unknown as import('../../services').Services;
 }

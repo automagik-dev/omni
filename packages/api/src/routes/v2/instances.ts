@@ -60,8 +60,8 @@ const createInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
-    .enum(['per_user', 'per_chat', 'per_user_per_chat'])
-    .default('per_user_per_chat')
+    .enum(['per_user', 'per_chat'])
+    .default('per_chat')
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
   enableAutoSplit: z.boolean().default(true).describe('Split responses on double newlines'),

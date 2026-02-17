@@ -97,7 +97,7 @@ import type { AgentType } from '../types/agent';
 /**
  * Session strategy for agent memory (matches @omni/db).
  */
-export type AgentSessionStrategy = 'per_user' | 'per_chat' | 'per_user_per_chat';
+export type AgentSessionStrategy = 'per_user' | 'per_chat';
 
 /**
  * Call agent action configuration.

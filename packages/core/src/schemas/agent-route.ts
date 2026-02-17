@@ -16,7 +16,7 @@ export type AgentRouteScope = z.infer<typeof AgentRouteScopeSchema>;
  * Agent session strategy enum
  * Note: AgentSessionStrategy type is defined in automations/types.ts
  */
-export const AgentSessionStrategySchema = z.enum(['per_user', 'per_chat', 'per_user_per_chat']);
+export const AgentSessionStrategySchema = z.enum(['per_user', 'per_chat']);
 
 /**
  * Reply filter mode

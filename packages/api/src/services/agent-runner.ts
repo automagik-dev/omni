@@ -200,7 +200,7 @@ export function getSplitDelayConfig(instance: Instance): SplitDelayConfig {
 /**
  * Compute session ID based on the configured strategy
  *
- * @param strategy - Session strategy (per_user, per_chat, per_user_per_chat)
+ * @param strategy - Session strategy (per_user, per_chat)
  * @param userId - The user's identifier
  * @param chatId - The chat/conversation identifier
  * @returns Computed session ID for the agent
@@ -421,7 +421,7 @@ export class AgentRunnerService {
     const combinedMessage = formattedMessages.join('\n---\n');
 
     // Compute session ID based on configured strategy
-    const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+    const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
     log.info('Running agent', {
@@ -523,7 +523,7 @@ export class AgentRunnerService {
     const enableSplit = instance.enableAutoSplit ?? true;
 
     // Compute session ID based on configured strategy
-    const sessionStrategy = instance.agentSessionStrategy ?? 'per_user_per_chat';
+    const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
     const request = {

@@ -71,10 +71,7 @@ const callAgentActionSchema = z.object({
     providerId: z.string().optional().describe('Provider ID (template: {{instance.agentProviderId}})'),
     agentId: z.string().min(1).describe('Agent ID (required or template)'),
     agentType: z.enum(['agent', 'team', 'workflow']).optional().describe('Agent type'),
-    sessionStrategy: z
-      .enum(['per_user', 'per_chat', 'per_user_per_chat'])
-      .optional()
-      .describe('Session strategy for agent memory'),
+    sessionStrategy: z.enum(['per_user', 'per_chat']).optional().describe('Session strategy for agent memory'),
     prefixSenderName: z.boolean().optional().describe('Prefix messages with sender name'),
     timeoutMs: z.number().int().optional().describe('Timeout in milliseconds'),
     responseAs: z.string().optional().describe('Store agent response as variable for chaining'),
