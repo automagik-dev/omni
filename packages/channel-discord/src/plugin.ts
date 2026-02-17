@@ -163,16 +163,20 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
     const buffer = Buffer.from(base64, 'base64');
 
     // Wire: media dedup — skip sending if this exact media was sent recently
-    if (mediaDedup.checkAndMark(buffer)) {
+    if (mediaDedup.isDuplicate(buffer)) {
       return ''; // Deduped — MediaDedup logs at DEBUG level
     }
 
     const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
-    return sendMediaBuffer(client, channelId, buffer, {
+    const bufferResult = await sendMediaBuffer(client, channelId, buffer, {
       filename,
       caption: content.text || content.caption,
       replyToId: message.replyTo,
     });
+    // Mark sent only after the API call succeeds to avoid poisoning the cache
+    // on transient failures (which would prevent legitimate retries).
+    mediaDedup.markSent(buffer);
+    return bufferResult;
   }
 
   if (!content.mediaUrl) {
@@ -181,15 +185,18 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
 
   // Wire: media dedup for URL-based media — hash the URL as a content proxy
   const urlBuffer = Buffer.from(content.mediaUrl);
-  if (mediaDedup.checkAndMark(urlBuffer)) {
+  if (mediaDedup.isDuplicate(urlBuffer)) {
     return ''; // Deduped — same URL sent recently
   }
 
-  return sendMediaMessage(client, channelId, content.mediaUrl, {
+  const urlResult = await sendMediaMessage(client, channelId, content.mediaUrl, {
     caption: content.text || content.caption,
     filename: content.filename,
     replyToId: message.replyTo,
   });
+  // Mark sent only after the API call succeeds.
+  mediaDedup.markSent(urlBuffer);
+  return urlResult;
 }
 
 /**

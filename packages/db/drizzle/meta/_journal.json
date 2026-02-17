@@ -29,6 +29,13 @@
       "when": 1771393021797,
       "tag": "0003_telegram_reaction_level",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771362759291,
+      "tag": "0004_add_guild_config_overrides",
+      "breakpoints": true
     }
   ]
 }

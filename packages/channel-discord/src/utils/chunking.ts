@@ -46,6 +46,12 @@ type Segment =
  */
 export function chunkMessage(text: string, maxLength = MAX_MESSAGE_LENGTH, maxLines = 0): string[] {
   if (maxLines > 0) {
+    // Skip line-based processing if message already fits within both limits.
+    // chunkMessageWithLines re-parses and re-wraps code blocks which can mutate
+    // content (e.g. adding extra blank lines before closing fences).
+    if (text.length <= maxLength && countLines(text) <= maxLines) {
+      return [text];
+    }
     return chunkMessageWithLines(text, maxLines, maxLength);
   }
 

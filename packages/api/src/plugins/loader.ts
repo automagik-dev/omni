@@ -278,6 +278,16 @@ export async function autoReconnectInstances(db: Database): Promise<{
       continue;
     }
 
+    // Hydrate per-guild config overrides into the plugin cache before connecting.
+    // This ensures guild configs are available after process restart, not just
+    // on manual connect via HTTP routes.
+    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+        instance.id,
+        instance.guildConfigOverrides as Record<string, unknown>,
+      );
+    }
+
     const reconnectConfig = buildReconnectOptions(reconnectInstanceRecord);
     const ok = await reconnectInstance(plugin, reconnectInstanceRecord, reconnectConfig, db);
     if (ok) {

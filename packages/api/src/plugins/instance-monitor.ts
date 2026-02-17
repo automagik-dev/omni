@@ -98,12 +98,28 @@ function wasAuthenticated(instance: InstanceInfo): boolean {
  * Connect a single instance via its plugin
  */
 async function connectInstance(
-  instance: { id: string; channel: string; telegramBotToken?: string | null; discordBotToken?: string | null },
+  instance: {
+    id: string;
+    channel: string;
+    telegramBotToken?: string | null;
+    discordBotToken?: string | null;
+    guildConfigOverrides?: Record<string, unknown> | null;
+  },
   registry: ChannelRegistry,
 ): Promise<void> {
   const plugin = registry.get(instance.channel as Parameters<typeof registry.get>[0]);
   if (!plugin) {
     throw new Error(`No plugin for channel: ${instance.channel}`);
+  }
+
+  // Hydrate per-guild config overrides into the plugin cache before connecting.
+  // Without this, auto-reconnect and monitor-driven reconnects would connect
+  // without guild configs, causing incoming messages to lose guildConfig metadata.
+  if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+    (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+      instance.id,
+      instance.guildConfigOverrides,
+    );
   }
 
   // Pass channel-specific tokens from DB for reconnection
@@ -434,6 +450,7 @@ export class InstanceMonitor {
     channel: string;
     telegramBotToken?: string | null;
     discordBotToken?: string | null;
+    guildConfigOverrides?: Record<string, unknown> | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;
