@@ -376,7 +376,7 @@ export class OpenClawClient {
         mode: 'backend',
       },
       role: 'operator',
-      scopes: ['operator.admin'],
+      scopes: ['operator.admin', 'operator.write'],
       caps: ['tool-events'],
       auth: this.config.token ? { token: this.config.token } : undefined,
       locale: 'en-US',

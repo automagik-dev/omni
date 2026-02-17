@@ -203,7 +203,7 @@ describe('OpenClawClient', () => {
     expect(connectFrame).toBeDefined();
     const params = connectFrame?.params as unknown as ConnectParams;
     expect(params.role).toBe('operator');
-    expect(params.scopes).toEqual(['operator.admin']);
+    expect(params.scopes).toEqual(['operator.admin', 'operator.write']);
     expect(params.client.id).toBe('gateway-client');
     expect(params.client.mode).toBe('backend');
     expect(params.client.platform).toBe('omni');
