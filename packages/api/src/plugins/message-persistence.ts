@@ -220,7 +220,9 @@ async function processSenderIdentity(
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
   // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
   // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
-  const isLidAddressed = payload.rawPayload?.addressingMode === 'lid';
+  // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
+  // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
+  const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
   const phoneNumber = isLidAddressed ? undefined : extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(

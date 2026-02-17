@@ -715,6 +715,14 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   // Annotate LID identity info for downstream persistence
   annotateLidResolution(msg, rawChatId);
 
+  // Annotate sender LID status independently of chat addressing mode.
+  // In group chats the chat JID is @g.us (not @lid), so addressingMode stays unset,
+  // but individual participants can still be @lid. Downstream identity resolution
+  // uses this flag to skip phone extraction for LID sender IDs.
+  if (isLidJid(senderJid)) {
+    (msg as unknown as Record<string, unknown>).senderIsLid = true;
+  }
+
   // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
   const platformTimestamp = msg.messageTimestamp
     ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp)) * 1000
