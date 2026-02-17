@@ -60,13 +60,21 @@ export function filterButtonsByScope(
 
 /**
  * Apply style prefixes to button labels.
+ * Preserves the original text as the `data` fallback BEFORE modifying the
+ * display text, so `callback_data` (which falls back to `data ?? text`) remains
+ * stable regardless of which style is applied.
  */
 function applyStyles(buttons: TelegramInlineButton[]): TelegramInlineButton[] {
   return buttons.map((b) => {
     const style = b.style ?? 'default';
     const prefix = STYLE_PREFIXES[style] ?? '';
     if (!prefix) return b;
-    return { ...b, text: `${prefix}${b.text}` };
+    return {
+      ...b,
+      // Lock in the stable callback value before the display text changes
+      data: b.data ?? b.text,
+      text: `${prefix}${b.text}`,
+    };
   });
 }
 

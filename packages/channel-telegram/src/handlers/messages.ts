@@ -20,6 +20,7 @@ import { buildDisplayName, toPlatformUserId } from '../utils/identity';
 import { tryDownloadTelegramMedia } from '../utils/media-download';
 import { extractTelegramMessageContent } from './extract-content';
 import { MediaGroupBuffer } from './media-group';
+import type { MediaGroupResult } from './media-group';
 
 const log = createLogger('telegram:messages');
 
@@ -177,10 +178,16 @@ async function processInboundMessage(
 export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): void {
   const chatQueue = getChatQueue(instanceId);
 
-  // Media group buffer — flushes batched album messages as single context
-  const mediaGroupBuffer = new MediaGroupBuffer(async (result) => {
-    // Process the first message of the album as representative,
-    // but include combined caption + media refs in the rawPayload
+  // Deferred flush signals: mediaGroupId → resolver.
+  // When the first album message arrives we immediately reserve a chatQueue slot
+  // via a Promise. The flush callback resolves it, unblocking the queued task.
+  // This keeps FIFO ordering: non-album messages that arrive during the 500ms
+  // buffer window are enqueued AFTER the album's reserved slot.
+  const pendingFlushes = new Map<string, (result: MediaGroupResult) => void>();
+
+  // Process a fully-buffered album result: downloads + handleMessageReceived.
+  // Called from inside the chatQueue task (not from the flush callback directly).
+  async function processAlbumResult(result: MediaGroupResult): Promise<void> {
     const first = result.messages[0];
     if (!first) return;
 
@@ -216,37 +223,115 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         filename: m.content.filename,
       }));
 
-    const chatId = first.chatId;
-    const threadId = first.rawPayload.message_thread_id as string | undefined;
-    const key = getSessionKey(chatId, threadId);
+    await plugin.handleMessageReceived(
+      instanceId,
+      first.externalId,
+      first.chatId,
+      first.from,
+      {
+        // Derive content type from the actual first media item, not a hardcoded 'image'
+        type: first.content.type || 'image',
+        text: result.combinedCaption || undefined,
+        mediaUrl: mediaRefs[0]?.mediaFileId ?? mediaRefs[0]?.mediaUrl,
+        localPath: first.content.localPath,
+        mimeType: mediaRefs[0]?.mimeType,
+      },
+      first.replyToId,
+      {
+        ...first.rawPayload,
+        isAlbum: true,
+        mediaGroupId: result.mediaGroupId,
+        albumSize: result.messages.length,
+        mediaRefs,
+        combinedCaption: result.combinedCaption,
+        mediaLocalPath: first.content.localPath,
+      },
+      first.platformTimestamp,
+    );
+  }
 
-    await chatQueue.enqueue(key, async () => {
-      await plugin.handleMessageReceived(
-        instanceId,
-        first.externalId,
-        first.chatId,
-        first.from,
-        {
-          type: 'image', // Albums are image-primary
-          text: result.combinedCaption || undefined,
-          mediaUrl: mediaRefs[0]?.mediaFileId ?? mediaRefs[0]?.mediaUrl,
-          localPath: first.content.localPath,
-          mimeType: mediaRefs[0]?.mimeType,
-        },
-        first.replyToId,
-        {
-          ...first.rawPayload,
-          isAlbum: true,
-          mediaGroupId: result.mediaGroupId,
-          albumSize: result.messages.length,
-          mediaRefs,
-          combinedCaption: result.combinedCaption,
-          mediaLocalPath: first.content.localPath,
-        },
-        first.platformTimestamp,
-      );
-    });
+  // Media group buffer — resolves the deferred flush signal so the chatQueue
+  // task that was reserved on first arrival can proceed with processing.
+  const mediaGroupBuffer = new MediaGroupBuffer(async (result) => {
+    const resolve = pendingFlushes.get(result.mediaGroupId);
+    if (resolve) {
+      pendingFlushes.delete(result.mediaGroupId);
+      resolve(result); // Unblocks the waiting chatQueue task
+    } else {
+      // Safety fallback — shouldn't happen in normal flow
+      await processAlbumResult(result);
+    }
   });
+
+  // Buffer an album message and reserve a chatQueue slot on its first arrival.
+  // Extracted to keep the bot.on('message') handler below complexity limits.
+  function bufferAlbumMessage(msg: TelegramMessageLike, chatId: string, threadId: string | undefined): void {
+    const from = msg.from!; // caller already guards against undefined
+    const userId = toPlatformUserId(from.id);
+    const externalId = String(msg.message_id);
+    const displayName = buildDisplayName(from);
+    const content = extractTelegramMessageContent(msg);
+    const botInfo = bot.botInfo;
+    const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
+    const mediaGroupId = msg.media_group_id!;
+
+    const isNewGroup = !pendingFlushes.has(mediaGroupId);
+
+    // Add to buffer immediately — before any I/O — so the 500ms album window
+    // starts on message arrival and groups all album parts regardless of
+    // individual download latency. Downloads happen in processAlbumResult.
+    mediaGroupBuffer.add(mediaGroupId, {
+      externalId,
+      chatId,
+      from: userId,
+      content: {
+        type: content.type,
+        text: content.text,
+        caption: content.text,
+        mediaFileId: content.mediaFileId,
+        mediaUrl: content.mediaFileId,
+        mimeType: content.mimeType,
+        localPath: undefined, // Populated in processAlbumResult
+        filename: content.filename,
+      },
+      replyToId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
+      rawPayload: {
+        chatType: msg.chat.type,
+        username: from.username,
+        isMention,
+        mediaFileId: content.mediaFileId,
+        filename: content.filename,
+        mediaLocalPath: undefined, // Populated in processAlbumResult
+        displayName,
+        pushName: displayName,
+        chatName: buildChatName(msg, displayName),
+        isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
+        isDM: msg.chat.type === 'private',
+        isForwarded: !!msg.forward_origin,
+        message_thread_id: threadId,
+      },
+      platformTimestamp: msg.date * 1000,
+      estimatedSize: JSON.stringify(content).length,
+    });
+
+    if (isNewGroup) {
+      // Reserve a slot in the sequential queue immediately on the first album
+      // message. Non-album messages arriving in the same chat during the 500ms
+      // buffer window will chain after this slot, preserving FIFO order.
+      // ChatQueue.enqueue() updates the chain synchronously, so we don't await.
+      const key = getSessionKey(chatId, threadId);
+      let flushResolve!: (result: MediaGroupResult) => void;
+      const flushPromise = new Promise<MediaGroupResult>((resolve) => {
+        flushResolve = resolve;
+      });
+      pendingFlushes.set(mediaGroupId, flushResolve);
+      chatQueue
+        .enqueue(key, () => flushPromise.then(processAlbumResult))
+        .catch((err) => {
+          log.error('Album flush processing failed', { mediaGroupId, error: String(err) });
+        });
+    }
+  }
 
   bot.on('message', async (ctx) => {
     const msg = (ctx as { message: TelegramMessageLike }).message;
@@ -260,49 +345,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     // --- Media group buffering: batch album messages ---
     if (msg.media_group_id) {
-      const userId = toPlatformUserId(from.id);
-      const externalId = String(msg.message_id);
-      const displayName = buildDisplayName(from);
-      const content = extractTelegramMessageContent(msg);
-      const botInfo = bot.botInfo;
-      const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
-
-      // Add to buffer FIRST — before any I/O — so the 500ms album window
-      // starts on message arrival and groups all album parts regardless of
-      // individual download latency. Downloads happen in the flush callback.
-      mediaGroupBuffer.add(msg.media_group_id, {
-        externalId,
-        chatId,
-        from: userId,
-        content: {
-          type: content.type,
-          text: content.text,
-          caption: content.text,
-          mediaFileId: content.mediaFileId,
-          mediaUrl: content.mediaFileId,
-          mimeType: content.mimeType,
-          localPath: undefined, // Populated in flush callback
-          filename: content.filename,
-        },
-        replyToId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
-        rawPayload: {
-          chatType: msg.chat.type,
-          username: from.username,
-          isMention,
-          mediaFileId: content.mediaFileId,
-          filename: content.filename,
-          mediaLocalPath: undefined, // Populated in flush callback
-          displayName,
-          pushName: displayName,
-          chatName: buildChatName(msg, displayName),
-          isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
-          isDM: msg.chat.type === 'private',
-          isForwarded: !!msg.forward_origin,
-          message_thread_id: threadId,
-        },
-        platformTimestamp: msg.date * 1000,
-        estimatedSize: JSON.stringify(content).length,
-      });
+      bufferAlbumMessage(msg, chatId, threadId);
       return; // Don't process individually — will be flushed by buffer
     }
 
