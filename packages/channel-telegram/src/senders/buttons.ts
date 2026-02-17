@@ -100,10 +100,10 @@ export async function sendInlineButtons(
   options?: Record<string, unknown>,
 ): Promise<number> {
   // Determine chat type from options (passed by plugin.ts via threadOptions or metadata)
-  const chatType = options?.chatType as string | undefined;
+  const chatType = options?.chatType as 'dm' | 'group' | 'channel' | 'private' | 'supergroup' | undefined;
 
   // Filter buttons by scope
-  const visibleButtons = filterButtonsByScope(buttons, chatType as TelegramInlineButton['scope']);
+  const visibleButtons = filterButtonsByScope(buttons, chatType);
 
   // If no buttons remain after filtering, send as plain text
   if (!visibleButtons.length) {

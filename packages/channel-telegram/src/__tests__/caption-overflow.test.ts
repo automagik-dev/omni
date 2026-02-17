@@ -95,13 +95,14 @@ describe('Caption Overflow — sendPhoto integration', () => {
 
     // sendPhoto called with truncated caption
     expect(bot.api.sendPhoto).toHaveBeenCalledTimes(1);
-    const photoCallArgs = bot.api.sendPhoto.mock.calls[0];
-    expect(photoCallArgs?.[2]?.caption?.length).toBe(1024);
+    const photoCall = (bot.api.sendPhoto as ReturnType<typeof mock>).mock.calls[0] as unknown[];
+    const photoOpts = photoCall?.[2] as Record<string, unknown> | undefined;
+    expect((photoOpts?.caption as string)?.length).toBe(1024);
 
     // sendMessage called for overflow
     expect(bot.api.sendMessage).toHaveBeenCalledTimes(1);
-    const msgCallArgs = bot.api.sendMessage.mock.calls[0];
-    expect(msgCallArgs?.[1]?.length).toBe(976);
+    const msgCall = (bot.api.sendMessage as ReturnType<typeof mock>).mock.calls[0] as unknown[];
+    expect((msgCall?.[1] as string)?.length).toBe(976);
   });
 
   test('short caption sends normally without follow-up', async () => {
