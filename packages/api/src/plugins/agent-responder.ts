@@ -192,13 +192,12 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
   const chatId = payload.chatId ?? '';
 
   // Determine if DM (not a group chat)
-  // WhatsApp: groups have @g.us, DMs have @s.whatsapp.net, newsletters have @newsletter, linked devices have @lid
-  // Discord: need to check channel type
+  // LID-first: @lid is a valid canonical DM identity — no longer excluded
+  // DM = not group, not broadcast, not newsletter
   const isDirectMessage =
     !chatId.includes('@g.us') &&
     !chatId.includes('@broadcast') &&
     !chatId.includes('@newsletter') &&
-    !chatId.includes('@lid') &&
     !(rawPayload.isGroup as boolean);
 
   // Check for bot mention
