@@ -351,6 +351,7 @@ function classifyMessageTrigger(context: MessageContext): AgentTriggerType {
 function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'channel' {
   if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
     if (chatId.includes('@s.whatsapp.net')) return 'dm';
+    if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
     if (chatId.includes('@g.us')) return 'group';
     if (chatId.includes('@newsletter')) return 'channel';
     return 'dm'; // fallback

@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
-import { fromJid, isLidJid, resolveToPhoneJid } from '../jid';
+import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 
@@ -471,9 +471,11 @@ function isFromMe(msg: WAMessage): boolean {
 /**
  * Resolve the actual sender JID for a message.
  *
+ * LID-first: keeps LID participant JIDs as canonical sender identity.
+ * Stores LID↔phone mapping when participantAlt provides the alternate form.
+ *
  * Fixes:
  * - isFromMe in groups: uses the bot's own JID instead of group JID
- * - @lid participant JIDs: resolves to phone JID via cache/remoteJidAlt
  */
 function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage, chatId: string): string {
   if (isFromMe(msg)) {
@@ -483,14 +485,20 @@ function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMes
 
   // In groups, msg.key.participant is the actual sender
   const senderJid = msg.key.participant || msg.key.remoteJid || chatId;
+  const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
 
-  // Resolve @lid participant JIDs to phone JIDs
-  if (isLidJid(senderJid)) {
-    const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
-    const lidCache = plugin.getLidMappingCache(instanceId);
-    return resolveToPhoneJid(senderJid, participantAlt, lidCache);
+  // Always store bidirectional mapping when participantAlt provides the alternate form
+  if (isLidJid(senderJid) && participantAlt && isUserJid(participantAlt)) {
+    plugin.storeLidMapping(instanceId, senderJid, participantAlt);
   }
 
+  // DEC-8: when lidFirstEnabled is disabled, resolve LID sender → phone (legacy behavior)
+  if (!plugin.isLidFirstEnabled(instanceId)) {
+    const lidCache = plugin.getLidMappingCache(instanceId);
+    return resolveToPhoneJidLegacy(senderJid, participantAlt, lidCache);
+  }
+
+  // LID-first: keep sender JID as-is (LID stays LID, phone stays phone)
   return senderJid;
 }
 
@@ -612,17 +620,32 @@ async function handleSpecialMessage(
 }
 
 /**
- * Annotate the raw message with LID resolution info for downstream persistence
+ * Annotate the raw message with LID identity info for downstream persistence.
+ *
+ * LID-first: when chatId is @lid, annotate with both the LID and the resolved phone
+ * (from remoteJidAlt) when available.
  */
-function annotateLidResolution(msg: WAMessage, rawChatId: string, chatId: string): void {
-  if (isLidJid(rawChatId) && chatId !== rawChatId) {
+function annotateLidResolution(msg: WAMessage, rawChatId: string): void {
+  const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
+
+  if (isLidJid(rawChatId)) {
     (msg as unknown as Record<string, unknown>).originalLidJid = rawChatId;
     (msg as unknown as Record<string, unknown>).addressingMode = 'lid';
+    if (remoteJidAlt && isUserJid(remoteJidAlt)) {
+      (msg as unknown as Record<string, unknown>).resolvedPhoneJid = remoteJidAlt;
+    }
+  } else if (isUserJid(rawChatId) && remoteJidAlt && isLidJid(remoteJidAlt)) {
+    (msg as unknown as Record<string, unknown>).originalLidJid = remoteJidAlt;
+    (msg as unknown as Record<string, unknown>).resolvedPhoneJid = rawChatId;
+    (msg as unknown as Record<string, unknown>).addressingMode = 'phone';
   }
 }
 
 /**
- * Resolve the chat ID from a message, handling @lid → phone JID conversion
+ * Resolve the chat ID from a message.
+ *
+ * LID-first: keeps @lid JIDs as canonical chatId (no phone downconversion).
+ * Stores bidirectional LID↔phone mapping when remoteJidAlt provides it.
  */
 function resolveChatId(
   plugin: WhatsAppPlugin,
@@ -631,16 +654,26 @@ function resolveChatId(
 ): { chatId: string; rawChatId: string } {
   const rawChatId = msg.key.remoteJid || '';
   const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
-  const lidCache = plugin.getLidMappingCache(instanceId);
-  const chatId = resolveToPhoneJid(rawChatId, remoteJidAlt, lidCache);
 
-  // If we resolved a LID, store the mapping for future messages
-  if (isLidJid(rawChatId) && chatId !== rawChatId) {
-    plugin.storeLidMapping(instanceId, rawChatId, chatId);
-    log.debug('Resolved LID to phone JID', { rawChatId, chatId, source: remoteJidAlt ? 'remoteJidAlt' : 'cache' });
+  // Store bidirectional mapping when remoteJidAlt provides the alternate form
+  // (always store mappings regardless of lidFirstEnabled — useful for future enable)
+  if (isLidJid(rawChatId) && remoteJidAlt && isUserJid(remoteJidAlt)) {
+    plugin.storeLidMapping(instanceId, rawChatId, remoteJidAlt);
+    log.debug('Stored LID↔phone mapping from remoteJidAlt', { lid: rawChatId, phone: remoteJidAlt });
+  } else if (isUserJid(rawChatId) && remoteJidAlt && isLidJid(remoteJidAlt)) {
+    plugin.storeLidMapping(instanceId, remoteJidAlt, rawChatId);
+    log.debug('Stored LID↔phone mapping from remoteJidAlt (reverse)', { lid: remoteJidAlt, phone: rawChatId });
   }
 
-  return { chatId, rawChatId };
+  // DEC-8: when lidFirstEnabled is disabled, resolve LID → phone (legacy behavior)
+  if (!plugin.isLidFirstEnabled(instanceId)) {
+    const lidCache = plugin.getLidMappingCache(instanceId);
+    const chatId = resolveToPhoneJidLegacy(rawChatId, remoteJidAlt, lidCache);
+    return { chatId, rawChatId };
+  }
+
+  // LID-first: use rawChatId as canonical (no resolution to phone)
+  return { chatId: rawChatId, rawChatId };
 }
 
 /**
@@ -679,8 +712,16 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
     content.mimeType = mediaResult.mimeType;
   }
 
-  // If LID was resolved, annotate the raw message so downstream can persist the mapping
-  annotateLidResolution(msg, rawChatId, chatId);
+  // Annotate LID identity info for downstream persistence
+  annotateLidResolution(msg, rawChatId);
+
+  // Annotate sender LID status independently of chat addressing mode.
+  // In group chats the chat JID is @g.us (not @lid), so addressingMode stays unset,
+  // but individual participants can still be @lid. Downstream identity resolution
+  // uses this flag to skip phone extraction for LID sender IDs.
+  if (isLidJid(senderJid)) {
+    (msg as unknown as Record<string, unknown>).senderIsLid = true;
+  }
 
   // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
   const platformTimestamp = msg.messageTimestamp
