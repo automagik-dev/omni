@@ -76,12 +76,32 @@ const DEFAULT_IDLE_MINUTES = 60;
 /**
  * Simple in-memory store for session activity timestamps.
  * Key format: `${instanceId}:${sessionId}`
+ *
+ * Growth is bounded by `maxEntries` (default 50 000).  When the limit is
+ * reached the oldest 10 % of entries are evicted (Map insertion order).
  */
 export class InMemorySessionActivityStore implements SessionActivityStore {
   private activities: Map<string, { lastActivityAt: number | null; lastResetAt: number | null }> = new Map();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 50_000) {
+    this.maxEntries = maxEntries;
+  }
 
   private key(instanceId: string, sessionId: string): string {
     return `${instanceId}:${sessionId}`;
+  }
+
+  /** Evict the oldest 10 % of entries when the store is at capacity. */
+  private evictIfNeeded(): void {
+    if (this.activities.size < this.maxEntries) return;
+    const toDelete = Math.ceil(this.maxEntries * 0.1);
+    let deleted = 0;
+    for (const k of this.activities.keys()) {
+      this.activities.delete(k);
+      deleted++;
+      if (deleted >= toDelete) break;
+    }
   }
 
   getActivity(instanceId: string, sessionId: string): SessionActivity {
@@ -94,18 +114,26 @@ export class InMemorySessionActivityStore implements SessionActivityStore {
 
   recordActivity(instanceId: string, sessionId: string, timestamp: number): void {
     const k = this.key(instanceId, sessionId);
-    const existing = this.activities.get(k) ?? { lastActivityAt: null, lastResetAt: null };
-    existing.lastActivityAt = timestamp;
-    this.activities.set(k, existing);
+    const existing = this.activities.get(k);
+    if (existing) {
+      existing.lastActivityAt = timestamp;
+    } else {
+      this.evictIfNeeded();
+      this.activities.set(k, { lastActivityAt: timestamp, lastResetAt: null });
+    }
   }
 
   recordReset(instanceId: string, sessionId: string, timestamp: number): void {
     const k = this.key(instanceId, sessionId);
-    const existing = this.activities.get(k) ?? { lastActivityAt: null, lastResetAt: null };
-    existing.lastResetAt = timestamp;
-    // Clear last activity on reset so next message is treated as fresh
-    existing.lastActivityAt = null;
-    this.activities.set(k, existing);
+    const existing = this.activities.get(k);
+    if (existing) {
+      existing.lastResetAt = timestamp;
+      // Clear last activity on reset so next message is treated as fresh
+      existing.lastActivityAt = null;
+    } else {
+      this.evictIfNeeded();
+      this.activities.set(k, { lastActivityAt: null, lastResetAt: timestamp });
+    }
   }
 
   /** Get size (for testing/monitoring) */

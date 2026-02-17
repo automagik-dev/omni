@@ -1504,20 +1504,44 @@ async function processAgentResponse(
 
   // ── Session Reset Check (pre-processing) ──
   const rawChatType = determineChatType(chatId, channel);
-  // Map 'channel' → 'group' for session reset purposes (channels behave like groups)
-  const resetChatType: 'dm' | 'group' | 'thread' = rawChatType === 'channel' ? 'group' : rawChatType;
+  // Map 'channel' → 'group' for session reset purposes (channels behave like groups).
+  // Classify as 'thread' when the message carries a threadId (e.g. Telegram forum topics, Discord threads)
+  // so that sessionReset.thread config is applied instead of falling back to DM/group policy.
+  const hasThread = !!firstMessage.payload.threadId;
+  const resetChatType: 'dm' | 'group' | 'thread' = hasThread
+    ? 'thread'
+    : rawChatType === 'channel'
+      ? 'group'
+      : rawChatType;
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
 
   if (resetResult.shouldReset) {
-    // Clear agent conversation context (provider will start fresh)
+    // Clear agent conversation context in the activity store
     sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
 
-    // DEC-6: Mandatory session.reset event
+    // Reset provider session state so stateful providers (OpenClaw, ClaudeCode, etc.)
+    // start a fresh conversation context rather than continuing the old one.
+    getAgentProvider(services, instance, db)
+      .then((provider) => {
+        if (provider?.resetSession) {
+          return provider.resetSession(sessionId, chatId, instance.id);
+        }
+      })
+      .catch((err) => {
+        log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
+      });
+
+    // DEC-6: Mandatory session.reset event — include routing metadata so subscribers
+    // on 'session.reset.>' receive the event (bare 'session.reset' subject is not matched).
     eventBus
-      .publish('session.reset', { instanceId: instance.id, sessionId, timestamp: Date.now() }, {})
+      .publish(
+        'session.reset',
+        { instanceId: instance.id, sessionId, timestamp: Date.now() },
+        { instanceId: instance.id, channelType: channel },
+      )
       .catch((err) => {
         log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
       });
