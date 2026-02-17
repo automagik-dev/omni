@@ -13,6 +13,9 @@ trim = true
 [git]
 conventional_commits = true
 filter_unconventional = true
+# Ignore intermediate version tags within the commit range to prevent
+# duplicate section headers. The range boundaries are set by the workflow.
+ignore_tags = ".*"
 
 commit_parsers = [
   { message = "^feat", group = "🚀 Features" },
