@@ -124,42 +124,45 @@ async function processInboundMessage(
 
   const local = await downloadIfMedia({ bot, instanceId, externalId, content });
 
-  await plugin.handleMessageReceived(
-    instanceId,
-    externalId,
-    chatId,
-    userId,
-    {
-      type: content.type,
-      text: content.text,
-      mediaUrl: content.mediaFileId,
-      localPath: local?.localPath,
-      mimeType: content.mimeType,
-      isVoiceNote: content.isVoiceNote,
-    },
-    replyToId,
-    {
-      chatType: msg.chat.type,
-      username: from.username,
-      isMention,
-      mediaFileId: content.mediaFileId,
-      filename: content.filename,
-      mediaLocalPath: local?.localPath,
+  // --- Reaction levels: remove ack reaction in finally so it always runs ---
+  try {
+    await plugin.handleMessageReceived(
+      instanceId,
+      externalId,
+      chatId,
+      userId,
+      {
+        type: content.type,
+        text: content.text,
+        mediaUrl: content.mediaFileId,
+        localPath: local?.localPath,
+        mimeType: content.mimeType,
+        isVoiceNote: content.isVoiceNote,
+      },
+      replyToId,
+      {
+        chatType: msg.chat.type,
+        username: from.username,
+        isMention,
+        mediaFileId: content.mediaFileId,
+        filename: content.filename,
+        mediaLocalPath: local?.localPath,
 
-      // Cross-channel rawPayload contract
-      displayName,
-      pushName: displayName,
-      chatName: buildChatName(msg, displayName),
-      isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
-      isDM: msg.chat.type === 'private',
-      isForwarded: !!msg.forward_origin,
-    },
-    platformTimestamp,
-  );
-
-  // --- Reaction levels: remove ack reaction after response ---
-  if (didSetAck) {
-    await removeAckReaction(bot, chatId, msg.message_id);
+        // Cross-channel rawPayload contract
+        displayName,
+        pushName: displayName,
+        chatName: buildChatName(msg, displayName),
+        isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
+        isDM: msg.chat.type === 'private',
+        isForwarded: !!msg.forward_origin,
+      },
+      platformTimestamp,
+    );
+  } finally {
+    // Always remove the ack reaction — even if processing throws
+    if (didSetAck) {
+      await removeAckReaction(bot, chatId, msg.message_id);
+    }
   }
 }
 
@@ -181,6 +184,38 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const first = result.messages[0];
     if (!first) return;
 
+    // Download media for all album messages concurrently at flush time.
+    // This happens here (not before buffering) so that the 500ms window
+    // starts on message arrival rather than after each download finishes.
+    await Promise.all(
+      result.messages.map(async (albumMsg) => {
+        if (!albumMsg.content.mediaFileId) return;
+        const local = await tryDownloadTelegramMedia({
+          bot,
+          instanceId,
+          externalId: albumMsg.externalId,
+          fileId: albumMsg.content.mediaFileId,
+          mimeType: albumMsg.content.mimeType,
+          filename: albumMsg.content.filename,
+        });
+        if (local) {
+          albumMsg.content.localPath = local.localPath;
+        }
+      }),
+    );
+
+    // Rebuild mediaRefs with the now-populated localPaths
+    const mediaRefs = result.messages
+      .filter((m) => m.content.mediaFileId || m.content.mediaUrl)
+      .map((m) => ({
+        type: m.content.type,
+        mediaFileId: m.content.mediaFileId,
+        mediaUrl: m.content.mediaUrl,
+        mimeType: m.content.mimeType,
+        localPath: m.content.localPath,
+        filename: m.content.filename,
+      }));
+
     const chatId = first.chatId;
     const threadId = first.rawPayload.message_thread_id as string | undefined;
     const key = getSessionKey(chatId, threadId);
@@ -194,9 +229,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         {
           type: 'image', // Albums are image-primary
           text: result.combinedCaption || undefined,
-          mediaUrl: result.mediaRefs[0]?.mediaFileId ?? result.mediaRefs[0]?.mediaUrl,
+          mediaUrl: mediaRefs[0]?.mediaFileId ?? mediaRefs[0]?.mediaUrl,
           localPath: first.content.localPath,
-          mimeType: result.mediaRefs[0]?.mimeType,
+          mimeType: mediaRefs[0]?.mimeType,
         },
         first.replyToId,
         {
@@ -204,8 +239,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
           isAlbum: true,
           mediaGroupId: result.mediaGroupId,
           albumSize: result.messages.length,
-          mediaRefs: result.mediaRefs,
+          mediaRefs,
           combinedCaption: result.combinedCaption,
+          mediaLocalPath: first.content.localPath,
         },
         first.platformTimestamp,
       );
@@ -231,8 +267,9 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
       const botInfo = bot.botInfo;
       const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
 
-      const local = await downloadIfMedia({ bot, instanceId, externalId, content });
-
+      // Add to buffer FIRST — before any I/O — so the 500ms album window
+      // starts on message arrival and groups all album parts regardless of
+      // individual download latency. Downloads happen in the flush callback.
       mediaGroupBuffer.add(msg.media_group_id, {
         externalId,
         chatId,
@@ -244,7 +281,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
           mediaFileId: content.mediaFileId,
           mediaUrl: content.mediaFileId,
           mimeType: content.mimeType,
-          localPath: local?.localPath,
+          localPath: undefined, // Populated in flush callback
           filename: content.filename,
         },
         replyToId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
@@ -254,7 +291,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
           isMention,
           mediaFileId: content.mediaFileId,
           filename: content.filename,
-          mediaLocalPath: local?.localPath,
+          mediaLocalPath: undefined, // Populated in flush callback
           displayName,
           pushName: displayName,
           chatName: buildChatName(msg, displayName),
@@ -290,14 +327,16 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     log.debug('Received edited message', { instanceId, chatId, externalId });
 
     const displayName = buildDisplayName(from);
-    const local = await downloadIfMedia({ bot, instanceId, externalId, content });
 
-    // Edited messages also go through the sequential queue
+    // Edited messages go through the sequential queue.
+    // Enqueue BEFORE downloading so arrival order determines processing order,
+    // not download latency (a faster download of a later edit must not race ahead).
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : undefined;
     const key = getSessionKey(chatId, threadId);
 
-    await chatQueue.enqueue(key, () =>
-      plugin.handleMessageReceived(
+    await chatQueue.enqueue(key, async () => {
+      const local = await downloadIfMedia({ bot, instanceId, externalId, content });
+      return plugin.handleMessageReceived(
         instanceId,
         externalId,
         chatId,
@@ -326,8 +365,8 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
           mediaLocalPath: local?.localPath,
         },
         (msg.edit_date ?? msg.date) * 1000,
-      ),
-    );
+      );
+    });
   });
 
   log.info('Message handlers set up', { instanceId, integrations: ['reactions', 'media-group', 'sequential-queue'] });
