@@ -60,7 +60,7 @@ export const DISCORD_CAPABILITIES: ChannelCapabilities = {
   canHandleThreads: true,
   canCreateWebhooks: true,
   canSendViaWebhook: true,
-  canHandleVoice: true,
+  canHandleVoice: false, // voice.ts sender exists but is not wired into the send path
 
   // Limits
   maxMessageLength: 2000,

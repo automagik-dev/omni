@@ -24,28 +24,32 @@ export class MediaDedup {
   }
 
   /**
-   * Compute a content hash from media data.
-   * Uses SHA-256 of first 4KB + file size for fast comparison.
+   * Compute a content hash from media data, scoped to a send context.
+   * Uses SHA-256 of first 4KB + file size + scope string.
+   *
+   * The scope should be `${instanceId}:${channelId}` so that identical media
+   * sent to different instances or channels is NOT collapsed as a duplicate.
    */
-  computeHash(data: Buffer): string {
+  computeHash(data: Buffer, scope = ''): string {
     const prefix = data.subarray(0, 4096);
     const hash = createHash('sha256');
     hash.update(prefix);
     hash.update(Buffer.from(String(data.length)));
+    if (scope) hash.update(Buffer.from(scope));
     return hash.digest('hex');
   }
 
   /**
-   * Check if media has been recently sent.
+   * Check if media has been recently sent to this scope (instance + channel).
    * Returns true if this is a duplicate (should be skipped).
    */
-  isDuplicate(data: Buffer): boolean {
+  isDuplicate(data: Buffer, scope = ''): boolean {
     this.evictExpired();
-    const hash = this.computeHash(data);
+    const hash = this.computeHash(data, scope);
     const entry = this.cache.get(hash);
 
     if (entry && Date.now() - entry.timestamp < this.ttlMs) {
-      log.debug('Media dedup: duplicate detected', { hash: hash.slice(0, 12) });
+      log.debug('Media dedup: duplicate detected', { hash: hash.slice(0, 12), scope });
       return true;
     }
 
@@ -53,10 +57,10 @@ export class MediaDedup {
   }
 
   /**
-   * Mark media as sent (add to dedup cache).
+   * Mark media as sent for this scope (add to dedup cache).
    */
-  markSent(data: Buffer): void {
-    const hash = this.computeHash(data);
+  markSent(data: Buffer, scope = ''): void {
+    const hash = this.computeHash(data, scope);
     this.cache.set(hash, { hash, timestamp: Date.now() });
     this.enforceMaxEntries();
   }
@@ -64,11 +68,11 @@ export class MediaDedup {
   /**
    * Check and mark in one operation. Returns true if duplicate.
    */
-  checkAndMark(data: Buffer): boolean {
-    if (this.isDuplicate(data)) {
+  checkAndMark(data: Buffer, scope = ''): boolean {
+    if (this.isDuplicate(data, scope)) {
       return true;
     }
-    this.markSent(data);
+    this.markSent(data, scope);
     return false;
   }
 

@@ -151,20 +151,34 @@ async function sendTextContent(client: Client, channelId: string, message: Outgo
   return messageIds[0] ?? '';
 }
 
+/** Sentinel returned by sendMediaContent when dedup suppresses the send. */
+export const DEDUP_SKIPPED = '__dedup_skipped__';
+
 /**
  * Send media content (image, audio, video, document)
  * Includes media deduplication check to prevent duplicate sends within TTL window.
+ *
+ * Returns DEDUP_SKIPPED (not an empty string) when the send was suppressed to
+ * allow callers to distinguish dedup skips from genuine empty message IDs.
  */
-async function sendMediaContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+async function sendMediaContent(
+  client: Client,
+  channelId: string,
+  message: OutgoingMessage,
+  instanceId: string,
+): Promise<string> {
   const content = message.content;
   const base64 = message.metadata?.base64 as string | undefined;
+  // Scope dedup by instance + channel so identical media going to different
+  // destinations is not incorrectly collapsed.
+  const dedupScope = `${instanceId}:${channelId}`;
 
   if (base64) {
     const buffer = Buffer.from(base64, 'base64');
 
     // Wire: media dedup — skip sending if this exact media was sent recently
-    if (mediaDedup.isDuplicate(buffer)) {
-      return ''; // Deduped — MediaDedup logs at DEBUG level
+    if (mediaDedup.isDuplicate(buffer, dedupScope)) {
+      return DEDUP_SKIPPED;
     }
 
     const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
@@ -175,7 +189,7 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
     });
     // Mark sent only after the API call succeeds to avoid poisoning the cache
     // on transient failures (which would prevent legitimate retries).
-    mediaDedup.markSent(buffer);
+    mediaDedup.markSent(buffer, dedupScope);
     return bufferResult;
   }
 
@@ -185,8 +199,8 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
 
   // Wire: media dedup for URL-based media — hash the URL as a content proxy
   const urlBuffer = Buffer.from(content.mediaUrl);
-  if (mediaDedup.isDuplicate(urlBuffer)) {
-    return ''; // Deduped — same URL sent recently
+  if (mediaDedup.isDuplicate(urlBuffer, dedupScope)) {
+    return DEDUP_SKIPPED;
   }
 
   const urlResult = await sendMediaMessage(client, channelId, content.mediaUrl, {
@@ -195,7 +209,7 @@ async function sendMediaContent(client: Client, channelId: string, message: Outg
     replyToId: message.replyTo,
   });
   // Mark sent only after the API call succeeds.
-  mediaDedup.markSent(urlBuffer);
+  mediaDedup.markSent(urlBuffer, dedupScope);
   return urlResult;
 }
 
@@ -520,7 +534,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
 
-      const messageId = await this.dispatchMessageByType(client, channelId, message);
+      const messageId = await this.dispatchMessageByType(client, channelId, message, instanceId);
+
+      // Dedup-skipped sends must not emit message.sent — doing so would produce
+      // phantom events with externalId: '' that corrupt downstream persistence.
+      if (messageId === DEDUP_SKIPPED) {
+        return { success: true, messageId: '', timestamp: Date.now() };
+      }
 
       // Journey timing: T11 (platformDeliveredAt) after Discord API responds
       if (correlationId) this.captureT11(correlationId);
@@ -557,7 +577,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /**
    * Dispatch message to appropriate handler based on content type
    */
-  private async dispatchMessageByType(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  private async dispatchMessageByType(
+    client: Client,
+    channelId: string,
+    message: OutgoingMessage,
+    instanceId: string,
+  ): Promise<string> {
     switch (message.content.type) {
       case 'text':
         return sendTextContent(client, channelId, message);
@@ -565,7 +590,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
       case 'audio':
       case 'video':
       case 'document':
-        return sendMediaContent(client, channelId, message);
+        return sendMediaContent(client, channelId, message, instanceId);
       case 'reaction':
         return sendReactionContent(client, channelId, message);
       case 'poll':
