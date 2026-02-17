@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
+import { createWebhookAuthMiddleware } from '../../middleware/webhook-auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { AppVariables } from '../../types';
 
@@ -2162,5 +2163,66 @@ instancesRoutes.post(
     }
   },
 );
+
+// ============================================================================
+// Telegram Webhook Ingress
+// ============================================================================
+
+/**
+ * POST /instances/:id/telegram/webhook - Receive Telegram bot updates
+ *
+ * This route is the HTTP ingress for Telegram webhook mode. It validates the
+ * X-Telegram-Bot-Api-Secret-Token header (when a webhookSecret is configured)
+ * via createWebhookAuthMiddleware, then dispatches the update to the grammy
+ * Bot instance for the connected Telegram instance.
+ *
+ * No API-key auth required — this endpoint is called by Telegram's servers.
+ */
+instancesRoutes.post('/:id/telegram/webhook', async (c) => {
+  const id = c.req.param('id');
+  const channelRegistry = c.get('channelRegistry');
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get('telegram');
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Telegram plugin not loaded' } }, 503);
+  }
+
+  // Retrieve the per-instance webhook secret from the plugin's in-memory config.
+  // The plugin exposes this via getWebhookSecret() so the middleware can be applied
+  // with the correct secret without storing it in the DB.
+  const telegramPlugin = plugin as unknown as {
+    getGrammyBot: (instanceId: string) => { handleUpdate: (update: unknown) => Promise<void> } | undefined;
+    getWebhookSecret: (instanceId: string) => string | undefined;
+  };
+
+  const webhookSecret = telegramPlugin.getWebhookSecret(id);
+
+  // Apply webhook authentication — identical to the middleware used in tests.
+  // Uses createWebhookAuthMiddleware so the auth logic stays in one place.
+  let authPassed = false;
+  await createWebhookAuthMiddleware({ webhookSecret })(c, async () => {
+    authPassed = true;
+  });
+  if (!authPassed) return c.res; // 401 already written by middleware
+
+  const bot = telegramPlugin.getGrammyBot(id);
+  if (!bot) {
+    return c.json({ error: { code: 'NOT_CONNECTED', message: `Bot not connected for instance ${id}` } }, 404);
+  }
+
+  let update: unknown;
+  try {
+    update = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }, 400);
+  }
+
+  await bot.handleUpdate(update);
+  return c.json({ ok: true });
+});
 
 export { instancesRoutes };

@@ -61,12 +61,15 @@ export class AccessService {
   ) {}
 
   /**
-   * List access rules
+   * List access rules.
+   * Always excludes internal `pending_pairing` rows — use
+   * `listPendingPairingRequests()` to inspect pairing state.
    */
   async list(options: { instanceId?: string; type?: RuleType } = {}): Promise<AccessRule[]> {
     const { instanceId, type } = options;
 
-    const conditions = [];
+    // Always exclude internal pairing-state rows from the public listing
+    const conditions = [ne(accessRules.ruleType, 'pending_pairing')];
 
     if (instanceId) {
       // Include both instance-specific and global rules
@@ -77,13 +80,11 @@ export class AccessService {
       conditions.push(eq(accessRules.ruleType, type));
     }
 
-    let query = this.db.select().from(accessRules).$dynamic();
-
-    if (conditions.length) {
-      query = query.where(and(...conditions));
-    }
-
-    return query.orderBy(desc(accessRules.priority));
+    return this.db
+      .select()
+      .from(accessRules)
+      .where(and(...conditions))
+      .orderBy(desc(accessRules.priority));
   }
 
   /**
