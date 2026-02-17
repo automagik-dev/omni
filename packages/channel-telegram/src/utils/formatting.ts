@@ -63,7 +63,7 @@ export function splitMessage(text: string, maxLength = 4096): string[] {
   return chunks;
 }
 
-type SegmentType = 'plain' | 'pre' | 'code' | 'blockquote';
+type SegmentType = 'plain' | 'pre' | 'code' | 'blockquote' | 'expandable_blockquote';
 
 interface HtmlSegment {
   type: SegmentType;
@@ -321,6 +321,11 @@ function trySplitCode(value: string, maxLength: number): string[] | null {
 }
 
 function trySplitBlockquote(value: string, maxLength: number): string[] | null {
+  // Expandable blockquote variant
+  const expandMatch = value.match(/^<blockquote\s+expandable\b[^>]*>([\s\S]*?)<\/blockquote>$/i);
+  if (expandMatch) {
+    return splitWrappedContent('<blockquote expandable>', expandMatch[1] ?? '', '</blockquote>', maxLength);
+  }
   const quoteMatch = value.match(/^<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>$/i);
   if (quoteMatch) {
     return splitWrappedContent('<blockquote>', quoteMatch[1] ?? '', '</blockquote>', maxLength);
@@ -332,6 +337,7 @@ const protectedSplitters: Record<SegmentType, (value: string, maxLen: number) =>
   pre: trySplitPre,
   code: trySplitCode,
   blockquote: trySplitBlockquote,
+  expandable_blockquote: trySplitBlockquote,
   plain: () => null,
 };
 
@@ -349,6 +355,7 @@ function splitLongProtectedSegment(segment: HtmlSegment, maxLength: number): str
 function findNextProtected(html: string, from: number): { start: number; end: number; type: SegmentType } | null {
   const patterns: Array<{ type: SegmentType; open: RegExp; close: RegExp }> = [
     { type: 'pre', open: /<pre\b[^>]*>/gi, close: /<\/pre>/gi },
+    { type: 'expandable_blockquote', open: /<blockquote\s+expandable\b[^>]*>/gi, close: /<\/blockquote>/gi },
     { type: 'blockquote', open: /<blockquote\b[^>]*>/gi, close: /<\/blockquote>/gi },
     { type: 'code', open: /<code\b[^>]*>/gi, close: /<\/code>/gi },
   ];
@@ -483,4 +490,20 @@ export function splitHtmlMessage(html: string, maxLength = 4096): string[] {
   }
 
   return acc.result();
+}
+
+/**
+ * Split a Telegram message for sending.
+ * Auto-detects whether content is HTML or plain text and uses appropriate splitter.
+ * Telegram max message length: 4096 characters.
+ */
+export function splitTelegramMessage(text: string, maxLength = 4096): string[] {
+  if (text.length <= maxLength) return [text];
+
+  // Detect HTML content
+  if (/<[a-z][^>]*>/i.test(text)) {
+    return splitHtmlMessage(text, maxLength);
+  }
+
+  return splitMessage(text, maxLength);
 }
