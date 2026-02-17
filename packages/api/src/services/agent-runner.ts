@@ -213,6 +213,9 @@ export function computeSessionId(strategy: AgentSessionStrategy, userId: string,
     case 'per_chat':
       // All users in a chat share the session (group memory)
       return chatId;
+    default:
+      // Legacy fallback for persisted values outside the current enum
+      return `${userId}:${chatId}`;
   }
 }
 

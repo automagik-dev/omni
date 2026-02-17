@@ -28,8 +28,25 @@ export interface ClaudeCodeProviderOptions {
   enableAutoSplit?: boolean;
   /** Prefix sender name to messages (default: true) */
   prefixSenderName?: boolean;
-  /** Session TTL in ms (default: 3600000 = 1 hour) - sessions older than this are discarded */
+  /** Session TTL in ms (default: Infinity = never expire) - sessions older than this are discarded */
   sessionTtlMs?: number;
+}
+
+const MAX_CONTEXT_MESSAGES = 20;
+const MAX_CONTEXT_CHARS = 4000;
+
+function boundContextMessages(contextMessages: string[]): string[] {
+  const bounded = contextMessages.slice(-MAX_CONTEXT_MESSAGES);
+
+  while (bounded.length > 1 && bounded.join('\n').length > MAX_CONTEXT_CHARS) {
+    bounded.shift();
+  }
+
+  if (bounded.length === 1 && bounded[0] && bounded[0].length > MAX_CONTEXT_CHARS) {
+    bounded[0] = bounded[0].slice(bounded[0].length - MAX_CONTEXT_CHARS);
+  }
+
+  return bounded;
 }
 
 export class ClaudeCodeAgentProvider implements IAgentProvider {
@@ -83,9 +100,10 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
 
     // Prepend context messages (message history since last bot response)
     if (context.contextMessages && context.contextMessages.length > 0) {
+      const boundedContext = boundContextMessages(context.contextMessages);
       const contextBlock = [
         '--- Recent conversation context ---',
-        ...context.contextMessages,
+        ...boundedContext,
         '--- Current message ---',
         '',
       ].join('\n');
@@ -119,6 +137,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
           });
           // Delete expired session
           await this.sessionStorage.deleteSession(context.source.instanceId, internalSessionKey);
+          resolvedSessionId = undefined;
         } else {
           log.debug('Resuming session from DB', {
             internalKey: internalSessionKey,

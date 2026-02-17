@@ -1974,6 +1974,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Resolve contextInfo from text and caption-bearing message types.
+   */
+  private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
+    const message = rawMessage.message;
+    return (
+      message?.extendedTextMessage?.contextInfo ??
+      message?.imageMessage?.contextInfo ??
+      message?.videoMessage?.contextInfo ??
+      message?.documentMessage?.contextInfo
+    );
+  }
+
+  /**
    * Handle incoming message
    * @internal
    */
@@ -2040,7 +2053,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     };
 
     // Extract mentionedJids from contextInfo (WhatsApp mentions)
-    const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
+    const contextInfo = this.getMessageContextInfo(rawMessage);
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 

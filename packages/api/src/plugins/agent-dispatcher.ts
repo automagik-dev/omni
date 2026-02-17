@@ -765,21 +765,23 @@ async function prependQuotedContext(
   instanceId: string,
   chatId: string,
   messages: BufferedMessage[],
-  messageTexts: string[],
+  entries: Array<{ text: string; messageKey: string | null }>,
+  messageKeyByIndex: Map<number, string>,
 ): Promise<void> {
-  for (const m of messages) {
+  for (const [index, m] of messages.entries()) {
     const replyToId = m.payload.replyToId;
     if (!replyToId) continue;
 
     const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId);
     if (!quotedText) continue;
 
-    const replyText = m.payload.content?.text;
-    const idx = replyText ? messageTexts.indexOf(replyText) : -1;
-    if (idx >= 0) {
-      messageTexts[idx] = `${quotedText}\n${messageTexts[idx]}`;
+    const messageKey = messageKeyByIndex.get(index);
+    const idx = messageKey ? entries.findIndex((entry) => entry.messageKey === messageKey) : -1;
+    const existingEntry = idx >= 0 ? entries[idx] : undefined;
+    if (existingEntry) {
+      existingEntry.text = `${quotedText}\n${existingEntry.text}`;
     } else {
-      messageTexts.unshift(quotedText);
+      entries.unshift({ text: quotedText, messageKey: null });
     }
   }
 }
@@ -824,7 +826,7 @@ async function replaceMentionsWithContactNames(
 ): Promise<string> {
   if (!mentionedJids || mentionedJids.length === 0) return text;
 
-  log.debug('Starting mention replacement', { text, mentionedJids, mentionedContacts });
+  log.debug('Starting mention replacement', { mentionCount: mentionedJids.length });
 
   // Create JID → name map from mentionedContacts (Baileys cache)
   const jidToName = new Map<string, string>();
@@ -837,12 +839,16 @@ async function replaceMentionsWithContactNames(
   }
 
   let replacedText = text;
+  let resolvedCount = 0;
+  let replacedCount = 0;
+  let unresolvedCount = 0;
+  let skippedCount = 0;
 
   for (const jid of mentionedJids) {
     // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
     const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
     if (!phoneMatch) {
-      log.debug('JID did not match pattern', { jid });
+      skippedCount++;
       continue;
     }
 
@@ -853,14 +859,26 @@ async function replaceMentionsWithContactNames(
     const contactName = await resolveContactName(services, instanceId, jid, jidToName);
 
     if (contactName) {
-      replacedText = replacedText.replace(new RegExp(mentionPattern, 'g'), `@${contactName}`);
-      log.debug('Replaced mention', { pattern: mentionPattern, name: contactName });
+      resolvedCount++;
+      const nextText = replacedText.replaceAll(mentionPattern, `@${contactName}`);
+      if (nextText !== replacedText) {
+        replacedCount++;
+        replacedText = nextText;
+      }
     } else {
-      log.debug('No name found for contact (cache + DB miss)', { jid });
+      unresolvedCount++;
     }
   }
 
-  log.debug('Mention replacement complete', { original: text, replaced: replacedText });
+  log.debug('Mention replacement complete', {
+    original: text,
+    replaced: replacedText,
+    mentionCount: mentionedJids.length,
+    resolvedCount,
+    replacedCount,
+    unresolvedCount,
+    skippedCount,
+  });
   return replacedText;
 }
 
@@ -874,39 +892,60 @@ async function prepareAgentContent(
   messages: BufferedMessage[],
 ): Promise<{ messageTexts: string[]; mediaFiles: ProviderFile[] }> {
   const chatId = messages[0]?.payload.chatId ?? '';
-  const messageTexts = messages.map((m) => m.payload.content?.text).filter((t): t is string => !!t);
+  const messageEntries: Array<{ text: string; messageKey: string | null }> = [];
+  const messageKeyByIndex = new Map<number, string>();
+  const mentionDataByMessageKey = new Map<
+    string,
+    {
+      mentionedJids: string[] | undefined;
+      mentionedContacts: Array<{ jid: string; name?: string }> | undefined;
+    }
+  >();
+
+  for (const [index, msg] of messages.entries()) {
+    const text = msg.payload.content?.text;
+    if (!text) continue;
+
+    const messageKey = msg.payload.externalId || `idx:${index}`;
+    messageKeyByIndex.set(index, messageKey);
+    messageEntries.push({ text, messageKey });
+
+    const rawPayload = msg.payload.rawPayload as Record<string, unknown> | undefined;
+    mentionDataByMessageKey.set(messageKey, {
+      mentionedJids: rawPayload?.mentionedJids as string[] | undefined,
+      mentionedContacts: rawPayload?.mentionedContacts as Array<{ jid: string; name?: string }> | undefined,
+    });
+  }
+
+  for (const entry of messageEntries) {
+    if (!entry.messageKey) continue;
+    const mentionData = mentionDataByMessageKey.get(entry.messageKey);
+    if (!mentionData?.mentionedJids || mentionData.mentionedJids.length === 0) continue;
+
+    entry.text = await replaceMentionsWithContactNames(
+      services,
+      instance.id,
+      entry.text,
+      mentionData.mentionedJids,
+      mentionData.mentionedContacts,
+    );
+  }
+
+  const processedMediaTexts: string[] = [];
   let mediaFiles = extractMediaFiles(messages);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
-    messageTexts.push(...processed);
-    if (processed.length > 0) mediaFiles = [];
+    processedMediaTexts.push(...processed);
+    if (processedMediaTexts.length > 0) mediaFiles = [];
   }
 
-  await prependQuotedContext(services, instance.id, chatId, messages, messageTexts);
+  await prependQuotedContext(services, instance.id, chatId, messages, messageEntries, messageKeyByIndex);
 
-  // Replace @phone mentions with actual contact names (cache-aside: Baileys cache → DB fallback)
-  for (let i = 0; i < messageTexts.length; i++) {
-    const msg = messages[i];
-    const text = messageTexts[i];
-    if (!text) continue;
+  const finalTexts = messageEntries.map((entry) => entry.text);
+  finalTexts.push(...processedMediaTexts);
 
-    const rawPayload = msg?.payload.rawPayload as Record<string, unknown> | undefined;
-    const mentionedJids = rawPayload?.mentionedJids as string[] | undefined;
-    const mentionedContacts = rawPayload?.mentionedContacts as Array<{ jid: string; name?: string }> | undefined;
-
-    if (mentionedJids && mentionedJids.length > 0) {
-      messageTexts[i] = await replaceMentionsWithContactNames(
-        services,
-        instance.id,
-        text,
-        mentionedJids,
-        mentionedContacts,
-      );
-    }
-  }
-
-  return { messageTexts, mediaFiles };
+  return { messageTexts: finalTexts, mediaFiles };
 }
 
 /**
@@ -1209,7 +1248,7 @@ async function buildContextMessages(
   services: Services,
   instance: Instance,
   chatId: string,
-  currentMessageId: string,
+  currentMessageIds: string[],
 ): Promise<string[]> {
   try {
     // Only provide context for group chats (not DMs)
@@ -1241,9 +1280,10 @@ async function buildContextMessages(
     }
 
     // Get all messages between last bot response and current message (exclude current)
+    const currentMessageIdSet = new Set(currentMessageIds.filter(Boolean));
     const contextMsgs = recentMessages
       .slice(0, lastBotMessageIndex)
-      .filter((msg) => msg.externalId !== currentMessageId);
+      .filter((msg) => !currentMessageIdSet.has(msg.externalId));
 
     if (contextMsgs.length === 0) {
       return [];
@@ -1306,7 +1346,8 @@ async function dispatchViaProvider(
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
 
   // Build context messages for group conversations (messages since last bot response)
-  const contextMessages = await buildContextMessages(services, instance, chatId, messages[0]?.payload.externalId ?? '');
+  const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
+  const contextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1804,7 +1845,7 @@ async function processReactionTrigger(
   const externalChatId = payload.chatId;
 
   // Look up internal chat UUID for route resolution
-  const chat = await services.chats.getByExternalId(baseInstance.id, externalChatId);
+  const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
   const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
 
   // Resolve agent route and merge with instance defaults
@@ -1817,13 +1858,14 @@ async function processReactionTrigger(
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
-    chatId: internalChatId,
+    chatId: externalChatId,
+    routeChatId: internalChatId,
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
   });
 
-  await sendTypingPresence(channel, instance.id, internalChatId, 'composing');
+  await sendTypingPresence(channel, instance.id, externalChatId, 'composing');
 
   try {
     // Try new IAgentProvider path first
@@ -1832,7 +1874,7 @@ async function processReactionTrigger(
     if (provider) {
       // Build AgentTrigger for the provider
       const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
-      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, internalChatId);
+      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -1841,7 +1883,7 @@ async function processReactionTrigger(
         source: {
           channelType: channel,
           instanceId: instance.id,
-          chatId: internalChatId,
+          chatId: externalChatId,
           messageId: payload.messageId,
         },
         sender: {
@@ -1863,7 +1905,7 @@ async function processReactionTrigger(
         await sendResponseParts(
           channel,
           instance.id,
-          internalChatId,
+          externalChatId,
           result.parts,
           getSplitDelayConfig(instance),
           _fmtMode,
@@ -1872,7 +1914,8 @@ async function processReactionTrigger(
 
       log.info('Reaction trigger response via provider', {
         instanceId: instance.id,
-        chatId: internalChatId,
+        chatId: externalChatId,
+        routeChatId: internalChatId,
         emoji: payload.emoji,
         parts: result?.parts.length ?? 0,
         providerId: result?.metadata.providerId,
@@ -1894,18 +1937,18 @@ async function processReactionTrigger(
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
     // Determine chat type and fetch metadata
-    const chatType = determineChatType(internalChatId, instance.channel);
+    const chatType = determineChatType(externalChatId, instance.channel);
     const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
       services,
       channel,
       instance.id,
       payload.from,
     );
-    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, internalChatId, chatType);
+    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, externalChatId, chatType);
 
     const result = await services.agentRunner.run({
       instance,
-      chatId: internalChatId,
+      chatId: externalChatId,
       personId,
       senderId: payload.from,
       senderName,
@@ -1922,7 +1965,7 @@ async function processReactionTrigger(
       await sendResponseParts(
         channel,
         instance.id,
-        internalChatId,
+        externalChatId,
         result.parts,
         getSplitDelayConfig(instance),
         _fmtMode,
@@ -1931,7 +1974,8 @@ async function processReactionTrigger(
 
     log.info('Reaction trigger response via legacy runner', {
       instanceId: instance.id,
-      chatId: internalChatId,
+      chatId: externalChatId,
+      routeChatId: internalChatId,
       emoji: payload.emoji,
       parts: result.parts.length,
       traceId: metadata.traceId,
@@ -1939,12 +1983,13 @@ async function processReactionTrigger(
   } catch (error) {
     log.error('Failed to process reaction trigger', {
       instanceId: instance.id,
-      chatId: internalChatId,
+      chatId: externalChatId,
+      routeChatId: internalChatId,
       error: String(error),
       traceId: metadata.traceId,
     });
   } finally {
-    await sendTypingPresence(channel, instance.id, internalChatId, 'paused');
+    await sendTypingPresence(channel, instance.id, externalChatId, 'paused');
   }
 }
 
@@ -2333,7 +2378,7 @@ export async function setupAgentDispatcher(
     const personId = firstMsg.metadata.personId;
 
     // Look up internal chat UUID for route resolution
-    const chat = await services.chats.getByExternalId(instanceId, externalChatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
     const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(

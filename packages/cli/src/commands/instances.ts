@@ -291,7 +291,19 @@ export function createInstancesCommand(): Command {
         body.channel = channel;
         setBool(body, 'isDefault', options.isDefault);
 
-        const instance = (await apiCall('instances', 'POST', body)) as {
+        const response = (await apiCall('instances', 'POST', body)) as {
+          data?: {
+            id: string;
+            name: string;
+            channel: string;
+            isActive: boolean;
+          };
+          id?: string;
+          name?: string;
+          channel?: string;
+          isActive?: boolean;
+        };
+        const instance = (response.data ?? response) as {
           id: string;
           name: string;
           channel: string;
