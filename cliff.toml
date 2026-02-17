@@ -23,7 +23,7 @@ body = """
 {%- set_global contributors = [] -%}
 {%- for commit in commits -%}
   {%- set author = commit.author.name | default(value="") -%}
-  {%- if author != "" and author != "github-actions[bot]" and author != "Automagik Genie" -%}
+  {%- if author != "" and author != "github-actions[bot]" -%}
     {%- if contributors is not containing(author) -%}
       {%- set_global contributors = contributors | concat(with=author) -%}
     {%- endif -%}
@@ -33,8 +33,16 @@ body = """
 {%- if contributors | length > 0 %}
 ### 👥 Contributors
 {% for name in contributors -%}
+{%- if name == "Cezar Vasconcelos" -%}
+- [@vasconceloscezar](https://github.com/vasconceloscezar)
+{% elif name == "Felipe Rosa" -%}
+- [@namastex888](https://github.com/namastex888)
+{% elif name == "Automagik Genie" -%}
+- [@automagik-genie](https://github.com/automagik-genie) 🤖
+{% else -%}
 - {{ name }}
-{% endfor -%}
+{% endif -%}
+{%- endfor -%}
 {%- endif -%}
 """
 trim = true
@@ -46,6 +54,11 @@ filter_unconventional = true
 # duplicate section headers. The range boundaries are set by the workflow.
 ignore_tags = ".*"
 sort_commits = "newest"
+
+# Escape @ mentions in commit messages so GitHub doesn't linkify them as users
+commit_preprocessors = [
+  { pattern = "@([a-zA-Z])", replace = "@\u200B${1}" },
+]
 
 commit_parsers = [
   { message = "^feat", group = "🚀 Features" },
