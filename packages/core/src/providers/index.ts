@@ -58,3 +58,13 @@ export {
   isProviderSchemaSupported,
   getSupportedProviderSchemas,
 } from './factory';
+
+// Transcription
+export {
+  type TranscriptionProvider,
+  type TranscriptionResult,
+  type TranscriptionErrorCode,
+  TranscriptionResultSchema,
+  TranscriptionError,
+} from './transcription';
+export { WhisperProvider, type WhisperProviderConfig } from './whisper-provider';
