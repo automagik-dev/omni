@@ -351,6 +351,7 @@ function classifyMessageTrigger(context: MessageContext): AgentTriggerType {
 function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'channel' {
   if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
     if (chatId.includes('@s.whatsapp.net')) return 'dm';
+    if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
     if (chatId.includes('@g.us')) return 'group';
     if (chatId.includes('@newsletter')) return 'channel';
     return 'dm'; // fallback
@@ -813,6 +814,43 @@ async function resolveContactName(
   return null;
 }
 
+type MentionStats = { resolved: number; replaced: number; unresolved: number; skipped: number };
+
+function buildJidNameMap(mentionedContacts: Array<{ jid: string; name?: string }> | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const contact of mentionedContacts ?? []) {
+    if (contact.name) map.set(contact.jid, contact.name);
+  }
+  return map;
+}
+
+async function applyJidMentionReplacement(
+  services: Services,
+  instanceId: string,
+  jid: string,
+  jidToName: Map<string, string>,
+  text: string,
+  stats: MentionStats,
+): Promise<string> {
+  // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
+  const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
+  if (!phoneMatch) {
+    stats.skipped++;
+    return text;
+  }
+
+  const contactName = await resolveContactName(services, instanceId, jid, jidToName);
+  if (!contactName) {
+    stats.unresolved++;
+    return text;
+  }
+
+  stats.resolved++;
+  const nextText = text.replaceAll(`@${phoneMatch[1]}`, `@${contactName}`);
+  if (nextText !== text) stats.replaced++;
+  return nextText;
+}
+
 /**
  * Replace @phone mentions in text with actual contact names
  * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
@@ -824,60 +862,26 @@ async function replaceMentionsWithContactNames(
   mentionedJids: string[] | undefined,
   mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
 ): Promise<string> {
-  if (!mentionedJids || mentionedJids.length === 0) return text;
+  if (!mentionedJids?.length) return text;
 
   log.debug('Starting mention replacement', { mentionCount: mentionedJids.length });
 
-  // Create JID → name map from mentionedContacts (Baileys cache)
-  const jidToName = new Map<string, string>();
-  if (mentionedContacts) {
-    for (const contact of mentionedContacts) {
-      if (contact.name) {
-        jidToName.set(contact.jid, contact.name);
-      }
-    }
-  }
-
+  const jidToName = buildJidNameMap(mentionedContacts);
+  const stats: MentionStats = { resolved: 0, replaced: 0, unresolved: 0, skipped: 0 };
   let replacedText = text;
-  let resolvedCount = 0;
-  let replacedCount = 0;
-  let unresolvedCount = 0;
-  let skippedCount = 0;
 
   for (const jid of mentionedJids) {
-    // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
-    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
-    if (!phoneMatch) {
-      skippedCount++;
-      continue;
-    }
-
-    const phoneNumber = phoneMatch[1];
-    const mentionPattern = `@${phoneNumber}`;
-
-    // Resolve contact name (cache → DB fallback)
-    const contactName = await resolveContactName(services, instanceId, jid, jidToName);
-
-    if (contactName) {
-      resolvedCount++;
-      const nextText = replacedText.replaceAll(mentionPattern, `@${contactName}`);
-      if (nextText !== replacedText) {
-        replacedCount++;
-        replacedText = nextText;
-      }
-    } else {
-      unresolvedCount++;
-    }
+    replacedText = await applyJidMentionReplacement(services, instanceId, jid, jidToName, replacedText, stats);
   }
 
   log.debug('Mention replacement complete', {
     original: text,
     replaced: replacedText,
     mentionCount: mentionedJids.length,
-    resolvedCount,
-    replacedCount,
-    unresolvedCount,
-    skippedCount,
+    resolvedCount: stats.resolved,
+    replacedCount: stats.replaced,
+    unresolvedCount: stats.unresolved,
+    skippedCount: stats.skipped,
   });
   return replacedText;
 }

@@ -181,6 +181,10 @@ export interface WhatsAppConnectionOptions {
   generateHighQualityLinkPreview?: boolean;
   /** Mark online when connecting (default: true) */
   markOnlineOnConnect?: boolean;
+  /** Enable LID-first identity resolution (default: true).
+   *  When false, falls back to legacy phone-based resolution (resolveToPhoneJidLegacy).
+   *  Per-instance rollback flag — DEC-8. */
+  lidFirstEnabled?: boolean;
 }
 
 /**
@@ -344,6 +348,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
   }
 
+  /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
+  private lidFirstEnabledMap = new Map<string, boolean>();
+
   /**
    * LID → phone JID mapping cache per instance.
    * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
@@ -369,6 +376,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Check if LID-first identity resolution is enabled for an instance.
+   * When false, falls back to legacy phone-based resolution (DEC-8 rollback).
+   */
+  isLidFirstEnabled(instanceId: string): boolean {
+    return this.lidFirstEnabledMap.get(instanceId) ?? true;
   }
 
   /**
@@ -769,6 +784,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
+
+    // Store per-instance LID-first flag (DEC-8 rollback)
+    this.lidFirstEnabledMap.set(instanceId, instanceOptions.lidFirstEnabled ?? true);
+
     const socketOptions: Partial<SocketConfig> = {
       // Plugin-level defaults
       ...this.pluginConfig,
@@ -975,11 +994,51 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Resolve the send target JID.
+   *
+   * LID-first: when sending to a phone number, try to resolve to LID via
+   * Baileys signalRepository.lidMapping.getLIDForPN. Falls back gracefully
+   * to phone JID if no LID mapping exists or the API is unavailable.
+   */
+  private async resolveSendTarget(sock: WASocket, instanceId: string, to: string): Promise<string> {
+    const phoneJid = toJid(to);
+
+    // If already a LID or not a user JID, passthrough
+    if (!isUserJid(phoneJid)) return phoneJid;
+
+    // DEC-8: skip LID resolution when lidFirstEnabled is disabled (rollback)
+    if (!this.isLidFirstEnabled(instanceId)) return phoneJid;
+
+    // Try LID resolution via Baileys signal repository
+    try {
+      const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
+      if (lidJid) {
+        this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
+        // Cache the phone↔LID mapping so the outbound echo (which arrives before DB persistence)
+        // can resolve the LID back to the existing phone chat without creating a duplicate.
+        this.storeLidMapping(instanceId, lidJid, phoneJid);
+        return lidJid;
+      }
+    } catch (error) {
+      // LID resolution failure is expected when contact hasn't synced yet — fallback to phone is correct.
+      // Use debug level to avoid production log noise for this routine fallback path.
+      this.logger.debug('lid_send_fallback', {
+        originalTarget: to,
+        attemptedPhone: phoneJid,
+        error: String(error),
+        instanceId,
+      });
+    }
+
+    return phoneJid;
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
-    const jid = toJid(message.to);
+    const jid = await this.resolveSendTarget(sock, instanceId, message.to);
     const rateLimiter = await this.waitForRateLimitBackoff(instanceId);
 
     try {
@@ -2080,8 +2139,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Cache sender's pushName for mention resolution (WAMessage.pushName field)
     const senderPushName = (rawMessage as { pushName?: string }).pushName;
     if (senderPushName && from) {
-      // Normalize sender JID to @s.whatsapp.net format for cache consistency
-      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      // LID-first: accept any JID format for cache keying (including @lid)
+      // from might be: "555197285829", "555197285829:73", "555197285829@s.whatsapp.net", or "100000001@lid"
       const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
 
       // Cache the sender's name so it's available when they're mentioned
@@ -2467,11 +2526,56 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Extract LID↔phone mappings from a contact and store bidirectionally
+   */
+  private extractContactLidMapping(
+    instanceId: string,
+    contactId: string,
+    lid: string | undefined,
+    phoneNumber: string | undefined,
+  ): void {
+    // Case 1: id=phone@s.whatsapp.net + lid=Y → store Y@lid → phone
+    if (lid && isUserJid(contactId)) {
+      const lidJid = lid.endsWith('@lid') ? lid : `${lid}@lid`;
+      this.storeLidMapping(instanceId, lidJid, contactId);
+    }
+    // Case 2: id=LID@lid + phoneNumber=X → store LID@lid → X@s.whatsapp.net
+    if (contactId.endsWith('@lid') && phoneNumber) {
+      const phoneJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber.replace(/\D/g, '')}@s.whatsapp.net`;
+      this.storeLidMapping(instanceId, contactId, phoneJid);
+    }
+  }
+
+  /**
+   * Build a SyncContact from raw Baileys contact data
+   */
+  private buildSyncContact(c: {
+    id: string;
+    phoneNumber?: string;
+    name?: string;
+    notify?: string;
+    verifiedName?: string;
+    imgUrl?: string | null;
+    status?: string;
+    lid?: string;
+  }): SyncContact {
+    const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
+    return {
+      platformUserId: c.id,
+      name: c.name || c.notify || c.verifiedName || undefined,
+      phone,
+      profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
+      isGroup: c.id.endsWith('@g.us'),
+      isBusiness: !!c.verifiedName,
+      metadata: { lid: c.lid, status: c.status, notify: c.notify, verifiedName: c.verifiedName },
+    };
+  }
+
+  /**
    * Handle contacts upsert (new contacts)
    * @internal
    */
   handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
-    // Get or create contacts cache for this instance
     let cache = this.contactsCache.get(instanceId);
     if (!cache) {
       cache = new Map();
@@ -2490,42 +2594,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         status?: string;
       };
 
-      // Skip group JIDs (they're handled separately)
-      const isGroup = c.id.endsWith('@g.us');
-
-      // Extract phone number from JID if not provided
-      const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
-
-      const syncContact: SyncContact = {
-        platformUserId: c.id,
-        name: c.name || c.notify || c.verifiedName || undefined,
-        phone,
-        profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
-        isGroup,
-        isBusiness: !!c.verifiedName,
-        metadata: {
-          lid: c.lid,
-          status: c.status,
-          notify: c.notify,
-          verifiedName: c.verifiedName,
-        },
-      };
-
+      const syncContact = this.buildSyncContact(c);
       cache.set(c.id, syncContact);
 
       this.logger.debug('Cached contact from contacts.upsert', {
         instanceId,
         id: c.id,
         name: syncContact.name,
-        phone,
+        phone: syncContact.phone,
         hasLid: !!c.lid,
       });
 
-      // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
-      if (c.lid && isUserJid(c.id)) {
-        const lidJid = c.lid.endsWith('@lid') ? c.lid : `${c.lid}@lid`;
-        this.storeLidMapping(instanceId, lidJid, c.id);
-      }
+      this.extractContactLidMapping(instanceId, c.id, c.lid, c.phoneNumber);
     }
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
