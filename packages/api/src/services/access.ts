@@ -16,7 +16,7 @@ import type { CacheProvider, EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules } from '@omni/db';
-import { and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
+import { type SQL, and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { CacheKeys } from '../cache/cache-keys';
 
 /** Default pairing request expiry: 1 hour */
@@ -69,7 +69,7 @@ export class AccessService {
     const { instanceId, type } = options;
 
     // Always exclude internal pairing-state rows from the public listing
-    const conditions = [ne(accessRules.ruleType, 'pending_pairing')];
+    const conditions: (SQL<unknown> | undefined)[] = [ne(accessRules.ruleType, 'pending_pairing')];
 
     if (instanceId) {
       // Include both instance-specific and global rules
