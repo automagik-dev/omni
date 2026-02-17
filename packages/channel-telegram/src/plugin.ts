@@ -190,11 +190,13 @@ class NonStreamingSender implements StreamSender {
     if (!text) return;
 
     const chunks = splitMessage(text, 4096);
+    let isFirst = true;
     for (const chunk of chunks) {
       if (!chunk) continue;
       await this.bot.api.sendMessage(this.chatId, chunk, {
-        ...(this.replyToMessageId ? { reply_parameters: { message_id: this.replyToMessageId } } : {}),
+        ...(isFirst && this.replyToMessageId ? { reply_parameters: { message_id: this.replyToMessageId } } : {}),
       });
+      isFirst = false;
     }
   }
 

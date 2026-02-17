@@ -68,7 +68,7 @@ function buildChatName(msg: TelegramMessageLike, displayName: string): string | 
 function getReactionConfig(plugin: TelegramPlugin, instanceId: string): ReactionLevelConfig {
   const instance = plugin.getInstanceState(instanceId);
   const options = instance?.config?.options;
-  const level = (options?.reactionLevel as string) ?? 'off';
+  const level = (options?.telegramReactionLevel as string) ?? 'off';
   return {
     level: level as ReactionLevelConfig['level'],
     ackEmoji: options?.ackEmoji as string | undefined,
