@@ -371,6 +371,10 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     // --- Media group buffering: batch album messages ---
     if (msg.media_group_id) {
+      const dedupeKey = `${chatId}:${String(msg.message_id)}`;
+      if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'telegram', log)) {
+        return;
+      }
       bufferAlbumMessage(msg, from, msg.media_group_id, chatId, threadId);
       return; // Don't process individually — will be flushed by buffer
     }

@@ -293,6 +293,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   }
   if (data.channel === 'telegram') {
     connectionOptions.telegramReactionLevel = instance.telegramReactionLevel;
+  } else if (data.channel === 'slack') {
+    if (connectToken) connectionOptions.botToken = connectToken;
+    if (instance.slackAppToken) connectionOptions.appToken = instance.slackAppToken;
   }
 
   // Get the channel plugin and trigger connection
@@ -567,6 +570,9 @@ instancesRoutes.post(
     }
     if (instance.channel === 'telegram') {
       connectionOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    } else if (instance.channel === 'slack') {
+      if (connectToken) connectionOptions.botToken = connectToken;
+      if (instance.slackAppToken) connectionOptions.appToken = instance.slackAppToken;
     }
     if (body.whatsapp) {
       connectionOptions.whatsapp = body.whatsapp;
@@ -679,6 +685,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (restartToken) restartOptions.token = restartToken;
     if (instance.channel === 'telegram') {
       restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    } else if (instance.channel === 'slack') {
+      if (restartToken) restartOptions.botToken = restartToken;
+      if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
     }
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {

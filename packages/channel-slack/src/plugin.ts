@@ -100,12 +100,20 @@ export class SlackPlugin extends BaseChannelPlugin {
       since: new Date(),
     });
 
-    const slackConfig = (config.options ?? {}) as SlackConfig;
+    const rawOptions = (config.options ?? {}) as Record<string, unknown>;
+    const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
+    const slackConfig = rawOptions as SlackConfig;
 
     try {
-      const botToken = slackConfig.botToken ?? (config.credentials?.botToken as string);
-      const appToken = slackConfig.appToken ?? (config.credentials?.appToken as string);
-      const signingSecret = slackConfig.signingSecret ?? (config.credentials?.signingSecret as string | undefined);
+      // Accept legacy/generic token aliases used by instance routes (`options.token`)
+      // in addition to Slack-specific fields.
+      const botToken =
+        slackConfig.botToken ??
+        (rawOptions.token as string | undefined) ??
+        (rawCredentials.botToken as string | undefined) ??
+        (rawCredentials.token as string | undefined);
+      const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
+      const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
 
       if (!botToken || !appToken) {
         throw new SlackError(

@@ -199,16 +199,33 @@ export async function autoReconnectInstances(db: Database): Promise<{
       const credentials: Record<string, unknown> = {};
       const options: Record<string, unknown> = {};
 
-      // Telegram needs bot token and reaction level
-      if (instance.telegramBotToken) {
-        options.token = instance.telegramBotToken;
-      }
-      if (instance.channel === 'telegram') {
-        options.telegramReactionLevel = instance.telegramReactionLevel;
-      }
-      // Discord needs bot token
-      if (instance.discordBotToken) {
-        options.token = instance.discordBotToken;
+      switch (instance.channel) {
+        case 'telegram': {
+          if (instance.telegramBotToken) {
+            options.token = instance.telegramBotToken;
+          }
+          options.telegramReactionLevel = instance.telegramReactionLevel;
+          break;
+        }
+        case 'discord': {
+          if (instance.discordBotToken) {
+            options.token = instance.discordBotToken;
+          }
+          break;
+        }
+        case 'slack': {
+          if (instance.slackBotToken) {
+            options.botToken = instance.slackBotToken;
+            // Keep generic alias for compatibility with old connectors.
+            options.token = instance.slackBotToken;
+          }
+          if (instance.slackAppToken) {
+            options.appToken = instance.slackAppToken;
+          }
+          break;
+        }
+        default:
+          break;
       }
 
       await plugin.connect(instance.id, {
