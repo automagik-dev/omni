@@ -7,9 +7,14 @@ import type { Database } from '@omni/db';
 import { agentSessions } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 
-export function createSessionStorage(db: Database): SessionStorage {
+function scopeSessionKey(providerId: string, sessionKey: string): string {
+  return `provider:${providerId}:session:${sessionKey}`;
+}
+
+export function createSessionStorage(db: Database, providerId = 'default'): SessionStorage {
   return {
     async getSession(instanceId: string, sessionKey: string) {
+      const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
       const [session] = await db
         .select({
           sessionId: agentSessions.providerSessionData,
@@ -17,7 +22,7 @@ export function createSessionStorage(db: Database): SessionStorage {
           expiresAt: agentSessions.expiresAt,
         })
         .from(agentSessions)
-        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, sessionKey)))
+        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)))
         .limit(1);
 
       if (!session) return null;
@@ -27,7 +32,7 @@ export function createSessionStorage(db: Database): SessionStorage {
         // Delete expired session
         await db
           .delete(agentSessions)
-          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, sessionKey)));
+          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
         return null;
       }
 
@@ -38,13 +43,14 @@ export function createSessionStorage(db: Database): SessionStorage {
     },
 
     async upsertSession(instanceId: string, sessionKey: string, sessionId: string, expiresAt: Date | null) {
+      const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
       const now = new Date();
 
       await db
         .insert(agentSessions)
         .values({
           instanceId,
-          sessionKey,
+          sessionKey: scopedSessionKey,
           providerSessionData: { sessionId },
           lastUsedAt: now,
           expiresAt,
@@ -61,9 +67,10 @@ export function createSessionStorage(db: Database): SessionStorage {
     },
 
     async deleteSession(instanceId: string, sessionKey: string) {
+      const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
       await db
         .delete(agentSessions)
-        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, sessionKey)));
+        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
     },
   };
 }

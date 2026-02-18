@@ -69,6 +69,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     const chatId = String(msg.chat.id);
     const userId = toPlatformUserId(from.id);
     const externalId = String(msg.message_id);
+    const dedupeKey = `${chatId}:${externalId}`;
     const displayName = buildDisplayName(from);
 
     const content = extractTelegramMessageContent(msg);
@@ -84,7 +85,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     }
 
     // ── Dedupe check ──
-    if (dedupeCache.isDuplicate(instanceId, externalId, 'telegram', log)) {
+    if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'telegram', log)) {
       return; // Duplicate — drop silently
     }
 

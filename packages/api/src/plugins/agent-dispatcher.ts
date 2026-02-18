@@ -1695,7 +1695,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
     },
-    createSessionStorage(db),
+    createSessionStorage(db, provider.id),
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
