@@ -4,12 +4,13 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, createLogger } from '@omni/core';
+import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
+import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
@@ -2093,5 +2094,86 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
     return c.json({ error: { code: 'RESYNC_FAILED', message } }, 500);
   }
 });
+
+// ============================================================================
+// Access Control: Pairing Requests
+// ============================================================================
+
+/**
+ * GET /instances/:id/pairing-requests - List pending pairing requests
+ */
+instancesRoutes.get('/:id/pairing-requests', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const requests = await services.access.listPendingPairingRequests(id);
+
+  return c.json({
+    items: requests.map((r) => ({
+      id: r.id,
+      instanceId: r.instanceId,
+      platformUserId: r.platformUserId,
+      pairingCode: r.pairingCode,
+      expiresAt: r.expiresAt.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+    })),
+  });
+});
+
+// Pairing action schema
+const pairingActionSchema = z.object({
+  action: z.enum(['approve', 'deny']).describe('Action: approve or deny the pairing request'),
+  reason: z.string().optional().describe('Reason for denial (optional)'),
+});
+
+/**
+ * POST /instances/:id/pairing-requests/:requestId/action - Approve or deny a pairing request
+ */
+instancesRoutes.post(
+  '/:id/pairing-requests/:requestId/action',
+  instanceAccess,
+  zValidator('json', pairingActionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const requestId = c.req.param('requestId');
+    const { action, reason } = c.req.valid('json');
+    const services = c.get('services');
+
+    try {
+      if (action === 'approve') {
+        const rule = await services.access.approvePairingRequest(requestId, id);
+        return c.json({
+          data: {
+            action: 'approve',
+            ruleId: rule.id,
+            message: `User ${rule.platformUserId} approved and added to allowlist`,
+          },
+        });
+      }
+
+      await services.access.denyPairingRequest(requestId, id, reason);
+      return c.json({
+        data: {
+          action: 'deny',
+          reason: reason ?? 'Denied by administrator',
+          message: 'Pairing request denied and deleted',
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (error instanceof NotFoundError) {
+        return c.json({ error: { code: 'NOT_FOUND', message } }, 404);
+      }
+      if (error instanceof PairingRequestExpiredError || error instanceof PairingRequestConsumedError) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message } }, 400);
+      }
+      return c.json({ error: { code: 'ACTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+// ============================================================================
+// Telegram Webhook Ingress
+// ============================================================================
 
 export { instancesRoutes };

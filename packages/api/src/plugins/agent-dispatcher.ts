@@ -18,6 +18,7 @@
  */
 
 import { join, resolve } from 'node:path';
+import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
@@ -26,6 +27,7 @@ import {
   ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
+  InMemorySessionActivityStore,
   JOURNEY_STAGES,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
@@ -34,8 +36,10 @@ import {
   type OpenClawProviderConfig,
   type ProviderFile,
   type ReactionReceivedPayload,
+  type SessionResetConfig,
   type StreamDelta,
   WebhookAgentProvider,
+  checkSessionReset,
   createLogger,
   createProviderClient,
   generateCorrelationId,
@@ -1464,12 +1468,140 @@ async function dispatchViaLegacy(
   });
 }
 
+// ============================================================================
+// Session Activity Store (singleton for session reset tracking)
+// ============================================================================
+
+const sessionActivityStore = new InMemorySessionActivityStore();
+
+/** Execute provider-level session reset and publish the session.reset event. */
+async function performSessionReset(
+  instance: Instance,
+  sessionId: string,
+  chatId: string,
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  eventBus: EventBus,
+  resetStrategy: string,
+  resetChatType: 'dm' | 'group' | 'thread',
+  traceId: string | undefined,
+): Promise<void> {
+  let sessionActuallyReset = false;
+  try {
+    const provider = await getAgentProvider(services, instance, db);
+    if (provider?.resetSession) {
+      await provider.resetSession(sessionId, chatId, instance.id);
+      sessionActuallyReset = true;
+    } else if (!provider) {
+      // No IAgentProvider configured — legacy agentRunner path; no provider-level
+      // session state to clear, so treat the reset as complete.
+      sessionActuallyReset = true;
+    }
+    // provider exists but lacks resetSession → session not actually cleared; do not record.
+  } catch (err) {
+    log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
+  }
+
+  if (sessionActuallyReset) {
+    sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
+
+    // DEC-6: Mandatory session.reset event — include routing metadata so the SESSION
+    // JetStream stream (session.>) captures it and typed subscribers receive it.
+    eventBus
+      .publish(
+        'session.reset',
+        { instanceId: instance.id, sessionId, timestamp: Date.now() },
+        { instanceId: instance.id, channelType: channel },
+      )
+      .catch((err) => {
+        log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
+      });
+
+    log.info('Session reset triggered', {
+      instanceId: instance.id,
+      sessionId,
+      strategy: resetStrategy,
+      chatType: resetChatType,
+      traceId,
+    });
+  }
+}
+
+/** Resolve chat type, check session reset policy, and record activity. */
+async function handleSessionReset(
+  firstMessage: BufferedMessage,
+  instance: Instance,
+  channel: ChannelType,
+  senderId: string,
+  chatId: string,
+  services: Services,
+  db: Database,
+  eventBus: EventBus,
+  traceId: string | undefined,
+): Promise<void> {
+  const inst = instance as Record<string, unknown>;
+  const msgRawPayload = firstMessage.payload.rawPayload ?? {};
+
+  const rawChatType = determineChatType(chatId, channel);
+  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
+  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
+  // rawPayload.isGroup=true for guild channels, so override when available.
+  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
+
+  // Classify as 'thread' when the message is from a thread channel.
+  // The SDK top-level threadId field is set by some channels; Discord and others
+  // store thread membership in rawPayload.isThread (message is inside a thread
+  // channel) or rawPayload.threadId (thread identifier).
+  const hasThread = !!(firstMessage.payload.threadId || msgRawPayload.isThread || msgRawPayload.threadId);
+
+  // Map 'channel' → 'group' for session reset purposes (broadcast channels behave
+  // like groups).  Thread takes precedence over group/dm classification.
+  const resetChatType: 'dm' | 'group' | 'thread' = hasThread
+    ? 'thread'
+    : resolvedChatType === 'channel'
+      ? 'group'
+      : resolvedChatType;
+
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
+  const activity = sessionActivityStore.getActivity(instance.id, sessionId);
+  const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
+
+  if (resetResult.shouldReset) {
+    // Await provider session reset before proceeding to dispatch so that the first
+    // post-reset turn sees a clean context. A detached promise would race with the
+    // provider dispatch and the incoming message could still use stale history.
+    //
+    // Only advance lastResetAt when the session was actually cleared.  For providers
+    // without resetSession (e.g. Agno, Webhook) the conversation context is not
+    // cleared, so recording a reset would incorrectly suppress future reset attempts
+    // while leaving stale context active.
+    await performSessionReset(
+      instance,
+      sessionId,
+      chatId,
+      services,
+      db,
+      channel,
+      eventBus,
+      resetResult.strategy,
+      resetChatType,
+      traceId,
+    );
+  }
+
+  // Record activity for session tracking (sliding window for idle reset)
+  sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   db: Database,
+  eventBus: EventBus,
 ): Promise<void> {
   const firstMessage = messages[0];
   if (!firstMessage) return;
@@ -1479,6 +1611,21 @@ async function processAgentResponse(
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
   const traceId = firstMessage.metadata.traceId;
 
+  // ── Reaction Ack (pre-processing, fire-and-forget) ──
+  const inst = instance as Record<string, unknown>;
+  const ackConfig: ReactionAckConfig = {
+    reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
+    reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
+    ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
+  };
+  const plugin = (await getPlugin(channel)) ?? null;
+  // AckProvider: channels that support reactions can expose ack/removeAck
+  // For now we pass null — channel-specific ack providers will be added
+  // when channel parity wishes (D, 7, 8) implement the AckProvider interface
+  const ackProvider: AckProvider | null = null;
+  const messageId = firstMessage.payload.externalId ?? '';
+  const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
+
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
   if (!personId) {
@@ -1487,8 +1634,15 @@ async function processAgentResponse(
       chatId,
       senderId,
     });
+    ackHandle.remove();
     return;
   }
+
+  // ── Session Reset Check + Activity Recording (post-personId guard) ──
+  // Only track activity for messages that will actually be dispatched, so that
+  // identity-resolution failures (transient race condition) do not corrupt the
+  // idle-reset sliding window.
+  await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
@@ -1557,7 +1711,10 @@ async function processAgentResponse(
       // Fall through to legacy path
     }
 
-    if (handled) return;
+    if (handled) {
+      ackHandle.remove();
+      return;
+    }
 
     // Fallback: legacy agentRunner.run() path
     log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
@@ -1584,6 +1741,8 @@ async function processAgentResponse(
       traceId,
     });
   } finally {
+    // ── Remove Ack (post-processing) ──
+    ackHandle.remove();
     await sendTypingPresence(channel, instance.id, chatId, 'paused');
   }
 }
@@ -2038,7 +2197,41 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message routing logic requires multiple checks
+/**
+ * Resolve LID-addressed mentions via DB mapping to determine if a @lid mention
+ * targets the instance owner. Mutates messageContext.mentionsBot if resolved.
+ *
+ * LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
+ * check DB for LID→phone mappings to detect if any @lid mention maps to the owner.
+ */
+async function resolveLidMentionBot(
+  chatsService: Services['chats'],
+  instanceId: string,
+  ownerIdentifier: string,
+  mentionedJids: string[],
+  messageContext: MessageContext,
+): Promise<void> {
+  const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
+  if (lidMentions.length === 0) return;
+
+  const ownerPhone = ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+  for (const lidJid of lidMentions) {
+    try {
+      const mapping = await chatsService.findLidMapping(instanceId, lidJid);
+      if (mapping) {
+        const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+        if (resolvedPhone === ownerPhone) {
+          messageContext.mentionsBot = true;
+          log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
+          break;
+        }
+      }
+    } catch {
+      // Non-critical: skip DB lookup failures
+    }
+  }
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2079,29 +2272,15 @@ async function shouldProcessMessage(
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
-  // LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
-  // check DB for LID→phone mappings to detect if any @lid mention maps to the owner
-  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && metadata.instanceId) {
+  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && instance.ownerIdentifier) {
     const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
-    const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
-    if (lidMentions.length > 0 && instance.ownerIdentifier) {
-      const ownerPhone = instance.ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
-      for (const lidJid of lidMentions) {
-        try {
-          const mapping = await chatsService.findLidMapping(metadata.instanceId, lidJid);
-          if (mapping) {
-            const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
-            if (resolvedPhone === ownerPhone) {
-              messageContext.mentionsBot = true;
-              log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
-              break;
-            }
-          }
-        } catch {
-          // Non-critical: skip DB lookup failures
-        }
-      }
-    }
+    await resolveLidMentionBot(
+      chatsService,
+      metadata.instanceId,
+      instance.ownerIdentifier,
+      mentionedJids,
+      messageContext,
+    );
   }
 
   log.debug('Message context built', {
@@ -2171,6 +2350,17 @@ async function checkAccessWithFallback(
     participantAlt,
     reason: accessResult.reason,
   });
+
+  // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
+  // Fire-and-forget: pairing request creation must not block message processing.
+  // Guard against empty primaryId: a missing payload.from would otherwise create a
+  // degenerate pairing entry shared by all anonymous senders.
+  if (accessResult.mode === 'allowlist' && !accessResult.rule && primaryId) {
+    accessService.requestPairing(instance.id, primaryId).catch((err) => {
+      log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
+    });
+  }
+
   if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
     sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
   }
@@ -2417,7 +2607,7 @@ export async function setupAgentDispatcher(
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
-    await processAgentResponse(services, instance, messages, triggerType, db);
+    await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
   });
 
   try {

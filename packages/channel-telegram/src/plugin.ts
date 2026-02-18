@@ -732,6 +732,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
     return getBot(instanceId);
   }
 
+  /**
+   * Get the configured webhook secret for a connected instance.
+   * Returns undefined if no secret was configured or the instance is not connected.
+   */
+  getWebhookSecret(instanceId: string): string | undefined {
+    return this.configs.get(instanceId)?.webhookSecret;
+  }
+
   private isRetryableError(error: unknown): boolean {
     if (error instanceof Error) {
       const msg = error.message.toLowerCase();

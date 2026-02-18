@@ -188,7 +188,9 @@ async function startServer(app: App): Promise<{ close: (cb: () => void) => void 
           ...Object.fromEntries(response.headers),
           'Content-Type': response.headers.get('Content-Type') || 'application/json',
         });
-        res.end(response.body ? await response.text() : undefined);
+        // Use arrayBuffer() instead of text() to preserve binary data (images, audio, etc.)
+        // text() would corrupt non-UTF-8 bytes (0xEFBFBD replacement char mangling)
+        res.end(response.body ? Buffer.from(await response.arrayBuffer()) : undefined);
       })
       .catch((error: Error) => {
         httpLog.error('Request error', { error: error.message, stack: error.stack });
@@ -372,9 +374,9 @@ async function main() {
   // Set up event bus related services (persistence, agent responder, sync worker)
   await setupEventBusServices(eventBus, services, db);
 
-  // Setup scheduler with services
+  // Setup scheduler with services and channel registry (for unread count refresh)
   log.info('Starting scheduler');
-  setupScheduler(services);
+  setupScheduler(services, globalChannelRegistry);
 
   // Start HTTP server
   const server = await startServer(app);

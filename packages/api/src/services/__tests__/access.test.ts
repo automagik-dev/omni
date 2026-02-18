@@ -28,6 +28,7 @@ function createRule(overrides: Partial<AccessRule> = {}): AccessRule {
     expiresAt: null,
     action: 'block',
     blockMessage: null,
+    metadata: null,
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,
