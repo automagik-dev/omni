@@ -339,6 +339,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached chat display names per instance (for DMs from chats.upsert) */
   private chatNamesCache = new Map<string, Map<string, string>>();
 
+  /** Last-known unread count per JID per instance — sourced from chats.upsert/chats.update */
+  private chatUnreadCache = new Map<string, Map<string, number>>();
+
   /**
    * Get all chat JIDs known to Baileys for an instance.
    * Sourced from chats.upsert events (fires on every connection).
@@ -346,6 +349,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getKnownChatJids(instanceId: string): string[] {
     return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
+  }
+
+  /**
+   * Re-emit all cached unread counts for an instance.
+   * Call this periodically (e.g. every hour) to keep DB in sync with Baileys state.
+   * Counts are sourced from the most recent chats.upsert/chats.update events.
+   */
+  refreshUnreadCounts(instanceId: string): void {
+    const cache = this.chatUnreadCache.get(instanceId);
+    if (!cache || cache.size === 0) return;
+    for (const [chatId, unreadCount] of cache) {
+      this.emitChatUnreadUpdate(instanceId, chatId, unreadCount);
+    }
+    this.logger.debug('Refreshed unread counts from cache', { instanceId, count: cache.size });
   }
 
   /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
@@ -2453,6 +2470,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const chat of chats) {
       const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!c.id) continue;
@@ -2461,8 +2484,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const name = c.displayName || c.name;
       cache.set(c.id, name ?? c.id);
 
-      // Sync unread count from WhatsApp
+      // Sync unread count from WhatsApp and cache for periodic refresh
       if (c.unreadCount !== undefined) {
+        unreadCache.set(c.id, c.unreadCount);
         this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
@@ -2486,6 +2510,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const update of updates) {
       const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
@@ -2498,6 +2528,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
       if (u.unreadCount !== undefined) {
+        unreadCache.set(u.id, u.unreadCount);
         this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
       }
     }

@@ -18,6 +18,7 @@ import {
   recordScheduledJob,
   scheduledJobNextRun,
 } from '@omni/core';
+import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { Services } from './services';
 
 const log = createLogger('scheduler:setup');
@@ -25,7 +26,7 @@ const log = createLogger('scheduler:setup');
 /**
  * Setup and start the scheduler with all jobs
  */
-export function setupScheduler(services: Services): void {
+export function setupScheduler(services: Services, channelRegistry?: ChannelRegistry | null): void {
   const scheduler = getScheduler();
 
   // Dead letter auto-retry - every 15 minutes
@@ -174,6 +175,42 @@ export function setupScheduler(services: Services): void {
       } catch (err) {
         const durationSec = (Date.now() - startTime) / 1000;
         recordScheduledJob('groups-sync-daily', 'failure', durationSec);
+        throw err;
+      }
+    },
+  });
+
+  // Unread count refresh — hourly
+  // Re-emits cached unread counts from WhatsApp plugin to DB so stale counts get corrected.
+  // Without this, counts only update on connection (chats.upsert) or real-time read events.
+  scheduler.register({
+    name: 'unread-count-refresh',
+    cron: CronExpressions.EVERY_HOUR,
+    runOnStart: false,
+    handler: async () => {
+      if (!channelRegistry) return;
+
+      const startTime = Date.now();
+      try {
+        const waPlugin = channelRegistry.get('whatsapp-baileys') as
+          | { refreshUnreadCounts?: (instanceId: string) => void }
+          | undefined;
+
+        if (!waPlugin?.refreshUnreadCounts) return;
+
+        const instances = await services.instances.listActive();
+        const waInstances = instances.filter((i) => i.channel === 'whatsapp-baileys');
+
+        for (const instance of waInstances) {
+          waPlugin.refreshUnreadCounts(instance.id);
+        }
+
+        const durationSec = (Date.now() - startTime) / 1000;
+        recordScheduledJob('unread-count-refresh', 'success', durationSec);
+        log.debug('Refreshed unread counts', { instanceCount: waInstances.length });
+      } catch (err) {
+        const durationSec = (Date.now() - startTime) / 1000;
+        recordScheduledJob('unread-count-refresh', 'failure', durationSec);
         throw err;
       }
     },

@@ -374,9 +374,9 @@ async function main() {
   // Set up event bus related services (persistence, agent responder, sync worker)
   await setupEventBusServices(eventBus, services, db);
 
-  // Setup scheduler with services
+  // Setup scheduler with services and channel registry (for unread count refresh)
   log.info('Starting scheduler');
-  setupScheduler(services);
+  setupScheduler(services, globalChannelRegistry);
 
   // Start HTTP server
   const server = await startServer(app);
