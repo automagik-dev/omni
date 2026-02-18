@@ -528,6 +528,12 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 const connectInstanceSchema = z.object({
   token: z.string().optional().describe('Bot token for Discord instances'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+  whatsapp: z
+    .object({
+      syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
+    })
+    .optional()
+    .describe('WhatsApp-specific connection options'),
 });
 
 /**
@@ -561,6 +567,9 @@ instancesRoutes.post(
     }
     if (instance.channel === 'telegram') {
       connectionOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    }
+    if (body.whatsapp) {
+      connectionOptions.whatsapp = body.whatsapp;
     }
 
     // Trigger connection via channel plugin

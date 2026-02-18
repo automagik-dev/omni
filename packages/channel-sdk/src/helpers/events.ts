@@ -45,6 +45,13 @@ export interface EmitMessageReceivedParams {
 
   /** Journey timing checkpoints (T0, T1, etc.) to include in event metadata */
   timings?: Record<string, number>;
+
+  /**
+   * Whether this message originates from a history sync (Baileys messaging-history.set).
+   * When true, the event ingestMode is set to 'history-sync' so downstream consumers
+   * (e.g. external bots) can skip replaying old messages on restart.
+   */
+  isHistorySync?: boolean;
 }
 
 /**

@@ -131,6 +131,13 @@ export interface EventMetadata {
   platformIdentityId?: string;
   traceId?: string;
   source?: string;
+  /**
+   * How the message entered the system.
+   * - 'realtime': a live message received from the platform
+   * - 'history-sync': a historical message replayed on reconnect (e.g. Baileys messaging-history.set)
+   * Consumers (e.g. bots) should skip 'history-sync' messages to avoid replaying old messages.
+   */
+  ingestMode?: 'realtime' | 'history-sync';
   /** NATS stream sequence number (set by subscription handler, not by publisher) */
   streamSequence?: number;
   /** Journey timing checkpoints: checkpoint name → Unix ms timestamp */
