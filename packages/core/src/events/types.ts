@@ -53,6 +53,8 @@ export const CORE_EVENT_TYPES = [
   // Reaction lifecycle
   'reaction.received',
   'reaction.removed',
+  // Session lifecycle
+  'session.reset',
   // Batch job operations
   'batch-job.created',
   'batch-job.started',
@@ -528,6 +530,16 @@ export interface ReactionRemovedPayload {
   isCustomEmoji?: boolean;
 }
 
+// ─── Session Events ────────────────────────────────────────
+export interface SessionResetPayload {
+  /** Instance that the session belongs to */
+  instanceId: string;
+  /** Session ID that was reset */
+  sessionId: string;
+  /** When the reset occurred */
+  timestamp: number;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -559,6 +571,7 @@ export interface EventPayloadMap {
   'profile.synced': ProfileSyncedPayload;
   'reaction.received': ReactionReceivedPayload;
   'reaction.removed': ReactionRemovedPayload;
+  'session.reset': SessionResetPayload;
   'presence.typing': PresenceTypingPayload;
   'presence.online': PresenceOnlinePayload;
   'presence.offline': PresenceOfflinePayload;
