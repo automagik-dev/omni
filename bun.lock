@@ -23,7 +23,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -56,7 +56,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@hono/swagger-ui": "^0.4.1",
         "@hono/trpc-server": "^0.3.2",
@@ -89,7 +89,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -106,7 +106,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -117,7 +117,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -135,7 +135,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -152,7 +152,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -172,7 +172,7 @@
     },
     "packages/cli": {
       "name": "@omni/cli",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -192,7 +192,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.39",
         "croner": "^9.1.0",
@@ -207,7 +207,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.3",
@@ -221,7 +221,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -238,9 +238,17 @@
         "typescript": "^5.7.3",
       },
     },
+    "packages/plugin-openclaw": {
+      "name": "@omni/plugin-openclaw",
+      "version": "2.0.0",
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+    },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.20260217.4",
+      "version": "2.20260218.18",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -553,6 +561,8 @@
     "@omni/db": ["@omni/db@workspace:packages/db"],
 
     "@omni/media-processing": ["@omni/media-processing@workspace:packages/media-processing"],
+
+    "@omni/plugin-openclaw": ["@omni/plugin-openclaw@workspace:packages/plugin-openclaw"],
 
     "@omni/sdk": ["@omni/sdk@workspace:packages/sdk"],
 
