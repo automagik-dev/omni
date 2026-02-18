@@ -2038,7 +2038,41 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
   return trashEmojiPattern.test(trimmed);
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Message routing logic requires multiple checks
+/**
+ * Resolve LID-addressed mentions via DB mapping to determine if a @lid mention
+ * targets the instance owner. Mutates messageContext.mentionsBot if resolved.
+ *
+ * LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
+ * check DB for LID→phone mappings to detect if any @lid mention maps to the owner.
+ */
+async function resolveLidMentionBot(
+  chatsService: Services['chats'],
+  instanceId: string,
+  ownerIdentifier: string,
+  mentionedJids: string[],
+  messageContext: MessageContext,
+): Promise<void> {
+  const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
+  if (lidMentions.length === 0) return;
+
+  const ownerPhone = ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+  for (const lidJid of lidMentions) {
+    try {
+      const mapping = await chatsService.findLidMapping(instanceId, lidJid);
+      if (mapping) {
+        const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+        if (resolvedPhone === ownerPhone) {
+          messageContext.mentionsBot = true;
+          log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
+          break;
+        }
+      }
+    } catch {
+      // Non-critical: skip DB lookup failures
+    }
+  }
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2079,29 +2113,15 @@ async function shouldProcessMessage(
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
-  // LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
-  // check DB for LID→phone mappings to detect if any @lid mention maps to the owner
-  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && metadata.instanceId) {
+  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && instance.ownerIdentifier) {
     const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
-    const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
-    if (lidMentions.length > 0 && instance.ownerIdentifier) {
-      const ownerPhone = instance.ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
-      for (const lidJid of lidMentions) {
-        try {
-          const mapping = await chatsService.findLidMapping(metadata.instanceId, lidJid);
-          if (mapping) {
-            const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
-            if (resolvedPhone === ownerPhone) {
-              messageContext.mentionsBot = true;
-              log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
-              break;
-            }
-          }
-        } catch {
-          // Non-critical: skip DB lookup failures
-        }
-      }
-    }
+    await resolveLidMentionBot(
+      chatsService,
+      metadata.instanceId,
+      instance.ownerIdentifier,
+      mentionedJids,
+      messageContext,
+    );
   }
 
   log.debug('Message context built', {

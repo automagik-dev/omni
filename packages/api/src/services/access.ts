@@ -74,7 +74,7 @@ export class AccessService {
   constructor(
     private db: Database,
     private eventBus: EventBus | null,
-    private cache?: CacheProvider,
+    private cache?: CacheProvider | null,
   ) {}
 
   /**
@@ -534,44 +534,6 @@ export class AccessService {
   // ==========================================================================
   // PAIRING HELPERS
   // ==========================================================================
-
-  /**
-   * Find existing pending pairing request for a specific user on an instance.
-   */
-  private async findPendingPairingForUser(instanceId: string, platformUserId: string): Promise<AccessRule | null> {
-    const [result] = await this.db
-      .select()
-      .from(accessRules)
-      .where(
-        and(
-          eq(accessRules.instanceId, instanceId),
-          eq(accessRules.ruleType, 'pending_pairing'),
-          eq(accessRules.platformUserId, platformUserId),
-          gt(accessRules.expiresAt, new Date()),
-        ),
-      )
-      .limit(1);
-
-    return result ?? null;
-  }
-
-  /**
-   * Count pending (non-expired) pairing requests for an instance.
-   */
-  private async countPendingPairingRequests(instanceId: string): Promise<number> {
-    const [result] = await this.db
-      .select({ count: count() })
-      .from(accessRules)
-      .where(
-        and(
-          eq(accessRules.instanceId, instanceId),
-          eq(accessRules.ruleType, 'pending_pairing'),
-          gt(accessRules.expiresAt, new Date()),
-        ),
-      );
-
-    return result?.count ?? 0;
-  }
 
   /**
    * Clean expired pairing requests for an instance.

@@ -8,6 +8,13 @@
       "when": 1771280049988,
       "tag": "0000_cute_white_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771393021796,
+      "tag": "0001_pairing_access_rules",
+      "breakpoints": true
     }
   ]
 }
