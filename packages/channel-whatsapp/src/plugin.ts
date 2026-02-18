@@ -2447,13 +2447,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle presence update (typing, online/offline)
    * @internal
    */
-  handlePresenceUpdate(
-    instanceId: string,
-    chatId: string,
-    userId: string,
-    presence: string,
-    lastSeen?: number,
-  ): void {
+  handlePresenceUpdate(instanceId: string, chatId: string, userId: string, presence: string, lastSeen?: number): void {
     const meta = { instanceId, channelType: this.id, source: `channel:${this.id}` };
 
     if (presence === 'composing' || presence === 'recording') {

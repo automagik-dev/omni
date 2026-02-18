@@ -1,0 +1,19 @@
+{
+  "name": "@omni/plugin-openclaw",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "channel": {
+      "id": "omni",
+      "label": "Omni",
+      "selectionLabel": "Omni Multichannel (WhatsApp, Discord, Slack, Telegram)",
+      "docsPath": "/channels/omni",
+      "blurb": "Route messages via the Omni v2 multichannel stack.",
+      "order": 70,
+      "aliases": ["omni-channel", "omni-v2"]
+    },
+    "install": {
+      "npmSpec": "@omni/plugin-openclaw",
+      "defaultChoice": "npm"
+    }
+  }
+}
