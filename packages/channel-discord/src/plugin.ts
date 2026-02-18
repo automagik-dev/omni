@@ -17,7 +17,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import type { Client, Message, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
-import { type InteractionAuthConfig } from './auth/interaction-auth';
+import type { InteractionAuthConfig } from './auth/interaction-auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
 import { createClient, destroyClient, getBotUser, isClientReady } from './client';
 import {

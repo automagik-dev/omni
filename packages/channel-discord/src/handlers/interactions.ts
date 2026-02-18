@@ -210,6 +210,67 @@ async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, inte
 }
 
 /**
+ * Enforce registry TTL for a component interaction.
+ * Unregistered components pass through for backward compatibility;
+ * registered-but-expired interactions are rate-limited and suppressed.
+ * Returns true if the interaction should proceed, false if suppressed.
+ */
+async function enforceRegistryTTL(instanceId: string, interaction: Interaction, label: string): Promise<boolean> {
+  const messageId = (interaction as { message?: { id: string } }).message?.id;
+  if (!messageId) return true;
+
+  const registry = getComponentRegistry();
+  if (!registry.has(instanceId, messageId)) {
+    const userId = interaction.user.id;
+    if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
+      log.debug(`Suppressing expired ${label} interaction (rate limit)`, {
+        instanceId,
+        userId,
+        messageId,
+      });
+      try {
+        const ci = interaction as MessageComponentInteraction;
+        if (!ci.replied && !ci.deferred) {
+          await ci.deferUpdate();
+        }
+      } catch (_) {
+        // Ignore
+      }
+      return false;
+    }
+  } else {
+    registry.resolve(instanceId, messageId);
+  }
+  return true;
+}
+
+/**
+ * Resolve the entity select menu type and extract values from the interaction.
+ * Returns null if the interaction is not a recognized entity select menu.
+ */
+function resolveEntitySelectType(
+  interaction: Interaction,
+): { selectType: 'user' | 'role' | 'channel' | 'mentionable'; customId: string; values: string[] } | null {
+  if (isUserSelectMenu(interaction)) {
+    return { selectType: 'user', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isRoleSelectMenu(interaction)) {
+    return { selectType: 'role', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isChannelSelectMenu(interaction)) {
+    return { selectType: 'channel', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isMentionableSelectMenu(interaction)) {
+    return {
+      selectType: 'mentionable',
+      customId: interaction.customId,
+      values: [...interaction.users.keys(), ...interaction.roles.keys()],
+    };
+  }
+  return null;
+}
+
+/**
  * Process entity select menu interaction (user, role, channel, mentionable)
  */
 async function processEntitySelectMenu(
@@ -218,70 +279,15 @@ async function processEntitySelectMenu(
   interaction: Interaction,
 ): Promise<void> {
   if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
-
-  // Enforce registry TTL: only process interactions for registered, non-expired components.
-  // Unregistered components pass through for backward compatibility; registered-but-expired
-  // interactions are rate-limited and suppressed after 3 attempts per 60s per user.
-  const messageId = (interaction as { message?: { id: string } }).message?.id;
-  if (messageId) {
-    const registry = getComponentRegistry();
-    if (!registry.has(instanceId, messageId)) {
-      // Component not (or no longer) in the registry
-      const userId = interaction.user.id;
-      if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
-        log.debug('Suppressing expired entity select interaction (rate limit)', {
-          instanceId,
-          userId,
-          messageId,
-        });
-        try {
-          const ci = interaction as MessageComponentInteraction;
-          if (!ci.replied && !ci.deferred) {
-            await ci.deferUpdate();
-          }
-        } catch (_) {
-          // Ignore
-        }
-        return;
-      }
-    } else {
-      // Component is registered and valid — resolve it to enforce consume/reusable behavior
-      registry.resolve(instanceId, messageId);
-    }
-  }
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'entity select'))) return;
 
   const base = extractBasePayload(interaction, instanceId);
-
-  let selectType: 'user' | 'role' | 'channel' | 'mentionable';
-  let customId: string;
-  let values: string[];
-
-  if (isUserSelectMenu(interaction)) {
-    selectType = 'user';
-    customId = interaction.customId;
-    values = interaction.values.map(String);
-  } else if (isRoleSelectMenu(interaction)) {
-    selectType = 'role';
-    customId = interaction.customId;
-    values = interaction.values.map(String);
-  } else if (isChannelSelectMenu(interaction)) {
-    selectType = 'channel';
-    customId = interaction.customId;
-    values = interaction.values.map(String);
-  } else if (isMentionableSelectMenu(interaction)) {
-    selectType = 'mentionable';
-    customId = interaction.customId;
-    // Mentionable returns users and roles — extract all IDs
-    values = [...interaction.users.keys(), ...interaction.roles.keys()];
-  } else {
-    return;
-  }
+  const resolved = resolveEntitySelectType(interaction);
+  if (!resolved) return;
 
   await plugin.handleEntitySelectMenu({
     ...base,
-    customId,
-    values,
-    selectType,
+    ...resolved,
   });
 
   // Defer update

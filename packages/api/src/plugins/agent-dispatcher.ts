@@ -814,6 +814,21 @@ async function resolveContactName(
 }
 
 /**
+ * Build a JID → contact name map from Baileys cached contact data.
+ */
+function buildJidToNameMap(mentionedContacts: Array<{ jid: string; name?: string }> | undefined): Map<string, string> {
+  const jidToName = new Map<string, string>();
+  if (mentionedContacts) {
+    for (const contact of mentionedContacts) {
+      if (contact.name) {
+        jidToName.set(contact.jid, contact.name);
+      }
+    }
+  }
+  return jidToName;
+}
+
+/**
  * Replace @phone mentions in text with actual contact names
  * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
  */
@@ -828,15 +843,7 @@ async function replaceMentionsWithContactNames(
 
   log.debug('Starting mention replacement', { mentionCount: mentionedJids.length });
 
-  // Create JID → name map from mentionedContacts (Baileys cache)
-  const jidToName = new Map<string, string>();
-  if (mentionedContacts) {
-    for (const contact of mentionedContacts) {
-      if (contact.name) {
-        jidToName.set(contact.jid, contact.name);
-      }
-    }
-  }
+  const jidToName = buildJidToNameMap(mentionedContacts);
 
   let replacedText = text;
   let resolvedCount = 0;

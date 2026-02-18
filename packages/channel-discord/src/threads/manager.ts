@@ -8,13 +8,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import {
-  ChannelType,
-  type BaseGuildTextChannel,
-  type Client,
-  type ForumChannel,
-  type ThreadChannel,
-} from 'discord.js';
+import { type BaseGuildTextChannel, ChannelType, type Client, type ForumChannel, type ThreadChannel } from 'discord.js';
 
 const log = createLogger('discord:threads');
 
@@ -76,13 +70,8 @@ export async function createThread(
   options: CreateThreadOptions,
 ): Promise<ThreadChannel> {
   const channel = await client.channels.fetch(channelId);
-  if (
-    !channel ||
-    (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)
-  ) {
-    throw new Error(
-      `Channel ${channelId} does not support threads (must be a text or announcement channel)`,
-    );
+  if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)) {
+    throw new Error(`Channel ${channelId} does not support threads (must be a text or announcement channel)`);
   }
 
   const textChannel = channel as BaseGuildTextChannel;
