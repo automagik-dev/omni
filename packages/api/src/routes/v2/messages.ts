@@ -839,8 +839,7 @@ messagesRoutes.post('/send', async (c) => {
       {
         error: {
           code: 'WRONG_ENDPOINT',
-          message:
-            'Media payloads must use POST /api/v2/messages/send/media — this endpoint only sends plain text.',
+          message: 'Media payloads must use POST /api/v2/messages/send/media — this endpoint only sends plain text.',
           hint: {
             endpoint: 'POST /api/v2/messages/send/media',
             requiredFields: ['instanceId', 'to', 'type (image|video|audio|document)', 'url or base64'],

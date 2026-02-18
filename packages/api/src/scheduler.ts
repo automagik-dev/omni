@@ -9,6 +9,7 @@
  * @see events-ops wish (DEC-9)
  */
 
+import type { ChannelRegistry } from '@omni/channel-sdk';
 import {
   CronExpressions,
   createLogger,
@@ -18,7 +19,6 @@ import {
   recordScheduledJob,
   scheduledJobNextRun,
 } from '@omni/core';
-import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { Services } from './services';
 
 const log = createLogger('scheduler:setup');
