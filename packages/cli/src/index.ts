@@ -32,6 +32,7 @@ import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
+import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStatusCommand } from './commands/status.js';
 import { createTtsCommand } from './commands/tts.js';
@@ -166,6 +167,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Update CLI to latest version',
+  },
+  {
+    create: createServerCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Manage server processes (start/stop/restart/logs/status)',
   },
   {
     create: createMediaCommand,
