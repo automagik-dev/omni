@@ -2448,14 +2448,27 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   handlePresenceUpdate(
-    _instanceId: string,
-    _chatId: string,
-    _userId: string,
-    _presence: string,
-    _lastSeen?: number,
+    instanceId: string,
+    chatId: string,
+    userId: string,
+    presence: string,
+    lastSeen?: number,
   ): void {
-    // TODO: Emit presence event
-    // presence can be: 'available', 'unavailable', 'composing', 'recording', 'paused'
+    const meta = { instanceId, channelType: this.id, source: `channel:${this.id}` };
+
+    if (presence === 'composing' || presence === 'recording') {
+      this.eventBus
+        .publish('presence.typing', { chatId, from: userId, timestamp: Date.now() }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.typing', { error: String(err) }));
+    } else if (presence === 'available') {
+      this.eventBus
+        .publish('presence.online', { userId, lastSeen }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.online', { error: String(err) }));
+    } else if (presence === 'unavailable') {
+      this.eventBus
+        .publish('presence.offline', { userId, lastSeen: lastSeen ?? Date.now() }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.offline', { error: String(err) }));
+    }
   }
 
   /**
