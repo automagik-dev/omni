@@ -75,10 +75,12 @@ jobs:
       - name: Setup Bun
         if: steps.exists.outputs.skip != 'true'
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        with:
+          bun-version: "latest"
 
-      - name: Install CLI dependencies
+      - name: Install dependencies
         if: steps.exists.outputs.skip != 'true'
-        run: cd packages/cli && bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build CLI
         if: steps.exists.outputs.skip != 'true'
