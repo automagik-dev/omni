@@ -84,7 +84,7 @@ jobs:
 
       - name: Build CLI
         if: steps.exists.outputs.skip != 'true'
-        run: bunx turbo run build --filter=@omni/cli
+        run: bunx turbo run build --filter=@automagik/omni
 
       - name: Publish to npm
         if: steps.exists.outputs.skip != 'true'
