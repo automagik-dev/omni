@@ -2232,6 +2232,19 @@ async function resolveLidMentionBot(
   }
 }
 
+async function resolveEffectiveReplyFilter(
+  chatsService: Services['chats'],
+  routeResolver: Services['routeResolver'],
+  instanceId: string,
+  chatId: string,
+  defaultFilter: Instance['agentReplyFilter'],
+): Promise<Instance['agentReplyFilter']> {
+  const chat = await chatsService.findByExternalIdSmart(instanceId, chatId);
+  if (!chat?.id) return defaultFilter;
+  const route = await routeResolver.resolve(instanceId, chat.id);
+  return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2296,14 +2309,13 @@ async function shouldProcessMessage(
   // Resolve per-chat route filter override before applying the instance-level filter.
   // This allows individual chats to have a different reply filter (e.g. mode:'all') while
   // the instance default remains filtered. Route lookup is a cheap indexed query.
-  let effectiveReplyFilter = instance.agentReplyFilter;
-  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
-  if (chat?.id) {
-    const route = await routeResolver.resolve(instance.id, chat.id);
-    if (route?.agentReplyFilter) {
-      effectiveReplyFilter = route.agentReplyFilter as typeof instance.agentReplyFilter;
-    }
-  }
+  const effectiveReplyFilter = await resolveEffectiveReplyFilter(
+    chatsService,
+    routeResolver,
+    instance.id,
+    payload.chatId,
+    instance.agentReplyFilter,
+  );
 
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
     log.debug('Message did not pass reply filter', {
