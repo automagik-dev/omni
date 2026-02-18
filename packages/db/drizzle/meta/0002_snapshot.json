@@ -1,6 +1,6 @@
 {
-  "id": "ad585a3c-1209-4bdf-af81-7d9ab747c33f",
-  "prevId": "fbb3c9b5-1764-4c32-aa86-0c0d80194da9",
+  "id": "b1df832f-de2b-4dc2-8569-2ddb73c5b065",
+  "prevId": "ad585a3c-1209-4bdf-af81-7d9ab747c33f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -23,7 +23,7 @@
         },
         "rule_type": {
           "name": "rule_type",
-          "type": "varchar(10)",
+          "type": "varchar(20)",
           "primaryKey": false,
           "notNull": true
         },
@@ -81,6 +81,12 @@
         "block_message": {
           "name": "block_message",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -168,6 +174,33 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_access_rules_pairing": {
+          "name": "idx_access_rules_pairing",
+          "columns": [
+            {
+              "expression": "instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "rule_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}

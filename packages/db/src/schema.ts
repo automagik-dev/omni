@@ -630,6 +630,23 @@ export const instances = pgTable(
     ttsVoiceId: text('tts_voice_id'), // ElevenLabs voice ID override
     ttsModelId: text('tts_model_id'), // ElevenLabs model override
 
+    // ---- Reaction Acknowledgment ----
+    /** Toggle reaction ack: 'off' (default) | 'on' */
+    reactionAck: varchar('reaction_ack', { length: 10 }).notNull().default('off').$type<'off' | 'on'>(),
+    /** Per-channel emoji overrides for ack reactions */
+    reactionAckEmoji: jsonb('reaction_ack_emoji').$type<Record<string, string>>(),
+    /** Timeout in ms before ack is auto-removed (hard cap 30s) */
+    ackTimeoutMs: integer('ack_timeout_ms').notNull().default(30000),
+
+    // ---- Session Reset ----
+    /** Session reset strategies: per chat-type configuration */
+    sessionReset: jsonb('session_reset').$type<{
+      default?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      dm?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      group?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      thread?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+    }>(),
+
     // ---- Media Processing ----
     processAudio: boolean('process_audio').notNull().default(true),
     processImages: boolean('process_images').notNull().default(true),
