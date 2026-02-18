@@ -5,12 +5,12 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
+import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');

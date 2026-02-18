@@ -12,6 +12,7 @@
  * - Max 3 pending requests per instance, 1 hour expiry
  */
 
+import { randomInt } from 'node:crypto';
 import type { CacheProvider, EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -210,7 +211,7 @@ export class AccessService {
   static generatePairingCode(): string {
     let code = '';
     for (let i = 0; i < PAIRING_CODE_LENGTH; i++) {
-      const randomIndex = crypto.randomInt(0, PAIRING_CODE_CHARS.length);
+      const randomIndex = randomInt(0, PAIRING_CODE_CHARS.length);
       code += PAIRING_CODE_CHARS[randomIndex];
     }
     return code;
