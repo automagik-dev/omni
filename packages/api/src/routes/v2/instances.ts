@@ -222,7 +222,7 @@ function buildInstanceConnectionOptions(input: InstanceConnectionOptionsInput): 
 }
 
 function getPluginFromRegistry(
-  channelRegistry: ChannelRegistry | undefined,
+  channelRegistry: ChannelRegistry | null | undefined,
   channel: string,
 ): ChannelPlugin | undefined {
   return channelRegistry?.get(channel as Parameters<ChannelRegistry['get']>[0]);
@@ -246,7 +246,7 @@ async function connectInstanceWithPlugin(
 }
 
 async function triggerCreateConnection(
-  channelRegistry: ChannelRegistry | undefined,
+  channelRegistry: ChannelRegistry | null | undefined,
   channel: string,
   instanceId: string,
   options: Record<string, unknown>,
