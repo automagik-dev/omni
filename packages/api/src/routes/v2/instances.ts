@@ -4,7 +4,8 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, createLogger } from '@omni/core';
+import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -2152,10 +2153,10 @@ instancesRoutes.post(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      if (message.includes('not found')) {
+      if (error instanceof NotFoundError) {
         return c.json({ error: { code: 'NOT_FOUND', message } }, 404);
       }
-      if (message.includes('expired') || message.includes('already been used')) {
+      if (error instanceof PairingRequestExpiredError || error instanceof PairingRequestConsumedError) {
         return c.json({ error: { code: 'INVALID_REQUEST', message } }, 400);
       }
       return c.json({ error: { code: 'ACTION_FAILED', message } }, 500);

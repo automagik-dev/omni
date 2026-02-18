@@ -53,6 +53,22 @@ export interface PairingActionResult {
   reason?: string;
 }
 
+/** Thrown when a pairing request has expired */
+export class PairingRequestExpiredError extends Error {
+  constructor(requestId: string) {
+    super(`Pairing request has expired: ${requestId}`);
+    this.name = 'PairingRequestExpiredError';
+  }
+}
+
+/** Thrown when a pairing request has already been consumed (approved or denied) */
+export class PairingRequestConsumedError extends Error {
+  constructor(requestId: string) {
+    super(`Pairing request has already been used: ${requestId}`);
+    this.name = 'PairingRequestConsumedError';
+  }
+}
+
 export class AccessService {
   constructor(
     private db: Database,
@@ -194,7 +210,7 @@ export class AccessService {
   static generatePairingCode(): string {
     let code = '';
     for (let i = 0; i < PAIRING_CODE_LENGTH; i++) {
-      const randomIndex = Math.floor(Math.random() * PAIRING_CODE_CHARS.length);
+      const randomIndex = crypto.randomInt(0, PAIRING_CODE_CHARS.length);
       code += PAIRING_CODE_CHARS[randomIndex];
     }
     return code;
@@ -226,13 +242,15 @@ export class AccessService {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${instanceId}))`);
 
       // Clean expired requests
-      await tx.delete(accessRules).where(
-        and(
-          eq(accessRules.instanceId, instanceId),
-          eq(accessRules.ruleType, 'pending_pairing'),
-          sql`${accessRules.expiresAt} <= now()`,
-        ),
-      );
+      await tx
+        .delete(accessRules)
+        .where(
+          and(
+            eq(accessRules.instanceId, instanceId),
+            eq(accessRules.ruleType, 'pending_pairing'),
+            sql`${accessRules.expiresAt} <= now()`,
+          ),
+        );
 
       // Reuse existing code if sender already has a pending request
       const [existing] = await tx
@@ -390,7 +408,7 @@ export class AccessService {
 
       // Check if expired
       if (request.expiresAt && request.expiresAt < new Date()) {
-        throw new Error('Pairing request has expired');
+        throw new PairingRequestExpiredError(requestId);
       }
 
       // Atomically mark as consumed — only succeeds if not already consumed.
@@ -415,7 +433,7 @@ export class AccessService {
         .returning();
 
       if (!consumed) {
-        throw new Error('Pairing code has already been used');
+        throw new PairingRequestConsumedError(requestId);
       }
 
       // Create allow rule for the user (within the same transaction)
@@ -475,7 +493,7 @@ export class AccessService {
 
       // Check if expired
       if (request.expiresAt && request.expiresAt < new Date()) {
-        throw new Error('Pairing request has expired');
+        throw new PairingRequestExpiredError(requestId);
       }
 
       // Atomically mark as consumed — only succeeds if not already consumed.
@@ -501,7 +519,7 @@ export class AccessService {
         .returning();
 
       if (!consumed) {
-        throw new Error('Pairing code has already been used');
+        throw new PairingRequestConsumedError(requestId);
       }
 
       // Delete the consumed pairing request
