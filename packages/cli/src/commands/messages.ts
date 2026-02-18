@@ -7,7 +7,7 @@
  */
 
 import type { Chat, Message, OmniClient } from '@omni/sdk';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveChatId, resolveInstanceId, resolveMessageId } from '../resolve.js';
@@ -321,9 +321,15 @@ export function createMessagesCommand(): Command {
     .command('delete <messageId>')
     .description('Delete a message for everyone (WhatsApp)')
     .requiredOption('--instance <id>', 'Instance ID')
-    .requiredOption('--channel-id <id>', 'Chat JID (e.g., 5511999999999@s.whatsapp.net)')
-    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+    .requiredOption('--chat <chatJid>', 'Chat JID (e.g., 5551997285829@s.whatsapp.net)')
+    .addOption(new Option('--channel-id <chatId>', '(deprecated alias for --chat)').hideHelp())
+    .action(async (messageId: string, options: { instance: string; chat?: string; channelId?: string }) => {
       try {
+        const channelId = options.chat ?? options.channelId;
+        if (!channelId) {
+          output.error('--chat is required');
+          return;
+        }
         const resolvedMessageId = await resolveMessageId(messageId);
         const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
@@ -335,7 +341,7 @@ export function createMessagesCommand(): Command {
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
             instanceId,
-            channelId: options.channelId,
+            channelId,
             messageId: resolvedMessageId,
           }),
         });
@@ -357,9 +363,15 @@ export function createMessagesCommand(): Command {
     .command('star <messageId>')
     .description('Star a message')
     .requiredOption('--instance <id>', 'Instance ID')
-    .requiredOption('--channel-id <id>', 'Chat JID')
-    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+    .requiredOption('--chat <chatJid>', 'Chat JID (e.g., 5551997285829@s.whatsapp.net)')
+    .addOption(new Option('--channel-id <chatId>', '(deprecated alias for --chat)').hideHelp())
+    .action(async (messageId: string, options: { instance: string; chat?: string; channelId?: string }) => {
       try {
+        const channelId = options.chat ?? options.channelId;
+        if (!channelId) {
+          output.error('--chat is required');
+          return;
+        }
         const resolvedMessageId = await resolveMessageId(messageId);
         const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
@@ -371,7 +383,7 @@ export function createMessagesCommand(): Command {
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
             instanceId,
-            channelId: options.channelId,
+            channelId,
           }),
         });
 
@@ -392,9 +404,15 @@ export function createMessagesCommand(): Command {
     .command('unstar <messageId>')
     .description('Unstar a message')
     .requiredOption('--instance <id>', 'Instance ID')
-    .requiredOption('--channel-id <id>', 'Chat JID')
-    .action(async (messageId: string, options: { instance: string; channelId: string }) => {
+    .requiredOption('--chat <chatJid>', 'Chat JID (e.g., 5551997285829@s.whatsapp.net)')
+    .addOption(new Option('--channel-id <chatId>', '(deprecated alias for --chat)').hideHelp())
+    .action(async (messageId: string, options: { instance: string; chat?: string; channelId?: string }) => {
       try {
+        const channelId = options.chat ?? options.channelId;
+        if (!channelId) {
+          output.error('--chat is required');
+          return;
+        }
         const resolvedMessageId = await resolveMessageId(messageId);
         const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
@@ -406,7 +424,7 @@ export function createMessagesCommand(): Command {
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
           body: JSON.stringify({
             instanceId,
-            channelId: options.channelId,
+            channelId,
           }),
         });
 
@@ -419,6 +437,41 @@ export function createMessagesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unstar message: ${message}`);
+      }
+    });
+
+  // omni messages remove-reaction <messageId>
+  messages
+    .command('remove-reaction <messageId>')
+    .description('Remove a reaction from a message')
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--emoji <emoji>', 'Emoji to remove')
+    .action(async (messageId: string, options: { instance: string; emoji: string }) => {
+      try {
+        const resolvedMessageId = await resolveMessageId(messageId);
+        const instanceId = await resolveInstanceId(options.instance);
+        const config = (await import('../config.js')).loadConfig();
+        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+        const apiKey = config.apiKey ?? '';
+
+        const resp = await fetch(`${baseUrl}/api/v2/messages/${resolvedMessageId}/reactions`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({
+            instanceId,
+            emoji: options.emoji,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: { message?: string } };
+          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+        }
+
+        output.success(`Reaction removed from message: ${resolvedMessageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to remove reaction: ${message}`);
       }
     });
 

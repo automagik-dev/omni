@@ -72,6 +72,8 @@ interface SendOptions {
   tts?: string;
   voiceId?: string;
   presenceDelay?: number;
+  forward?: boolean;
+  fromChat?: string;
 }
 
 /** Message sender handlers - each validates required fields before use */
@@ -235,6 +237,26 @@ const messageSenders = {
     });
     output.success('TTS voice note sent', result);
   },
+
+  async forward(client: OmniClient, instanceId: string, options: SendOptions) {
+    const { to, message, fromChat } = options;
+    if (!to) return;
+    if (!message) {
+      output.error('--message <id> is required for forwarding');
+      return;
+    }
+    if (!fromChat) {
+      output.error('--from-chat <chatId> is required for forwarding');
+      return;
+    }
+    const result = await client.messages.sendForward({
+      instanceId,
+      to,
+      messageId: message,
+      fromChatId: fromChat,
+    });
+    output.success('Message forwarded', result);
+  },
 };
 
 /** Determine which message type to send based on options */
@@ -249,6 +271,7 @@ function getMessageType(options: SendOptions): keyof typeof messageSenders | nul
   if (options.embed) return 'embed';
   if (options.presence) return 'presence';
   if (options.tts) return 'tts';
+  if (options.forward) return 'forward';
   return null;
 }
 
@@ -357,13 +380,26 @@ function buildGroupedSendHelp(): string {
     { flags: '--presence-delay <ms>', description: 'Recording presence duration (optional)' },
   ];
 
+  const forwardOptions: OptionDef[] = [
+    { flags: '--forward', description: 'Forward a message to another chat' },
+    { flags: '--message <id>', description: 'Message ID to forward' },
+    { flags: '--from-chat <chatId>', description: 'Source chat ID' },
+  ];
+
   // Examples
   const examples: Example[] = [
     { command: 'omni send --to +5511999 --text "Hello!"', description: 'Send text' },
     { command: 'omni send --to +5511999 --media ./photo.jpg --caption "Check this"', description: 'Send media' },
     { command: 'omni send --to +5511999 --reaction "👍" --message msg_abc', description: 'React to message' },
-    { command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"', description: 'Create poll' },
+    {
+      command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"',
+      description: 'Create poll',
+    },
     { command: 'omni send --to +5511999 --tts "Hello from AI!"', description: 'Send TTS voice note' },
+    {
+      command: 'omni send --to +5511999 --forward --message msg_abc --from-chat chat_123',
+      description: 'Forward message',
+    },
   ];
 
   // Build help output
@@ -383,6 +419,7 @@ ${formatOptionGroup('Location', locationOptions)}
 ${formatOptionGroup('Poll (Discord)', pollOptions)}
 ${formatOptionGroup('Embed (Discord)', embedOptions)}
 ${formatOptionGroup('Presence', presenceOptions)}
+${formatOptionGroup('Forward', forwardOptions)}
 
 ${formatExamples(examples)}
 `;
@@ -441,11 +478,14 @@ export function createSendCommand(): Command {
     .option('--tts <text>', 'Send TTS voice note (text-to-speech)')
     .option('--voice-id <id>', 'ElevenLabs voice ID for TTS')
     .option('--presence-delay <ms>', 'Recording presence duration in ms', Number.parseInt)
+    // Forward
+    .option('--forward', 'Forward a message to another chat')
+    .option('--from-chat <chatId>', 'Source chat ID for forwarding')
     .action(async (options: SendOptions) => {
       // Validate message type first (before instance lookup)
       const messageType = getMessageType(options);
       if (!messageType) {
-        output.error('No message type specified. Use --text, --media, --reaction, etc.');
+        output.error('No message type specified. Use --text, --media, --reaction, --forward, etc.');
         return;
       }
 

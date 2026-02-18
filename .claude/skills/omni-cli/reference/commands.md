@@ -21,7 +21,7 @@ Exhaustive reference of all commands, subcommands, and options.
 - [keys](#omni-keys) - API keys
 - [automations](#omni-automations) - Workflows
 - [webhooks](#omni-webhooks) - Webhooks
-- [agent-routes](#omni-agent-routes) - Agent routing
+- [routes](#omni-routes) - Agent routing
 - [access](#omni-access) - Access control
 - [settings](#omni-settings) - Server settings
 - [batch](#omni-batch) - Batch processing
@@ -280,7 +280,7 @@ Configure disappearing messages.
 
 **Options:**
 - `--instance <id>` - Instance ID (required)
-- `--duration <time>` - Duration before messages disappear (e.g., "24h", "7d", "0" to disable)
+- `--duration <time>` - Duration before messages disappear (e.g., "24h", "7d", "off" to disable; "0" also accepted)
 
 **Example:**
 ```bash
@@ -288,7 +288,7 @@ Configure disappearing messages.
 omni chats disappearing chat_abc --instance inst_123 --duration 24h
 
 # Disable
-omni chats disappearing chat_abc --instance inst_123 --duration 0
+omni chats disappearing chat_abc --instance inst_123 --duration off  # 0 is also accepted
 ```
 
 #### `pin <id>`
@@ -498,7 +498,8 @@ Request pairing code (alternative to QR).
 
 **Example:**
 ```bash
-omni instances pair inst_123
+omni instances pair inst_123 --phone +5511999999999
+# --phone is required for phone pairing
 # Returns 8-digit code to enter in WhatsApp settings
 ```
 
@@ -867,7 +868,6 @@ Event replay system.
 - `--speed <multiplier>` - Playback speed (default: 1.0)
 - `--dry-run` - Preview without executing
 - `--status <id>` - Get replay session status
-- `--list` - List all replay sessions
 - `--cancel <id>` - Cancel replay session
 
 **Examples:**
@@ -880,9 +880,6 @@ omni events replay --start --since 1h --dry-run
 
 # Check status
 omni events replay --status session_abc
-
-# List sessions
-omni events replay --list
 
 # Cancel
 omni events replay --cancel session_abc
