@@ -700,6 +700,39 @@ function resolveChatId(
 }
 
 /**
+ * Sanitize inbound text content. Returns false when the message should be dropped.
+ */
+function sanitizeInboundText(content: ExtractedContent, instanceId: string, messageId?: string): boolean {
+  if (!content.text) return true;
+
+  const sanitized = sanitizeMessage(content.text, log, {
+    instanceId,
+    messageId,
+  });
+
+  if (!sanitized.ok) return false;
+  content.text = sanitized.text;
+  return true;
+}
+
+/**
+ * Mark sender as LID for downstream identity resolution.
+ */
+function annotateSenderLidStatus(msg: WAMessage, senderJid: string): void {
+  if (!isLidJid(senderJid)) return;
+  (msg as unknown as Record<string, unknown>).senderIsLid = true;
+}
+
+/**
+ * Extract platform timestamp (T0) in milliseconds.
+ */
+function getPlatformTimestamp(msg: WAMessage): number {
+  if (!msg.messageTimestamp) return Date.now();
+  const timestamp = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+  return timestamp * 1000;
+}
+
+/**
  * Process a single message
  */
 async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
@@ -712,14 +745,7 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   if (!content) return;
 
   // ── Sanitize inbound text ──
-  if (content.text) {
-    const sanitized = sanitizeMessage(content.text, log, {
-      instanceId,
-      messageId: msg.key.id || undefined,
-    });
-    if (!sanitized.ok) return; // Drop messages with null bytes or exceeding max length
-    content.text = sanitized.text;
-  }
+  if (!sanitizeInboundText(content, instanceId, msg.key.id || undefined)) return;
 
   // ── Dedupe check ──
   const externalIdForDedupe = msg.key.id || '';
@@ -758,14 +784,10 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   // In group chats the chat JID is @g.us (not @lid), so addressingMode stays unset,
   // but individual participants can still be @lid. Downstream identity resolution
   // uses this flag to skip phone extraction for LID sender IDs.
-  if (isLidJid(senderJid)) {
-    (msg as unknown as Record<string, unknown>).senderIsLid = true;
-  }
+  annotateSenderLidStatus(msg, senderJid);
 
   // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
-  const platformTimestamp = msg.messageTimestamp
-    ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp)) * 1000
-    : Date.now();
+  const platformTimestamp = getPlatformTimestamp(msg);
 
   // Pass all content fields including extended ones (poll, event, product, etc.)
   await plugin.handleMessageReceived(

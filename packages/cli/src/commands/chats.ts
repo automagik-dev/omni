@@ -407,6 +407,139 @@ function displayChatList(
   }
 }
 
+type ParticipantActionOptions = {
+  add?: string;
+  remove?: string;
+  name?: string;
+  role?: string;
+  promote?: string;
+  demote?: string;
+};
+
+type ParticipantRoleChange = {
+  platformUserId: string;
+  role: 'admin' | 'member';
+  statusText: string;
+};
+
+function getParticipantRoleChange(options: ParticipantActionOptions): ParticipantRoleChange | null {
+  if (options.promote) {
+    return {
+      platformUserId: options.promote,
+      role: 'admin',
+      statusText: 'promoted to admin',
+    };
+  }
+  if (options.demote) {
+    return {
+      platformUserId: options.demote,
+      role: 'member',
+      statusText: 'demoted to member',
+    };
+  }
+  return null;
+}
+
+async function updateParticipantRole(chatId: string, roleChange: ParticipantRoleChange): Promise<void> {
+  const config = (await import('../config.js')).loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+  const apiKey = config.apiKey ?? '';
+  const resp = await fetch(
+    `${baseUrl}/api/v2/chats/${chatId}/participants/${encodeURIComponent(roleChange.platformUserId)}/role`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ role: roleChange.role }),
+    },
+  );
+  if (!resp.ok) {
+    const err = (await resp.json()) as { error?: { message?: string } };
+    throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+  }
+  output.success(`Participant ${roleChange.platformUserId} ${roleChange.statusText}`);
+}
+
+async function handleParticipantAction(
+  client: OmniClient,
+  chatId: string,
+  options: ParticipantActionOptions,
+): Promise<boolean> {
+  if (options.add) {
+    const participant = await client.chats.addParticipant(chatId, {
+      platformUserId: options.add,
+      displayName: options.name,
+      role: options.role,
+    });
+    output.success(`Participant added: ${participant.platformUserId}`, participant);
+    return true;
+  }
+
+  if (options.remove) {
+    await client.chats.removeParticipant(chatId, options.remove);
+    output.success(`Participant removed: ${options.remove}`);
+    return true;
+  }
+
+  const roleChange = getParticipantRoleChange(options);
+  if (!roleChange) {
+    return false;
+  }
+
+  await updateParticipantRole(chatId, roleChange);
+  return true;
+}
+
+async function listParticipants(client: OmniClient, chatId: string): Promise<void> {
+  const participants = await client.chats.listParticipants(chatId);
+
+  const items = participants.map((p) => ({
+    id: p.id,
+    userId: p.platformUserId,
+    name: p.displayName ?? '-',
+    role: p.role ?? '-',
+  }));
+
+  output.list(items, { emptyMessage: 'No participants found.' });
+}
+
+const VALID_DISAPPEARING_DURATIONS = ['off', '0', '24h', '7d', '90d'] as const;
+type DisappearingDuration = Exclude<(typeof VALID_DISAPPEARING_DURATIONS)[number], '0'>;
+
+function normalizeDisappearingDuration(rawDuration: string): DisappearingDuration | null {
+  if (!VALID_DISAPPEARING_DURATIONS.includes(rawDuration as (typeof VALID_DISAPPEARING_DURATIONS)[number])) {
+    return null;
+  }
+  return rawDuration === '0' ? 'off' : (rawDuration as DisappearingDuration);
+}
+
+function getDisappearingSuccessMessage(duration: DisappearingDuration): string {
+  return duration === 'off' ? 'Disappearing messages turned off' : `Disappearing messages set to ${duration}`;
+}
+
+async function setDisappearingMessages(
+  chatId: string,
+  instanceId: string,
+  duration: DisappearingDuration,
+): Promise<void> {
+  const config = (await import('../config.js')).loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+  const apiKey = config.apiKey ?? '';
+
+  const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/disappearing`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({
+      instanceId,
+      duration,
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = (await resp.json()) as { error?: { message?: string } };
+    throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+  }
+}
+
 export function createChatsCommand(): Command {
   const chats = new Command('chats').description('Manage chats');
 
@@ -849,52 +982,14 @@ export function createChatsCommand(): Command {
     .option('--role <role>', 'Role for new participant')
     .option('--promote <user-id>', 'Promote participant to admin')
     .option('--demote <user-id>', 'Demote participant to member')
-    .action(async (id: string, options: { add?: string; remove?: string; name?: string; role?: string; promote?: string; demote?: string }) => {
+    .action(async (id: string, options: ParticipantActionOptions) => {
       const client = getClient();
 
       try {
         const chatId = await resolveChatId(id);
-        if (options.add) {
-          const participant = await client.chats.addParticipant(chatId, {
-            platformUserId: options.add,
-            displayName: options.name,
-            role: options.role,
-          });
-          output.success(`Participant added: ${participant.platformUserId}`, participant);
-        } else if (options.remove) {
-          await client.chats.removeParticipant(chatId, options.remove);
-          output.success(`Participant removed: ${options.remove}`);
-        } else if (options.promote || options.demote) {
-          const platformUserId = (options.promote ?? options.demote)!;
-          const role = options.promote ? 'admin' : 'member';
-          const config = (await import('../config.js')).loadConfig();
-          const baseUrl = config.apiUrl ?? 'http://localhost:8882';
-          const apiKey = config.apiKey ?? '';
-          const resp = await fetch(
-            `${baseUrl}/api/v2/chats/${chatId}/participants/${encodeURIComponent(platformUserId)}/role`,
-            {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-              body: JSON.stringify({ role }),
-            },
-          );
-          if (!resp.ok) {
-            const err = (await resp.json()) as { error?: { message?: string } };
-            throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-          }
-          output.success(`Participant ${platformUserId} ${options.promote ? 'promoted to admin' : 'demoted to member'}`);
-        } else {
-          // List participants
-          const participants = await client.chats.listParticipants(chatId);
-
-          const items = participants.map((p) => ({
-            id: p.id,
-            userId: p.platformUserId,
-            name: p.displayName ?? '-',
-            role: p.role ?? '-',
-          }));
-
-          output.list(items, { emptyMessage: 'No participants found.' });
+        const handled = await handleParticipantAction(client, chatId, options);
+        if (!handled) {
+          await listParticipants(client, chatId);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -930,43 +1025,19 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .option('--duration <duration>', 'Duration: off, 24h, 7d, 90d (default: 24h)', '24h')
     .action(async (id: string, options: { instance: string; duration?: string }) => {
-      const validDurations = ['off', '0', '24h', '7d', '90d'];
       const rawDuration = options.duration ?? '24h';
+      const duration = normalizeDisappearingDuration(rawDuration);
 
-      if (!validDurations.includes(rawDuration)) {
-        output.error(`Invalid duration: ${rawDuration}. Valid: ${validDurations.join(', ')}`);
+      if (!duration) {
+        output.error(`Invalid duration: ${rawDuration}. Valid: ${VALID_DISAPPEARING_DURATIONS.join(', ')}`);
         return;
       }
-
-      // Normalize '0' to 'off'
-      const duration = rawDuration === '0' ? 'off' : rawDuration;
 
       try {
         const chatId = await resolveChatId(id);
         const instanceId = await resolveInstanceId(options.instance);
-        const config = (await import('../config.js')).loadConfig();
-        const baseUrl = config.apiUrl ?? 'http://localhost:8882';
-        const apiKey = config.apiKey ?? '';
-
-        const resp = await fetch(`${baseUrl}/api/v2/chats/${chatId}/disappearing`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-          body: JSON.stringify({
-            instanceId,
-            duration,
-          }),
-        });
-
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: { message?: string } };
-          throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
-        }
-
-        if (duration === 'off') {
-          output.success('Disappearing messages turned off');
-        } else {
-          output.success(`Disappearing messages set to ${duration}`);
-        }
+        await setDisappearingMessages(chatId, instanceId, duration);
+        output.success(getDisappearingSuccessMessage(duration));
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to set disappearing messages: ${message}`);

@@ -391,9 +391,15 @@ function buildGroupedSendHelp(): string {
     { command: 'omni send --to +5511999 --text "Hello!"', description: 'Send text' },
     { command: 'omni send --to +5511999 --media ./photo.jpg --caption "Check this"', description: 'Send media' },
     { command: 'omni send --to +5511999 --reaction "👍" --message msg_abc', description: 'React to message' },
-    { command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"', description: 'Create poll' },
+    {
+      command: 'omni send --to +5511999 --poll "Lunch?" --options "Pizza,Sushi,Tacos"',
+      description: 'Create poll',
+    },
     { command: 'omni send --to +5511999 --tts "Hello from AI!"', description: 'Send TTS voice note' },
-    { command: 'omni send --to +5511999 --forward --message msg_abc --from-chat chat_123', description: 'Forward message' },
+    {
+      command: 'omni send --to +5511999 --forward --message msg_abc --from-chat chat_123',
+      description: 'Forward message',
+    },
   ];
 
   // Build help output
