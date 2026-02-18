@@ -1,0 +1,9 @@
+model: gpt-4o
+tools:
+  - type: bash
+keywords:
+  - omni
+  - analytics
+  - events
+  - replay
+description: Omni v2 event analytics specialist — use for event replay, analytics queries, debugging message flows, investigating error spikes, and tracing message journeys via the omni CLI.
