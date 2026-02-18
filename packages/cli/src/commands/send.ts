@@ -320,7 +320,7 @@ function buildGroupedSendHelp(): string {
   // Option groups
   const commonOptions: OptionDef[] = [
     { flags: '--instance <id>', description: `Instance ID (default: ${defaultInstance})` },
-    { flags: '--to <recipient>', description: 'Recipient (phone, chat ID, or channel ID)' },
+    { flags: '--to <recipient>', description: 'Recipient: WA JID (5511@s.whatsapp.net), phone (+5511...), or Omni chat/person UUID' },
   ];
 
   const textOptions: OptionDef[] = [
@@ -438,7 +438,7 @@ export function createSendCommand(): Command {
   send
     .description('Send a message to a recipient')
     .option('--instance <id>', 'Instance ID (uses default if not specified)')
-    .option('--to <recipient>', 'Recipient (phone number, chat ID, or channel ID)')
+    .option('--to <recipient>', 'Recipient: WA JID, phone number, or Omni chat/person UUID')
     // Text message
     .option('--text <text>', 'Send text message')
     .option('--reply-to <id>', 'Reply to a message ID')
