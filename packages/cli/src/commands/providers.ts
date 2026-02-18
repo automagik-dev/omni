@@ -122,6 +122,7 @@ export function createProvidersCommand(): Command {
           id: p.id,
           name: p.name,
           schema: p.schema,
+          projectPath: (p.schemaConfig as Record<string, unknown> | null)?.projectPath ?? '-',
           active: p.isActive ? 'yes' : 'no',
         }));
 
