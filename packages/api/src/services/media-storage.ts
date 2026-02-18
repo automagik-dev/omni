@@ -189,9 +189,10 @@ export class MediaStorageService {
     url: string,
     mimeType?: string,
     timestamp?: Date,
+    fetchOptions?: RequestInit,
   ): Promise<StoredMediaResult> {
-    // Fetch the media
-    const response = await fetch(url);
+    // Fetch the media (fetchOptions allows callers to supply auth headers, e.g. Slack bot token)
+    const response = await fetch(url, fetchOptions);
     if (!response.ok) {
       throw new Error(`Failed to download media: ${response.status}`);
     }

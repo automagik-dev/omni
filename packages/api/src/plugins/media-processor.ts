@@ -124,6 +124,61 @@ interface MediaResolution {
 }
 
 /**
+ * Build fetch options for authenticated media downloads.
+ * Slack private URLs require a bot-token Authorization header — we look it up
+ * from the instances table so credentials never enter the event payload or DB.
+ */
+async function buildFetchOptions(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  channelType?: ChannelType,
+): Promise<RequestInit | undefined> {
+  if (channelType !== 'slack') return undefined;
+  try {
+    const instance = await ctx.services.instances.getById(instanceId);
+    const slackBotToken = (instance as Record<string, unknown>).slackBotToken as string | undefined;
+    if (slackBotToken) {
+      return { headers: { Authorization: `Bearer ${slackBotToken}` } };
+    }
+  } catch {
+    // If instance lookup fails, attempt unauthenticated download anyway
+  }
+  return undefined;
+}
+
+/**
+ * Download media from URL and persist to local storage.
+ * Returns the local path on success, null on failure.
+ */
+async function downloadMediaFromUrl(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  messageId: string,
+  mediaUrl: string,
+  mimeType: string,
+  platformTimestamp: Date | undefined,
+  channelType?: ChannelType,
+): Promise<string | null> {
+  const fetchOptions = await buildFetchOptions(ctx, instanceId, channelType);
+  try {
+    const result = await ctx.mediaStorage.storeFromUrl(
+      instanceId,
+      messageId,
+      mediaUrl,
+      mimeType,
+      platformTimestamp,
+      fetchOptions,
+    );
+    await ctx.mediaStorage.updateMessageLocalPath(messageId, result.localPath);
+    log.debug('Downloaded media from URL', { messageId, filePath: result.localPath });
+    return result.localPath;
+  } catch (error) {
+    log.error('Failed to download media', { error: String(error), mediaUrl });
+    return null;
+  }
+}
+
+/**
  * Resolve media file path for a message
  * Handles both local paths and URL downloads
  */
@@ -134,6 +189,7 @@ async function resolveMediaPath(
   externalId: string,
   content: MessageReceivedPayload['content'],
   mimeType: string,
+  channelType?: ChannelType,
 ): Promise<MediaResolution | null> {
   // Wait briefly for message-persistence to create the DB row (race condition:
   // both media-processor and message-persistence subscribe to message.received)
@@ -164,23 +220,17 @@ async function resolveMediaPath(
 
   let filePath = message.mediaLocalPath;
 
-  // If no local path, try to download from URL
   if (!filePath && content.mediaUrl) {
-    try {
-      const result = await ctx.mediaStorage.storeFromUrl(
-        instanceId,
-        message.id,
-        content.mediaUrl,
-        mimeType,
-        message.platformTimestamp ?? undefined,
-      );
-      filePath = result.localPath;
-      await ctx.mediaStorage.updateMessageLocalPath(message.id, filePath);
-      log.debug('Downloaded media from URL', { messageId: message.id, filePath });
-    } catch (error) {
-      log.error('Failed to download media', { error: String(error), mediaUrl: content.mediaUrl });
-      return null;
-    }
+    filePath = await downloadMediaFromUrl(
+      ctx,
+      instanceId,
+      message.id,
+      content.mediaUrl,
+      mimeType,
+      message.platformTimestamp ?? undefined,
+      channelType,
+    );
+    if (!filePath) return null;
   }
 
   if (!filePath) {
@@ -266,7 +316,15 @@ async function processMessageMedia(
     return;
   }
 
-  const media = await resolveMediaPath(ctx, instanceId, payload.chatId, externalId, content, mimeType);
+  const media = await resolveMediaPath(
+    ctx,
+    instanceId,
+    payload.chatId,
+    externalId,
+    content,
+    mimeType,
+    metadata.channelType,
+  );
   if (!media) return;
 
   log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
