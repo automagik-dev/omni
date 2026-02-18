@@ -7,7 +7,7 @@
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
-        cli cli-build cli-link \
+        cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
         _init-db-wait _sync-db
 
@@ -68,9 +68,10 @@ help:
 	@echo "  make logs-api        View API logs"
 	@echo ""
 	@echo "CLI:"
-	@echo "  make cli ARGS=\"...\"  Run CLI from source"
-	@echo "  make cli-build       Build CLI package"
-	@echo "  make cli-link        Build + link globally (omni command)"
+	@echo "  make cli ARGS=\"...\"      Run CLI from source"
+	@echo "  make cli-build           Build CLI package"
+	@echo "  make cli-build-full      Build CLI client + server bundles"
+	@echo "  make cli-link            Build + link globally (omni command)"
 	@echo ""
 	@echo "SDK:"
 	@echo "  make sdk-generate    Generate SDK from OpenAPI spec"
@@ -359,6 +360,9 @@ cli:
 
 cli-build:
 	bun run --cwd packages/cli build
+
+cli-build-full: ## Build CLI client + server bundles
+	cd packages/cli && bun run build && bun run build:server
 
 cli-link: cli-build
 	cd packages/cli && bun link
