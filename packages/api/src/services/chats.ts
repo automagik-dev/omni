@@ -5,7 +5,7 @@
  */
 
 import type { EventBus } from '@omni/core';
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
   type ChannelType,
@@ -21,6 +21,8 @@ import {
 } from '@omni/db';
 import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from 'drizzle-orm';
 import { sanitizeText } from '../utils/utf8';
+
+const log = createLogger('chats');
 
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
@@ -321,17 +323,18 @@ export class ChatService {
     // Primary lookup: exact externalId match
     const existing = await this.getByExternalId(instanceId, externalId);
     if (existing) {
+      log.debug('chat_resolution', { externalId, resolvedVia: 'direct', instanceId });
       return existing;
     }
 
     // Secondary lookup: check if another chat has this as its canonicalId
-    // (e.g., an @lid chat that was previously resolved to this phone JID)
     const [byCanonical] = await this.db
       .select()
       .from(chats)
       .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
       .limit(1);
     if (byCanonical) {
+      log.debug('chat_resolution', { externalId, resolvedVia: 'canonicalId', instanceId });
       return byCanonical;
     }
 
@@ -346,6 +349,7 @@ export class ChatService {
       if (mapping) {
         const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
         if (lidChat) {
+          log.debug('chat_resolution', { externalId, resolvedVia: 'phoneMapping', instanceId });
           return lidChat;
         }
       }
@@ -359,6 +363,7 @@ export class ChatService {
       if (mapping) {
         const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
         if (phoneChat) {
+          log.debug('chat_resolution', { externalId, resolvedVia: 'lidMapping', instanceId });
           return phoneChat;
         }
       }

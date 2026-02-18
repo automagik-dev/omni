@@ -22,6 +22,7 @@
 
 import { getLogBuffer } from './buffer';
 import { createFormatter, isTTY } from './formatters';
+import { redactObject } from './redact';
 import type { LogConfig, LogEntry, LogFormat, LogLevel, Logger } from './types';
 import { LOG_LEVEL_VALUES } from './types';
 
@@ -131,11 +132,14 @@ function writeLog(entry: LogEntry): void {
     return;
   }
 
+  // Redact sensitive tokens from log data before output
+  const redacted = redactObject(entry);
+
   // Add to buffer for SSE streaming
-  getLogBuffer().push(entry);
+  getLogBuffer().push(redacted);
 
   // Format and output
-  const formatted = getFormatter()(entry);
+  const formatted = getFormatter()(redacted);
 
   // Write to appropriate stream
   if (entry.level === 'error') {

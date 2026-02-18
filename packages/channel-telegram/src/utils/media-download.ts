@@ -1,11 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 
+import { createDownloadGuard } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 
 import type { TelegramBotLike } from '../grammy-shim';
 
 const log = createLogger('telegram:media-download');
+
+/** Download size guard — 50MB default */
+const downloadGuard = createDownloadGuard();
 
 const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
@@ -139,6 +143,13 @@ export async function tryDownloadTelegramMedia(params: {
     const url = `https://api.telegram.org/file/bot${bot.token}/${filePath}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+    // Check Content-Length before reading body to prevent memory exhaustion
+    downloadGuard.checkResponse(res, log, {
+      instanceId,
+      url,
+      channel: 'telegram',
+    });
 
     const arrayBuf = await res.arrayBuffer();
     const buffer = Buffer.from(arrayBuf);

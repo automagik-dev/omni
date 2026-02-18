@@ -28,6 +28,7 @@ import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
+import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 /**
  * Message from history sync
@@ -180,6 +181,10 @@ export interface WhatsAppConnectionOptions {
   generateHighQualityLinkPreview?: boolean;
   /** Mark online when connecting (default: true) */
   markOnlineOnConnect?: boolean;
+  /** Enable LID-first identity resolution (default: true).
+   *  When false, falls back to legacy phone-based resolution (resolveToPhoneJidLegacy).
+   *  Per-instance rollback flag — DEC-8. */
+  lidFirstEnabled?: boolean;
 }
 
 /**
@@ -254,6 +259,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private sentMessageIds = new Map<string, Set<string>>();
   private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
 
+  /** Rate limit managers per instance — handles Baileys 429 backoff */
+  private rateLimitManagers = new Map<string, RateLimitManager>();
+
+  /** Get or create a rate limit manager for an instance */
+  private getRateLimitManager(instanceId: string): RateLimitManager {
+    let manager = this.rateLimitManagers.get(instanceId);
+    if (!manager) {
+      manager = createRateLimitManager(instanceId, this.logger);
+      this.rateLimitManagers.set(instanceId, manager);
+    }
+    return manager;
+  }
+
   /**
    * Enforce a randomized delay between outgoing actions to avoid
    * WhatsApp anti-bot detection. Simulates human-probable timing.
@@ -321,6 +339,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached chat display names per instance (for DMs from chats.upsert) */
   private chatNamesCache = new Map<string, Map<string, string>>();
 
+  /** Last-known unread count per JID per instance — sourced from chats.upsert/chats.update */
+  private chatUnreadCache = new Map<string, Map<string, number>>();
+
   /**
    * Get all chat JIDs known to Baileys for an instance.
    * Sourced from chats.upsert events (fires on every connection).
@@ -329,6 +350,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   getKnownChatJids(instanceId: string): string[] {
     return Array.from(this.chatNamesCache.get(instanceId)?.keys() ?? []);
   }
+
+  /**
+   * Re-emit all cached unread counts for an instance.
+   * Call this periodically (e.g. every hour) to keep DB in sync with Baileys state.
+   * Counts are sourced from the most recent chats.upsert/chats.update events.
+   */
+  refreshUnreadCounts(instanceId: string): void {
+    const cache = this.chatUnreadCache.get(instanceId);
+    if (!cache || cache.size === 0) return;
+    for (const [chatId, unreadCount] of cache) {
+      this.emitChatUnreadUpdate(instanceId, chatId, unreadCount);
+    }
+    this.logger.debug('Refreshed unread counts from cache', { instanceId, count: cache.size });
+  }
+
+  /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
+  private lidFirstEnabledMap = new Map<string, boolean>();
 
   /**
    * LID → phone JID mapping cache per instance.
@@ -355,6 +393,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Check if LID-first identity resolution is enabled for an instance.
+   * When false, falls back to legacy phone-based resolution (DEC-8 rollback).
+   */
+  isLidFirstEnabled(instanceId: string): boolean {
+    return this.lidFirstEnabledMap.get(instanceId) ?? true;
   }
 
   /**
@@ -755,6 +801,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
+
+    // Store per-instance LID-first flag (DEC-8 rollback)
+    this.lidFirstEnabledMap.set(instanceId, instanceOptions.lidFirstEnabled ?? true);
+
     const socketOptions: Partial<SocketConfig> = {
       // Plugin-level defaults
       ...this.pluginConfig,
@@ -915,11 +965,98 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Apply pre-send processing: humanized delay, typing simulation, audio conversion, markdown formatting
+   */
+  private async preprocessOutgoing(
+    instanceId: string,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<OutgoingMessage> {
+    await this.humanDelay(instanceId);
+
+    // Simulate typing for text/caption messages
+    const textContent = message.content.text || message.content.caption || '';
+    if (textContent.length > 0) {
+      await this.simulateTyping(instanceId, jid, textContent);
+    }
+
+    // Handle audio conversion for voice notes (PTT)
+    let processed = message;
+    if (message.content.type === 'audio' && message.metadata?.ptt === true) {
+      processed = await this.processAudioForVoiceNote(message);
+    }
+
+    // Apply markdown→WhatsApp format conversion for text messages
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    if (processed.content.type === 'text' && formatMode !== 'passthrough' && processed.content.text) {
+      const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+      const converted = markdownToWhatsApp(processed.content.text);
+      processed = { ...processed, content: { ...processed.content, text: converted } };
+    }
+
+    return processed;
+  }
+
+  /**
+   * Wait for rate limit backoff if active
+   */
+  private async waitForRateLimitBackoff(instanceId: string): Promise<RateLimitManager> {
+    const rateLimiter = this.getRateLimitManager(instanceId);
+    const remainingBackoff = rateLimiter.getRemainingBackoff();
+    if (remainingBackoff > 0) {
+      this.logger.debug('Waiting for rate limit backoff', { instanceId, remainingBackoff });
+      await new Promise<void>((r) => setTimeout(r, remainingBackoff));
+    }
+    return rateLimiter;
+  }
+
+  /**
+   * Resolve the send target JID.
+   *
+   * LID-first: when sending to a phone number, try to resolve to LID via
+   * Baileys signalRepository.lidMapping.getLIDForPN. Falls back gracefully
+   * to phone JID if no LID mapping exists or the API is unavailable.
+   */
+  private async resolveSendTarget(sock: WASocket, instanceId: string, to: string): Promise<string> {
+    const phoneJid = toJid(to);
+
+    // If already a LID or not a user JID, passthrough
+    if (!isUserJid(phoneJid)) return phoneJid;
+
+    // DEC-8: skip LID resolution when lidFirstEnabled is disabled (rollback)
+    if (!this.isLidFirstEnabled(instanceId)) return phoneJid;
+
+    // Try LID resolution via Baileys signal repository
+    try {
+      const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
+      if (lidJid) {
+        this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
+        // Cache the phone↔LID mapping so the outbound echo (which arrives before DB persistence)
+        // can resolve the LID back to the existing phone chat without creating a duplicate.
+        this.storeLidMapping(instanceId, lidJid, phoneJid);
+        return lidJid;
+      }
+    } catch (error) {
+      // LID resolution failure is expected when contact hasn't synced yet — fallback to phone is correct.
+      // Use debug level to avoid production log noise for this routine fallback path.
+      this.logger.debug('lid_send_fallback', {
+        originalTarget: to,
+        attemptedPhone: phoneJid,
+        error: String(error),
+        instanceId,
+      });
+    }
+
+    return phoneJid;
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
-    const jid = toJid(message.to);
+    const jid = await this.resolveSendTarget(sock, instanceId, message.to);
+    const rateLimiter = await this.waitForRateLimitBackoff(instanceId);
 
     try {
       // ── Reaction dispatch (separate path — not a normal message) ──
@@ -927,28 +1064,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         return this.dispatchReaction(instanceId, sock, jid, message);
       }
 
-      // Humanized delay — prevent anti-bot detection
-      await this.humanDelay(instanceId);
-
-      // Simulate typing for text/caption messages
-      const textContent = message.content.text || message.content.caption || '';
-      if (textContent.length > 0) {
-        await this.simulateTyping(instanceId, jid, textContent);
-      }
-
-      // Handle audio conversion for voice notes (PTT)
-      let processedMessage = message;
-      if (message.content.type === 'audio' && message.metadata?.ptt === true) {
-        processedMessage = await this.processAudioForVoiceNote(message);
-      }
-
-      // Apply markdown→WhatsApp format conversion for text messages
-      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
-        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
-        const converted = markdownToWhatsApp(processedMessage.content.text);
-        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
-      }
+      const processedMessage = await this.preprocessOutgoing(instanceId, jid, message);
 
       // Build message content based on type
       const content = this.buildContent(processedMessage);
@@ -982,12 +1098,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         replyToId: message.replyTo,
       });
 
+      // Reset rate limit state on successful send
+      rateLimiter.reset();
+
       return {
         success: true,
         messageId: externalId,
         timestamp: Date.now(),
       };
     } catch (error) {
+      // ── Rate limit detection ──
+      if (isRateLimitError(error)) {
+        rateLimiter.handleRateLimit(error, 0);
+      }
+
       const waError = mapBaileysError(error);
 
       await this.emitMessageFailed({
@@ -995,14 +1119,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         chatId: jid,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
       });
 
       return {
         success: false,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
         timestamp: Date.now(),
       };
     }
@@ -2032,8 +2156,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Cache sender's pushName for mention resolution (WAMessage.pushName field)
     const senderPushName = (rawMessage as { pushName?: string }).pushName;
     if (senderPushName && from) {
-      // Normalize sender JID to @s.whatsapp.net format for cache consistency
-      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      // LID-first: accept any JID format for cache keying (including @lid)
+      // from might be: "555197285829", "555197285829:73", "555197285829@s.whatsapp.net", or "100000001@lid"
       const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
 
       // Cache the sender's name so it's available when they're mentioned
@@ -2346,6 +2470,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const chat of chats) {
       const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!c.id) continue;
@@ -2354,8 +2484,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const name = c.displayName || c.name;
       cache.set(c.id, name ?? c.id);
 
-      // Sync unread count from WhatsApp
+      // Sync unread count from WhatsApp and cache for periodic refresh
       if (c.unreadCount !== undefined) {
+        unreadCache.set(c.id, c.unreadCount);
         this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
@@ -2379,6 +2510,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const update of updates) {
       const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
@@ -2391,6 +2528,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
       if (u.unreadCount !== undefined) {
+        unreadCache.set(u.id, u.unreadCount);
         this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
       }
     }
@@ -2419,11 +2557,56 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Extract LID↔phone mappings from a contact and store bidirectionally
+   */
+  private extractContactLidMapping(
+    instanceId: string,
+    contactId: string,
+    lid: string | undefined,
+    phoneNumber: string | undefined,
+  ): void {
+    // Case 1: id=phone@s.whatsapp.net + lid=Y → store Y@lid → phone
+    if (lid && isUserJid(contactId)) {
+      const lidJid = lid.endsWith('@lid') ? lid : `${lid}@lid`;
+      this.storeLidMapping(instanceId, lidJid, contactId);
+    }
+    // Case 2: id=LID@lid + phoneNumber=X → store LID@lid → X@s.whatsapp.net
+    if (contactId.endsWith('@lid') && phoneNumber) {
+      const phoneJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber.replace(/\D/g, '')}@s.whatsapp.net`;
+      this.storeLidMapping(instanceId, contactId, phoneJid);
+    }
+  }
+
+  /**
+   * Build a SyncContact from raw Baileys contact data
+   */
+  private buildSyncContact(c: {
+    id: string;
+    phoneNumber?: string;
+    name?: string;
+    notify?: string;
+    verifiedName?: string;
+    imgUrl?: string | null;
+    status?: string;
+    lid?: string;
+  }): SyncContact {
+    const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
+    return {
+      platformUserId: c.id,
+      name: c.name || c.notify || c.verifiedName || undefined,
+      phone,
+      profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
+      isGroup: c.id.endsWith('@g.us'),
+      isBusiness: !!c.verifiedName,
+      metadata: { lid: c.lid, status: c.status, notify: c.notify, verifiedName: c.verifiedName },
+    };
+  }
+
+  /**
    * Handle contacts upsert (new contacts)
    * @internal
    */
   handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
-    // Get or create contacts cache for this instance
     let cache = this.contactsCache.get(instanceId);
     if (!cache) {
       cache = new Map();
@@ -2442,42 +2625,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         status?: string;
       };
 
-      // Skip group JIDs (they're handled separately)
-      const isGroup = c.id.endsWith('@g.us');
-
-      // Extract phone number from JID if not provided
-      const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
-
-      const syncContact: SyncContact = {
-        platformUserId: c.id,
-        name: c.name || c.notify || c.verifiedName || undefined,
-        phone,
-        profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
-        isGroup,
-        isBusiness: !!c.verifiedName,
-        metadata: {
-          lid: c.lid,
-          status: c.status,
-          notify: c.notify,
-          verifiedName: c.verifiedName,
-        },
-      };
-
+      const syncContact = this.buildSyncContact(c);
       cache.set(c.id, syncContact);
 
       this.logger.debug('Cached contact from contacts.upsert', {
         instanceId,
         id: c.id,
         name: syncContact.name,
-        phone,
+        phone: syncContact.phone,
         hasLid: !!c.lid,
       });
 
-      // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
-      if (c.lid && isUserJid(c.id)) {
-        const lidJid = c.lid.endsWith('@lid') ? c.lid : `${c.lid}@lid`;
-        this.storeLidMapping(instanceId, lidJid, c.id);
-      }
+      this.extractContactLidMapping(instanceId, c.id, c.lid, c.phoneNumber);
     }
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });

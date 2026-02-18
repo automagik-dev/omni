@@ -60,6 +60,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'messages.send': 'send text',
   'messages.sendMedia': 'send media',
   'messages.sendReaction': 'send reaction',
+  'messages.sendForward': 'send --forward',
   'messages.sendSticker': 'send sticker',
   'messages.sendContact': 'send contact',
   'messages.sendLocation': 'send location',
@@ -68,6 +69,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'messages.sendPresence': 'send presence',
   'messages.listVoices': 'tts voices',
   'messages.sendTts': 'send tts',
+  'messages.removeReaction': 'messages remove-reaction <messageId>',
   'messages.markRead': 'messages read',
   'messages.batchMarkRead': 'messages read --batch',
 
@@ -107,6 +109,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'access.createRule': 'access create',
   'access.deleteRule': 'access delete',
   'access.checkAccess': 'access check',
+  'access.listPairingRequests': 'access pending',
+  'access.actionPairingRequest': 'access approve / access deny',
 
   // ============================================================================
   // SETTINGS

@@ -41,6 +41,7 @@ import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { timeoutMiddleware } from '../../middleware/timeout';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
@@ -49,6 +50,10 @@ import type { ApiKeyData, AppVariables } from '../../types';
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
+
+// Apply a long timeout to all send routes — debounce + typing simulation can take 10-60s+
+// The global default is 30s which is insufficient for heavily debounced instances
+messagesRoutes.use('/send*', timeoutMiddleware({ timeoutMs: 120_000 }));
 
 // ============================================================================
 // Helper Functions
@@ -67,21 +72,34 @@ function isUUID(value: string): boolean {
 }
 
 /**
- * Resolve recipient - handles both Omni person IDs and platform IDs
+ * Resolve recipient - handles Omni person IDs, Omni chat IDs, and platform IDs (WA JID etc.)
+ *
+ * Resolution order for UUIDs:
+ * 1. Try as person ID → returns platformUserId for the channel
+ * 2. Try as chat ID → returns chat.externalId (the platform JID/channel ID)
+ * 3. Throw if UUID but not found in either table
  */
 async function resolveRecipient(to: string, channelType: string, services: Services): Promise<string> {
   if (!isUUID(to)) return to;
 
-  const identity = await services.persons.getIdentityForChannel(to, channelType);
-  if (!identity) {
-    throw new OmniError({
-      code: ERROR_CODES.RECIPIENT_NOT_ON_CHANNEL,
-      message: `Person ${to} has no identity on ${channelType}`,
-      context: { personId: to, channelType },
-      recoverable: false,
-    });
+  // Try as person ID first
+  const identity = await services.persons.getIdentityForChannel(to, channelType).catch(() => null);
+  if (identity) return identity.platformUserId;
+
+  // Try as chat ID — use getById which throws NotFoundError on miss
+  try {
+    const chat = await services.chats.getById(to);
+    return chat.externalId;
+  } catch {
+    // Not a chat UUID either — throw informative error
   }
-  return identity.platformUserId;
+
+  throw new OmniError({
+    code: ERROR_CODES.RECIPIENT_NOT_ON_CHANNEL,
+    message: `"${to}" is a UUID but not a known person or chat on ${channelType}. Pass a platform ID (e.g. WA JID) directly, or an Omni person/chat UUID.`,
+    context: { to, channelType },
+    recoverable: false,
+  });
 }
 
 /**
@@ -801,8 +819,45 @@ messagesRoutes.patch(
 /**
  * POST /messages/send - Send text message
  */
-messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
-  const { instanceId, to, text, replyTo, mentions } = c.req.valid('json');
+messagesRoutes.post('/send', async (c) => {
+  // Parse raw body first to detect media fields before schema validation strips them
+  let rawBody: Record<string, unknown>;
+  try {
+    rawBody = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: { code: 'INVALID_JSON', message: 'Request body must be valid JSON' } }, 400);
+  }
+
+  // Detect media fields sent to the wrong endpoint
+  const mediaFieldIndicators = ['base64', 'url', 'filename', 'voiceNote', 'mediaUrl'];
+  const mediaTypeValues = ['image', 'video', 'audio', 'document'];
+  const hasMediaField = mediaFieldIndicators.some((f) => f in rawBody);
+  const hasMediaType = 'type' in rawBody && mediaTypeValues.includes(rawBody.type as string);
+
+  if (hasMediaField || hasMediaType) {
+    return c.json(
+      {
+        error: {
+          code: 'WRONG_ENDPOINT',
+          message: 'Media payloads must use POST /api/v2/messages/send/media — this endpoint only sends plain text.',
+          hint: {
+            endpoint: 'POST /api/v2/messages/send/media',
+            requiredFields: ['instanceId', 'to', 'type (image|video|audio|document)', 'url or base64'],
+            optionalFields: ['caption', 'filename', 'voiceNote'],
+          },
+        },
+      },
+      422,
+    );
+  }
+
+  // Validate as text schema
+  const parsed = sendTextSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
+  }
+
+  const { instanceId, to, text, replyTo, mentions } = parsed.data;
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 

@@ -192,26 +192,37 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
   const chatId = payload.chatId ?? '';
 
   // Determine if DM (not a group chat)
-  // WhatsApp: groups have @g.us, DMs have @s.whatsapp.net, newsletters have @newsletter, linked devices have @lid
-  // Discord: need to check channel type
+  // LID-first: @lid is a valid canonical DM identity — no longer excluded
+  // DM = not group, not broadcast, not newsletter
   const isDirectMessage =
     !chatId.includes('@g.us') &&
     !chatId.includes('@broadcast') &&
     !chatId.includes('@newsletter') &&
-    !chatId.includes('@lid') &&
     !(rawPayload.isGroup as boolean);
 
+  const chatFormat = chatId.includes('@lid') ? 'lid' : chatId.includes('@g.us') ? 'group' : 'phone';
+  log.debug('dm_detection', { chatId, isDirectMessage, format: chatFormat });
+
   // Check for bot mention
-  // WhatsApp: check if message mentions our JID
+  // WhatsApp: check if message mentions our JID (handles LID↔phone mismatch)
   // Discord: check if message has @mention of our user
   const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
   const ownerJid = instance.ownerIdentifier ?? '';
-  const mentionsBot = mentionedJids.some((jid) => jid === ownerJid || jid.includes(ownerJid));
+  // Strip device suffix (:XX) and @suffix to extract the raw identifier for comparison
+  const extractId = (jid: string) => jid.replace(/:.*$/, '').replace(/@.*$/, '');
+  const ownerId = extractId(ownerJid);
+  const jidMatchesOwner = mentionedJids.some((jid) => {
+    return jid === ownerJid || extractId(jid) === ownerId;
+  });
+  // Also check plugin-level LID resolution (isMentioningInstance) and platform hints (isMention)
+  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
 
   // Check if reply to bot message
-  // Look at quoted message sender
+  // Look at quoted message sender (handles LID↔phone mismatch via ID extraction)
   const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant === ownerJid;
+  const isReplyToBot = quotedParticipant
+    ? quotedParticipant === ownerJid || extractId(quotedParticipant) === ownerId
+    : false;
 
   return {
     isDirectMessage,
@@ -551,6 +562,19 @@ async function processIncomingMessage(
       reason: accessResult.reason,
       action: accessResult.rule?.action,
     });
+
+    // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
+    // Fire-and-forget: pairing request creation must not block message processing.
+    if (accessResult.mode === 'allowlist' && !accessResult.rule) {
+      accessService.requestPairing(instance.id, payload.from ?? '').catch((err) => {
+        log.warn('Failed to create pairing request', {
+          instanceId: instance.id,
+          from: payload.from,
+          error: String(err),
+        });
+      });
+    }
+
     await handleAccessDenied(channel, instance.id, payload.chatId, accessResult);
     return;
   }

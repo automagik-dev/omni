@@ -1119,6 +1119,50 @@ describe('agent-dispatcher', () => {
       expect(agentRunner.getSenderName).toHaveBeenCalled();
     });
 
+    it('processes LID DMs when onDm filter is enabled (LID-first)', async () => {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () =>
+          createMockInstance({
+            agentReplyFilter: {
+              mode: 'filtered',
+              conditions: {
+                onDm: true,
+                onMention: false,
+                onReply: false,
+                onNameMatch: false,
+              },
+            },
+          }),
+        ),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      // LID DM — should pass filter (LID-first: @lid is a valid DM identity)
+      const event = createMessageEvent({
+        payload: {
+          externalId: 'ext-lid-1',
+          chatId: '100000001@lid', // LID-canonical DM
+          from: '100000001',
+          content: { type: 'text', text: 'Hello from LID' },
+          rawPayload: {},
+        },
+      });
+
+      await eventBus.fire('message.received', event);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // LID DMs should pass the DM filter and reach agent processing
+      expect(agentRunner.getSenderName).toHaveBeenCalled();
+    });
+
     it('skips messages when reply filter is null (no agent response)', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {

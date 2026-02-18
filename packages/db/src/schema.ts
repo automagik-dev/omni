@@ -70,7 +70,7 @@ export interface AgentReplyFilter {
 export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
-export const ruleTypes = ['allow', 'deny'] as const;
+export const ruleTypes = ['allow', 'deny', 'pending_pairing'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
 export const accessModes = ['disabled', 'blocklist', 'allowlist'] as const;
@@ -632,6 +632,23 @@ export const instances = pgTable(
     ttsVoiceId: text('tts_voice_id'), // ElevenLabs voice ID override
     ttsModelId: text('tts_model_id'), // ElevenLabs model override
 
+    // ---- Reaction Acknowledgment ----
+    /** Toggle reaction ack: 'off' (default) | 'on' */
+    reactionAck: varchar('reaction_ack', { length: 10 }).notNull().default('off').$type<'off' | 'on'>(),
+    /** Per-channel emoji overrides for ack reactions */
+    reactionAckEmoji: jsonb('reaction_ack_emoji').$type<Record<string, string>>(),
+    /** Timeout in ms before ack is auto-removed (hard cap 30s) */
+    ackTimeoutMs: integer('ack_timeout_ms').notNull().default(30000),
+
+    // ---- Session Reset ----
+    /** Session reset strategies: per chat-type configuration */
+    sessionReset: jsonb('session_reset').$type<{
+      default?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      dm?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      group?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      thread?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+    }>(),
+
     // ---- Media Processing ----
     processAudio: boolean('process_audio').notNull().default(true),
     processImages: boolean('process_images').notNull().default(true),
@@ -1128,7 +1145,7 @@ export const accessRules = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
-    ruleType: varchar('rule_type', { length: 10 }).notNull().$type<RuleType>(),
+    ruleType: varchar('rule_type', { length: 20 }).notNull().$type<RuleType>(),
 
     // ---- Matching Criteria ----
     phonePattern: varchar('phone_pattern', { length: 50 }), // E.164 with optional wildcard
@@ -1145,6 +1162,9 @@ export const accessRules = pgTable(
     action: varchar('action', { length: 20 }).notNull().default('block'), // 'block' | 'allow' | 'silent_block'
     blockMessage: text('block_message'),
 
+    // ---- Pairing metadata (for pending_pairing rules) ----
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -1154,6 +1174,7 @@ export const accessRules = pgTable(
     phoneIdx: index('access_rules_phone_idx').on(table.phonePattern),
     ruleTypeIdx: index('access_rules_type_idx').on(table.ruleType),
     uniqueRule: uniqueIndex('access_rules_unique_idx').on(table.instanceId, table.phonePattern, table.ruleType),
+    pairingIdx: index('idx_access_rules_pairing').on(table.instanceId, table.ruleType, table.expiresAt),
   }),
 );
 

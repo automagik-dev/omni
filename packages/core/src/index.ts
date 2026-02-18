@@ -58,6 +58,9 @@ export * from './metrics';
 // Automations
 export * from './automations';
 
+// Sessions
+export * from './sessions/reset';
+
 // Providers
 export * from './providers';
 

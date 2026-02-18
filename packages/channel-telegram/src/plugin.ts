@@ -97,6 +97,24 @@ async function dispatchMedia(
   }
 }
 
+/** Dispatch text content — handles optional inline buttons and chat-type scope. */
+async function dispatchTextContent(
+  bot: TelegramBotLike,
+  chatId: string,
+  content: OutgoingMessage['content'],
+  replyParam: number | undefined,
+  formatMode: 'convert' | 'passthrough',
+  baseOptions: { message_thread_id?: number } | undefined,
+  chatType: string | undefined,
+): Promise<number | null> {
+  if (content.buttons?.length) {
+    // Pass chatType only for button scope filtering inside sendInlineButtons
+    const buttonOptions = { ...(baseOptions ?? {}), ...(chatType ? { chatType } : {}) };
+    return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, buttonOptions);
+  }
+  return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, baseOptions);
+}
+
 /**
  * Dispatch outgoing content to the appropriate Telegram sender method.
  * Returns the sent message ID, or null for reaction-type messages.
@@ -114,18 +132,11 @@ async function dispatchContent(
   // baseOptions carries only valid Telegram API parameters (e.g. message_thread_id)
   const baseOptions = threadOptions ? { ...threadOptions } : undefined;
 
-  if (content.type === 'text') {
-    if (content.buttons?.length) {
-      // Pass chatType only for button scope filtering inside sendInlineButtons
-      const buttonOptions = { ...(baseOptions ?? {}), ...(chatType ? { chatType } : {}) };
-      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, buttonOptions);
-    }
-    return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, baseOptions);
-  }
+  if (content.type === 'text')
+    return dispatchTextContent(bot, chatId, content, replyParam, formatMode, baseOptions, chatType);
   if (content.type === 'poll') {
-    if (!content.poll) {
+    if (!content.poll)
       return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode, baseOptions);
-    }
     return sendPoll(bot, chatId, content.poll, replyParam, baseOptions);
   }
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
@@ -811,6 +822,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
    */
   getInstanceState(instanceId: string) {
     return this.instances.get(instanceId);
+  }
+
+  /**
+   * Get the configured webhook secret for a connected instance.
+   * Returns undefined if no secret was configured or the instance is not connected.
+   */
+  getWebhookSecret(instanceId: string): string | undefined {
+    return this.configs.get(instanceId)?.webhookSecret;
   }
 
   private isRetryableError(error: unknown): boolean {

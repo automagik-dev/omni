@@ -64,10 +64,32 @@ export * from './helpers/typing';
 export * from './helpers/message';
 
 // ─────────────────────────────────────────────────────────────
+// Reaction Acknowledgment
+// ─────────────────────────────────────────────────────────────
+
+export * from './reaction-ack';
+
+// ─────────────────────────────────────────────────────────────
 // Discovery
 // ─────────────────────────────────────────────────────────────
 
 export * from './discovery';
+
+// ─────────────────────────────────────────────────────────────
+// Reliability utilities
+// ─────────────────────────────────────────────────────────────
+
+export { createInboundDedupeCache, validateCacheKey } from './dedupe';
+export type { DedupeCache, DedupeConfig, DedupeStats } from './dedupe';
+
+export { sanitizeMessage, isValidInstanceId } from './sanitize';
+export type { SanitizeOptions, SanitizeResult } from './sanitize';
+
+export { createDownloadGuard, DownloadTooLargeError } from './download-guard';
+export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from './download-guard';
+
+export { createDebounceBridge } from './debounce-bridge';
+export type { DebounceBridge, DebounceBridgeConfig, DebounceBridgeMessage, BatchCallback } from './debounce-bridge';
 
 // Explicit streaming type export for package root access
 export type { StreamSender } from './types/streaming';

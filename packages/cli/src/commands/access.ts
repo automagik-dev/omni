@@ -4,6 +4,9 @@
  * omni access list [--instance <id>] [--type allow|deny]
  * omni access create --type <allow|deny> [--instance <id>] [--phone <pattern>] [--user <id>]
  * omni access delete <id>
+ * omni access pending <instanceId>
+ * omni access approve <instanceId> <requestId>
+ * omni access deny <instanceId> <requestId> [--reason <text>]
  */
 
 import { Command } from 'commander';
@@ -179,6 +182,67 @@ export function createAccessCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to check access: ${message}`);
+      }
+    });
+
+  // omni access pending <instanceId>
+  access
+    .command('pending <instanceId>')
+    .description('List pending pairing requests for an instance')
+    .action(async (instanceId: string) => {
+      const client = getClient();
+
+      try {
+        const requests = await client.access.listPairingRequests(instanceId);
+
+        const items = requests.map((r) => ({
+          id: r.id,
+          user: r.platformUserId,
+          code: r.pairingCode,
+          expires: r.expiresAt,
+          created: r.createdAt,
+        }));
+
+        output.list(items, { emptyMessage: 'No pending pairing requests.' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list pairing requests: ${message}`);
+      }
+    });
+
+  // omni access approve <instanceId> <requestId>
+  access
+    .command('approve <instanceId> <requestId>')
+    .description('Approve a pairing request (adds user to allowlist)')
+    .action(async (instanceId: string, requestId: string) => {
+      const client = getClient();
+
+      try {
+        const result = await client.access.actionPairingRequest(instanceId, requestId, { action: 'approve' });
+        output.success(result.message ?? 'Pairing request approved');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to approve pairing request: ${message}`);
+      }
+    });
+
+  // omni access deny <instanceId> <requestId> [--reason <text>]
+  access
+    .command('deny <instanceId> <requestId>')
+    .description('Deny a pairing request')
+    .option('--reason <text>', 'Reason for denial')
+    .action(async (instanceId: string, requestId: string, options: { reason?: string }) => {
+      const client = getClient();
+
+      try {
+        const result = await client.access.actionPairingRequest(instanceId, requestId, {
+          action: 'deny',
+          reason: options.reason,
+        });
+        output.success(result.message ?? 'Pairing request denied');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to deny pairing request: ${message}`);
       }
     });
 

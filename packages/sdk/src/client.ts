@@ -280,6 +280,28 @@ export interface CheckAccessResult {
 }
 
 /**
+ * Pairing request item returned from list endpoint
+ */
+export interface PairingRequestItem {
+  id: string;
+  instanceId: string;
+  platformUserId: string;
+  pairingCode: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/**
+ * Result of pairing request action (approve/deny)
+ */
+export interface PairingActionResult {
+  action: 'approve' | 'deny';
+  ruleId?: string;
+  reason?: string;
+  message?: string;
+}
+
+/**
  * Query parameters for listing settings
  */
 export interface ListSettingsParams {
@@ -606,6 +628,24 @@ export interface SendReactionBody {
   to: string;
   messageId: string;
   emoji: string;
+}
+
+/**
+ * Body for removing a reaction
+ */
+export interface RemoveReactionBody {
+  instanceId: string;
+  emoji: string;
+}
+
+/**
+ * Body for forwarding a message
+ */
+export interface SendForwardBody {
+  instanceId: string;
+  to: string;
+  messageId: string;
+  fromChatId: string;
 }
 
 /**
@@ -1696,6 +1736,34 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent', audioSizeKb: 0, durationMs: 0, timestamp: Date.now() };
       },
+
+      /**
+       * Forward a message to another chat
+       */
+      async sendForward(body: SendForwardBody): Promise<{ messageId: string; status: string }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/forward`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { messageId: '', status: 'sent' };
+      },
+
+      /**
+       * Remove a reaction from a message
+       */
+      async removeReaction(id: string, body: RemoveReactionBody): Promise<{ success: boolean }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/${id}/reactions`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { success?: boolean };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return { success: json?.success ?? true };
+      },
     },
 
     // ========================================================================
@@ -1834,6 +1902,34 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data?.data ?? { allowed: true, reason: 'Default allow' };
+      },
+
+      /**
+       * List pending pairing requests for an instance
+       */
+      async listPairingRequests(instanceId: string): Promise<PairingRequestItem[]> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${instanceId}/pairing-requests`, {});
+        const json = (await resp.json()) as { items?: PairingRequestItem[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.items ?? [];
+      },
+
+      /**
+       * Approve or deny a pairing request
+       */
+      async actionPairingRequest(
+        instanceId: string,
+        requestId: string,
+        body: { action: 'approve' | 'deny'; reason?: string },
+      ): Promise<PairingActionResult> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${instanceId}/pairing-requests/${requestId}/action`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: PairingActionResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { action: body.action };
       },
     },
 

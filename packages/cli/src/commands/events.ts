@@ -26,9 +26,9 @@ interface ReplayOptions {
   cancel?: string;
 }
 
-/** Parse time duration like "24h", "7d", "1w" into ISO timestamp */
+/** Parse time duration like "30min", "24h", "7d", "1w", "1m" (months) into ISO timestamp */
 function parseSinceTime(since: string): string {
-  const match = since.match(/^(\d+)([hdwm])$/);
+  const match = since.match(/^(\d+)([hdwm]|min)$/);
   if (!match) {
     // Assume ISO timestamp
     return since;
@@ -41,6 +41,9 @@ function parseSinceTime(since: string): string {
   let ms: number;
 
   switch (unit) {
+    case 'min':
+      ms = value * 60 * 1000;
+      break;
     case 'h':
       ms = value * 60 * 60 * 1000;
       break;
