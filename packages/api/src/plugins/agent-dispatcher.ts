@@ -2236,6 +2236,7 @@ async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
+  routeResolver: Services['routeResolver'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
@@ -2292,12 +2293,24 @@ async function shouldProcessMessage(
     mentionedJids: rawPayloadWithMentions?.mentionedJids,
   });
 
-  if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
+  // Resolve per-chat route filter override before applying the instance-level filter.
+  // This allows individual chats to have a different reply filter (e.g. mode:'all') while
+  // the instance default remains filtered. Route lookup is a cheap indexed query.
+  let effectiveReplyFilter = instance.agentReplyFilter;
+  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
+  if (chat?.id) {
+    const route = await routeResolver.resolve(instance.id, chat.id);
+    if (route?.agentReplyFilter) {
+      effectiveReplyFilter = route.agentReplyFilter as typeof instance.agentReplyFilter;
+    }
+  }
+
+  if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
     log.debug('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,
-      filter: instance.agentReplyFilter,
+      filter: effectiveReplyFilter,
     });
     return null;
   }
@@ -2625,6 +2638,7 @@ export async function setupAgentDispatcher(
             agentRunner,
             accessService,
             services.chats,
+            services.routeResolver,
             rateLimiter,
             payload,
             metadata,
