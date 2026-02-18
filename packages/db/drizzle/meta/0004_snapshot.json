@@ -211,12 +211,8 @@
           "name": "access_rules_instance_id_instances_id_fk",
           "tableFrom": "access_rules",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -224,12 +220,8 @@
           "name": "access_rules_person_id_persons_id_fk",
           "tableFrom": "access_rules",
           "tableTo": "persons",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["person_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -429,9 +421,7 @@
         "agent_providers_name_unique": {
           "name": "agent_providers_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -702,12 +692,8 @@
           "name": "agent_routes_instance_id_instances_id_fk",
           "tableFrom": "agent_routes",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -715,12 +701,8 @@
           "name": "agent_routes_chat_id_chats_id_fk",
           "tableFrom": "agent_routes",
           "tableTo": "chats",
-          "columnsFrom": [
-            "chat_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -728,12 +710,8 @@
           "name": "agent_routes_person_id_persons_id_fk",
           "tableFrom": "agent_routes",
           "tableTo": "persons",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["person_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -741,12 +719,8 @@
           "name": "agent_routes_agent_provider_id_agent_providers_id_fk",
           "tableFrom": "agent_routes",
           "tableTo": "agent_providers",
-          "columnsFrom": [
-            "agent_provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["agent_provider_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -877,12 +851,8 @@
           "name": "agent_sessions_instance_id_instances_id_fk",
           "tableFrom": "agent_sessions",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1006,12 +976,8 @@
           "name": "api_key_audit_logs_api_key_id_api_keys_id_fk",
           "tableFrom": "api_key_audit_logs",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1343,12 +1309,8 @@
           "name": "automation_logs_automation_id_automations_id_fk",
           "tableFrom": "automation_logs",
           "tableTo": "automations",
-          "columnsFrom": [
-            "automation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["automation_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1677,12 +1639,8 @@
           "name": "batch_jobs_instance_id_instances_id_fk",
           "tableFrom": "batch_jobs",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1785,12 +1743,8 @@
           "name": "chat_id_mappings_instance_id_instances_id_fk",
           "tableFrom": "chat_id_mappings",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1996,12 +1950,8 @@
           "name": "chat_participants_chat_id_chats_id_fk",
           "tableFrom": "chat_participants",
           "tableTo": "chats",
-          "columnsFrom": [
-            "chat_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2009,12 +1959,8 @@
           "name": "chat_participants_person_id_persons_id_fk",
           "tableFrom": "chat_participants",
           "tableTo": "persons",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["person_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2022,12 +1968,8 @@
           "name": "chat_participants_platform_identity_id_platform_identities_id_fk",
           "tableFrom": "chat_participants",
           "tableTo": "platform_identities",
-          "columnsFrom": [
-            "platform_identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["platform_identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2300,12 +2242,8 @@
           "name": "chats_instance_id_instances_id_fk",
           "tableFrom": "chats",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2870,9 +2808,7 @@
         "global_settings_key_unique": {
           "name": "global_settings_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "key"
-          ]
+          "columns": ["key"]
         }
       },
       "policies": {},
@@ -3447,12 +3383,8 @@
           "name": "instances_agent_provider_id_agent_providers_id_fk",
           "tableFrom": "instances",
           "tableTo": "agent_providers",
-          "columnsFrom": [
-            "agent_provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["agent_provider_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3462,9 +3394,7 @@
         "instances_name_unique": {
           "name": "instances_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -3614,12 +3544,8 @@
           "name": "media_content_event_id_omni_events_id_fk",
           "tableFrom": "media_content",
           "tableTo": "omni_events",
-          "columnsFrom": [
-            "event_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["event_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3627,12 +3553,8 @@
           "name": "media_content_batch_job_id_batch_jobs_id_fk",
           "tableFrom": "media_content",
           "tableTo": "batch_jobs",
-          "columnsFrom": [
-            "batch_job_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["batch_job_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4107,12 +4029,8 @@
           "name": "messages_chat_id_chats_id_fk",
           "tableFrom": "messages",
           "tableTo": "chats",
-          "columnsFrom": [
-            "chat_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4120,12 +4038,8 @@
           "name": "messages_sender_person_id_persons_id_fk",
           "tableFrom": "messages",
           "tableTo": "persons",
-          "columnsFrom": [
-            "sender_person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["sender_person_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -4133,12 +4047,8 @@
           "name": "messages_sender_platform_identity_id_platform_identities_id_fk",
           "tableFrom": "messages",
           "tableTo": "platform_identities",
-          "columnsFrom": [
-            "sender_platform_identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["sender_platform_identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4523,12 +4433,8 @@
           "name": "omni_events_instance_id_instances_id_fk",
           "tableFrom": "omni_events",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -4536,12 +4442,8 @@
           "name": "omni_events_person_id_persons_id_fk",
           "tableFrom": "omni_events",
           "tableTo": "persons",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["person_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -4549,12 +4451,8 @@
           "name": "omni_events_platform_identity_id_platform_identities_id_fk",
           "tableFrom": "omni_events",
           "tableTo": "platform_identities",
-          "columnsFrom": [
-            "platform_identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["platform_identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4745,12 +4643,8 @@
           "name": "omni_groups_instance_id_instances_id_fk",
           "tableFrom": "omni_groups",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4858,9 +4752,7 @@
         "payload_storage_config_event_type_unique": {
           "name": "payload_storage_config_event_type_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "event_type"
-          ]
+          "columns": ["event_type"]
         }
       },
       "policies": {},
@@ -5178,12 +5070,8 @@
           "name": "platform_identities_person_id_persons_id_fk",
           "tableFrom": "platform_identities",
           "tableTo": "persons",
-          "columnsFrom": [
-            "person_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["person_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5191,12 +5079,8 @@
           "name": "platform_identities_instance_id_instances_id_fk",
           "tableFrom": "platform_identities",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5403,12 +5287,8 @@
           "name": "setting_change_history_setting_id_global_settings_id_fk",
           "tableFrom": "setting_change_history",
           "tableTo": "global_settings",
-          "columnsFrom": [
-            "setting_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["setting_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5562,12 +5442,8 @@
           "name": "sync_jobs_instance_id_instances_id_fk",
           "tableFrom": "sync_jobs",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5780,12 +5656,8 @@
           "name": "trigger_logs_instance_id_instances_id_fk",
           "tableFrom": "trigger_logs",
           "tableTo": "instances",
-          "columnsFrom": [
-            "instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["instance_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5793,12 +5665,8 @@
           "name": "trigger_logs_provider_id_agent_providers_id_fk",
           "tableFrom": "trigger_logs",
           "tableTo": "agent_providers",
-          "columnsFrom": [
-            "provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["provider_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -5806,12 +5674,8 @@
           "name": "trigger_logs_route_id_agent_routes_id_fk",
           "tableFrom": "trigger_logs",
           "tableTo": "agent_routes",
-          "columnsFrom": [
-            "route_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["route_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -5924,9 +5788,7 @@
         "webhook_sources_name_unique": {
           "name": "webhook_sources_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
