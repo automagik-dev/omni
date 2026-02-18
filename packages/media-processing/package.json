@@ -1,6 +1,6 @@
 {
   "name": "@omni/media-processing",
-  "version": "2.20260218.38",
+  "version": "2.20260218.39",
   "type": "module",
   "exports": {
     ".": {
