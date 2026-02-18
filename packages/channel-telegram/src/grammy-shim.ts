@@ -71,6 +71,9 @@ export interface TelegramMessageLike {
   reply_to_message?: { message_id: number };
   forward_origin?: unknown;
   message_thread_id?: number;
+
+  /** Present when the message belongs to a media group (album) */
+  media_group_id?: string;
 }
 
 export interface TelegramBotLike {

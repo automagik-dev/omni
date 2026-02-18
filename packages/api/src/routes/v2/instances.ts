@@ -291,6 +291,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   if (connectToken) {
     connectionOptions.token = connectToken;
   }
+  if (data.channel === 'telegram') {
+    connectionOptions.telegramReactionLevel = instance.telegramReactionLevel;
+  }
 
   // Get the channel plugin and trigger connection
   if (channelRegistry) {
@@ -556,6 +559,9 @@ instancesRoutes.post(
     if (connectToken) {
       connectionOptions.token = connectToken;
     }
+    if (instance.channel === 'telegram') {
+      connectionOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    }
 
     // Trigger connection via channel plugin
     if (!channelRegistry) {
@@ -646,42 +652,36 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
-  const instance = await services.instances.getById(id);
-
-  // Restart via channel plugin: disconnect then connect
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        // Disconnect first
-        await plugin.disconnect(id);
-        // Then reconnect
-        await plugin.connect(id, {
-          instanceId: id,
-          credentials: {},
-          options: {
-            forceNewQr,
-          },
-        });
-      } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: 'RESTART_FAILED',
-              message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          },
-          500,
-        );
-      }
-    } else {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-        400,
-      );
-    }
-  } else {
+  if (!channelRegistry) {
     return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const instance = await services.instances.getById(id);
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  try {
+    await plugin.disconnect(id);
+    const restartOptions: Record<string, unknown> = { forceNewQr };
+    const restartToken = persistedTokenForChannel(instance);
+    if (restartToken) restartOptions.token = restartToken;
+    if (instance.channel === 'telegram') {
+      restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    }
+    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+  } catch (error) {
+    return c.json(
+      {
+        error: {
+          code: 'RESTART_FAILED',
+          message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        },
+      },
+      500,
+    );
   }
 
   return c.json({

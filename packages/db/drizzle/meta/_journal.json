@@ -22,6 +22,13 @@
       "when": 1771393021796,
       "tag": "0002_pairing_access_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1771280049989,
+      "tag": "0003_telegram_reaction_level",
+      "breakpoints": true
     }
   ]
 }
