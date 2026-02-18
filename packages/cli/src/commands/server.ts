@@ -13,14 +13,14 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
+import { loadConfig } from '../config.js';
 import * as output from '../output.js';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const OMNI_API_PORT = 8882;
-const HEALTH_CHECK_URL = `http://localhost:${OMNI_API_PORT}/api/v2/health`;
+const DEFAULT_API_PORT = 8882;
 const HEALTH_TIMEOUT_MS = 10_000;
 const HEALTH_POLL_INTERVAL_MS = 500;
 
@@ -71,13 +71,13 @@ async function isPm2Available(): Promise<boolean> {
 }
 
 /** Run a PM2 command and return exit code */
-async function runPm2(...args: string[]): Promise<number> {
+async function runPm2(args: string[], envOverrides?: Record<string, string>): Promise<number> {
   const proc = Bun.spawn({
     cmd: ['pm2', ...args],
     stdin: 'inherit',
     stdout: 'inherit',
     stderr: 'inherit',
-    env: process.env,
+    env: { ...process.env, ...envOverrides },
   });
   return proc.exited;
 }
@@ -95,12 +95,50 @@ async function capturePm2(...args: string[]): Promise<{ code: number; stdout: st
   return { code, stdout };
 }
 
+function resolveApiPort(): number {
+  const envPort = Number.parseInt(process.env.API_PORT ?? '', 10);
+  if (!Number.isNaN(envPort)) return envPort;
+
+  const configuredApiUrl = loadConfig().apiUrl;
+  if (configuredApiUrl) {
+    try {
+      const parsed = new URL(configuredApiUrl);
+      const configPort = Number.parseInt(parsed.port, 10);
+      if (!Number.isNaN(configPort)) return configPort;
+    } catch {
+      // Keep default.
+    }
+  }
+
+  return DEFAULT_API_PORT;
+}
+
+function getHealthCheckUrl(port: number): string {
+  return `http://localhost:${port}/api/v2/health`;
+}
+
+function buildApiRuntimeEnv(port: number): Record<string, string> {
+  const env: Record<string, string> = {
+    API_PORT: String(port),
+  };
+
+  if (process.env.DATABASE_URL) {
+    env.DATABASE_URL = process.env.DATABASE_URL;
+  }
+  if (process.env.OMNI_API_KEY) {
+    env.OMNI_API_KEY = process.env.OMNI_API_KEY;
+  }
+
+  return env;
+}
+
 /** Wait for the health endpoint to respond (up to HEALTH_TIMEOUT_MS) */
-async function waitForHealth(): Promise<boolean> {
+async function waitForHealth(port: number): Promise<boolean> {
+  const healthCheckUrl = getHealthCheckUrl(port);
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
-      const resp = await fetch(HEALTH_CHECK_URL, { signal: AbortSignal.timeout(1000) });
+      const resp = await fetch(healthCheckUrl, { signal: AbortSignal.timeout(1000) });
       if (resp.ok) return true;
     } catch {
       // keep polling
@@ -180,18 +218,16 @@ async function runStart(): Promise<void> {
     bundleNotFoundError(bundlePath);
   }
 
+  const apiPort = resolveApiPort();
+  if (!process.env.DATABASE_URL) {
+    output.warn('DATABASE_URL is not set in this shell. API startup may fail unless PM2 already has it configured.');
+  }
+
   // 3. Start omni-api via PM2
-  output.info(`Starting ${PM2_PROCESSES.api} (port ${OMNI_API_PORT})...`);
+  output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const apiCode = await runPm2(
-    'start',
-    bundlePath,
-    '--name',
-    PM2_PROCESSES.api,
-    '--interpreter',
-    'node',
-    '--env',
-    `OMNI_API_PORT=${OMNI_API_PORT}`,
-    '--update-env',
+    ['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'node', '--update-env'],
+    buildApiRuntimeEnv(apiPort),
   );
   if (apiCode !== 0) {
     output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
@@ -201,7 +237,7 @@ async function runStart(): Promise<void> {
   const natsPath = join(homedir(), '.omni', 'nats-server');
   if (existsSync(natsPath)) {
     output.info(`Starting ${PM2_PROCESSES.nats}...`);
-    const natsCode = await runPm2('start', natsPath, '--name', PM2_PROCESSES.nats);
+    const natsCode = await runPm2(['start', natsPath, '--name', PM2_PROCESSES.nats]);
     if (natsCode !== 0) {
       output.warn(`${PM2_PROCESSES.nats} failed to start — run 'omni install' to download NATS first`);
     }
@@ -210,10 +246,11 @@ async function runStart(): Promise<void> {
   }
 
   // 5. Wait for health check
-  output.info(`Waiting for health check at ${HEALTH_CHECK_URL}...`);
-  const healthy = await waitForHealth();
+  const healthCheckUrl = getHealthCheckUrl(apiPort);
+  output.info(`Waiting for health check at ${healthCheckUrl}...`);
+  const healthy = await waitForHealth(apiPort);
   if (healthy) {
-    output.success(`Server is healthy at ${HEALTH_CHECK_URL}`);
+    output.success(`Server is healthy at ${healthCheckUrl}`);
   } else {
     output.warn(`Health check did not pass within ${HEALTH_TIMEOUT_MS / 1000}s — server may still be starting`);
   }
@@ -228,7 +265,7 @@ async function runStop(): Promise<void> {
 
   // Delete each process; ignore errors for processes that aren't running
   for (const name of Object.values(PM2_PROCESSES)) {
-    await runPm2('delete', name);
+    await runPm2(['delete', name]);
   }
 
   output.success('Omni services stopped');
@@ -239,15 +276,17 @@ async function runRestart(): Promise<void> {
     pm2NotFoundError();
   }
 
+  const apiPort = resolveApiPort();
   output.info('Restarting omni services...');
-  const code = await runPm2('restart', PM2_PROCESSES.api, PM2_PROCESSES.nats);
+  const code = await runPm2(['restart', PM2_PROCESSES.api, PM2_PROCESSES.nats]);
   if (code !== 0) {
     output.warn('Some services may not have restarted cleanly — check pm2 status');
   }
 
   // Wait for health
-  output.info(`Waiting for health check at ${HEALTH_CHECK_URL}...`);
-  const healthy = await waitForHealth();
+  const healthCheckUrl = getHealthCheckUrl(apiPort);
+  output.info(`Waiting for health check at ${healthCheckUrl}...`);
+  const healthy = await waitForHealth(apiPort);
   if (healthy) {
     output.success('Server is healthy after restart');
   } else {

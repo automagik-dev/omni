@@ -170,6 +170,7 @@ type ReconnectInstance = {
   telegramBotToken?: string | null;
   telegramReactionLevel?: string | null;
   discordBotToken?: string | null;
+  discordPresence?: Record<string, unknown> | null;
   slackBotToken?: string | null;
   slackAppToken?: string | null;
 };
@@ -192,6 +193,10 @@ function buildReconnectOptions(instance: ReconnectInstance): {
     case 'discord': {
       if (instance.discordBotToken) {
         options.token = instance.discordBotToken;
+      }
+      // Re-apply persisted presence on reconnect (plugin applies it in handleConnected)
+      if (instance.discordPresence) {
+        options.presence = instance.discordPresence;
       }
       break;
     }
@@ -276,6 +281,16 @@ export async function autoReconnectInstances(db: Database): Promise<{
       logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
       failed++;
       continue;
+    }
+
+    // Hydrate per-guild config overrides into the plugin cache before connecting.
+    // This ensures guild configs are available after process restart, not just
+    // on manual connect via HTTP routes.
+    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+        instance.id,
+        instance.guildConfigOverrides as Record<string, unknown>,
+      );
     }
 
     const reconnectConfig = buildReconnectOptions(reconnectInstanceRecord);
