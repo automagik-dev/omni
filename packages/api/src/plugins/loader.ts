@@ -173,6 +173,7 @@ type ReconnectInstance = {
   discordPresence?: Record<string, unknown> | null;
   slackBotToken?: string | null;
   slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
 };
 
 function buildReconnectOptions(instance: ReconnectInstance): {
@@ -208,6 +209,9 @@ function buildReconnectOptions(instance: ReconnectInstance): {
       }
       if (instance.slackAppToken) {
         options.appToken = instance.slackAppToken;
+      }
+      if (instance.slackSigningSecret) {
+        options.signingSecret = instance.slackSigningSecret;
       }
       break;
     }

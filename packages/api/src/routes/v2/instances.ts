@@ -168,6 +168,40 @@ function persistedTokenForChannel(instance: {
   }
 }
 
+/** Build channel-specific connection options from instance data */
+function buildChannelConnectOptions(
+  channel: string,
+  base: Record<string, unknown>,
+  instance: {
+    telegramReactionLevel?: string | null;
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+  },
+  overrides?: {
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+    whatsapp?: unknown;
+  },
+): Record<string, unknown> {
+  const opts = { ...base };
+  if (channel === 'telegram') {
+    opts.telegramReactionLevel = instance.telegramReactionLevel;
+  }
+  if (channel === 'slack') {
+    opts.botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+    if (overrides?.slackAppToken ?? instance.slackAppToken)
+      opts.appToken = overrides?.slackAppToken ?? instance.slackAppToken;
+    if (overrides?.slackSigningSecret ?? instance.slackSigningSecret)
+      opts.signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
+  }
+  if (overrides?.whatsapp) {
+    opts.whatsapp = overrides.whatsapp;
+  }
+  return opts;
+}
+
 /**
  * Map channel type to its token DB column name.
  * Returns undefined for channels that don't store tokens.
@@ -191,6 +225,7 @@ type InstanceConnectionOptionsInput = {
   token?: string;
   telegramReactionLevel?: string | null;
   slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
 };
 
@@ -206,6 +241,7 @@ function applyChannelSpecificConnectionOptions(
   if (input.channel === 'slack') {
     if (input.token) options.botToken = input.token;
     if (input.slackAppToken) options.appToken = input.slackAppToken;
+    if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
   }
 }
 
@@ -264,6 +300,22 @@ async function triggerCreateConnection(
   }
 
   log.info('Triggered connection', { instanceId, channel });
+}
+
+/** Build DB update payload to persist tokens provided in a connect request */
+function buildTokenPersistUpdates(
+  channel: string,
+  body: { token?: string; slackBotToken?: string; slackAppToken?: string; slackSigningSecret?: string },
+): Record<string, string> {
+  const updates: Record<string, string> = {};
+  const tokenField = body.token ? channelTokenField(channel) : undefined;
+  if (tokenField && body.token) updates[tokenField] = body.token;
+  if (channel === 'slack') {
+    if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
+    if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
+    if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
+  }
+  return updates;
 }
 
 /** Default reply filter applied when an agent provider is bound but no filter is set */
@@ -373,6 +425,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     token: connectToken,
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
+    slackSigningSecret: instance.slackSigningSecret,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -596,7 +649,10 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 
 // Connect instance schema
 const connectInstanceSchema = z.object({
-  token: z.string().optional().describe('Bot token for Discord instances'),
+  token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
+  slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
+  slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
+  slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
   whatsapp: z
     .object({
@@ -635,7 +691,8 @@ instancesRoutes.post(
       forceNewQr,
       token: connectToken,
       telegramReactionLevel: instance.telegramReactionLevel,
-      slackAppToken: instance.slackAppToken,
+      slackAppToken: body.slackAppToken ?? instance.slackAppToken,
+      slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
       whatsapp: body.whatsapp,
     });
 
@@ -678,11 +735,10 @@ instancesRoutes.post(
       );
     }
 
-    // Update database — persist token if a new one was provided
-    const tokenField = body.token ? channelTokenField(instance.channel) : undefined;
+    // Update database — persist tokens if new ones were provided
     const updated = await services.instances.update(id, {
       isActive: true,
-      ...(tokenField ? { [tokenField]: body.token } : {}),
+      ...buildTokenPersistUpdates(instance.channel, body),
     });
 
     return c.json({
@@ -757,6 +813,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     } else if (instance.channel === 'slack') {
       if (restartToken) restartOptions.botToken = restartToken;
       if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
+    }
+    if (instance.channel === 'slack') {
+      restartOptions.botToken = instance.slackBotToken ?? restartToken;
+      restartOptions.appToken = instance.slackAppToken;
+      restartOptions.signingSecret = instance.slackSigningSecret;
     }
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {

@@ -102,9 +102,13 @@ async function connectInstance(
     id: string;
     channel: string;
     telegramBotToken?: string | null;
+    telegramReactionLevel?: string | null;
     discordBotToken?: string | null;
     guildConfigOverrides?: Record<string, unknown> | null;
     discordPresence?: Record<string, unknown> | null;
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -128,12 +132,21 @@ async function connectInstance(
   if (instance.telegramBotToken) {
     options.token = instance.telegramBotToken;
   }
+  if (instance.channel === 'telegram') {
+    options.telegramReactionLevel = instance.telegramReactionLevel;
+  }
   if (instance.discordBotToken) {
     options.token = instance.discordBotToken;
   }
   // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
   if (instance.discordPresence) {
     options.presence = instance.discordPresence;
+  }
+  // Slack needs both botToken and appToken for Socket Mode
+  if (instance.channel === 'slack') {
+    if (instance.slackBotToken) options.botToken = instance.slackBotToken;
+    if (instance.slackAppToken) options.appToken = instance.slackAppToken;
+    if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
   }
 
   await plugin.connect(instance.id, {
