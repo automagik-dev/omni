@@ -250,13 +250,13 @@ check: typecheck lint test
 # ============================================================================
 
 db-push:
-	cd packages/db && bunx drizzle-kit push --force
+	@set -a && . ./.env && set +a && cd packages/db && bunx drizzle-kit push --force
 
 db-migrate:
-	bun run --filter @omni/db db:migrate
+	@set -a && . ./.env && set +a && bun run --filter @omni/db db:migrate
 
 db-studio:
-	bun run --filter @omni/db db:studio
+	@set -a && . ./.env && set +a && bun run --filter @omni/db db:studio
 
 db-reset:
 	@echo "WARNING: This will delete all data!"
