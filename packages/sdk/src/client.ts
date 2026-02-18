@@ -280,6 +280,28 @@ export interface CheckAccessResult {
 }
 
 /**
+ * Pairing request item returned from list endpoint
+ */
+export interface PairingRequestItem {
+  id: string;
+  instanceId: string;
+  platformUserId: string;
+  pairingCode: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/**
+ * Result of pairing request action (approve/deny)
+ */
+export interface PairingActionResult {
+  action: 'approve' | 'deny';
+  ruleId?: string;
+  reason?: string;
+  message?: string;
+}
+
+/**
  * Query parameters for listing settings
  */
 export interface ListSettingsParams {
@@ -1880,6 +1902,34 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data?.data ?? { allowed: true, reason: 'Default allow' };
+      },
+
+      /**
+       * List pending pairing requests for an instance
+       */
+      async listPairingRequests(instanceId: string): Promise<PairingRequestItem[]> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${instanceId}/pairing-requests`, {});
+        const json = (await resp.json()) as { items?: PairingRequestItem[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.items ?? [];
+      },
+
+      /**
+       * Approve or deny a pairing request
+       */
+      async actionPairingRequest(
+        instanceId: string,
+        requestId: string,
+        body: { action: 'approve' | 'deny'; reason?: string },
+      ): Promise<PairingActionResult> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${instanceId}/pairing-requests/${requestId}/action`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: PairingActionResult };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { action: body.action };
       },
     },
 

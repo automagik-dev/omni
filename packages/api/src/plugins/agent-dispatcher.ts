@@ -2171,6 +2171,15 @@ async function checkAccessWithFallback(
     participantAlt,
     reason: accessResult.reason,
   });
+
+  // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
+  // Fire-and-forget: pairing request creation must not block message processing.
+  if (accessResult.mode === 'allowlist' && !accessResult.rule) {
+    accessService.requestPairing(instance.id, primaryId).catch((err) => {
+      log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
+    });
+  }
+
   if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
     sendTextMessage(channel, instance.id, payload.chatId, accessResult.rule.blockMessage).catch(() => {});
   }
