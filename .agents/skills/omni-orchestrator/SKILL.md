@@ -70,7 +70,7 @@ omni instances syncs <id>  # Check sync status
 Configure AI agent routing for an instance:
 
 ```bash
-omni instances update <id> --agent-routing '{"providerId":"openai-1","model":"gpt-4o"}'
+omni instances update <id> --agent-routing '{"providerId":"openai-1","model":"gpt-5.3-codex"}'
 ```
 
 ## Reply Filters

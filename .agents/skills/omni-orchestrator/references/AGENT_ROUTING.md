@@ -5,7 +5,7 @@
 Set AI provider for an instance:
 
 ```bash
-omni instances update <id> --agent-routing '{"providerId":"<provider-id>","model":"gpt-4o"}'
+omni instances update <id> --agent-routing '{"providerId":"<provider-id>","model":"gpt-5.3-codex"}'
 ```
 
 Create a provider first:
