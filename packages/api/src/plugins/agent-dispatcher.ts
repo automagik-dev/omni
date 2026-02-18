@@ -1474,7 +1474,127 @@ async function dispatchViaLegacy(
 
 const sessionActivityStore = new InMemorySessionActivityStore();
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Orchestrates ack, session reset, and dispatch pipeline
+/** Execute provider-level session reset and publish the session.reset event. */
+async function performSessionReset(
+  instance: Instance,
+  sessionId: string,
+  chatId: string,
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  eventBus: EventBus,
+  resetStrategy: string,
+  resetChatType: 'dm' | 'group' | 'thread',
+  traceId: string | undefined,
+): Promise<void> {
+  let sessionActuallyReset = false;
+  try {
+    const provider = await getAgentProvider(services, instance, db);
+    if (provider?.resetSession) {
+      await provider.resetSession(sessionId, chatId, instance.id);
+      sessionActuallyReset = true;
+    } else if (!provider) {
+      // No IAgentProvider configured — legacy agentRunner path; no provider-level
+      // session state to clear, so treat the reset as complete.
+      sessionActuallyReset = true;
+    }
+    // provider exists but lacks resetSession → session not actually cleared; do not record.
+  } catch (err) {
+    log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
+  }
+
+  if (sessionActuallyReset) {
+    sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
+
+    // DEC-6: Mandatory session.reset event — include routing metadata so the SESSION
+    // JetStream stream (session.>) captures it and typed subscribers receive it.
+    eventBus
+      .publish(
+        'session.reset',
+        { instanceId: instance.id, sessionId, timestamp: Date.now() },
+        { instanceId: instance.id, channelType: channel },
+      )
+      .catch((err) => {
+        log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
+      });
+
+    log.info('Session reset triggered', {
+      instanceId: instance.id,
+      sessionId,
+      strategy: resetStrategy,
+      chatType: resetChatType,
+      traceId,
+    });
+  }
+}
+
+/** Resolve chat type, check session reset policy, and record activity. */
+async function handleSessionReset(
+  firstMessage: BufferedMessage,
+  instance: Instance,
+  channel: ChannelType,
+  senderId: string,
+  chatId: string,
+  services: Services,
+  db: Database,
+  eventBus: EventBus,
+  traceId: string | undefined,
+): Promise<void> {
+  const inst = instance as Record<string, unknown>;
+  const msgRawPayload = firstMessage.payload.rawPayload ?? {};
+
+  const rawChatType = determineChatType(chatId, channel);
+  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
+  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
+  // rawPayload.isGroup=true for guild channels, so override when available.
+  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
+
+  // Classify as 'thread' when the message is from a thread channel.
+  // The SDK top-level threadId field is set by some channels; Discord and others
+  // store thread membership in rawPayload.isThread (message is inside a thread
+  // channel) or rawPayload.threadId (thread identifier).
+  const hasThread = !!(firstMessage.payload.threadId || msgRawPayload.isThread || msgRawPayload.threadId);
+
+  // Map 'channel' → 'group' for session reset purposes (broadcast channels behave
+  // like groups).  Thread takes precedence over group/dm classification.
+  const resetChatType: 'dm' | 'group' | 'thread' = hasThread
+    ? 'thread'
+    : resolvedChatType === 'channel'
+      ? 'group'
+      : resolvedChatType;
+
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
+  const activity = sessionActivityStore.getActivity(instance.id, sessionId);
+  const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
+
+  if (resetResult.shouldReset) {
+    // Await provider session reset before proceeding to dispatch so that the first
+    // post-reset turn sees a clean context. A detached promise would race with the
+    // provider dispatch and the incoming message could still use stale history.
+    //
+    // Only advance lastResetAt when the session was actually cleared.  For providers
+    // without resetSession (e.g. Agno, Webhook) the conversation context is not
+    // cleared, so recording a reset would incorrectly suppress future reset attempts
+    // while leaving stale context active.
+    await performSessionReset(
+      instance,
+      sessionId,
+      chatId,
+      services,
+      db,
+      channel,
+      eventBus,
+      resetResult.strategy,
+      resetChatType,
+      traceId,
+    );
+  }
+
+  // Record activity for session tracking (sliding window for idle reset)
+  sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -1506,86 +1626,8 @@ async function processAgentResponse(
   const messageId = firstMessage.payload.externalId ?? '';
   const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
 
-  // ── Session Reset Check (pre-processing) ──
-  // Extract raw payload once — used for channel-specific chat-type hints below.
-  const msgRawPayload = firstMessage.payload.rawPayload ?? {};
-
-  const rawChatType = determineChatType(chatId, channel);
-  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
-  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
-  // rawPayload.isGroup=true for guild channels, so override when available.
-  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
-
-  // Classify as 'thread' when the message is from a thread channel.
-  // The SDK top-level threadId field is set by some channels; Discord and others
-  // store thread membership in rawPayload.isThread (message is inside a thread
-  // channel) or rawPayload.threadId (thread identifier).
-  const hasThread = !!(firstMessage.payload.threadId || msgRawPayload.isThread || msgRawPayload.threadId);
-
-  // Map 'channel' → 'group' for session reset purposes (broadcast channels behave
-  // like groups).  Thread takes precedence over group/dm classification.
-  const resetChatType: 'dm' | 'group' | 'thread' = hasThread
-    ? 'thread'
-    : resolvedChatType === 'channel'
-      ? 'group'
-      : resolvedChatType;
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
-  const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
-  const activity = sessionActivityStore.getActivity(instance.id, sessionId);
-  const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
-
-  if (resetResult.shouldReset) {
-    // Await provider session reset before proceeding to dispatch so that the first
-    // post-reset turn sees a clean context. A detached promise would race with the
-    // provider dispatch and the incoming message could still use stale history.
-    //
-    // Only advance lastResetAt when the session was actually cleared.  For providers
-    // without resetSession (e.g. Agno, Webhook) the conversation context is not
-    // cleared, so recording a reset would incorrectly suppress future reset attempts
-    // while leaving stale context active.
-    let sessionActuallyReset = false;
-    try {
-      const provider = await getAgentProvider(services, instance, db);
-      if (provider?.resetSession) {
-        await provider.resetSession(sessionId, chatId, instance.id);
-        sessionActuallyReset = true;
-      } else if (!provider) {
-        // No IAgentProvider configured — legacy agentRunner path; no provider-level
-        // session state to clear, so treat the reset as complete.
-        sessionActuallyReset = true;
-      }
-      // provider exists but lacks resetSession → session not actually cleared; do not record.
-    } catch (err) {
-      log.warn('Failed to reset provider session', { error: String(err), instanceId: instance.id, sessionId });
-    }
-
-    if (sessionActuallyReset) {
-      sessionActivityStore.recordReset(instance.id, sessionId, Date.now());
-
-      // DEC-6: Mandatory session.reset event — include routing metadata so the SESSION
-      // JetStream stream (session.>) captures it and typed subscribers receive it.
-      eventBus
-        .publish(
-          'session.reset',
-          { instanceId: instance.id, sessionId, timestamp: Date.now() },
-          { instanceId: instance.id, channelType: channel },
-        )
-        .catch((err) => {
-          log.warn('Failed to publish session.reset event', { error: String(err), instanceId: instance.id, sessionId });
-        });
-
-      log.info('Session reset triggered', {
-        instanceId: instance.id,
-        sessionId,
-        strategy: resetResult.strategy,
-        chatType: resetChatType,
-        traceId,
-      });
-    }
-  }
-
-  // Record activity for session tracking (sliding window for idle reset)
-  sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+  // ── Session Reset Check + Activity Recording (pre-processing) ──
+  await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
