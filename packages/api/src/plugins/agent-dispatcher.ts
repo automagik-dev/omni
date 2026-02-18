@@ -1626,9 +1626,6 @@ async function processAgentResponse(
   const messageId = firstMessage.payload.externalId ?? '';
   const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
 
-  // ── Session Reset Check + Activity Recording (pre-processing) ──
-  await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
-
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
   if (!personId) {
@@ -1640,6 +1637,12 @@ async function processAgentResponse(
     ackHandle.remove();
     return;
   }
+
+  // ── Session Reset Check + Activity Recording (post-personId guard) ──
+  // Only track activity for messages that will actually be dispatched, so that
+  // identity-resolution failures (transient race condition) do not corrupt the
+  // idle-reset sliding window.
+  await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
@@ -2350,7 +2353,9 @@ async function checkAccessWithFallback(
 
   // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
   // Fire-and-forget: pairing request creation must not block message processing.
-  if (accessResult.mode === 'allowlist' && !accessResult.rule) {
+  // Guard against empty primaryId: a missing payload.from would otherwise create a
+  // degenerate pairing entry shared by all anonymous senders.
+  if (accessResult.mode === 'allowlist' && !accessResult.rule && primaryId) {
     accessService.requestPairing(instance.id, primaryId).catch((err) => {
       log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
     });
