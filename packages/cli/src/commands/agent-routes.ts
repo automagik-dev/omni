@@ -16,6 +16,17 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
+function buildRouteReplyFilter(mode: string | undefined):
+  | {
+      mode: 'all' | 'filtered';
+      conditions: { onDm: boolean; onMention: boolean; onReply: boolean; onNameMatch: boolean };
+    }
+  | undefined {
+  if (!mode) return undefined;
+  const conditions = { onDm: true, onMention: true, onReply: true, onNameMatch: false };
+  return { mode: mode as 'all' | 'filtered', conditions };
+}
+
 async function createAgentRouteAction(options: {
   instance: string;
   scope: string;
@@ -32,6 +43,7 @@ async function createAgentRouteAction(options: {
   gate?: boolean;
   gateModel?: string;
   gatePrompt?: string;
+  replyFilterMode?: string;
   label?: string;
   priority?: number;
   inactive?: boolean;
@@ -70,6 +82,7 @@ async function createAgentRouteAction(options: {
       agentGateEnabled: options.gate,
       agentGateModel: options.gateModel,
       agentGatePrompt: options.gatePrompt,
+      agentReplyFilter: buildRouteReplyFilter(options.replyFilterMode),
       label: options.label,
       priority: options.priority || 0,
       isActive: !options.inactive,
@@ -98,6 +111,7 @@ async function updateAgentRouteAction(
     gate?: boolean;
     gateModel?: string;
     gatePrompt?: string;
+    replyFilterMode?: string;
     label?: string;
     priority?: number;
     active?: boolean;
@@ -127,6 +141,8 @@ async function updateAgentRouteAction(
     if (options.gate !== undefined) updates.agentGateEnabled = options.gate;
     if (options.gateModel !== undefined) updates.agentGateModel = options.gateModel;
     if (options.gatePrompt !== undefined) updates.agentGatePrompt = options.gatePrompt;
+    if (options.replyFilterMode !== undefined)
+      updates.agentReplyFilter = buildRouteReplyFilter(options.replyFilterMode);
     if (options.label !== undefined) updates.label = options.label;
     if (options.priority !== undefined) updates.priority = options.priority;
     if (options.active) updates.isActive = true;
@@ -230,6 +246,7 @@ export function createRoutesCommand(): Command {
     .option('--no-gate', 'Disable LLM response gate')
     .option('--gate-model <model>', 'Response gate model')
     .option('--gate-prompt <prompt>', 'Response gate prompt')
+    .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
     .option('--label <label>', 'Human-readable label for this route')
     .option('--priority <number>', 'Priority (higher = higher priority)', Number.parseInt, 0)
     .option('--inactive', 'Create route as inactive')
@@ -255,6 +272,7 @@ export function createRoutesCommand(): Command {
     .option('--no-gate', 'Disable LLM response gate (set to null)')
     .option('--gate-model <model>', 'Response gate model')
     .option('--gate-prompt <prompt>', 'Response gate prompt')
+    .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
     .option('--label <label>', 'Human-readable label for this route')
     .option('--priority <number>', 'Priority (higher = higher priority)', Number.parseInt)
     .option('--active', 'Activate route')

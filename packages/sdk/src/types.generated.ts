@@ -3328,7 +3328,7 @@ export interface components {
              * @description Session strategy override
              * @enum {string|null}
              */
-            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+            agentSessionStrategy: "per_user" | "per_chat" | null;
             /** @description Prefix sender name override */
             agentPrefixSenderName: boolean | null;
             /** @description Wait for media override */
@@ -3415,7 +3415,7 @@ export interface components {
              * @description Session strategy
              * @enum {string}
              */
-            agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+            agentSessionStrategy?: "per_user" | "per_chat";
             /** @description Prefix sender name */
             agentPrefixSenderName?: boolean;
             /** @description Wait for media processing */
@@ -3477,7 +3477,7 @@ export interface components {
              * @description Session strategy
              * @enum {string|null}
              */
-            agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat" | null;
+            agentSessionStrategy?: "per_user" | "per_chat" | null;
             /** @description Prefix sender name */
             agentPrefixSenderName?: boolean | null;
             /** @description Wait for media processing */
@@ -3813,7 +3813,7 @@ export interface components {
                      * @description Session strategy for agent memory
                      * @enum {string}
                      */
-                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    sessionStrategy?: "per_user" | "per_chat";
                     /** @description Prefix messages with sender name */
                     prefixSenderName?: boolean;
                     /** @description Timeout in milliseconds */
@@ -3937,7 +3937,7 @@ export interface components {
                      * @description Session strategy for agent memory
                      * @enum {string}
                      */
-                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    sessionStrategy?: "per_user" | "per_chat";
                     /** @description Prefix messages with sender name */
                     prefixSenderName?: boolean;
                     /** @description Timeout in milliseconds */
@@ -10227,7 +10227,7 @@ export interface operations {
                              * @description Session strategy override
                              * @enum {string|null}
                              */
-                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            agentSessionStrategy: "per_user" | "per_chat" | null;
                             /** @description Prefix sender name override */
                             agentPrefixSenderName: boolean | null;
                             /** @description Wait for media override */
@@ -10351,7 +10351,7 @@ export interface operations {
                      * @description Session strategy
                      * @enum {string}
                      */
-                    agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                    agentSessionStrategy?: "per_user" | "per_chat";
                     /** @description Prefix sender name */
                     agentPrefixSenderName?: boolean;
                     /** @description Wait for media processing */
@@ -10453,7 +10453,7 @@ export interface operations {
                              * @description Session strategy override
                              * @enum {string|null}
                              */
-                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            agentSessionStrategy: "per_user" | "per_chat" | null;
                             /** @description Prefix sender name override */
                             agentPrefixSenderName: boolean | null;
                             /** @description Wait for media override */
@@ -10636,7 +10636,7 @@ export interface operations {
                              * @description Session strategy override
                              * @enum {string|null}
                              */
-                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            agentSessionStrategy: "per_user" | "per_chat" | null;
                             /** @description Prefix sender name override */
                             agentPrefixSenderName: boolean | null;
                             /** @description Wait for media override */
@@ -10828,7 +10828,7 @@ export interface operations {
                      * @description Session strategy
                      * @enum {string|null}
                      */
-                    agentSessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                    agentSessionStrategy?: "per_user" | "per_chat" | null;
                     /** @description Prefix sender name */
                     agentPrefixSenderName?: boolean | null;
                     /** @description Wait for media processing */
@@ -10924,7 +10924,7 @@ export interface operations {
                              * @description Session strategy override
                              * @enum {string|null}
                              */
-                            agentSessionStrategy: "per_user" | "per_chat" | "per_user_per_chat" | null;
+                            agentSessionStrategy: "per_user" | "per_chat" | null;
                             /** @description Prefix sender name override */
                             agentPrefixSenderName: boolean | null;
                             /** @description Wait for media override */
@@ -12142,7 +12142,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -12280,7 +12280,7 @@ export interface operations {
                              * @description Session strategy for agent memory
                              * @enum {string}
                              */
-                            sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                            sessionStrategy?: "per_user" | "per_chat";
                             /** @description Prefix messages with sender name */
                             prefixSenderName?: boolean;
                             /** @description Timeout in milliseconds */
@@ -12414,7 +12414,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -12586,7 +12586,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -12795,7 +12795,7 @@ export interface operations {
                              * @description Session strategy for agent memory
                              * @enum {string}
                              */
-                            sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                            sessionStrategy?: "per_user" | "per_chat";
                             /** @description Prefix messages with sender name */
                             prefixSenderName?: boolean;
                             /** @description Timeout in milliseconds */
@@ -12929,7 +12929,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -13101,7 +13101,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -13273,7 +13273,7 @@ export interface operations {
                                      * @description Session strategy for agent memory
                                      * @enum {string}
                                      */
-                                    sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                    sessionStrategy?: "per_user" | "per_chat";
                                     /** @description Prefix messages with sender name */
                                     prefixSenderName?: boolean;
                                     /** @description Timeout in milliseconds */
@@ -13443,7 +13443,7 @@ export interface operations {
                                  * @description Session strategy for agent memory
                                  * @enum {string}
                                  */
-                                sessionStrategy?: "per_user" | "per_chat" | "per_user_per_chat";
+                                sessionStrategy?: "per_user" | "per_chat";
                                 /** @description Prefix messages with sender name */
                                 prefixSenderName?: boolean;
                                 /** @description Timeout in milliseconds */

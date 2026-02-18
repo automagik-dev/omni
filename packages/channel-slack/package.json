@@ -1,0 +1,30 @@
+{
+  "name": "@omni/channel-slack",
+  "version": "2.20260218.30",
+  "description": "Slack channel plugin for Omni v2 using Bolt.js with Socket Mode",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:watch": "bun test --watch"
+  },
+  "dependencies": {
+    "@omni/channel-sdk": "workspace:*",
+    "@omni/core": "workspace:*",
+    "@slack/bolt": "^4.1.0",
+    "@slack/web-api": "^7.8.0",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

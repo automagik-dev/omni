@@ -33,14 +33,3 @@ reviews:
     - path: ".github/workflows/**"
       instructions: "CI workflows. Check for hardcoded secrets, proper caching keys, and timeout settings."
 
-tools:
-  shellcheck:
-    enabled: true
-  biome:
-    enabled: true
-  actionlint:
-    enabled: true
-  gitleaks:
-    enabled: true
-  yamllint:
-    enabled: true

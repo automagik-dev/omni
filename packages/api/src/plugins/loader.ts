@@ -163,6 +163,89 @@ export async function getAllPlugins(): Promise<ChannelPlugin[]> {
   return channelRegistry.getAll();
 }
 
+type ReconnectInstance = {
+  id: string;
+  name: string;
+  channel: string;
+  telegramBotToken?: string | null;
+  telegramReactionLevel?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+  slackAppToken?: string | null;
+};
+
+function buildReconnectOptions(instance: ReconnectInstance): {
+  credentials: Record<string, unknown>;
+  options: Record<string, unknown>;
+} {
+  const credentials: Record<string, unknown> = {};
+  const options: Record<string, unknown> = {};
+
+  switch (instance.channel) {
+    case 'telegram': {
+      if (instance.telegramBotToken) {
+        options.token = instance.telegramBotToken;
+      }
+      options.telegramReactionLevel = instance.telegramReactionLevel;
+      break;
+    }
+    case 'discord': {
+      if (instance.discordBotToken) {
+        options.token = instance.discordBotToken;
+      }
+      break;
+    }
+    case 'slack': {
+      if (instance.slackBotToken) {
+        options.botToken = instance.slackBotToken;
+        // Keep generic alias for compatibility with old connectors.
+        options.token = instance.slackBotToken;
+      }
+      if (instance.slackAppToken) {
+        options.appToken = instance.slackAppToken;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  return { credentials, options };
+}
+
+async function markInstanceInactive(db: Database, instanceId: string): Promise<void> {
+  const { instances } = await import('@omni/db');
+  const { eq } = await import('drizzle-orm');
+  await db.update(instances).set({ isActive: false }).where(eq(instances.id, instanceId));
+}
+
+async function reconnectInstance(
+  plugin: ChannelPlugin,
+  instance: ReconnectInstance,
+  config: { credentials: Record<string, unknown>; options: Record<string, unknown> },
+  db: Database,
+): Promise<boolean> {
+  try {
+    await plugin.connect(instance.id, {
+      instanceId: instance.id,
+      credentials: config.credentials,
+      options: config.options,
+    });
+
+    logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
+    return true;
+  } catch (error) {
+    logger.error('Failed to reconnect instance', {
+      instanceId: instance.id,
+      name: instance.name,
+      error: String(error),
+    });
+
+    await markInstanceInactive(db, instance.id);
+    return false;
+  }
+}
+
 /**
  * Auto-reconnect previously active instances on startup
  *
@@ -186,45 +269,20 @@ export async function autoReconnectInstances(db: Database): Promise<{
   let failed = 0;
 
   for (const instance of activeInstances) {
-    try {
-      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-      if (!plugin) {
-        logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
-        failed++;
-        continue;
-      }
+    const reconnectInstanceRecord = instance as ReconnectInstance;
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
 
-      // Reconnect the instance (uses stored auth state from database)
-      // Pass channel-specific tokens from DB for reconnection
-      const credentials: Record<string, unknown> = {};
-      const options: Record<string, unknown> = {};
+    if (!plugin) {
+      logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
+      failed++;
+      continue;
+    }
 
-      // Telegram needs bot token
-      if (instance.telegramBotToken) {
-        options.token = instance.telegramBotToken;
-      }
-      // Discord needs bot token
-      if (instance.discordBotToken) {
-        options.token = instance.discordBotToken;
-      }
-
-      await plugin.connect(instance.id, {
-        instanceId: instance.id,
-        credentials,
-        options,
-      });
-
-      logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
+    const reconnectConfig = buildReconnectOptions(reconnectInstanceRecord);
+    const ok = await reconnectInstance(plugin, reconnectInstanceRecord, reconnectConfig, db);
+    if (ok) {
       succeeded++;
-    } catch (error) {
-      logger.error('Failed to reconnect instance', {
-        instanceId: instance.id,
-        name: instance.name,
-        error: String(error),
-      });
-
-      // Mark instance as inactive since reconnection failed
-      await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
+    } else {
       failed++;
     }
   }

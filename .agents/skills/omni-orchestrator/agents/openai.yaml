@@ -1,0 +1,9 @@
+model: gpt-5.3-codex
+tools:
+  - type: bash
+keywords:
+  - omni
+  - instance
+  - channel
+  - routing
+description: Omni v2 instance orchestration specialist — use for setting up channels (WhatsApp, Telegram, Discord, Slack), configuring agent routing, managing instances lifecycle, and configuring providers via the omni CLI.

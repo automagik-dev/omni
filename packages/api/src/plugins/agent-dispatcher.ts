@@ -2232,10 +2232,24 @@ async function resolveLidMentionBot(
   }
 }
 
+async function resolveEffectiveReplyFilter(
+  chatsService: Services['chats'],
+  routeResolver: Services['routeResolver'],
+  instanceId: string,
+  chatId: string,
+  defaultFilter: Instance['agentReplyFilter'],
+): Promise<Instance['agentReplyFilter']> {
+  const chat = await chatsService.findByExternalIdSmart(instanceId, chatId);
+  if (!chat?.id) return defaultFilter;
+  const route = await routeResolver.resolve(instanceId, chat.id);
+  return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
+  routeResolver: Services['routeResolver'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
@@ -2292,12 +2306,23 @@ async function shouldProcessMessage(
     mentionedJids: rawPayloadWithMentions?.mentionedJids,
   });
 
-  if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
+  // Resolve per-chat route filter override before applying the instance-level filter.
+  // This allows individual chats to have a different reply filter (e.g. mode:'all') while
+  // the instance default remains filtered. Route lookup is a cheap indexed query.
+  const effectiveReplyFilter = await resolveEffectiveReplyFilter(
+    chatsService,
+    routeResolver,
+    instance.id,
+    payload.chatId,
+    instance.agentReplyFilter,
+  );
+
+  if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
     log.debug('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,
-      filter: instance.agentReplyFilter,
+      filter: effectiveReplyFilter,
     });
     return null;
   }
@@ -2625,6 +2650,7 @@ export async function setupAgentDispatcher(
             agentRunner,
             accessService,
             services.chats,
+            services.routeResolver,
             rateLimiter,
             payload,
             metadata,

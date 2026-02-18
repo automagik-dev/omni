@@ -1,6 +1,6 @@
 {
-  "name": "@omni/cli",
-  "version": "2.20260218.11",
+  "name": "@automagik/omni",
+  "version": "2.20260218.30",
   "description": "LLM-optimized CLI for Omni v2",
   "type": "module",
   "bin": {
@@ -8,6 +8,10 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist", "bin"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
@@ -15,7 +19,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "build:server": "bun build ../api/src/index.ts --outfile dist/server/index.js --target node",
+    "prepack": "bun run build && bun run build:server"
   },
   "dependencies": {
     "@omni/core": "workspace:*",

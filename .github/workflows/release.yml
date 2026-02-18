@@ -72,6 +72,30 @@ jobs:
             --title "${TAG}" \
             --notes "$RELEASE_NOTES"
 
+      - name: Setup Bun
+        if: steps.exists.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+
+      - name: Install CLI dependencies
+        if: steps.exists.outputs.skip != 'true'
+        run: cd packages/cli && bun install --frozen-lockfile
+
+      - name: Build CLI
+        if: steps.exists.outputs.skip != 'true'
+        run: cd packages/cli && bun run build
+
+      - name: Publish to npm
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          cd packages/cli && bun publish --access public
+
       - name: Update CHANGELOG.md
         if: steps.exists.outputs.skip != 'true'
         env:

@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import type { ChannelPlugin } from '@omni/channel-sdk';
+import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -185,6 +185,87 @@ function channelTokenField(channel: string): string | undefined {
   }
 }
 
+type InstanceConnectionOptionsInput = {
+  channel: string;
+  forceNewQr: boolean;
+  token?: string;
+  telegramReactionLevel?: string | null;
+  slackAppToken?: string | null;
+  whatsapp?: { syncFullHistory?: boolean };
+};
+
+function applyChannelSpecificConnectionOptions(
+  options: Record<string, unknown>,
+  input: InstanceConnectionOptionsInput,
+): void {
+  if (input.channel === 'telegram') {
+    options.telegramReactionLevel = input.telegramReactionLevel;
+    return;
+  }
+
+  if (input.channel === 'slack') {
+    if (input.token) options.botToken = input.token;
+    if (input.slackAppToken) options.appToken = input.slackAppToken;
+  }
+}
+
+function buildInstanceConnectionOptions(input: InstanceConnectionOptionsInput): Record<string, unknown> {
+  const options: Record<string, unknown> = { forceNewQr: input.forceNewQr };
+  if (input.token) {
+    options.token = input.token;
+  }
+  applyChannelSpecificConnectionOptions(options, input);
+  if (input.whatsapp) {
+    options.whatsapp = input.whatsapp;
+  }
+  return options;
+}
+
+function getPluginFromRegistry(
+  channelRegistry: ChannelRegistry | null | undefined,
+  channel: string,
+): ChannelPlugin | undefined {
+  return channelRegistry?.get(channel as Parameters<ChannelRegistry['get']>[0]);
+}
+
+async function connectInstanceWithPlugin(
+  plugin: ChannelPlugin,
+  instanceId: string,
+  options: Record<string, unknown>,
+): Promise<string | undefined> {
+  try {
+    await plugin.connect(instanceId, {
+      instanceId,
+      credentials: {},
+      options,
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown error';
+  }
+}
+
+async function triggerCreateConnection(
+  channelRegistry: ChannelRegistry | null | undefined,
+  channel: string,
+  instanceId: string,
+  options: Record<string, unknown>,
+): Promise<void> {
+  const plugin = getPluginFromRegistry(channelRegistry, channel);
+  if (!plugin) {
+    log.warn('No plugin found for channel', { channel });
+    return;
+  }
+
+  const errorMessage = await connectInstanceWithPlugin(plugin, instanceId, options);
+  if (errorMessage) {
+    log.error('Failed to connect instance', { instanceId, error: errorMessage });
+    return;
+  }
+
+  log.info('Triggered connection', { instanceId, channel });
+}
+
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
   mode: 'filtered' as const,
@@ -286,32 +367,14 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   // Create the database record first
   const instance = await services.instances.create(data);
 
-  // Build connection options
-  const connectionOptions: Record<string, unknown> = { forceNewQr: true };
-  if (connectToken) {
-    connectionOptions.token = connectToken;
-  }
-
-  // Get the channel plugin and trigger connection
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(data.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        // Trigger plugin connection
-        await plugin.connect(instance.id, {
-          instanceId: instance.id,
-          credentials: {},
-          options: connectionOptions,
-        });
-        log.info('Triggered connection', { instanceId: instance.id, channel: data.channel });
-      } catch (error) {
-        log.error('Failed to connect instance', { instanceId: instance.id, error: String(error) });
-        // Don't fail the request - instance is created, connection can be retried
-      }
-    } else {
-      log.warn('No plugin found for channel', { channel: data.channel });
-    }
-  }
+  const connectionOptions = buildInstanceConnectionOptions({
+    channel: data.channel,
+    forceNewQr: true,
+    token: connectToken,
+    telegramReactionLevel: instance.telegramReactionLevel,
+    slackAppToken: instance.slackAppToken,
+  });
+  await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
   return c.json({ data: instance }, 201);
 });
@@ -525,6 +588,12 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 const connectInstanceSchema = z.object({
   token: z.string().optional().describe('Bot token for Discord instances'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+  whatsapp: z
+    .object({
+      syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
+    })
+    .optional()
+    .describe('WhatsApp-specific connection options'),
 });
 
 /**
@@ -550,19 +619,22 @@ instancesRoutes.post(
 
     const instance = await services.instances.getById(id);
 
-    // Build connection options
-    const connectionOptions: Record<string, unknown> = { forceNewQr };
     const connectToken = body.token ?? persistedTokenForChannel(instance);
-    if (connectToken) {
-      connectionOptions.token = connectToken;
-    }
+    const connectionOptions = buildInstanceConnectionOptions({
+      channel: instance.channel,
+      forceNewQr,
+      token: connectToken,
+      telegramReactionLevel: instance.telegramReactionLevel,
+      slackAppToken: instance.slackAppToken,
+      whatsapp: body.whatsapp,
+    });
 
     // Trigger connection via channel plugin
     if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    const plugin = getPluginFromRegistry(channelRegistry, instance.channel);
     if (!plugin) {
       return c.json(
         { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
@@ -570,18 +642,13 @@ instancesRoutes.post(
       );
     }
 
-    try {
-      await plugin.connect(id, {
-        instanceId: id,
-        credentials: {},
-        options: connectionOptions,
-      });
-    } catch (error) {
+    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
+    if (errorMessage) {
       return c.json(
         {
           error: {
             code: 'CONNECTION_FAILED',
-            message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            message: `Failed to connect: ${errorMessage}`,
           },
         },
         500,
@@ -646,42 +713,39 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
-  const instance = await services.instances.getById(id);
-
-  // Restart via channel plugin: disconnect then connect
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        // Disconnect first
-        await plugin.disconnect(id);
-        // Then reconnect
-        await plugin.connect(id, {
-          instanceId: id,
-          credentials: {},
-          options: {
-            forceNewQr,
-          },
-        });
-      } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: 'RESTART_FAILED',
-              message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          },
-          500,
-        );
-      }
-    } else {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-        400,
-      );
-    }
-  } else {
+  if (!channelRegistry) {
     return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const instance = await services.instances.getById(id);
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  try {
+    await plugin.disconnect(id);
+    const restartOptions: Record<string, unknown> = { forceNewQr };
+    const restartToken = persistedTokenForChannel(instance);
+    if (restartToken) restartOptions.token = restartToken;
+    if (instance.channel === 'telegram') {
+      restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    } else if (instance.channel === 'slack') {
+      if (restartToken) restartOptions.botToken = restartToken;
+      if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
+    }
+    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+  } catch (error) {
+    return c.json(
+      {
+        error: {
+          code: 'RESTART_FAILED',
+          message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        },
+      },
+      500,
+    );
   }
 
   return c.json({
