@@ -609,6 +609,24 @@ export interface SendReactionBody {
 }
 
 /**
+ * Body for removing a reaction
+ */
+export interface RemoveReactionBody {
+  instanceId: string;
+  emoji: string;
+}
+
+/**
+ * Body for forwarding a message
+ */
+export interface SendForwardBody {
+  instanceId: string;
+  to: string;
+  messageId: string;
+  fromChatId: string;
+}
+
+/**
  * Body for sending a sticker
  */
 export interface SendStickerBody {
@@ -1695,6 +1713,34 @@ export function createOmniClient(config: OmniClientConfig) {
         const json = (await resp.json()) as { data?: TtsResponse };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent', audioSizeKb: 0, durationMs: 0, timestamp: Date.now() };
+      },
+
+      /**
+       * Forward a message to another chat
+       */
+      async sendForward(body: SendForwardBody): Promise<{ messageId: string; status: string }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/forward`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { messageId: '', status: 'sent' };
+      },
+
+      /**
+       * Remove a reaction from a message
+       */
+      async removeReaction(id: string, body: RemoveReactionBody): Promise<{ success: boolean }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/${id}/reactions`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { success?: boolean };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return { success: json?.success ?? true };
       },
     },
 

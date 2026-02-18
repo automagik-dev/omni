@@ -859,8 +859,9 @@ export function createInstancesCommand(): Command {
 
       try {
         const id = await resolveInstanceId(rawId);
-        const profile = await client.instances.getUserProfile(id, userId);
-        output.data(profile);
+        const profile = (await client.instances.getUserProfile(id, userId)) as unknown as Record<string, unknown>;
+        const bio = profile.bio as { status?: string | null } | undefined;
+        output.data({ ...profile, bio: bio?.status ?? '-' });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get user profile: ${message}`);

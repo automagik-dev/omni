@@ -109,9 +109,9 @@ Time-based filters accept human-friendly formats:
 ```bash
 --since 7d        # 7 days ago
 --since 24h       # 24 hours ago
---since 30m       # 30 minutes ago
+--since 30min     # 30 minutes ago
 --since 1w        # 1 week ago
---since 1m        # 1 month ago
+--since 1m        # 1 month ago (m = months, min = minutes)
 --until 2d        # Until 2 days ago
 
 # Also accepts ISO timestamps
@@ -157,7 +157,7 @@ Time-based filters accept human-friendly formats:
 | `omni keys` | API key management |
 | `omni automations` | Event-driven workflows |
 | `omni webhooks` | Webhook management |
-| `omni agent-routes` | Agent routing configuration |
+| `omni routes` | Agent routing configuration |
 | `omni prompts` | LLM prompt overrides |
 | `omni settings` | Server-wide settings |
 | `omni access` | Permissions and access control |
@@ -377,8 +377,8 @@ omni chats read <chat-id> --instance <id>
 # Enable disappearing messages (24 hours)
 omni chats disappearing <chat-id> --instance <id> --duration 24h
 
-# Disable (duration 0)
-omni chats disappearing <chat-id> --instance <id> --duration 0
+# Disable disappearing messages
+omni chats disappearing <chat-id> --instance <id> --duration off  # 0 is also accepted
 ```
 
 #### Pin/Unpin
@@ -445,7 +445,8 @@ omni instances qr <id> --base64
 #### Pairing Code (WhatsApp alternative to QR)
 
 ```bash
-omni instances pair <id>
+omni instances pair <id> --phone <number>
+# --phone is required for phone pairing
 # Returns an 8-digit code to enter in WhatsApp settings
 ```
 
@@ -615,9 +616,6 @@ omni events replay --start --since 7d --dry-run
 
 # Check replay status
 omni events replay --status <session-id>
-
-# List all replay sessions
-omni events replay --list
 
 # Cancel replay
 omni events replay --cancel <session-id>
@@ -1132,7 +1130,7 @@ See **scripts/README.md** for full documentation, systemd service examples, and 
 ### Message Journey Tracing
 
 ```bash
-omni journey <message-id>
+omni journey show <correlationId>
 ```
 
 **Shows:**

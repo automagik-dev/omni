@@ -819,8 +819,9 @@ export function createChatsCommand(): Command {
             mediaOnly: options.mediaOnly || undefined,
           });
 
-          // Cast to extended type and apply filters
+          // Cast to extended type, filter ephemeral, and apply filters
           let messages = rawMessages as ExtendedMessage[];
+          messages = messages.filter((m) => m.messageType !== 'ephemeralMessage');
           messages = applyMessageFilters(messages, options);
 
           // Default to rich format (shows transcriptions), use --compact for minimal view
@@ -846,7 +847,9 @@ export function createChatsCommand(): Command {
     .option('--remove <user-id>', 'Remove participant by platform user ID')
     .option('--name <name>', 'Display name for new participant')
     .option('--role <role>', 'Role for new participant')
-    .action(async (id: string, options: { add?: string; remove?: string; name?: string; role?: string }) => {
+    .option('--promote <user-id>', 'Promote participant to admin')
+    .option('--demote <user-id>', 'Demote participant to member')
+    .action(async (id: string, options: { add?: string; remove?: string; name?: string; role?: string; promote?: string; demote?: string }) => {
       const client = getClient();
 
       try {
@@ -861,6 +864,25 @@ export function createChatsCommand(): Command {
         } else if (options.remove) {
           await client.chats.removeParticipant(chatId, options.remove);
           output.success(`Participant removed: ${options.remove}`);
+        } else if (options.promote || options.demote) {
+          const platformUserId = (options.promote ?? options.demote)!;
+          const role = options.promote ? 'admin' : 'member';
+          const config = (await import('../config.js')).loadConfig();
+          const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+          const apiKey = config.apiKey ?? '';
+          const resp = await fetch(
+            `${baseUrl}/api/v2/chats/${chatId}/participants/${encodeURIComponent(platformUserId)}/role`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+              body: JSON.stringify({ role }),
+            },
+          );
+          if (!resp.ok) {
+            const err = (await resp.json()) as { error?: { message?: string } };
+            throw new Error(err?.error?.message ?? `API error: ${resp.status}`);
+          }
+          output.success(`Participant ${platformUserId} ${options.promote ? 'promoted to admin' : 'demoted to member'}`);
         } else {
           // List participants
           const participants = await client.chats.listParticipants(chatId);
@@ -908,13 +930,16 @@ export function createChatsCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .option('--duration <duration>', 'Duration: off, 24h, 7d, 90d (default: 24h)', '24h')
     .action(async (id: string, options: { instance: string; duration?: string }) => {
-      const validDurations = ['off', '24h', '7d', '90d'];
-      const duration = options.duration ?? '24h';
+      const validDurations = ['off', '0', '24h', '7d', '90d'];
+      const rawDuration = options.duration ?? '24h';
 
-      if (!validDurations.includes(duration)) {
-        output.error(`Invalid duration: ${duration}. Valid: ${validDurations.join(', ')}`);
+      if (!validDurations.includes(rawDuration)) {
+        output.error(`Invalid duration: ${rawDuration}. Valid: ${validDurations.join(', ')}`);
         return;
       }
+
+      // Normalize '0' to 'off'
+      const duration = rawDuration === '0' ? 'off' : rawDuration;
 
       try {
         const chatId = await resolveChatId(id);
