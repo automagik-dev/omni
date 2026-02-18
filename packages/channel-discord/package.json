@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-discord",
-  "version": "2.20260218.20",
+  "version": "2.20260218.21",
   "description": "Discord channel plugin for Omni v2 using discord.js",
   "type": "module",
   "main": "src/index.ts",
