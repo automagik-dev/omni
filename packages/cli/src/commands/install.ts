@@ -352,7 +352,7 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
 }
 
 function formatSystemdEnvironment(name: string, value: string): string {
-  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escaped = value.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `Environment="${name}=${escaped}"`;
 }
 
@@ -525,10 +525,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
 
   const runtimeEnv = buildApiRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_API_PROCESS} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(
-    ['start', bundlePath, '--name', PM2_API_PROCESS, '--interpreter', 'node', '--update-env'],
-    runtimeEnv,
-  );
+  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_API_PROCESS, '--interpreter', 'node'], runtimeEnv);
   if (apiCode !== 0) {
     apiSpinner.fail(`Failed to start ${PM2_API_PROCESS} (pm2 exit code ${apiCode})`);
   } else {
@@ -636,9 +633,6 @@ async function runInstall(options: InstallOptions): Promise<void> {
 
   // Step 7: API key
   const { apiKey, generated: apiKeyGenerated } = await promptApiKey(nonInteractive);
-  if (apiKeyGenerated) {
-    output.raw(`  Generated API key: ${apiKey}`);
-  }
 
   // Step 8: Start services
   const cfg: WizardConfig = { port, dataDir, databaseUrl, apiKey, processManager };
