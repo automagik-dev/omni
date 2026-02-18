@@ -757,6 +757,11 @@ export interface SendEmbedBody {
 export interface ConnectInstanceBody {
   token?: string;
   forceNewQr?: boolean;
+  /** WhatsApp-specific connection options */
+  whatsapp?: {
+    /** Sync full message history on connect (default: true) */
+    syncFullHistory?: boolean;
+  };
 }
 
 /**

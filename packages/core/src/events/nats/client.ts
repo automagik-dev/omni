@@ -205,6 +205,8 @@ export class NatsEventBus implements EventBus {
         platformIdentityId: metadata?.platformIdentityId,
         traceId: metadata?.traceId ?? eventId,
         source: metadata?.source ?? this.config.serviceName,
+        ingestMode: metadata?.ingestMode,
+        timings: metadata?.timings,
       },
     };
 

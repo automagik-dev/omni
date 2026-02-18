@@ -2976,6 +2976,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           mimeType: content.mimeType,
         },
         rawPayload,
+        isHistorySync: true,
       });
     }
   }
