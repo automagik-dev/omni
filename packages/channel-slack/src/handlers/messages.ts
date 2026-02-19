@@ -88,6 +88,8 @@ function buildRawPayload(
   return {
     ts: meta.ts,
     threadTs: meta.threadTs,
+    // threadId: included for per_thread session strategy in agent-dispatcher
+    threadId: !meta.isDm && meta.threadTs ? meta.threadTs : undefined,
     channelType: meta.channelType,
     teamId: meta.teamId,
     isDm: meta.isDm,
