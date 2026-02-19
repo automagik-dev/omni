@@ -603,7 +603,7 @@ export class ClaudeCodeClient implements IAgentClient {
     });
 
     return {
-      content: acc.content,
+      content: stripThinkingTags(acc.content),
       runId: crypto.randomUUID(),
       sessionId: acc.sessionId,
       status: 'completed',
