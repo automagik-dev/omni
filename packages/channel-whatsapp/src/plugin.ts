@@ -738,6 +738,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (config.options?.forceNewQr === true) {
       const existingSocket = this.sockets.get(instanceId);
       if (existingSocket) {
+        existingSocket.ev.removeAllListeners('connection.update');
         await closeSocket(existingSocket, false);
         this.sockets.delete(instanceId);
       }
@@ -870,6 +871,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
     resetConnectionState(instanceId);
+
+    // Remove event listeners before closing to prevent ghost reconnects
+    sock.ev.removeAllListeners('connection.update');
 
     // Close socket WITHOUT logging out (preserves session for reconnect)
     await closeSocket(sock, false);
