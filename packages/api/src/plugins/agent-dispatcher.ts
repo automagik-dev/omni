@@ -1859,6 +1859,9 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
+      streamConfig: schemaConfig.streamConfig as
+        | { showToolCalls?: boolean; showThinking?: boolean; showToolProgress?: boolean; toolCallFormat?: 'compact' | 'verbose' }
+        | undefined,
     },
   );
 }

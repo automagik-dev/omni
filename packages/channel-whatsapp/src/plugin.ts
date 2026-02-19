@@ -1301,13 +1301,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
-    // Read per-instance throttle from config
+    // Read per-instance stream config
     const instanceEntry = this.instances.get(instanceId);
-    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+    const streamOpts = instanceEntry?.config?.options ?? {};
 
     return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
-      throttleMs,
       formatMode: options?.formatMode,
+      editMode: (streamOpts.streamEditMode as boolean) ?? false,
+      throttleMs: (streamOpts.streamThrottleMs as number) ?? undefined,
     });
   }
 

@@ -40,7 +40,7 @@ export { AgnoClient, createAgnoClient } from './agno-client';
 
 // Claude Code Client
 export { ClaudeCodeClient, createClaudeCodeClient } from './claude-code-client';
-export type { ClaudeCodeConfig } from './claude-code-client';
+export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamRunMetrics } from './claude-code-client';
 
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';

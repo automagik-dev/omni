@@ -37,8 +37,8 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canSendSticker: true,
   canSendPoll: true,
 
-  // Streaming (progressive response edits)
-  canStreamResponse: true,
+  // Streaming (progressive response edits) — disabled: edit-based streaming is buggy on WhatsApp
+  canStreamResponse: false,
 
   // Group/broadcast
   canHandleGroups: true, // Groups work de facto (handles @g.us JIDs, participant resolution)
