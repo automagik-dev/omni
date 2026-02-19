@@ -33,6 +33,7 @@ import { VERSION } from '../version.js';
 
 const DEFAULT_API_PORT = 8882;
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
+const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
 const NATS_VERSION = 'v2.10.24';
@@ -58,6 +59,7 @@ interface InstallOptions {
 interface WizardConfig {
   port: number;
   dataDir: string;
+  databaseUrl: string;
   apiKey: string;
   processManager: ProcessManager;
 }
@@ -97,13 +99,13 @@ async function isPm2Available(): Promise<boolean> {
 }
 
 /** Run a PM2 command (inherited stdio) */
-async function runPm2(...args: string[]): Promise<number> {
+async function runPm2(args: string[], envOverrides?: Record<string, string>): Promise<number> {
   const proc = Bun.spawn({
     cmd: ['pm2', ...args],
     stdin: 'inherit',
     stdout: 'inherit',
     stderr: 'inherit',
-    env: process.env,
+    env: { ...process.env, ...envOverrides },
   });
   return proc.exited;
 }
@@ -335,13 +337,33 @@ function maskApiKey(key: string): string {
   return `${key.slice(0, 12)}...`;
 }
 
+type ApiKeyPromptResult = {
+  apiKey: string;
+  generated: boolean;
+};
+
+function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
+  return {
+    API_PORT: String(cfg.port),
+    DATABASE_URL: cfg.databaseUrl,
+    OMNI_API_KEY: cfg.apiKey,
+    MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
+  };
+}
+
+function formatSystemdEnvironment(name: string, value: string): string {
+  const escaped = value.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `Environment="${name}=${escaped}"`;
+}
+
 // ============================================================================
 // HELPERS - SYSTEMD UNIT
 // ============================================================================
 
 /** Write a systemd unit file to /etc/systemd/system/omni-api.service */
-async function writeSystemdUnit(port: number, dataDir: string): Promise<boolean> {
+async function writeSystemdUnit(cfg: WizardConfig): Promise<boolean> {
   const bundlePath = getServerBundlePath();
+  const runtimeEnv = buildApiRuntimeEnv(cfg);
   const unitContent = `[Unit]
 Description=Omni API Server
 After=network.target
@@ -350,8 +372,10 @@ After=network.target
 Type=simple
 ExecStart=/usr/bin/env node ${bundlePath}
 Restart=on-failure
-Environment=OMNI_API_PORT=${port}
-Environment=OMNI_DATA_DIR=${dataDir}
+${formatSystemdEnvironment('API_PORT', runtimeEnv.API_PORT)}
+${formatSystemdEnvironment('DATABASE_URL', runtimeEnv.DATABASE_URL)}
+${formatSystemdEnvironment('OMNI_API_KEY', runtimeEnv.OMNI_API_KEY)}
+${formatSystemdEnvironment('MEDIA_STORAGE_PATH', runtimeEnv.MEDIA_STORAGE_PATH)}
 
 [Install]
 WantedBy=multi-user.target
@@ -437,11 +461,12 @@ async function chooseProcessManager(nonInteractive: boolean, forceSystemd: boole
 async function promptConfig(
   nonInteractive: boolean,
   portOverride: number | undefined,
-): Promise<{ port: number; dataDir: string }> {
+): Promise<{ port: number; dataDir: string; databaseUrl: string }> {
   if (nonInteractive) {
     return {
       port: portOverride ?? DEFAULT_API_PORT,
       dataDir: DEFAULT_DATA_DIR,
+      databaseUrl: DEFAULT_DATABASE_URL,
     };
   }
 
@@ -449,25 +474,26 @@ async function promptConfig(
   const port = Number.parseInt(portStr, 10);
 
   const dataDir = await promptLine(`  Data directory [${DEFAULT_DATA_DIR}]: `, DEFAULT_DATA_DIR);
+  const databaseUrl = await promptLine(`  Database URL [${DEFAULT_DATABASE_URL}]: `, DEFAULT_DATABASE_URL);
 
   return {
     port: Number.isNaN(port) ? DEFAULT_API_PORT : port,
     dataDir: dataDir || DEFAULT_DATA_DIR,
+    databaseUrl: databaseUrl || DEFAULT_DATABASE_URL,
   };
 }
 
 /** Step 7: API key */
-async function promptApiKey(nonInteractive: boolean): Promise<string> {
+async function promptApiKey(nonInteractive: boolean): Promise<ApiKeyPromptResult> {
   if (nonInteractive) {
-    const key = generateApiKey();
-    return key;
+    return { apiKey: generateApiKey(), generated: true };
   }
 
   const provided = await promptLine('  API key (leave blank to generate): ', '');
   if (provided === '') {
-    return generateApiKey();
+    return { apiKey: generateApiKey(), generated: true };
   }
-  return provided;
+  return { apiKey: provided, generated: false };
 }
 
 /** Step 8: Start services */
@@ -478,7 +504,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   }
 
   if (cfg.processManager === 'systemd') {
-    await writeSystemdUnit(cfg.port, cfg.dataDir);
+    await writeSystemdUnit(cfg);
     return;
   }
 
@@ -497,18 +523,9 @@ async function startServices(cfg: WizardConfig): Promise<void> {
     return;
   }
 
+  const runtimeEnv = buildApiRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_API_PROCESS} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(
-    'start',
-    bundlePath,
-    '--name',
-    PM2_API_PROCESS,
-    '--interpreter',
-    'node',
-    '--env',
-    `OMNI_API_PORT=${cfg.port}`,
-    '--update-env',
-  );
+  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_API_PROCESS, '--interpreter', 'node'], runtimeEnv);
   if (apiCode !== 0) {
     apiSpinner.fail(`Failed to start ${PM2_API_PROCESS} (pm2 exit code ${apiCode})`);
   } else {
@@ -517,7 +534,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
 
   if (existsSync(NATS_BINARY_PATH)) {
     const natsSpinner = ora(`Starting ${PM2_NATS_PROCESS}...`).start();
-    const natsCode = await runPm2('start', NATS_BINARY_PATH, '--name', PM2_NATS_PROCESS);
+    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_NATS_PROCESS]);
     if (natsCode !== 0) {
       natsSpinner.warn(`${PM2_NATS_PROCESS} failed to start — check NATS binary`);
     } else {
@@ -552,14 +569,22 @@ function writeConfigFile(port: number, apiKey: string): void {
 }
 
 /** Step 11: Done banner */
-async function printDoneBanner(port: number, apiKey: string, nonInteractive: boolean): Promise<void> {
+async function printDoneBanner(
+  port: number,
+  apiKey: string,
+  nonInteractive: boolean,
+  showFullGeneratedKey: boolean,
+): Promise<void> {
+  const displayedKey = showFullGeneratedKey ? apiKey : maskApiKey(apiKey);
+  const keyHint = showFullGeneratedKey ? ' <- save this (shown once)' : ' <- configured';
+
   output.raw(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ Omni v${VERSION} is running!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   API:    http://localhost:${port}
-  Key:    ${maskApiKey(apiKey)}  <- save this!
+  Key:    ${displayedKey}${keyHint}
 
   omni status              Check connection
   omni server logs api     View API logs
@@ -604,13 +629,13 @@ async function runInstall(options: InstallOptions): Promise<void> {
   const processManager = await chooseProcessManager(nonInteractive, forceSystemd);
 
   // Step 6: Config
-  const { port, dataDir } = await promptConfig(nonInteractive, portOverride);
+  const { port, dataDir, databaseUrl } = await promptConfig(nonInteractive, portOverride);
 
   // Step 7: API key
-  const apiKey = await promptApiKey(nonInteractive);
+  const { apiKey, generated: apiKeyGenerated } = await promptApiKey(nonInteractive);
 
   // Step 8: Start services
-  const cfg: WizardConfig = { port, dataDir, apiKey, processManager };
+  const cfg: WizardConfig = { port, dataDir, databaseUrl, apiKey, processManager };
   await startServices(cfg);
 
   // Step 9: Health check (only for PM2 path)
@@ -622,7 +647,7 @@ async function runInstall(options: InstallOptions): Promise<void> {
   writeConfigFile(port, apiKey);
 
   // Step 11: Done banner
-  await printDoneBanner(port, apiKey, nonInteractive);
+  await printDoneBanner(port, apiKey, nonInteractive, apiKeyGenerated);
 
   process.exit(0);
 }

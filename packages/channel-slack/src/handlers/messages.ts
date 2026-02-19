@@ -88,6 +88,8 @@ function buildRawPayload(
   return {
     ts: meta.ts,
     threadTs: meta.threadTs,
+    // threadId: included for per_thread session strategy in agent-dispatcher
+    threadId: !meta.isDm && meta.threadTs ? meta.threadTs : undefined,
     channelType: meta.channelType,
     teamId: meta.teamId,
     isDm: meta.isDm,
@@ -108,21 +110,28 @@ function slackTsToMs(ts: string | undefined): number | undefined {
 export function setupMessageHandlers(
   app: App,
   instanceId: string,
-  botUserId: string | undefined,
+  botUserId: string | undefined | (() => string | undefined),
   callbacks: MessageHandlerCallbacks,
   dmPolicyConfig: DmPolicyConfig,
   logger: Logger,
 ): void {
+  // Support both static value and getter (for lazy resolution after app.start())
+  const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
+
   // Handle all messages (channels, groups, DMs, mpim)
   app.message(async ({ message }) => {
     const msg = message as unknown as Record<string, unknown>;
-    if (shouldSkipMessage(msg, botUserId)) return;
+    if (shouldSkipMessage(msg, resolveBotUserId())) return;
 
     const userId = msg.user as string;
     const meta = extractMessageMeta(msg);
     const text = (msg.text as string) ?? '';
+    const currentBotUserId = resolveBotUserId();
 
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
+
+    // Detect @mention of the bot in message text (Slack format: <@U...>)
+    const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
 
     logger.debug('Message received', {
       instanceId,
@@ -130,6 +139,7 @@ export function setupMessageHandlers(
       userId,
       isDm: meta.isDm,
       isThread: meta.isThreadReply,
+      isMention: isMentioningInstance,
     });
 
     await callbacks.onMessage(
@@ -139,35 +149,15 @@ export function setupMessageHandlers(
       userId,
       { type: 'text', text: text || undefined },
       meta.isThreadReply ? meta.threadTs : undefined,
-      buildRawPayload(meta, msg),
+      buildRawPayload(meta, msg, { isMentioningInstance }),
       slackTsToMs(meta.ts),
       meta,
     );
   });
 
-  // Handle app_mention events (bot mentioned in channel)
-  app.event('app_mention', async ({ event }) => {
-    const evt = event as unknown as Record<string, unknown>;
-    const userId = evt.user as string | undefined;
-    if (!userId || (botUserId && userId === botUserId)) return;
-
-    const meta = extractMessageMeta(evt);
-    const text = (evt.text as string) ?? '';
-
-    logger.debug('App mention received', { instanceId, channelId: meta.channelId, userId });
-
-    await callbacks.onMessage(
-      instanceId,
-      meta.ts,
-      meta.channelId,
-      userId,
-      { type: 'text', text },
-      meta.isThreadReply ? meta.threadTs : undefined,
-      buildRawPayload(meta, evt, { isMention: true }),
-      slackTsToMs(meta.ts),
-      meta,
-    );
-  });
+  // NOTE: app_mention is NOT handled separately — app.message() already captures
+  // messages that mention the bot, and the agent-dispatcher detects mentions via
+  // the mentionsBot flag. Handling both would cause duplicate message.received events.
 
   logger.info('Message handlers registered', { instanceId });
 }

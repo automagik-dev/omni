@@ -47,6 +47,7 @@ import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
 import type { ApiKeyData, AppVariables } from '../../types';
 
+const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
@@ -1075,18 +1076,16 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Validate that the target message exists (prevent sending reactions to invalid messages).
+  // Soft-validate that the target message exists.
   // `messageId` here is the channel/external message id (not the DB UUID).
+  // This is a best-effort check — if the message isn't in the DB yet
+  // (e.g. new Slack channel, history not synced), we still send the
+  // reaction and let the channel plugin handle it directly.
   const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (!target) {
-      throw new OmniError({
-        code: ERROR_CODES.NOT_FOUND,
-        message: `Target message not found: ${messageId}`,
-        context: { messageId, resourceType: 'Message' },
-        recoverable: false,
-      });
+      log.warn('Target message not found in DB, sending reaction anyway', { messageId, chatId: chat.id });
     }
   }
 

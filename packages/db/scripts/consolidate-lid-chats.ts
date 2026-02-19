@@ -22,7 +22,7 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
-import { agentRoutes, chatParticipants, chats, createDb, messages } from '../src';
+import { agentRoutes, chatParticipants, chats, createDb } from '../src';
 
 const db = createDb();
 const isDryRun = process.argv.includes('--dry-run');
@@ -176,9 +176,7 @@ async function mergeAgentRoutes(
 
   if (existing) {
     // Phone chat already has a route — delete LID chat route (if any)
-    await tx
-      .delete(agentRoutes)
-      .where(and(eq(agentRoutes.chatId, lidId), eq(agentRoutes.instanceId, instanceId)));
+    await tx.delete(agentRoutes).where(and(eq(agentRoutes.chatId, lidId), eq(agentRoutes.instanceId, instanceId)));
     return { moved: 0 };
   }
 
@@ -211,7 +209,7 @@ async function mergeStats(pair: DuplicatePair, tx: Parameters<Parameters<typeof 
 
 /** Merge one duplicate pair inside a transaction */
 async function mergePair(pair: DuplicatePair): Promise<MergeStats> {
-  let stats: MergeStats = {
+  const stats: MergeStats = {
     messagesMoved: 0,
     messagesDeduped: 0,
     participantsMoved: 0,
@@ -225,9 +223,7 @@ async function mergePair(pair: DuplicatePair): Promise<MergeStats> {
     const participantCount = await db.execute(
       sql`SELECT COUNT(*) AS cnt FROM chat_participants WHERE chat_id = ${pair.lidId}`,
     );
-    const routeCount = await db.execute(
-      sql`SELECT COUNT(*) AS cnt FROM agent_routes WHERE chat_id = ${pair.lidId}`,
-    );
+    const routeCount = await db.execute(sql`SELECT COUNT(*) AS cnt FROM agent_routes WHERE chat_id = ${pair.lidId}`);
     stats.messagesMoved = Number((msgCount as unknown as Array<{ cnt: string }>)[0]?.cnt ?? 0);
     stats.participantsMoved = Number((participantCount as unknown as Array<{ cnt: string }>)[0]?.cnt ?? 0);
     stats.routesMoved = Number((routeCount as unknown as Array<{ cnt: string }>)[0]?.cnt ?? 0);
@@ -295,7 +291,9 @@ async function consolidateLidChats() {
         `     ${isDryRun ? 'Would merge' : '✓ Merged'}: ${stats.messagesMoved} msgs, ${stats.participantsMoved} participants, ${stats.routesMoved} routes`,
       );
       if (stats.messagesDeduped > 0 || stats.participantsDeduped > 0) {
-        console.log(`     Skipped (already in phone chat): ${stats.messagesDeduped} msgs, ${stats.participantsDeduped} participants`);
+        console.log(
+          `     Skipped (already in phone chat): ${stats.messagesDeduped} msgs, ${stats.participantsDeduped} participants`,
+        );
       }
     } catch (err) {
       console.error(`     ❌ Error merging pair: ${String(err)}`);

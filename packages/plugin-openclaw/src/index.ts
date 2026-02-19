@@ -97,19 +97,20 @@ async function startGateway(
 ): Promise<void> {
   stopGateway(accountId);
 
+  const abortController = new AbortController();
   const url = `${account.apiUrl}/v2/events/stream?instanceId=${account.instanceId}`;
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${account.apiKey}`,
       Accept: 'text/event-stream',
     },
+    signal: abortController.signal,
   });
 
   if (!response.ok || !response.body) {
     throw new Error(`Omni SSE stream failed: ${response.status} ${response.statusText}`);
   }
 
-  const abortController = new AbortController();
   const connection = {
     close: () => {
       abortController.abort();

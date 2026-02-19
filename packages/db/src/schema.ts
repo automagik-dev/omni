@@ -66,8 +66,9 @@ export interface AgentReplyFilter {
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
+ * - per_thread: Isolated session per thread/topic (lazy init, collaborative)
  */
-export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
+export const agentSessionStrategies = ['per_user', 'per_chat', 'per_thread'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
 export const ruleTypes = ['allow', 'deny', 'pending_pairing'] as const;
@@ -532,6 +533,14 @@ export const instances = pgTable(
     discordSlashCommandsEnabled: boolean('discord_slash_commands_enabled').default(true),
     discordWebhookUrl: text('discord_webhook_url'),
     discordPermissions: integer('discord_permissions'),
+    /** Per-guild configuration overrides: Record<guildId, GuildConfigOverride> */
+    guildConfigOverrides: jsonb('guild_config_overrides').$type<Record<string, unknown>>(),
+    /** Persisted bot presence: survives reconnects by being passed as options.presence on connect */
+    discordPresence: jsonb('discord_presence').$type<{
+      status?: 'online' | 'dnd' | 'idle' | 'invisible';
+      activityText?: string;
+      activityType?: 'Playing' | 'Streaming' | 'Listening' | 'Watching' | 'Custom' | 'Competing';
+    }>(),
 
     // ---- Slack Configuration ----
     slackBotToken: text('slack_bot_token'),
@@ -1044,6 +1053,11 @@ export const messages = pgTable(
     statusIdx: index('messages_status_idx').on(table.status),
     platformTimestampIdx: index('messages_platform_timestamp_idx').on(table.platformTimestamp),
     replyToIdx: index('messages_reply_to_idx').on(table.replyToMessageId),
+    replyToExternalIdx: index('messages_reply_to_external_idx').on(
+      table.chatId,
+      table.replyToExternalId,
+      table.isFromMe,
+    ),
     hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
     originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
   }),

@@ -8,6 +8,8 @@
 import { BaseChannelPlugin } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -30,24 +32,8 @@ import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } f
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
-/**
- * Message from history sync
- */
-export interface HistorySyncMessage {
-  externalId: string;
-  chatId: string;
-  from: string;
-  timestamp: Date;
-  content: {
-    type: string;
-    text?: string;
-    mediaUrl?: string;
-    mimeType?: string;
-    caption?: string;
-  };
-  isFromMe: boolean;
-  rawPayload: unknown;
-}
+// Re-export for external consumers that previously imported from this module
+export type { HistorySyncMessage, FetchHistoryResult };
 
 /**
  * Anchor point for fetching older messages in a chat
@@ -66,7 +52,8 @@ export interface MessageAnchor {
 }
 
 /**
- * Options for fetchHistory method
+ * WhatsApp-specific options for fetchHistory method
+ * Extends the base FetchHistoryOptions with WhatsApp-specific anchors
  */
 export interface FetchHistoryOptions {
   /** Fetch messages since this date */
@@ -85,14 +72,6 @@ export interface FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
-}
-
-/**
- * Result of fetchHistory operation
- */
-export interface FetchHistoryResult {
-  totalFetched: number;
-  messages: HistorySyncMessage[];
 }
 
 /**

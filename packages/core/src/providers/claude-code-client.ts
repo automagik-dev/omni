@@ -216,6 +216,7 @@ function handleBlockStart(
 }
 
 /** Handle a content_block_delta event. Returns a delta to yield, or null. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream delta handler requires branching on multiple delta types
 function handleBlockDelta(
   event: Record<string, unknown>,
   acc: StreamAccumulator,
@@ -266,6 +267,7 @@ function handleBlockDelta(
 }
 
 /** Handle a content_block_stop event. Returns a delta to yield, or null. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream block-stop logic requires handling multiple block types
 function handleBlockStop(
   event: Record<string, unknown>,
   acc: StreamAccumulator,
@@ -275,6 +277,7 @@ function handleBlockStop(
 
   // Text block completed — emit accumulated content as a delta
   if (acc.activeTextBlockIndices.has(index)) {
+    // biome-ignore lint/style/noNonNullAssertion: guarded by has(index) above
     const startOffset = acc.activeTextBlockIndices.get(index)!;
     acc.activeTextBlockIndices.delete(index);
 

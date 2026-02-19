@@ -16,7 +16,12 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
-function buildRouteReplyFilter(mode: string | undefined): { mode: 'all' | 'filtered'; conditions: { onDm: boolean; onMention: boolean; onReply: boolean; onNameMatch: boolean } } | undefined {
+function buildRouteReplyFilter(mode: string | undefined):
+  | {
+      mode: 'all' | 'filtered';
+      conditions: { onDm: boolean; onMention: boolean; onReply: boolean; onNameMatch: boolean };
+    }
+  | undefined {
   if (!mode) return undefined;
   const conditions = { onDm: true, onMention: true, onReply: true, onNameMatch: false };
   return { mode: mode as 'all' | 'filtered', conditions };
@@ -136,7 +141,8 @@ async function updateAgentRouteAction(
     if (options.gate !== undefined) updates.agentGateEnabled = options.gate;
     if (options.gateModel !== undefined) updates.agentGateModel = options.gateModel;
     if (options.gatePrompt !== undefined) updates.agentGatePrompt = options.gatePrompt;
-    if (options.replyFilterMode !== undefined) updates.agentReplyFilter = buildRouteReplyFilter(options.replyFilterMode);
+    if (options.replyFilterMode !== undefined)
+      updates.agentReplyFilter = buildRouteReplyFilter(options.replyFilterMode);
     if (options.label !== undefined) updates.label = options.label;
     if (options.priority !== undefined) updates.priority = options.priority;
     if (options.active) updates.isActive = true;

@@ -200,12 +200,18 @@ export function getSplitDelayConfig(instance: Instance): SplitDelayConfig {
 /**
  * Compute session ID based on the configured strategy
  *
- * @param strategy - Session strategy (per_user, per_chat)
+ * @param strategy - Session strategy (per_user, per_chat, per_thread)
  * @param userId - The user's identifier
  * @param chatId - The chat/conversation identifier
+ * @param threadId - Optional thread/topic identifier (required for per_thread)
  * @returns Computed session ID for the agent
  */
-export function computeSessionId(strategy: AgentSessionStrategy, userId: string, chatId: string): string {
+export function computeSessionId(
+  strategy: AgentSessionStrategy,
+  userId: string,
+  chatId: string,
+  threadId?: string,
+): string {
   switch (strategy) {
     case 'per_user':
       // Same session across all chats for this user
@@ -213,6 +219,9 @@ export function computeSessionId(strategy: AgentSessionStrategy, userId: string,
     case 'per_chat':
       // All users in a chat share the session (group memory)
       return chatId;
+    case 'per_thread':
+      // Isolated session per thread/topic
+      return `thread:${chatId}:${threadId ?? chatId}`;
     default:
       // Legacy fallback for persisted values outside the current enum
       return `${userId}:${chatId}`;

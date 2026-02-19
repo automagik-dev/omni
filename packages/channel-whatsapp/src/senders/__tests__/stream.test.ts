@@ -16,7 +16,6 @@
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { StreamDelta } from '@omni/core';
 import { WhatsAppStreamSender } from '../stream';
 
 // ─── Mock WASocket ─────────────────────────────────────────

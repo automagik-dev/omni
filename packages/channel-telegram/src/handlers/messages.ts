@@ -177,6 +177,8 @@ async function processInboundMessage(
         isGroup: msg.chat.type === 'group' || msg.chat.type === 'supergroup',
         isDM: msg.chat.type === 'private',
         isForwarded: !!msg.forward_origin,
+        // threadId for per_thread session strategy (Topics only — not regular replies)
+        threadId: msg.is_topic_message === true ? String(msg.message_thread_id) : undefined,
       },
       platformTimestamp,
     );
@@ -335,6 +337,8 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
         isDM: msg.chat.type === 'private',
         isForwarded: !!msg.forward_origin,
         message_thread_id: threadId,
+        // threadId for per_thread session strategy (Topics only — not regular replies)
+        threadId: msg.is_topic_message === true ? threadId : undefined,
       },
       platformTimestamp: msg.date * 1000,
       estimatedSize: JSON.stringify(content).length,
@@ -371,6 +375,10 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     // --- Media group buffering: batch album messages ---
     if (msg.media_group_id) {
+      const dedupeKey = `${chatId}:${String(msg.message_id)}`;
+      if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'telegram', log)) {
+        return;
+      }
       bufferAlbumMessage(msg, from, msg.media_group_id, chatId, threadId);
       return; // Don't process individually — will be flushed by buffer
     }

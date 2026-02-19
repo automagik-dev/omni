@@ -17,8 +17,11 @@
  * - Preserves existing debouncing for message events
  */
 
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
+import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
@@ -46,7 +49,10 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
+import { agentSessions } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
+import { createMediaProcessingService } from '@omni/media-processing';
+import { and, eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import {
   type MessageContext,
@@ -299,10 +305,23 @@ function getDebounceConfig(instance: Instance): DebounceConfig {
   };
 }
 
-function buildMessageContext(payload: MessageReceivedPayload, instance: Instance): MessageContext {
-  const rawPayload = payload.rawPayload ?? {};
-  const chatId = payload.chatId ?? '';
+/** Build message context for Slack channels (isReplyToBot resolved async later) */
+function buildSlackMessageContext(rawPayload: Record<string, unknown>, text: string): MessageContext {
+  return {
+    isDirectMessage: rawPayload.isDm === true,
+    mentionsBot: rawPayload.isMentioningInstance === true,
+    isReplyToBot: false, // resolved async via hasBotRepliedInThread
+    text,
+  };
+}
 
+/** Build message context for WhatsApp / default channels */
+function buildWhatsAppMessageContext(
+  rawPayload: Record<string, unknown>,
+  chatId: string,
+  instance: Instance,
+  text: string,
+): MessageContext {
   const isDirectMessage =
     !chatId.includes('@g.us') &&
     !chatId.includes('@broadcast') &&
@@ -331,12 +350,37 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
     ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
     : false;
 
-  return {
-    isDirectMessage,
-    mentionsBot,
-    isReplyToBot,
-    text: payload.content?.text ?? '',
-  };
+  return { isDirectMessage, mentionsBot, isReplyToBot, text };
+}
+
+/** Build message context for Discord channels */
+function buildDiscordMessageContext(
+  rawPayload: Record<string, unknown>,
+  instance: Instance,
+  text: string,
+): MessageContext {
+  const isDirectMessage = rawPayload.isDM === true;
+  const mentionedUsers = ((rawPayload.mentions as Record<string, unknown>)?.users as string[]) ?? [];
+  const botId = instance.ownerIdentifier ?? '';
+  const mentionsBot = (botId.length > 0 && mentionedUsers.includes(botId)) || rawPayload.isMentioningInstance === true;
+  return { isDirectMessage, mentionsBot, isReplyToBot: false, text };
+}
+
+function buildMessageContext(payload: MessageReceivedPayload, instance: Instance): MessageContext {
+  const rawPayload = payload.rawPayload ?? {};
+  const chatId = payload.chatId ?? '';
+  const text = payload.content?.text ?? '';
+  const channel = instance.channel;
+
+  if (channel === 'slack') {
+    return buildSlackMessageContext(rawPayload, text);
+  }
+
+  if (channel === 'discord') {
+    return buildDiscordMessageContext(rawPayload, instance, text);
+  }
+
+  return buildWhatsAppMessageContext(rawPayload, chatId, instance, text);
 }
 
 /**
@@ -349,32 +393,39 @@ function classifyMessageTrigger(context: MessageContext): AgentTriggerType {
   return 'name_match';
 }
 
+/** Determine WhatsApp chat type from JID format */
+function whatsappChatType(chatId: string): 'dm' | 'group' | 'channel' {
+  if (chatId.includes('@s.whatsapp.net')) return 'dm';
+  if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
+  if (chatId.includes('@g.us')) return 'group';
+  if (chatId.includes('@newsletter')) return 'channel';
+  return 'dm';
+}
+
 /**
- * Determine chat type from platform-specific chat ID
+ * Determine chat type from platform-specific chat ID and optional rawPayload hints
  */
-function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'channel' {
+function determineChatType(
+  chatId: string,
+  channel: string,
+  rawPayload?: Record<string, unknown>,
+): 'dm' | 'group' | 'channel' {
   if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
-    if (chatId.includes('@s.whatsapp.net')) return 'dm';
-    if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
-    if (chatId.includes('@g.us')) return 'group';
-    if (chatId.includes('@newsletter')) return 'channel';
-    return 'dm'; // fallback
+    return whatsappChatType(chatId);
   }
-
   if (channel === 'telegram') {
-    // Telegram: negative chatId = group/supergroup, positive = DM
     const numId = Number(chatId);
-    if (!Number.isNaN(numId) && numId < 0) return 'group';
-    return 'dm';
+    return !Number.isNaN(numId) && numId < 0 ? 'group' : 'dm';
   }
-
+  if (channel === 'slack') {
+    if (rawPayload?.isDm === true) return 'dm';
+    return 'channel';
+  }
   if (channel === 'discord') {
-    // Discord group detection logic (based on chatId format or instance metadata)
-    // For now, assume DM unless proven otherwise
+    if (rawPayload?.isGroup === true) return 'group';
     return 'dm';
   }
-
-  return 'dm'; // default fallback
+  return 'dm';
 }
 
 async function sendTypingPresence(
@@ -400,6 +451,7 @@ async function sendTextMessage(
   chatId: string,
   text: string,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
+  replyTo?: string,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -407,6 +459,7 @@ async function sendTextMessage(
   await plugin.sendMessage(instanceId, {
     to: chatId,
     content: { type: 'text', text },
+    replyTo,
     metadata: { messageFormatMode },
   });
 }
@@ -704,6 +757,7 @@ async function sendResponseParts(
   parts: string[],
   splitConfig: SplitDelayConfig,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
+  replyTo?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -711,8 +765,14 @@ async function sendResponseParts(
     allChunks.push(...chunkText(part, messageLimit));
   }
 
+  // Slack needs thread_ts on every message to stay in thread.
+  // WhatsApp/Discord senders only quote the first chunk internally,
+  // so passing replyTo on subsequent chunks creates unwanted extra replies.
+  const isSlack = channel === 'slack';
+
   for (const [index, chunk] of allChunks.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode);
+    const chunkReplyTo = isSlack || index === 0 ? replyTo : undefined;
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo);
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1065,19 +1125,31 @@ async function resolveStreamingCapabilities(
   db: Database,
 ): Promise<StreamCapabilities | null> {
   if (!instance.agentStreamMode) {
-    log.debug('Stream guard: agentStreamMode is falsy', { instanceId: instance.id, agentStreamMode: instance.agentStreamMode, chatId });
+    log.debug('Stream guard: agentStreamMode is falsy', {
+      instanceId: instance.id,
+      agentStreamMode: instance.agentStreamMode,
+      chatId,
+    });
     return null;
   }
 
   const provider = await getAgentProvider(services, instance, db);
   if (!provider?.triggerStream) {
-    log.debug('Stream guard: provider has no triggerStream', { instanceId: instance.id, hasProvider: !!provider, chatId });
+    log.debug('Stream guard: provider has no triggerStream', {
+      instanceId: instance.id,
+      hasProvider: !!provider,
+      chatId,
+    });
     return null;
   }
 
   const plugin = await getPlugin(channel);
   if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) {
-    log.debug('Stream guard: channel does not support streaming', { channel, canStream: plugin?.capabilities?.canStreamResponse, chatId });
+    log.debug('Stream guard: channel does not support streaming', {
+      channel,
+      canStream: plugin?.capabilities?.canStreamResponse,
+      chatId,
+    });
     return null;
   }
 
@@ -1124,6 +1196,16 @@ async function consumeStream(
   return !hadError;
 }
 
+/** Extract thread ID from the first buffered message rawPayload (for per_thread session strategy) */
+function extractThreadId(messages: BufferedMessage[]): string | undefined {
+  return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
+}
+
+/** Merge per-thread history context with DB-fetched context messages (extra comes first) */
+function mergeContextMessages(extra: string[] | undefined, db: string[]): string[] {
+  return extra?.length ? [...extra, ...db] : db;
+}
+
 /**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
@@ -1141,6 +1223,7 @@ async function dispatchViaStreamingProvider(
   traceId: string,
   rawEvent: AgentTrigger['event'],
   db: Database,
+  extraContextMessages?: string[],
 ): Promise<boolean> {
   const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId, db);
   if (!resolved) return false;
@@ -1149,8 +1232,14 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && !mediaFiles.length) return false;
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
-  const replyToId = messages[0]?.payload.externalId;
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const rawThreadId = rawPl.threadId as string | undefined;
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+
+  const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
+  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1171,9 +1260,10 @@ async function dispatchViaStreamingProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
+    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
-  const chatType = determineChatType(chatId, channel);
+  const chatType = determineChatType(chatId, channel, rawPl);
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
@@ -1344,6 +1434,7 @@ async function dispatchViaProvider(
   traceId: string,
   rawEvent: AgentTrigger['event'],
   db: Database,
+  extraContextMessages?: string[],
 ): Promise<boolean> {
   const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
@@ -1360,11 +1451,13 @@ async function dispatchViaProvider(
     messageTexts.push('[Media message]');
   }
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const rawThreadId = extractThreadId(messages);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
   // Build context messages for group conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const contextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1385,7 +1478,7 @@ async function dispatchViaProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
-    contextMessages: contextMessages.length > 0 ? contextMessages : undefined,
+    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
   const result = await provider.trigger(trigger);
@@ -1394,7 +1487,8 @@ async function dispatchViaProvider(
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
+    const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1437,7 +1531,8 @@ async function dispatchViaLegacy(
   }
 
   // Determine chat type and fetch metadata
-  const chatType = determineChatType(chatId, instance.channel);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const chatType = determineChatType(chatId, instance.channel, rawPl);
   const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
     services,
     channel,
@@ -1465,7 +1560,8 @@ async function dispatchViaLegacy(
   const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
+  const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -1552,11 +1648,7 @@ async function handleSessionReset(
   const inst = instance as Record<string, unknown>;
   const msgRawPayload = firstMessage.payload.rawPayload ?? {};
 
-  const rawChatType = determineChatType(chatId, channel);
-  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
-  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
-  // rawPayload.isGroup=true for guild channels, so override when available.
-  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
+  const resolvedChatType = determineChatType(chatId, channel, msgRawPayload as Record<string, unknown>);
 
   // Classify as 'thread' when the message is from a thread channel.
   // The SDK top-level threadId field is set by some channels; Discord and others
@@ -1572,7 +1664,13 @@ async function handleSessionReset(
       ? 'group'
       : resolvedChatType;
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const rawThreadIdForReset = (msgRawPayload as Record<string, unknown>).threadId as string | undefined;
+  const sessionId = computeSessionId(
+    instance.agentSessionStrategy ?? 'per_chat',
+    senderId,
+    chatId,
+    rawThreadIdForReset,
+  );
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
@@ -1602,6 +1700,303 @@ async function handleSessionReset(
 
   // Record activity for session tracking (sliding window for idle reset)
   sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+}
+
+// ============================================================================
+// Per-Thread Session Tracking
+// ============================================================================
+
+/**
+ * Check whether a per_thread session has been initialized for this instance/thread.
+ * Uses the agentSessions table with a dedicated 'thread_init:' key prefix.
+ */
+async function checkPerThreadSessionExists(db: Database, instanceId: string, sessionId: string): Promise<boolean> {
+  const initKey = `thread_init:${sessionId}`;
+  const result = await db
+    .select({ instanceId: agentSessions.instanceId })
+    .from(agentSessions)
+    .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
+    .limit(1);
+  return result.length > 0;
+}
+
+/**
+ * Mark a per_thread session as initialized in the DB.
+ * Called after the first lazy-init dispatch so subsequent triggers skip history fetch.
+ */
+async function markPerThreadSessionInitialized(db: Database, instanceId: string, sessionId: string): Promise<void> {
+  const initKey = `thread_init:${sessionId}`;
+  const now = new Date();
+  await db
+    .insert(agentSessions)
+    .values({
+      instanceId,
+      sessionKey: initKey,
+      providerSessionData: { initialized: true, initializedAt: now.toISOString() },
+      lastUsedAt: now,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: [agentSessions.instanceId, agentSessions.sessionKey],
+      set: { lastUsedAt: now, updatedAt: now },
+    });
+}
+
+// ============================================================================
+// Per-Thread Lazy Init: History Fetch + Media Processing
+// ============================================================================
+
+/** Emoji icons for media processing start/end reactions */
+const PROC_REACT_START: Record<string, string> = { audio: '🎧', image: '👀', video: '👀', document: '👀' };
+const PROC_REACT_DONE = '✅';
+
+/**
+ * Determine the content-type category from a MIME type string.
+ */
+function mimeToContentType(mimeType: string): 'audio' | 'image' | 'video' | 'document' {
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'document';
+}
+
+/**
+ * Download a URL to a temp file and return the local path.
+ * Returns null on any error (graceful degradation).
+ */
+async function downloadToTempFile(url: string, mimeType: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const ext = mimeType.split('/')[1]?.split(';')[0] ?? 'bin';
+    const tmpPath = join(tmpdir(), `omni-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+    await writeFile(tmpPath, buffer);
+    return tmpPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Download or resolve a media file and run it through the media processing service.
+ * Returns the processed text content, or null if unavailable / processing failed.
+ */
+async function processMediaFile(
+  msg: HistorySyncMessage,
+  mimeType: string,
+  mediaService: ReturnType<typeof createMediaProcessingService> | null,
+): Promise<string | null> {
+  let localPath = msg.content.localPath ?? null;
+  let ownedTempFile = false;
+
+  if (!localPath && msg.content.mediaUrl && mediaService) {
+    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType);
+    if (localPath) ownedTempFile = true;
+  }
+
+  if (!localPath || !mediaService) return null;
+
+  try {
+    const result = await mediaService.process(localPath, mimeType, { caption: msg.content.caption });
+    return result.success && result.content ? result.content : null;
+  } catch (err) {
+    log.debug('Media processing failed for history message', { error: String(err), messageId: msg.externalId });
+    return null;
+  } finally {
+    if (ownedTempFile) {
+      import('node:fs').then(({ unlink }) => {
+        unlink(localPath as string, () => {});
+      });
+    }
+  }
+}
+
+/** Build the final formatted string for a history media message */
+function buildHistoryMediaResult(
+  header: string,
+  icon: string,
+  contentType: string,
+  processedContent: string | null,
+  caption: string | undefined,
+  text: string | undefined,
+): string {
+  if (!processedContent) {
+    return `${header} ${icon}: ${caption ?? text ?? `[${contentType}]`}`;
+  }
+  const suffix = caption ? ` (${caption})` : '';
+  return `${header} ${icon}: ${processedContent}${suffix}`;
+}
+
+/**
+ * Format a single history message as a context string, processing media when possible.
+ */
+async function processHistoryMessage(
+  msg: HistorySyncMessage,
+  mediaService: ReturnType<typeof createMediaProcessingService> | null,
+  reactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+  unreactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+): Promise<string> {
+  const timeStr = msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const header = `[${msg.from ?? 'Unknown'} - ${timeStr}]`;
+
+  if (!msg.content.mimeType || (!msg.content.localPath && !msg.content.mediaUrl)) {
+    return `${header} ${msg.content.text ?? ''}`.trim();
+  }
+
+  const mimeType = msg.content.mimeType;
+  const contentType = mimeToContentType(mimeType);
+  const icon = MEDIA_ICONS[contentType] ?? '📎';
+  const startEmoji = PROC_REACT_START[contentType] ?? '👀';
+
+  if (reactFn) reactFn(msg.externalId, startEmoji).catch(() => {});
+
+  const processedContent = await processMediaFile(msg, mimeType, mediaService);
+
+  if (processedContent) {
+    if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
+    if (reactFn) reactFn(msg.externalId, PROC_REACT_DONE).catch(() => {});
+  }
+
+  return buildHistoryMediaResult(header, icon, contentType, processedContent, msg.content.caption, msg.content.text);
+}
+
+/**
+ * Fetch thread history, process media files, and return formatted context messages.
+ * Called on the first trigger of a per_thread session (lazy init).
+ */
+async function fetchAndProcessThreadHistory(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  threadId: string,
+): Promise<string[]> {
+  const plugin = await getPlugin(channel);
+  if (!plugin?.fetchHistory) {
+    log.debug('Channel plugin does not support fetchHistory', { instanceId: instance.id, channel });
+    return [];
+  }
+
+  let historyResult: FetchHistoryResult;
+  try {
+    historyResult = await plugin.fetchHistory(instance.id, {
+      channelId: chatId,
+      threadId,
+      limit: 200,
+    });
+  } catch (err) {
+    log.warn('fetchHistory failed, proceeding without thread context', {
+      error: String(err),
+      instanceId: instance.id,
+      channel,
+    });
+    return [];
+  }
+
+  // Build MediaProcessingService if API keys are configured
+  let mediaService: ReturnType<typeof createMediaProcessingService> | null = null;
+  try {
+    const groqApiKey = await services.settings.getSecret('groq.api_key', 'GROQ_API_KEY');
+    const openaiApiKey = await services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY');
+    const geminiApiKey = await services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY');
+    if (groqApiKey || openaiApiKey || geminiApiKey) {
+      mediaService = createMediaProcessingService({ groqApiKey, openaiApiKey, geminiApiKey });
+    }
+  } catch {
+    // Non-fatal: proceed without media processing
+  }
+
+  const boundReact = plugin.react?.bind(plugin);
+  const boundUnreact = plugin.unreact?.bind(plugin);
+  const reactFn = boundReact ? (msgId: string, emoji: string) => boundReact(instance.id, chatId, msgId, emoji) : null;
+  const unreactFn = boundUnreact
+    ? (msgId: string, emoji: string) => boundUnreact(instance.id, chatId, msgId, emoji)
+    : null;
+
+  // Process messages in parallel (with a cap of 5 concurrent media jobs)
+  const CONCURRENCY = 5;
+  const contextMessages: string[] = [];
+  const mediaMessages = historyResult.messages.filter((m) => !m.isFromMe);
+
+  // Process in batches to cap concurrency
+  for (let i = 0; i < mediaMessages.length; i += CONCURRENCY) {
+    const batch = mediaMessages.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn)));
+    contextMessages.push(...results);
+  }
+
+  log.info('Thread history fetched', {
+    instanceId: instance.id,
+    channel,
+    chatId,
+    threadId,
+    totalMessages: historyResult.totalFetched,
+    contextMessages: contextMessages.length,
+  });
+
+  return contextMessages;
+}
+
+/**
+ * Handle the first trigger in a per_thread session:
+ * fetch history, process media, mark session initialized, return context messages.
+ */
+async function handlePerThreadLazyInit(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  threadId: string,
+  sessionId: string,
+  db: Database,
+): Promise<string[]> {
+  log.info('per_thread lazy init', {
+    instanceId: instance.id,
+    channel,
+    chatId,
+    threadId,
+    sessionId,
+  });
+
+  const contextMessages = await fetchAndProcessThreadHistory(services, instance, channel, chatId, threadId);
+
+  // Persist the init marker so subsequent triggers skip history fetch
+  try {
+    await markPerThreadSessionInitialized(db, instance.id, sessionId);
+  } catch (err) {
+    log.warn('Failed to mark per_thread session initialized', {
+      error: String(err),
+      instanceId: instance.id,
+      sessionId,
+    });
+  }
+
+  return contextMessages;
+}
+
+/**
+ * If the instance uses per_thread strategy and this is the first trigger for the thread,
+ * fetch and process thread history and return it as extra context messages.
+ * Returns undefined if no lazy init is needed.
+ */
+async function resolvePerThreadExtraContext(
+  db: Database,
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  firstMessage: BufferedMessage,
+): Promise<string[] | undefined> {
+  const strategy = instance.agentSessionStrategy ?? 'per_chat';
+  const rawThreadId = (firstMessage.payload.rawPayload as Record<string, unknown>)?.threadId as string | undefined;
+  if (strategy !== 'per_thread' || !rawThreadId) return undefined;
+  const sessionId = computeSessionId('per_thread', senderId, chatId, rawThreadId);
+  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId);
+  if (sessionExists) return undefined;
+  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
 }
 
 async function processAgentResponse(
@@ -1668,6 +2063,19 @@ async function processAgentResponse(
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
+  // ── Per-thread lazy init ──
+  // On the first trigger in a per_thread session: fetch thread history, process media,
+  // and inject the formatted messages as extra context for the agent.
+  const perThreadExtraContext = await resolvePerThreadExtraContext(
+    db,
+    services,
+    instance,
+    channel,
+    chatId,
+    senderId,
+    firstMessage,
+  );
+
   try {
     // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
     // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
@@ -1691,6 +2099,7 @@ async function processAgentResponse(
         traceId,
         rawEvent,
         db,
+        perThreadExtraContext,
       );
 
       // B-1b: Fall back to accumulate-then-reply
@@ -1708,6 +2117,7 @@ async function processAgentResponse(
           traceId,
           rawEvent,
           db,
+          perThreadExtraContext,
         );
       }
     } catch (providerError) {
@@ -1869,7 +2279,12 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
       streamConfig: schemaConfig.streamConfig as
-        | { showToolCalls?: boolean; showThinking?: boolean; showToolProgress?: boolean; toolCallFormat?: 'compact' | 'verbose' }
+        | {
+            showToolCalls?: boolean;
+            showThinking?: boolean;
+            showToolProgress?: boolean;
+            toolCallFormat?: 'compact' | 'verbose';
+          }
         | undefined,
     },
   );
@@ -2087,6 +2502,7 @@ async function processReactionTrigger(
           result.parts,
           getSplitDelayConfig(instance),
           _fmtMode,
+          payload.messageId,
         );
       }
 
@@ -2115,7 +2531,7 @@ async function processReactionTrigger(
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
     // Determine chat type and fetch metadata
-    const chatType = determineChatType(externalChatId, instance.channel);
+    const chatType = determineChatType(externalChatId, instance.channel, payload.rawPayload as Record<string, unknown>);
     const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
       services,
       channel,
@@ -2147,6 +2563,7 @@ async function processReactionTrigger(
         result.parts,
         getSplitDelayConfig(instance),
         _fmtMode,
+        payload.messageId,
       );
     }
 
@@ -2260,10 +2677,28 @@ async function resolveEffectiveReplyFilter(
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
+/** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
+async function resolveSlackThreadReply(
+  chatsService: Services['chats'],
+  messagesService: Services['messages'],
+  instance: Instance,
+  payload: MessageReceivedPayload,
+  context: MessageContext,
+): Promise<void> {
+  if (instance.channel !== 'slack') return;
+  const raw = payload.rawPayload ?? {};
+  if (raw.isThreadReply !== true || !raw.threadTs) return;
+  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
+  if (!chat) return;
+  context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: gate function intentionally handles many early-exit conditions
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
+  messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
@@ -2318,6 +2753,8 @@ async function shouldProcessMessage(
       messageContext,
     );
   }
+
+  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext);
 
   log.debug('Message context built', {
     instanceId: instance.id,
@@ -2585,6 +3022,33 @@ async function shouldRespondViaGate(
   }
 }
 
+/** Evaluate gate for non-mention/reply triggers; returns true if response should be skipped */
+async function shouldSkipViaGate(
+  triggerType: AgentTriggerType,
+  firstMsg: BufferedMessage,
+  instance: Instance,
+  messages: BufferedMessage[],
+  services: Services,
+): Promise<boolean> {
+  if (triggerType === 'mention' || triggerType === 'reply') return false;
+  const chatType = determineChatType(
+    firstMsg.payload.chatId,
+    firstMsg.metadata.channelType ?? 'whatsapp',
+    (firstMsg.payload.rawPayload ?? {}) as Record<string, unknown>,
+  );
+  const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
+  if (!shouldRespond) {
+    log.info('Gate skipped response', {
+      instanceId: instance.id,
+      chatId: firstMsg.payload.chatId,
+      triggerType,
+      traceId: firstMsg.metadata.traceId,
+      messageCount: messages.length,
+    });
+  }
+  return !shouldRespond;
+}
+
 /**
  * Set up agent dispatcher - subscribes to message AND reaction events
  * Returns a cleanup function that should be called on shutdown.
@@ -2632,21 +3096,7 @@ export async function setupAgentDispatcher(
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
 
-    // Bypass gate for direct mention/reply. For dm/name_match, evaluate via gate.
-    if (triggerType !== 'mention' && triggerType !== 'reply') {
-      const chatType = determineChatType(firstMsg.payload.chatId, firstMsg.metadata.channelType ?? 'whatsapp');
-      const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
-      if (!shouldRespond) {
-        log.info('Gate skipped response', {
-          instanceId: instance.id,
-          chatId: firstMsg.payload.chatId,
-          triggerType,
-          traceId: firstMsg.metadata.traceId,
-          messageCount: messages.length,
-        });
-        return;
-      }
-    }
+    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
@@ -2672,6 +3122,7 @@ export async function setupAgentDispatcher(
             agentRunner,
             accessService,
             services.chats,
+            services.messages,
             services.routeResolver,
             rateLimiter,
             payload,

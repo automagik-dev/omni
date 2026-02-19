@@ -158,7 +158,6 @@ export class WhatsAppStreamSender implements StreamSender {
 
   /** Send any remaining unsent content on stream completion. */
   private async handleParagraphModeFinal(finalContent: string): Promise<void> {
-
     const unsent = finalContent.slice(this.sentLength).trimStart();
     if (!unsent.trim()) return;
     await this.sendFormattedChunks(unsent);
@@ -183,6 +182,7 @@ export class WhatsAppStreamSender implements StreamSender {
     await this.throttledEdit(displayText);
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream send logic requires multiple branching paths
   private async handleEditModeFinal(finalContent: string): Promise<void> {
     const text = this.formatMode !== 'passthrough' ? markdownToWhatsApp(finalContent) : finalContent;
     const chunks = splitWhatsAppMessage(text, MAX_MESSAGE_LENGTH);
@@ -201,6 +201,7 @@ export class WhatsAppStreamSender implements StreamSender {
         return;
       }
       for (let i = 1; i < chunks.length; i++) {
+        // biome-ignore lint/style/noNonNullAssertion: guarded by if (chunks[i]) above
         if (chunks[i]) await this.sendMessage(chunks[i]!);
       }
     } else {

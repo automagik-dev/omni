@@ -103,8 +103,8 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
     unit: 'per_document',
     inputRate: 0,
   },
-  'local:xlsx': {
-    model: 'xlsx',
+  'local:exceljs': {
+    model: 'exceljs',
     provider: 'local',
     unit: 'per_document',
     inputRate: 0,
