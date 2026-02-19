@@ -27,9 +27,8 @@ const logger = createLogger({ module: 'plugin-loader' });
  */
 function findMonorepoRoot(startDir: string): string | null {
   let current = startDir;
-  const root = dirname(current);
 
-  while (current !== root) {
+  while (current !== dirname(current)) {
     if (existsSync(join(current, 'turbo.json'))) {
       return current;
     }
