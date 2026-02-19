@@ -141,11 +141,6 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       this.connections.set(instanceId, connection);
 
-      // Set bot presence to online
-      connection.client.users.setPresence({ presence: 'auto' }).catch((err) => {
-        this.logger.warn('Failed to set presence to auto', { instanceId, error: String(err) });
-      });
-
       await this.updateInstanceStatus(instanceId, config, {
         state: 'connected',
         since: new Date(),
@@ -188,11 +183,6 @@ export class SlackPlugin extends BaseChannelPlugin {
   async disconnect(instanceId: string): Promise<void> {
     const connection = this.connections.get(instanceId);
     if (!connection) return;
-
-    // Set bot presence to away before disconnecting (fire-and-forget, same as connect)
-    connection.client.users.setPresence({ presence: 'away' }).catch((err) => {
-      this.logger.warn('Failed to set presence to away', { instanceId, error: String(err) });
-    });
 
     await destroyBoltConnection(connection, this.logger);
     this.connections.delete(instanceId);
