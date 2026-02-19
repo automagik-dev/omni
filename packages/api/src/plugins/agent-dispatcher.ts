@@ -566,7 +566,7 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
