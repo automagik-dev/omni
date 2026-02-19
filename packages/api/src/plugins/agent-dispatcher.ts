@@ -299,10 +299,23 @@ function getDebounceConfig(instance: Instance): DebounceConfig {
   };
 }
 
-function buildMessageContext(payload: MessageReceivedPayload, instance: Instance): MessageContext {
-  const rawPayload = payload.rawPayload ?? {};
-  const chatId = payload.chatId ?? '';
+/** Build message context for Slack channels (isReplyToBot resolved async later) */
+function buildSlackMessageContext(rawPayload: Record<string, unknown>, text: string): MessageContext {
+  return {
+    isDirectMessage: rawPayload.isDm === true,
+    mentionsBot: rawPayload.isMentioningInstance === true,
+    isReplyToBot: false, // resolved async via hasBotRepliedInThread
+    text,
+  };
+}
 
+/** Build message context for WhatsApp / default channels */
+function buildWhatsAppMessageContext(
+  rawPayload: Record<string, unknown>,
+  chatId: string,
+  instance: Instance,
+  text: string,
+): MessageContext {
   const isDirectMessage =
     !chatId.includes('@g.us') &&
     !chatId.includes('@broadcast') &&
@@ -331,12 +344,20 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
     ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
     : false;
 
-  return {
-    isDirectMessage,
-    mentionsBot,
-    isReplyToBot,
-    text: payload.content?.text ?? '',
-  };
+  return { isDirectMessage, mentionsBot, isReplyToBot, text };
+}
+
+function buildMessageContext(payload: MessageReceivedPayload, instance: Instance): MessageContext {
+  const rawPayload = payload.rawPayload ?? {};
+  const chatId = payload.chatId ?? '';
+  const text = payload.content?.text ?? '';
+  const channel = instance.channel;
+
+  if (channel === 'slack') {
+    return buildSlackMessageContext(rawPayload, text);
+  }
+
+  return buildWhatsAppMessageContext(rawPayload, chatId, instance, text);
 }
 
 /**
@@ -349,32 +370,39 @@ function classifyMessageTrigger(context: MessageContext): AgentTriggerType {
   return 'name_match';
 }
 
+/** Determine WhatsApp chat type from JID format */
+function whatsappChatType(chatId: string): 'dm' | 'group' | 'channel' {
+  if (chatId.includes('@s.whatsapp.net')) return 'dm';
+  if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
+  if (chatId.includes('@g.us')) return 'group';
+  if (chatId.includes('@newsletter')) return 'channel';
+  return 'dm';
+}
+
 /**
- * Determine chat type from platform-specific chat ID
+ * Determine chat type from platform-specific chat ID and optional rawPayload hints
  */
-function determineChatType(chatId: string, channel: string): 'dm' | 'group' | 'channel' {
+function determineChatType(
+  chatId: string,
+  channel: string,
+  rawPayload?: Record<string, unknown>,
+): 'dm' | 'group' | 'channel' {
   if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
-    if (chatId.includes('@s.whatsapp.net')) return 'dm';
-    if (chatId.includes('@lid')) return 'dm'; // LID-first: @lid is a valid DM identity
-    if (chatId.includes('@g.us')) return 'group';
-    if (chatId.includes('@newsletter')) return 'channel';
-    return 'dm'; // fallback
+    return whatsappChatType(chatId);
   }
-
   if (channel === 'telegram') {
-    // Telegram: negative chatId = group/supergroup, positive = DM
     const numId = Number(chatId);
-    if (!Number.isNaN(numId) && numId < 0) return 'group';
-    return 'dm';
+    return !Number.isNaN(numId) && numId < 0 ? 'group' : 'dm';
   }
-
+  if (channel === 'slack') {
+    if (rawPayload?.isDm === true) return 'dm';
+    return 'channel';
+  }
   if (channel === 'discord') {
-    // Discord group detection logic (based on chatId format or instance metadata)
-    // For now, assume DM unless proven otherwise
+    if (rawPayload?.isGroup === true) return 'group';
     return 'dm';
   }
-
-  return 'dm'; // default fallback
+  return 'dm';
 }
 
 async function sendTypingPresence(
@@ -400,6 +428,7 @@ async function sendTextMessage(
   chatId: string,
   text: string,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
+  replyTo?: string,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -407,6 +436,7 @@ async function sendTextMessage(
   await plugin.sendMessage(instanceId, {
     to: chatId,
     content: { type: 'text', text },
+    replyTo,
     metadata: { messageFormatMode },
   });
 }
@@ -704,6 +734,7 @@ async function sendResponseParts(
   parts: string[],
   splitConfig: SplitDelayConfig,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
+  replyTo?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -711,8 +742,14 @@ async function sendResponseParts(
     allChunks.push(...chunkText(part, messageLimit));
   }
 
+  // Slack needs thread_ts on every message to stay in thread.
+  // WhatsApp/Discord senders only quote the first chunk internally,
+  // so passing replyTo on subsequent chunks creates unwanted extra replies.
+  const isSlack = channel === 'slack';
+
   for (const [index, chunk] of allChunks.entries()) {
-    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode);
+    const chunkReplyTo = isSlack || index === 0 ? replyTo : undefined;
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo);
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1141,7 +1178,7 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
-  const replyToId = messages[0]?.payload.externalId;
+  const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1164,7 +1201,8 @@ async function dispatchViaStreamingProvider(
     sessionId,
   };
 
-  const chatType = determineChatType(chatId, channel);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const chatType = determineChatType(chatId, channel, rawPl);
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
@@ -1385,7 +1423,8 @@ async function dispatchViaProvider(
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
+    const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1428,7 +1467,8 @@ async function dispatchViaLegacy(
   }
 
   // Determine chat type and fetch metadata
-  const chatType = determineChatType(chatId, instance.channel);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const chatType = determineChatType(chatId, instance.channel, rawPl);
   const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
     services,
     channel,
@@ -1456,7 +1496,8 @@ async function dispatchViaLegacy(
   const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode);
+  const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -1543,11 +1584,7 @@ async function handleSessionReset(
   const inst = instance as Record<string, unknown>;
   const msgRawPayload = firstMessage.payload.rawPayload ?? {};
 
-  const rawChatType = determineChatType(chatId, channel);
-  // determineChatType cannot distinguish Discord guild channels from DMs using chatId
-  // alone (both are numeric Discord channel IDs).  The Discord plugin sets
-  // rawPayload.isGroup=true for guild channels, so override when available.
-  const resolvedChatType = channel === 'discord' && msgRawPayload.isGroup === true ? 'group' : rawChatType;
+  const resolvedChatType = determineChatType(chatId, channel, msgRawPayload as Record<string, unknown>);
 
   // Classify as 'thread' when the message is from a thread channel.
   // The SDK top-level threadId field is set by some channels; Discord and others
@@ -2072,6 +2109,7 @@ async function processReactionTrigger(
           result.parts,
           getSplitDelayConfig(instance),
           _fmtMode,
+          payload.messageId,
         );
       }
 
@@ -2100,7 +2138,7 @@ async function processReactionTrigger(
     const senderName = await services.agentRunner.getSenderName(personId, undefined);
 
     // Determine chat type and fetch metadata
-    const chatType = determineChatType(externalChatId, instance.channel);
+    const chatType = determineChatType(externalChatId, instance.channel, payload.rawPayload as Record<string, unknown>);
     const { avatarUrl: senderAvatarUrl, platformUsername: senderPlatformUsername } = await fetchSenderMetadata(
       services,
       channel,
@@ -2132,6 +2170,7 @@ async function processReactionTrigger(
         result.parts,
         getSplitDelayConfig(instance),
         _fmtMode,
+        payload.messageId,
       );
     }
 
@@ -2245,10 +2284,27 @@ async function resolveEffectiveReplyFilter(
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
+/** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
+async function resolveSlackThreadReply(
+  chatsService: Services['chats'],
+  messagesService: Services['messages'],
+  instance: Instance,
+  payload: MessageReceivedPayload,
+  context: MessageContext,
+): Promise<void> {
+  if (instance.channel !== 'slack') return;
+  const raw = payload.rawPayload ?? {};
+  if (raw.isThreadReply !== true || !raw.threadTs) return;
+  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
+  if (!chat) return;
+  context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
+  messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
   rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
@@ -2296,6 +2352,8 @@ async function shouldProcessMessage(
       messageContext,
     );
   }
+
+  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext);
 
   log.debug('Message context built', {
     instanceId: instance.id,
@@ -2563,6 +2621,33 @@ async function shouldRespondViaGate(
   }
 }
 
+/** Evaluate gate for non-mention/reply triggers; returns true if response should be skipped */
+async function shouldSkipViaGate(
+  triggerType: AgentTriggerType,
+  firstMsg: BufferedMessage,
+  instance: Instance,
+  messages: BufferedMessage[],
+  services: Services,
+): Promise<boolean> {
+  if (triggerType === 'mention' || triggerType === 'reply') return false;
+  const chatType = determineChatType(
+    firstMsg.payload.chatId,
+    firstMsg.metadata.channelType ?? 'whatsapp',
+    (firstMsg.payload.rawPayload ?? {}) as Record<string, unknown>,
+  );
+  const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
+  if (!shouldRespond) {
+    log.info('Gate skipped response', {
+      instanceId: instance.id,
+      chatId: firstMsg.payload.chatId,
+      triggerType,
+      traceId: firstMsg.metadata.traceId,
+      messageCount: messages.length,
+    });
+  }
+  return !shouldRespond;
+}
+
 /**
  * Set up agent dispatcher - subscribes to message AND reaction events
  * Returns a cleanup function that should be called on shutdown.
@@ -2610,21 +2695,7 @@ export async function setupAgentDispatcher(
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
 
-    // Bypass gate for direct mention/reply. For dm/name_match, evaluate via gate.
-    if (triggerType !== 'mention' && triggerType !== 'reply') {
-      const chatType = determineChatType(firstMsg.payload.chatId, firstMsg.metadata.channelType ?? 'whatsapp');
-      const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
-      if (!shouldRespond) {
-        log.info('Gate skipped response', {
-          instanceId: instance.id,
-          chatId: firstMsg.payload.chatId,
-          triggerType,
-          traceId: firstMsg.metadata.traceId,
-          messageCount: messages.length,
-        });
-        return;
-      }
-    }
+    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
@@ -2650,6 +2721,7 @@ export async function setupAgentDispatcher(
             agentRunner,
             accessService,
             services.chats,
+            services.messages,
             services.routeResolver,
             rateLimiter,
             payload,

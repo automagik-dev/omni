@@ -6,7 +6,7 @@
  * Supports:
  * - PDF: pdf-parse (local)
  * - Word: mammoth (local)
- * - Excel: xlsx (local)
+ * - Excel: exceljs (local, xlsx/xlsm only)
  * - Text/Markdown/JSON: direct read
  * - Scanned PDFs: Gemini Vision (fallback)
  */
@@ -38,7 +38,6 @@ export class DocumentProcessor extends BaseProcessor {
     'application/pdf',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'text/plain',
     'text/markdown',
@@ -76,10 +75,7 @@ export class DocumentProcessor extends BaseProcessor {
       normalizedMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ) {
       result = await this.processWord(filePath);
-    } else if (
-      normalizedMime === 'application/vnd.ms-excel' ||
-      normalizedMime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    ) {
+    } else if (normalizedMime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
       result = await this.processExcel(filePath);
     } else if (normalizedMime === 'text/csv') {
       result = await this.processCsv(filePath);
@@ -183,40 +179,55 @@ export class DocumentProcessor extends BaseProcessor {
   }
 
   /**
-   * Process Excel file using xlsx
+   * Process Excel file using exceljs (xlsx/xlsm only — no legacy .xls)
    */
   private async processExcel(filePath: string): Promise<ProcessingResult> {
     try {
-      const XLSX = await import('xlsx');
+      const ExcelJS = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
 
-      const workbook = XLSX.readFile(filePath);
       const sheets: string[] = [];
-
-      for (const sheetName of workbook.SheetNames) {
-        const sheet = workbook.Sheets[sheetName];
-        if (sheet) {
-          const csv = XLSX.utils.sheet_to_csv(sheet);
-          sheets.push(`## ${sheetName}\n\n${csv}`);
-        }
+      for (const worksheet of workbook.worksheets) {
+        const csv = this.worksheetToCsv(worksheet);
+        sheets.push(`## ${worksheet.name}\n\n${csv}`);
       }
-
-      const content = sheets.join('\n\n---\n\n');
 
       return {
         success: true,
-        content,
+        content: sheets.join('\n\n---\n\n'),
         contentFormat: 'markdown',
         processingType: 'extraction',
         provider: 'local',
-        model: 'xlsx',
+        model: 'exceljs',
         processingTimeMs: 0,
         costCents: 0,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('Excel extraction failed', { error: errorMsg });
-      return this.createFailedResult(errorMsg, 'local', 'xlsx');
+      return this.createFailedResult(errorMsg, 'local', 'exceljs');
     }
+  }
+
+  /**
+   * Convert an ExcelJS worksheet to a CSV string.
+   * ExcelJS row.values is 1-indexed (index 0 is undefined).
+   */
+  private worksheetToCsv(worksheet: import('exceljs').Worksheet): string {
+    const rows: string[] = [];
+    worksheet.eachRow((row) => {
+      const values = (row.values as unknown[]).slice(1); // skip 1-indexed gap
+      const csvRow = values
+        .map((cell) => {
+          if (cell === null || cell === undefined) return '';
+          const str = String(cell);
+          return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+        })
+        .join(',');
+      rows.push(csvRow);
+    });
+    return rows.join('\n');
   }
 
   /**

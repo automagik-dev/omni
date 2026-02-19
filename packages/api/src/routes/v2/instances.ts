@@ -112,6 +112,7 @@ const createInstanceSchema = z.object({
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
+  slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -168,6 +169,58 @@ function persistedTokenForChannel(instance: {
   }
 }
 
+/** Sensitive fields that must never be returned in API responses */
+const SENSITIVE_INSTANCE_FIELDS = [
+  'telegramBotToken',
+  'discordBotToken',
+  'slackBotToken',
+  'slackAppToken',
+  'slackSigningSecret',
+] as const;
+
+/** Strip secret tokens from an instance before returning it in API responses */
+function sanitizeInstance<T extends Record<string, unknown>>(
+  instance: T,
+): Omit<T, (typeof SENSITIVE_INSTANCE_FIELDS)[number]> {
+  const sanitized = { ...instance };
+  for (const field of SENSITIVE_INSTANCE_FIELDS) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
+
+/** Apply Slack-specific config from profileMetadata */
+function applySlackProfileMetadata(
+  opts: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (!metadata) return;
+  if (metadata.replyToMode) opts.replyToMode = metadata.replyToMode;
+  if (metadata.streamMode) opts.streamMode = metadata.streamMode;
+  if (metadata.dmPolicy) opts.dmPolicy = metadata.dmPolicy;
+  if (metadata.dmAllowlist) opts.dmAllowlist = metadata.dmAllowlist;
+}
+
+/** Apply Slack tokens and config to connection options */
+function applySlackConnectOptions(
+  opts: Record<string, unknown>,
+  instance: {
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
+  },
+  overrides?: { slackBotToken?: string | null; slackAppToken?: string | null; slackSigningSecret?: string | null },
+): void {
+  const botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+  if (botToken) opts.botToken = botToken;
+  const appToken = overrides?.slackAppToken ?? instance.slackAppToken;
+  if (appToken) opts.appToken = appToken;
+  const signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
+  if (signingSecret) opts.signingSecret = signingSecret;
+  applySlackProfileMetadata(opts, instance.profileMetadata);
+}
+
 /**
  * Map channel type to its token DB column name.
  * Returns undefined for channels that don't store tokens.
@@ -191,6 +244,7 @@ type InstanceConnectionOptionsInput = {
   token?: string;
   telegramReactionLevel?: string | null;
   slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
 };
 
@@ -206,6 +260,7 @@ function applyChannelSpecificConnectionOptions(
   if (input.channel === 'slack') {
     if (input.token) options.botToken = input.token;
     if (input.slackAppToken) options.appToken = input.slackAppToken;
+    if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
   }
 }
 
@@ -266,6 +321,22 @@ async function triggerCreateConnection(
   log.info('Triggered connection', { instanceId, channel });
 }
 
+/** Build DB update payload to persist tokens provided in a connect request */
+function buildTokenPersistUpdates(
+  channel: string,
+  body: { token?: string; slackBotToken?: string; slackAppToken?: string; slackSigningSecret?: string },
+): Record<string, string> {
+  const updates: Record<string, string> = {};
+  const tokenField = body.token ? channelTokenField(channel) : undefined;
+  if (tokenField && body.token) updates[tokenField] = body.token;
+  if (channel === 'slack') {
+    if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
+    if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
+    if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
+  }
+  return updates;
+}
+
 /** Default reply filter applied when an agent provider is bound but no filter is set */
 const DEFAULT_AGENT_REPLY_FILTER = {
   mode: 'filtered' as const,
@@ -283,7 +354,8 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const result = await services.instances.list({ channel, status, limit, cursor });
 
   // Filter by API key's allowed instanceIds
-  const items = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const filtered = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const items = filtered.map(sanitizeInstance);
 
   return c.json({
     items,
@@ -345,7 +417,7 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**
@@ -373,6 +445,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     token: connectToken,
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
+    slackSigningSecret: instance.slackSigningSecret,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -386,7 +459,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
-  return c.json({ data: instance }, 201);
+  return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
 /**
@@ -412,7 +485,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     await accessCache.clear();
   }
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**
@@ -596,7 +669,10 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 
 // Connect instance schema
 const connectInstanceSchema = z.object({
-  token: z.string().optional().describe('Bot token for Discord instances'),
+  token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
+  slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
+  slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
+  slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
   whatsapp: z
     .object({
@@ -635,7 +711,8 @@ instancesRoutes.post(
       forceNewQr,
       token: connectToken,
       telegramReactionLevel: instance.telegramReactionLevel,
-      slackAppToken: instance.slackAppToken,
+      slackAppToken: body.slackAppToken ?? instance.slackAppToken,
+      slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
       whatsapp: body.whatsapp,
     });
 
@@ -678,11 +755,10 @@ instancesRoutes.post(
       );
     }
 
-    // Update database — persist token if a new one was provided
-    const tokenField = body.token ? channelTokenField(instance.channel) : undefined;
+    // Update database — persist tokens if new ones were provided
     const updated = await services.instances.update(id, {
       isActive: true,
-      ...(tokenField ? { [tokenField]: body.token } : {}),
+      ...buildTokenPersistUpdates(instance.channel, body),
     });
 
     return c.json({
@@ -757,6 +833,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     } else if (instance.channel === 'slack') {
       if (restartToken) restartOptions.botToken = restartToken;
       if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
+    }
+    if (instance.channel === 'slack') {
+      applySlackConnectOptions(restartOptions, instance);
     }
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {
