@@ -98,6 +98,8 @@ interface StreamAccumulator {
   thinkingStartMs: number;
   thinkingDurationMs: number | undefined;
   activeToolBlocks: Map<number, ToolBlock>;
+  /** Tracks which block indices are active text blocks (to detect block completion) */
+  activeTextBlockIndices: Set<number>;
 }
 
 /** Resolved stream config flags (pre-computed from ClaudeCodeStreamConfig). */
@@ -174,6 +176,8 @@ function handleBlockStart(
 
   if (blockType === 'thinking') {
     if (!acc.thinkingStartMs) acc.thinkingStartMs = Date.now();
+  } else if (blockType === 'text') {
+    acc.activeTextBlockIndices.add(index);
   } else if (blockType === 'tool_use' && flags.showToolCalls) {
     acc.activeToolBlocks.set(index, {
       id: (block.id as string) ?? '',
@@ -205,9 +209,10 @@ function handleBlockDelta(
   }
 
   if (deltaType === 'text_delta') {
+    // Accumulate only — emit on content_block_stop to avoid mid-sentence sends
     acc.content += (delta.text as string) ?? '';
     freezeThinking(acc);
-    return contentDelta(acc);
+    return null;
   }
 
   if (deltaType === 'input_json_delta' && flags.showToolCalls) {
@@ -226,24 +231,33 @@ function handleBlockStop(
   acc: StreamAccumulator,
   flags: ResolvedStreamFlags,
 ): StreamDelta | null {
-  if (!flags.showToolCalls) return null;
-
   const index = typeof event.index === 'number' ? event.index : -1;
-  const toolBlock = acc.activeToolBlocks.get(index);
-  if (!toolBlock) return null;
 
-  acc.activeToolBlocks.delete(index);
-
-  let input: Record<string, unknown> = {};
-  try {
-    input = toolBlock.inputJson ? (JSON.parse(toolBlock.inputJson) as Record<string, unknown>) : {};
-  } catch {
-    input = { _raw: toolBlock.inputJson };
+  // Text block completed — emit accumulated content as a delta
+  if (acc.activeTextBlockIndices.has(index)) {
+    acc.activeTextBlockIndices.delete(index);
+    if (!acc.content) return null;
+    return contentDelta(acc);
   }
 
-  acc.content += formatToolCall(toolBlock.name, input, flags.toolCallFormat);
-  freezeThinking(acc);
-  return contentDelta(acc);
+  // Tool use block completed — append tool call annotation if enabled
+  if (flags.showToolCalls) {
+    const toolBlock = acc.activeToolBlocks.get(index);
+    if (toolBlock) {
+      acc.activeToolBlocks.delete(index);
+      let input: Record<string, unknown> = {};
+      try {
+        input = toolBlock.inputJson ? (JSON.parse(toolBlock.inputJson) as Record<string, unknown>) : {};
+      } catch {
+        input = { _raw: toolBlock.inputJson };
+      }
+      acc.content += formatToolCall(toolBlock.name, input, flags.toolCallFormat);
+      freezeThinking(acc);
+      return contentDelta(acc);
+    }
+  }
+
+  return null;
 }
 
 /** Route a stream_event message to the appropriate handler. Returns a delta to yield, or null. */
@@ -580,6 +594,7 @@ export class ClaudeCodeClient implements IAgentClient {
         thinkingStartMs: 0,
         thinkingDurationMs: undefined,
         activeToolBlocks: new Map(),
+        activeTextBlockIndices: new Set(),
       };
 
       log.info('streamRun: starting', {
@@ -603,6 +618,14 @@ export class ClaudeCodeClient implements IAgentClient {
 
           // Capture session ID from system init (before routing)
           const msg = message as Record<string, unknown>;
+
+          // Debug: log every message type from SDK to diagnose streaming
+          log.debug('streamRun: SDK message', {
+            type: msg.type,
+            subtype: msg.subtype,
+            hasEvent: msg.type === 'stream_event' ? !!(msg as { event?: unknown }).event : undefined,
+          });
+
           if (msg.type === 'system' && msg.subtype === 'init') {
             sessionId = (msg.session_id as string) ?? '';
             continue;

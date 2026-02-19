@@ -56,26 +56,32 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
 
   // ─── Content deltas — paragraph detection ──────────────────
 
-  test('onContentDelta without paragraph separator sends nothing', async () => {
+  test('onContentDelta sends content immediately as a complete block', async () => {
     await sender.onContentDelta({
       phase: 'content',
       content: 'Hello world, no newlines here',
     });
-    expect(mockSocket.sent.length).toBe(0);
+    expect(mockSocket.sent.length).toBe(1);
+    expect(mockSocket.sent[0]?.content.text).toBe('Hello world, no newlines here');
   });
 
-  test('onContentDelta with \\n\\n sends completed paragraph', async () => {
+  test('second onContentDelta sends only the new portion', async () => {
+    // Each delta is cumulative — first block sent on first call
     await sender.onContentDelta({
       phase: 'content',
-      content: 'First paragraph.\n\nSecond still typing...',
+      content: 'First block.',
     });
-
-    // "First paragraph." should have been sent
     expect(mockSocket.sent.length).toBe(1);
-    const text = mockSocket.sent[0]?.content.text as string;
-    expect(text).toContain('First paragraph.');
-    // Second paragraph is not complete — should NOT be sent
-    expect(text).not.toContain('Second');
+
+    // Second call: cumulative content includes first block — only new portion sent
+    await sender.onContentDelta({
+      phase: 'content',
+      content: 'First block.\n\nSecond block.',
+    });
+    expect(mockSocket.sent.length).toBe(2);
+    const text = mockSocket.sent[1]?.content.text as string;
+    expect(text).toContain('Second block.');
+    expect(text).not.toContain('First block.');
   });
 
   test('multiple paragraphs sent progressively', async () => {
@@ -94,24 +100,24 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
     expect(mockSocket.sent.length).toBe(2);
   });
 
-  test('onFinal sends remaining unsent content', async () => {
-    // Delta with incomplete paragraph
+  test('onFinal sends content not covered by prior deltas', async () => {
+    // First block comes in via delta
     await sender.onContentDelta({
       phase: 'content',
-      content: 'Para 1.\n\nPara 2 incomplete',
+      content: 'Block one.',
     });
-    expect(mockSocket.sent.length).toBe(1); // Only para 1
+    expect(mockSocket.sent.length).toBe(1);
 
-    // Final sends the rest
+    // Final has additional content that was never in a delta
     await sender.onFinal({
       phase: 'final',
-      content: 'Para 1.\n\nPara 2 complete now.',
+      content: 'Block one.\n\nBlock two complete.',
     });
 
-    // Para 1 from delta + "Para 2 complete now." from final
     expect(mockSocket.sent.length).toBe(2);
     const finalText = mockSocket.sent[1]?.content.text as string;
-    expect(finalText).toContain('Para 2 complete now.');
+    expect(finalText).toContain('Block two complete.');
+    expect(finalText).not.toContain('Block one.');
   });
 
   test('onFinal with all content already sent is a no-op', async () => {
@@ -170,22 +176,21 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
       'group',
     );
 
-    // First delta: one complete paragraph
+    // First delta sends and should quote the trigger
     await quotingSender.onContentDelta({
       phase: 'content',
-      content: 'First para.\n\nSecond typing...',
+      content: 'First block.',
     });
 
-    // Completed paragraph sent — should quote
     expect(mockSocket.sent.length).toBe(1);
     expect(mockSocket.sent[0]?.options).toBeDefined();
     const opts = mockSocket.sent[0]?.options as { quoted: { key: { id: string } } };
     expect(opts.quoted.key.id).toBe('original-msg-id');
 
-    // Final sends remaining — should NOT quote
-    await quotingSender.onFinal({
-      phase: 'final',
-      content: 'First para.\n\nSecond done.',
+    // Second delta (cumulative) — only new portion sent, no quote
+    await quotingSender.onContentDelta({
+      phase: 'content',
+      content: 'First block.\n\nSecond block.',
     });
 
     expect(mockSocket.sent.length).toBe(2);

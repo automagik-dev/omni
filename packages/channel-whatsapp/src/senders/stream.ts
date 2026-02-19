@@ -20,9 +20,6 @@ import { splitWhatsAppMessage } from '../utils/split-message';
 
 const log = createLogger('whatsapp:sender:stream');
 
-/** Paragraph separator — two newlines */
-const PARAGRAPH_SEP = '\n\n';
-
 /** WhatsApp max message length */
 const MAX_MESSAGE_LENGTH = 65_536;
 
@@ -53,7 +50,7 @@ export class WhatsAppStreamSender implements StreamSender {
   private readonly formatMode: 'convert' | 'passthrough';
   private readonly editMode: boolean;
 
-  // ─── Paragraph-based streaming state ────────────────────────
+  // ─── Progressive streaming state ────────────────────────────
   /** How many characters of cumulative content we've already sent */
   private sentLength = 0;
   /** Whether the first message has been sent (for quoting) */
@@ -102,6 +99,7 @@ export class WhatsAppStreamSender implements StreamSender {
 
   async onFinal(delta: StreamDelta & { phase: 'final' }): Promise<void> {
     this.phase = 'done';
+
     this.clearPendingEdit();
 
     const finalContent = delta.content;
@@ -116,12 +114,14 @@ export class WhatsAppStreamSender implements StreamSender {
 
   async onError(_delta: StreamDelta & { phase: 'error' }): Promise<void> {
     this.phase = 'done';
+
     this.clearPendingEdit();
     log.warn('Stream error', { jid: this.jid });
   }
 
   async abort(): Promise<void> {
     this.phase = 'done';
+
     this.clearPendingEdit();
     log.debug('Stream aborted', { jid: this.jid });
   }
@@ -131,48 +131,35 @@ export class WhatsAppStreamSender implements StreamSender {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Check cumulative content for new complete paragraphs and send them.
-   * A paragraph is considered "complete" when followed by \n\n.
+   * Each content delta represents a completed block from the provider
+   * (emitted on content_block_stop, not on every token).
+   * Send the new portion immediately — no buffering, no risk of mid-sentence breaks.
    */
   private async handleParagraphModeDelta(cumulativeContent: string): Promise<void> {
     const unsent = cumulativeContent.slice(this.sentLength);
-    if (!unsent) return;
+    if (!unsent.trim()) return;
 
-    // Find complete paragraphs (everything before the last \n\n)
-    const lastSep = unsent.lastIndexOf(PARAGRAPH_SEP);
-    if (lastSep === -1) return; // No complete paragraph yet
+    await this.sendFormattedChunks(unsent);
+    this.sentLength = cumulativeContent.length;
+  }
 
-    const completedText = unsent.slice(0, lastSep);
-    if (!completedText.trim()) return;
-
-    // Format and send
-    const formatted = this.formatMode !== 'passthrough' ? markdownToWhatsApp(completedText) : completedText;
+  /** Format text and send as one or more WhatsApp messages. */
+  private async sendFormattedChunks(text: string): Promise<void> {
+    const formatted = this.formatMode !== 'passthrough' ? markdownToWhatsApp(text) : text;
     const chunks = splitWhatsAppMessage(formatted, MAX_MESSAGE_LENGTH);
-
     for (const chunk of chunks) {
       if (chunk) {
         await this.sendMessage(chunk);
       }
     }
-
-    // Advance the sent cursor past the completed text + separator
-    this.sentLength += lastSep + PARAGRAPH_SEP.length;
   }
 
   /** Send any remaining unsent content on stream completion. */
   private async handleParagraphModeFinal(finalContent: string): Promise<void> {
+
     const unsent = finalContent.slice(this.sentLength);
-
     if (!unsent.trim()) return;
-
-    const formatted = this.formatMode !== 'passthrough' ? markdownToWhatsApp(unsent) : unsent;
-    const chunks = splitWhatsAppMessage(formatted, MAX_MESSAGE_LENGTH);
-
-    for (const chunk of chunks) {
-      if (chunk) {
-        await this.sendMessage(chunk);
-      }
-    }
+    await this.sendFormattedChunks(unsent);
   }
 
   // ═══════════════════════════════════════════════════════════════

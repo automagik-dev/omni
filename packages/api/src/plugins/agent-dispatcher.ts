@@ -1064,13 +1064,22 @@ async function resolveStreamingCapabilities(
   traceId: string,
   db: Database,
 ): Promise<StreamCapabilities | null> {
-  if (!instance.agentStreamMode) return null;
+  if (!instance.agentStreamMode) {
+    log.debug('Stream guard: agentStreamMode is falsy', { instanceId: instance.id, agentStreamMode: instance.agentStreamMode, chatId });
+    return null;
+  }
 
   const provider = await getAgentProvider(services, instance, db);
-  if (!provider?.triggerStream) return null;
+  if (!provider?.triggerStream) {
+    log.debug('Stream guard: provider has no triggerStream', { instanceId: instance.id, hasProvider: !!provider, chatId });
+    return null;
+  }
 
   const plugin = await getPlugin(channel);
-  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) return null;
+  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) {
+    log.debug('Stream guard: channel does not support streaming', { channel, canStream: plugin?.capabilities?.canStreamResponse, chatId });
+    return null;
+  }
 
   const streamKey = `${instance.id}:${chatId}`;
   if (activeStreams.has(streamKey)) {
@@ -1990,6 +1999,9 @@ async function resolveEffectiveInstance(
     routeScope: route.scope,
     agentProviderId: route.agentProviderId,
     agentId: route.agentId,
+    agentStreamMode: effectiveInstance.agentStreamMode,
+    routeAgentStreamMode: route.agentStreamMode,
+    instanceAgentStreamMode: instance.agentStreamMode,
   });
 
   return { instance: effectiveInstance, routeId: route.id };
