@@ -98,8 +98,12 @@ interface StreamAccumulator {
   thinkingStartMs: number;
   thinkingDurationMs: number | undefined;
   activeToolBlocks: Map<number, ToolBlock>;
-  /** Tracks which block indices are active text blocks (to detect block completion) */
-  activeTextBlockIndices: Set<number>;
+  /** Tracks active text blocks: index → content offset at block start */
+  activeTextBlockIndices: Map<number, number>;
+  /** True when inside a <thinking>...</thinking> XML section in text blocks.
+   *  Claude Code wraps internal reasoning in these tags as regular text —
+   *  we suppress them from content accumulation so they never reach the user. */
+  insideXmlThinking: boolean;
 }
 
 /** Resolved stream config flags (pre-computed from ClaudeCodeStreamConfig). */
@@ -138,6 +142,29 @@ function formatToolCall(name: string, input: Record<string, unknown>, format: 'c
 }
 
 // ---------------------------------------------------------------------------
+// Thinking tag helpers — Claude Code emits <thinking> as plain text blocks
+// ---------------------------------------------------------------------------
+
+const THINKING_TAG_RE = /<thinking>[\s\S]*?<\/thinking>\s*/g;
+
+/** Strip `<thinking>...</thinking>` tags from text (safety net for final content). */
+function stripThinkingTags(text: string): string {
+  let result = text.replace(THINKING_TAG_RE, '');
+  const openIdx = result.indexOf('<thinking>');
+  if (openIdx >= 0) result = result.slice(0, openIdx);
+  return result.trim();
+}
+
+/** Format thinking text as a visible annotation (like tool calls). */
+function formatThinkingAnnotation(thinkingText: string): string {
+  // Show first ~150 chars of reasoning as a compact annotation
+  const clean = thinkingText.replace(/<\/?thinking>/g, '').trim();
+  if (!clean) return '';
+  const preview = clean.length > 150 ? `${clean.slice(0, 150)}…` : clean;
+  return `\n\u{1F4AD} _${preview}_\n`;
+}
+
+// ---------------------------------------------------------------------------
 // StreamDelta helpers — freeze thinking and build cumulative content delta
 // ---------------------------------------------------------------------------
 
@@ -152,7 +179,7 @@ function freezeThinking(acc: StreamAccumulator): void {
 function contentDelta(acc: StreamAccumulator): StreamDelta {
   return {
     phase: 'content',
-    content: acc.content,
+    content: stripThinkingTags(acc.content),
     thinking: acc.thinking || undefined,
     thinkingDurationMs: acc.thinkingDurationMs,
   };
@@ -177,7 +204,7 @@ function handleBlockStart(
   if (blockType === 'thinking') {
     if (!acc.thinkingStartMs) acc.thinkingStartMs = Date.now();
   } else if (blockType === 'text') {
-    acc.activeTextBlockIndices.add(index);
+    acc.activeTextBlockIndices.set(index, acc.content.length);
   } else if (blockType === 'tool_use' && flags.showToolCalls) {
     acc.activeToolBlocks.set(index, {
       id: (block.id as string) ?? '',
@@ -209,8 +236,21 @@ function handleBlockDelta(
   }
 
   if (deltaType === 'text_delta') {
-    // Accumulate only — emit on content_block_stop to avoid mid-sentence sends
-    acc.content += (delta.text as string) ?? '';
+    const text = (delta.text as string) ?? '';
+
+    // Track <thinking> XML tags — Claude Code wraps reasoning in these as regular text.
+    if (text.includes('<thinking>')) acc.insideXmlThinking = true;
+
+    if (acc.insideXmlThinking) {
+      // Accumulate thinking text separately (strip XML tags for clean storage)
+      const clean = text.replace(/<\/?thinking>/g, '');
+      if (clean) acc.thinking += clean;
+    } else {
+      acc.content += text;
+    }
+
+    if (text.includes('</thinking>')) acc.insideXmlThinking = false;
+
     freezeThinking(acc);
     return null;
   }
@@ -235,8 +275,18 @@ function handleBlockStop(
 
   // Text block completed — emit accumulated content as a delta
   if (acc.activeTextBlockIndices.has(index)) {
+    const startOffset = acc.activeTextBlockIndices.get(index)!;
     acc.activeTextBlockIndices.delete(index);
-    if (!acc.content) return null;
+
+    // If the block was pure thinking (no content added), optionally emit annotation
+    if (acc.content.length <= startOffset) {
+      if (flags.showThinking && acc.thinking) {
+        acc.content += formatThinkingAnnotation(acc.thinking);
+        return contentDelta(acc);
+      }
+      return null;
+    }
+
     return contentDelta(acc);
   }
 
@@ -312,10 +362,14 @@ function handleResult(
   freezeThinking(acc);
 
   if (msg.subtype === 'success') {
-    const resultContent = (msg.result as string) ?? '';
+    let resultContent = (msg.result as string) ?? '';
     const totalCost = (msg.total_cost_usd as number) ?? 0;
     const usage = (msg.usage as Record<string, number>) ?? {};
     const sid = (msg.session_id as string) ?? currentSessionId;
+
+    // Safety net: strip leaked <thinking> tags from final content
+    resultContent = stripThinkingTags(resultContent);
+    acc.content = stripThinkingTags(acc.content);
 
     return {
       kind: 'success',
@@ -594,7 +648,8 @@ export class ClaudeCodeClient implements IAgentClient {
         thinkingStartMs: 0,
         thinkingDurationMs: undefined,
         activeToolBlocks: new Map(),
-        activeTextBlockIndices: new Set(),
+        activeTextBlockIndices: new Map(),
+        insideXmlThinking: false,
       };
 
       log.info('streamRun: starting', {
@@ -618,13 +673,6 @@ export class ClaudeCodeClient implements IAgentClient {
 
           // Capture session ID from system init (before routing)
           const msg = message as Record<string, unknown>;
-
-          // Debug: log every message type from SDK to diagnose streaming
-          log.debug('streamRun: SDK message', {
-            type: msg.type,
-            subtype: msg.subtype,
-            hasEvent: msg.type === 'stream_event' ? !!(msg as { event?: unknown }).event : undefined,
-          });
 
           if (msg.type === 'system' && msg.subtype === 'init') {
             sessionId = (msg.session_id as string) ?? '';
@@ -760,6 +808,16 @@ function processStreamRunMessage(
 
   if (msg.type === 'tool_use_summary' && flags.showToolCalls) {
     return handleToolUseSummary(msg, acc);
+  }
+
+  // Auto-compaction boundary — Claude Code CLI compacted the conversation
+  if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
+    const trigger = (msg.trigger as string) ?? 'auto';
+    const preTokens = (msg.pre_tokens as number) ?? 0;
+    log.info('streamRun: compact_boundary', { trigger, preTokens, sessionId: currentSessionId });
+    acc.content += `\n\u{1F4E6} _Context compacted (${trigger}, ${preTokens} tokens before)_\n`;
+    freezeThinking(acc);
+    return contentDelta(acc);
   }
 
   if (msg.type === 'result') {

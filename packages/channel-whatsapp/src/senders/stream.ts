@@ -55,6 +55,8 @@ export class WhatsAppStreamSender implements StreamSender {
   private sentLength = 0;
   /** Whether the first message has been sent (for quoting) */
   private firstMessageSent = false;
+  /** Send queue — serializes async sends to prevent out-of-order delivery */
+  private sendQueue: Promise<void> = Promise.resolve();
 
   // ─── Edit-based streaming state ─────────────────────────────
   private messageId: string | null = null;
@@ -136,7 +138,7 @@ export class WhatsAppStreamSender implements StreamSender {
    * Send the new portion immediately — no buffering, no risk of mid-sentence breaks.
    */
   private async handleParagraphModeDelta(cumulativeContent: string): Promise<void> {
-    const unsent = cumulativeContent.slice(this.sentLength);
+    const unsent = cumulativeContent.slice(this.sentLength).trimStart();
     if (!unsent.trim()) return;
 
     await this.sendFormattedChunks(unsent);
@@ -157,7 +159,7 @@ export class WhatsAppStreamSender implements StreamSender {
   /** Send any remaining unsent content on stream completion. */
   private async handleParagraphModeFinal(finalContent: string): Promise<void> {
 
-    const unsent = finalContent.slice(this.sentLength);
+    const unsent = finalContent.slice(this.sentLength).trimStart();
     if (!unsent.trim()) return;
     await this.sendFormattedChunks(unsent);
   }
@@ -210,7 +212,17 @@ export class WhatsAppStreamSender implements StreamSender {
 
   // ─── Shared helpers ─────────────────────────────────────────
 
+  /**
+   * Queue a message send — serializes all sends to prevent out-of-order delivery.
+   * Each send waits for the previous one to complete before starting.
+   */
   private async sendMessage(text: string): Promise<void> {
+    this.sendQueue = this.sendQueue.then(() => this.doSend(text));
+    await this.sendQueue;
+  }
+
+  /** Actually send a single message to WhatsApp. */
+  private async doSend(text: string): Promise<void> {
     try {
       const quoteId = !this.firstMessageSent ? this.replyToMessageId : undefined;
       const quoted = quoteId
