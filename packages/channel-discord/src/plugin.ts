@@ -606,6 +606,36 @@ export class DiscordPlugin extends BaseChannelPlugin {
     await removeReaction(client, channelId, messageId, emoji);
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // ChannelPlugin: react / unreact (per_thread media processing feedback)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Add a reaction emoji to a Discord message (per_thread media processing feedback).
+   * Graceful skip on permission errors (bot may lack ADD_REACTIONS in this channel).
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const client = this.getClient(instanceId);
+    try {
+      await addReaction(client, chatId, messageId, emoji);
+    } catch (err) {
+      this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Remove a reaction emoji from a Discord message.
+   * Graceful skip on permission errors.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const client = this.getClient(instanceId);
+    try {
+      await removeReaction(client, chatId, messageId, emoji);
+    } catch (err) {
+      this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
   /**
    * Set bot presence (status + activity) for a Discord instance.
    * Can be called at runtime without reconnecting.
