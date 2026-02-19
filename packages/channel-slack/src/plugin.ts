@@ -185,8 +185,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     const connection = this.connections.get(instanceId);
     if (!connection) return;
 
-    // Set bot presence to away before disconnecting
-    await connection.client.users.setPresence({ presence: 'away' }).catch((err) => {
+    // Set bot presence to away before disconnecting (fire-and-forget, same as connect)
+    connection.client.users.setPresence({ presence: 'away' }).catch((err) => {
       this.logger.warn('Failed to set presence to away', { instanceId, error: String(err) });
     });
 

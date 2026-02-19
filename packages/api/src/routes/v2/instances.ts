@@ -169,6 +169,26 @@ function persistedTokenForChannel(instance: {
   }
 }
 
+/** Sensitive fields that must never be returned in API responses */
+const SENSITIVE_INSTANCE_FIELDS = [
+  'telegramBotToken',
+  'discordBotToken',
+  'slackBotToken',
+  'slackAppToken',
+  'slackSigningSecret',
+] as const;
+
+/** Strip secret tokens from an instance before returning it in API responses */
+function sanitizeInstance<T extends Record<string, unknown>>(
+  instance: T,
+): Omit<T, (typeof SENSITIVE_INSTANCE_FIELDS)[number]> {
+  const sanitized = { ...instance };
+  for (const field of SENSITIVE_INSTANCE_FIELDS) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
+
 /** Apply Slack-specific config from profileMetadata */
 function applySlackProfileMetadata(
   opts: Record<string, unknown>,
@@ -192,7 +212,8 @@ function applySlackConnectOptions(
   },
   overrides?: { slackBotToken?: string | null; slackAppToken?: string | null; slackSigningSecret?: string | null },
 ): void {
-  opts.botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+  const botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+  if (botToken) opts.botToken = botToken;
   const appToken = overrides?.slackAppToken ?? instance.slackAppToken;
   if (appToken) opts.appToken = appToken;
   const signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
@@ -333,7 +354,8 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const result = await services.instances.list({ channel, status, limit, cursor });
 
   // Filter by API key's allowed instanceIds
-  const items = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const filtered = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const items = filtered.map(sanitizeInstance);
 
   return c.json({
     items,
@@ -395,7 +417,7 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**
@@ -437,7 +459,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
-  return c.json({ data: instance }, 201);
+  return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
 /**
@@ -463,7 +485,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     await accessCache.clear();
   }
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**

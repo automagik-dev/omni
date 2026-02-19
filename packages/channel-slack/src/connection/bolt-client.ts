@@ -41,6 +41,15 @@ export function createBoltApp(options: SlackConnectionOptions, logger: Logger): 
     token: options.botToken,
     appToken: options.appToken,
     socketMode: true,
+    clientOptions: {
+      retryConfig: {
+        retries: options.retryConfig?.retries ?? 2,
+        factor: options.retryConfig?.factor ?? 2,
+        minTimeout: options.retryConfig?.baseDelayMs ?? 500,
+        maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
+        randomize: true,
+      },
+    },
   };
 
   if (options.signingSecret) {
@@ -67,17 +76,9 @@ export function createBoltApp(options: SlackConnectionOptions, logger: Logger): 
  * Call this AFTER all handlers have been registered on the app.
  */
 export async function startBoltConnection(connection: BoltConnection, logger: Logger): Promise<BoltConnection> {
-  // Start the app (connects via Socket Mode WebSocket)
-  try {
-    await connection.app.start();
-    logger.info('Bolt.js app started successfully in Socket Mode');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to start Bolt.js app', { error: message });
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, `Failed to start Slack connection: ${message}`);
-  }
-
-  // Get bot info
+  // Resolve bot identity BEFORE starting Socket Mode to avoid a race condition
+  // where incoming messages arrive before botUserId is set, causing the bot to
+  // process its own messages (shouldSkipMessage can't filter without botUserId).
   try {
     const authResult = await connection.app.client.auth.test();
     connection.botUserId = authResult.user_id ?? undefined;
@@ -91,7 +92,19 @@ export async function startBoltConnection(connection: BoltConnection, logger: Lo
       teamName: connection.teamName,
     });
   } catch (error) {
-    logger.warn('Failed to resolve bot identity', { error: String(error) });
+    logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
+      error: String(error),
+    });
+  }
+
+  // Start the app (connects via Socket Mode WebSocket)
+  try {
+    await connection.app.start();
+    logger.info('Bolt.js app started successfully in Socket Mode');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('Failed to start Bolt.js app', { error: message });
+    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, `Failed to start Slack connection: ${message}`);
   }
 
   return connection;
