@@ -8,6 +8,9 @@
 import { BaseChannelPlugin } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  FetchHistoryOptions,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -244,50 +247,9 @@ async function sendPollContent(client: Client, channelId: string, message: Outgo
 // Types
 // ============================================================================
 
-/**
- * Message from history sync
- */
-export interface HistorySyncMessage {
-  externalId: string;
-  chatId: string;
-  from: string;
-  timestamp: Date;
-  content: {
-    type: string;
-    text?: string;
-    mediaUrl?: string;
-    mimeType?: string;
-    caption?: string;
-  };
-  isFromMe: boolean;
-  rawPayload: unknown;
-}
-
-/**
- * Options for fetchHistory method
- */
-export interface FetchHistoryOptions {
-  /** Channel ID to fetch messages from (required for Discord) */
-  channelId: string;
-  /** Fetch messages since this date */
-  since?: Date;
-  /** Fetch messages until this date (default: now) */
-  until?: Date;
-  /** Maximum number of messages to fetch (default: 100, max: 1000) */
-  limit?: number;
-  /** Callback for progress updates */
-  onProgress?: (fetched: number, total?: number) => void;
-  /** Callback for each message synced */
-  onMessage?: (message: HistorySyncMessage) => void;
-}
-
-/**
- * Result of fetchHistory operation
- */
-export interface FetchHistoryResult {
-  totalFetched: number;
-  messages: HistorySyncMessage[];
-}
+// HistorySyncMessage, FetchHistoryOptions, FetchHistoryResult imported from @omni/channel-sdk
+// Re-export for external consumers
+export type { HistorySyncMessage, FetchHistoryOptions, FetchHistoryResult };
 
 /**
  * Contact from sync (guild member)
@@ -995,6 +957,23 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * Handles pagination and filtering by date range
    * @internal
    */
+  /** Process a single batch of messages, applying date filters. Returns false to stop iteration. */
+  private processBatch(
+    batch: Map<string, Message> & { last: () => Message | undefined; size: number },
+    options: FetchHistoryOptions,
+    messages: HistorySyncMessage[],
+    botId: string | undefined,
+  ): boolean {
+    for (const msg of batch.values()) {
+      if (options.since && msg.createdAt < options.since) return false; // reached oldest — stop
+      if (options.until && msg.createdAt > options.until) continue; // too new — skip
+      const historyMsg = this.convertToHistoryMessage(msg, options.channelId ?? '', botId);
+      messages.push(historyMsg);
+      options.onMessage?.(historyMsg);
+    }
+    return true;
+  }
+
   private async fetchMessageBatches(
     channel: TextBasedChannel,
     options: FetchHistoryOptions,
@@ -1011,27 +990,18 @@ export class DiscordPlugin extends BaseChannelPlugin {
 
       if (batch.size === 0) break;
 
-      for (const msg of batch.values()) {
-        // Apply date filters
-        if (options.since && msg.createdAt < options.since) {
-          remaining = 0; // Stop fetching, reached oldest message
-          break;
-        }
-        if (options.until && msg.createdAt > options.until) {
-          continue; // Skip messages newer than until date
-        }
-
-        const historyMsg = this.convertToHistoryMessage(msg, options.channelId, botId);
-        messages.push(historyMsg);
-        options.onMessage?.(historyMsg);
-      }
+      const shouldContinue = this.processBatch(
+        batch as unknown as Map<string, Message> & { last: () => Message | undefined; size: number },
+        options,
+        messages,
+        botId,
+      );
 
       remaining -= batch.size;
       before = batch.last()?.id;
       options.onProgress?.(messages.length);
 
-      // If batch returned less than requested, we've reached the end
-      if (batch.size < batchSize) break;
+      if (!shouldContinue || batch.size < batchSize) break;
     }
 
     return messages;
