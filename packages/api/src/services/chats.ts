@@ -190,6 +190,9 @@ export class ChatService {
     // Enrich group chats with names from omni_groups when chat name is missing
     await this.enrichGroupNames(items);
 
+    // Enrich DM chats that have no name or a raw JID as name with participant display names
+    await this.enrichDmNames(items);
+
     // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
     this.deduplicateByCanonicalId(items);
 
@@ -219,6 +222,41 @@ export class ChatService {
       const groupName = nameMap.get(chat.externalId);
       if (groupName) {
         chat.name = groupName;
+      }
+    }
+  }
+
+  /**
+   * Enrich DM chats that have no name (or a raw JID as name) with participant display names.
+   * Looks up the most recently active participant's displayName for each nameless DM chat.
+   */
+  private async enrichDmNames(items: Chat[]): Promise<void> {
+    const needsName = items.filter((c) => {
+      if (c.chatType !== 'dm') return false;
+      if (!c.name) return true;
+      return c.name.endsWith('@lid') || c.name.endsWith('@s.whatsapp.net') || c.name.endsWith('@g.us');
+    });
+    if (needsName.length === 0) return;
+
+    const chatIds = needsName.map((c) => c.id);
+    const participants = await this.db
+      .select({ chatId: chatParticipants.chatId, displayName: chatParticipants.displayName })
+      .from(chatParticipants)
+      .where(and(inArray(chatParticipants.chatId, chatIds), sql`${chatParticipants.displayName} IS NOT NULL`))
+      .orderBy(asc(chatParticipants.chatId));
+
+    // Pick first non-null displayName per chat
+    const nameMap = new Map<string, string>();
+    for (const p of participants) {
+      if (p.displayName && !nameMap.has(p.chatId)) {
+        nameMap.set(p.chatId, p.displayName);
+      }
+    }
+
+    for (const chat of needsName) {
+      const participantName = nameMap.get(chat.id);
+      if (participantName) {
+        chat.name = participantName;
       }
     }
   }
