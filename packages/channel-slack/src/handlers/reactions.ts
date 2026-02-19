@@ -24,15 +24,18 @@ export interface ReactionHandlerCallbacks {
 export function setupReactionHandlers(
   app: App,
   instanceId: string,
-  botUserId: string | undefined,
+  botUserId: string | undefined | (() => string | undefined),
   callbacks: ReactionHandlerCallbacks,
   logger: Logger,
 ): void {
+  const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
+
   app.event('reaction_added', async ({ event }) => {
     const evt = event as unknown as Record<string, unknown>;
     const userId = evt.user as string | undefined;
     if (!userId) return;
-    if (botUserId && userId === botUserId) return;
+    const currentBotUserId = resolveBotUserId();
+    if (currentBotUserId && userId === currentBotUserId) return;
 
     const emoji = (evt.reaction as string) ?? '';
     const item = evt.item as Record<string, unknown> | undefined;
@@ -50,7 +53,8 @@ export function setupReactionHandlers(
     const evt = event as unknown as Record<string, unknown>;
     const userId = evt.user as string | undefined;
     if (!userId) return;
-    if (botUserId && userId === botUserId) return;
+    const currentBotUserId = resolveBotUserId();
+    if (currentBotUserId && userId === currentBotUserId) return;
 
     const emoji = (evt.reaction as string) ?? '';
     const item = evt.item as Record<string, unknown> | undefined;

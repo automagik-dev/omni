@@ -1052,6 +1052,11 @@ export const messages = pgTable(
     statusIdx: index('messages_status_idx').on(table.status),
     platformTimestampIdx: index('messages_platform_timestamp_idx').on(table.platformTimestamp),
     replyToIdx: index('messages_reply_to_idx').on(table.replyToMessageId),
+    replyToExternalIdx: index('messages_reply_to_external_idx').on(
+      table.chatId,
+      table.replyToExternalId,
+      table.isFromMe,
+    ),
     hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
     originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
   }),

@@ -19,7 +19,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
-import { checkBoltHealth, createBoltConnection, destroyBoltConnection } from './connection/bolt-client';
+import { checkBoltHealth, createBoltApp, destroyBoltConnection, startBoltConnection } from './connection/bolt-client';
 import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { extractFileInfo, getContentTypeFromMime } from './handlers/files';
@@ -123,15 +123,27 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
 
       this.slackConfigs.set(instanceId, slackConfig);
-      const connection = await createBoltConnection(
+
+      // Phase 1: Create the Bolt.js app (NOT started yet)
+      const connection = createBoltApp(
         { botToken, appToken, signingSecret, retryConfig: slackConfig.retryConfig },
         this.logger,
       );
 
-      // Set up event handlers
+      // Phase 2: Register all event handlers BEFORE starting
+      // This is critical — Bolt.js Socket Mode starts receiving events
+      // immediately after start(), so handlers must be in place first.
       this.setupHandlers(instanceId, connection, slackConfig);
 
+      // Phase 3: Start Socket Mode connection (now handlers are ready)
+      await startBoltConnection(connection, this.logger);
+
       this.connections.set(instanceId, connection);
+
+      // Set bot presence to online
+      connection.client.users.setPresence({ presence: 'auto' }).catch((err) => {
+        this.logger.warn('Failed to set presence to auto', { instanceId, error: String(err) });
+      });
 
       await this.updateInstanceStatus(instanceId, config, {
         state: 'connected',
@@ -172,6 +184,11 @@ export class SlackPlugin extends BaseChannelPlugin {
   async disconnect(instanceId: string): Promise<void> {
     const connection = this.connections.get(instanceId);
     if (!connection) return;
+
+    // Set bot presence to away before disconnecting (fire-and-forget, same as connect)
+    connection.client.users.setPresence({ presence: 'away' }).catch((err) => {
+      this.logger.warn('Failed to set presence to away', { instanceId, error: String(err) });
+    });
 
     await destroyBoltConnection(connection, this.logger);
     this.connections.delete(instanceId);
@@ -407,11 +424,11 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Set up all event handlers for an instance
    */
   private setupHandlers(instanceId: string, connection: BoltConnection, config: SlackConfig): void {
-    // Message handlers
+    // Message handlers — pass getter so botUserId resolves after start()
     setupMessageHandlers(
       connection.app,
       instanceId,
-      connection.botUserId,
+      () => connection.botUserId,
       {
         onMessage: async (
           _instId,
@@ -474,11 +491,11 @@ export class SlackPlugin extends BaseChannelPlugin {
       this.logger,
     );
 
-    // Reaction handlers
+    // Reaction handlers — pass getter so botUserId resolves after start()
     setupReactionHandlers(
       connection.app,
       instanceId,
-      connection.botUserId,
+      () => connection.botUserId,
       {
         onReaction: async (instId, messageId, chatId, userId, emoji, action) => {
           await this.handleReactionReceived(instId, messageId, chatId, userId, emoji, action);
