@@ -835,7 +835,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
    * only new messages (after the bot is triggered) accumulate in the session.
    */
   async fetchHistory(_instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
-    this.logger.info('fetchHistory: Telegram Bot API does not support retroactive history retrieval', {
+    this.logger?.info('fetchHistory: Telegram Bot API does not support retroactive history retrieval', {
       channelId: options.channelId,
       threadId: options.threadId,
     });
