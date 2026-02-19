@@ -104,6 +104,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
 
+    let connection: BoltConnection | undefined;
     try {
       // Accept legacy/generic token aliases used by instance routes (`options.token`)
       // in addition to Slack-specific fields.
@@ -125,7 +126,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       this.slackConfigs.set(instanceId, slackConfig);
 
       // Phase 1: Create the Bolt.js app (NOT started yet)
-      const connection = createBoltApp(
+      connection = createBoltApp(
         { botToken, appToken, signingSecret, retryConfig: slackConfig.retryConfig },
         this.logger,
       );
@@ -165,6 +166,9 @@ export class SlackPlugin extends BaseChannelPlugin {
         teamName: connection.teamName,
       });
     } catch (error) {
+      if (connection) {
+        await destroyBoltConnection(connection, this.logger).catch(() => {});
+      }
       await this.updateInstanceStatus(instanceId, config, {
         state: 'error',
         since: new Date(),

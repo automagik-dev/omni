@@ -90,7 +90,7 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NPM_TOKEN" ]; then
             echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
