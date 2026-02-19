@@ -22,7 +22,12 @@ import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
-import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
+import {
+  cancelPendingReconnect,
+  resetConnectionState,
+  seedAuthenticated,
+  setupConnectionHandlers,
+} from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
@@ -758,10 +763,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Create a new Baileys connection using socket wrapper
    */
   private async createConnection(instanceId: string, config: InstanceConfig): Promise<void> {
+    // Cancel any pending reconnect timers to prevent duplicate sockets
+    cancelPendingReconnect(instanceId);
+
     // Close existing socket if any (critical: prevents duplicate connections)
     const existingSocket = this.sockets.get(instanceId);
     if (existingSocket) {
       this.logger.info('Closing existing socket before reconnect', { instanceId });
+      // Remove event listeners BEFORE closing to prevent the close event
+      // from triggering another reconnect via the old handler
+      existingSocket.ev.removeAllListeners('connection.update');
       await closeSocket(existingSocket, false);
       this.sockets.delete(instanceId);
     }
@@ -827,6 +838,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         // IMPORTANT: Close the old socket to release resources and event listeners
         const oldSocket = this.sockets.get(instanceId);
         if (oldSocket) {
+          oldSocket.ev.removeAllListeners('connection.update');
           await closeSocket(oldSocket, false);
           this.sockets.delete(instanceId);
         }
@@ -2035,6 +2047,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Close and cleanup socket to prevent memory leaks
     const sock = this.sockets.get(instanceId);
     if (sock) {
+      sock.ev.removeAllListeners('connection.update');
       await closeSocket(sock, false);
       this.sockets.delete(instanceId);
     }
