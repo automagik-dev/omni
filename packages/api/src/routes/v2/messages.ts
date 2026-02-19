@@ -41,7 +41,6 @@ import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { timeoutMiddleware } from '../../middleware/timeout';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
@@ -51,10 +50,6 @@ const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
-
-// Apply a long timeout to all send routes — debounce + typing simulation can take 10-60s+
-// The global default is 30s which is insufficient for heavily debounced instances
-messagesRoutes.use('/send*', timeoutMiddleware({ timeoutMs: 120_000 }));
 
 // ============================================================================
 // Helper Functions

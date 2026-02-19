@@ -81,7 +81,13 @@ export function createApp(
   app.use('*', timing());
 
   // Request safety: timeout and body size limits
-  app.use('*', defaultTimeoutMiddleware);
+  // Promise.race timeout is only safe for reads (GETs) — abandoning a read
+  // result is harmless. For writes, the handler keeps running after timeout,
+  // orphaning mutexes and corrupting state (see #72 / #70).
+  app.use('*', async (c, next) => {
+    if (c.req.method !== 'GET') return next();
+    return defaultTimeoutMiddleware(c, next);
+  });
   app.use('*', defaultBodyLimitMiddleware);
 
   // HTTP logging
