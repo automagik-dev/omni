@@ -70,6 +70,9 @@ HEARTBEAT.md
 BOOTSTRAP.md
 memory/
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Beads state is local-only (keep outside repo)
 .beads/
 

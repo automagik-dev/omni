@@ -1,0 +1,1 @@
+CREATE INDEX "messages_reply_to_external_idx" ON "messages" USING btree ("chat_id","reply_to_external_id","is_from_me");

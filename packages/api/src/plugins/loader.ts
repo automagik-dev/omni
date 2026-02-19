@@ -163,6 +163,104 @@ export async function getAllPlugins(): Promise<ChannelPlugin[]> {
   return channelRegistry.getAll();
 }
 
+/** Apply Slack tokens and profileMetadata config to connection options */
+function applySlackReconnectOptions(options: Record<string, unknown>, instance: ReconnectInstance): void {
+  if (instance.slackBotToken) {
+    options.botToken = instance.slackBotToken;
+    options.token = instance.slackBotToken;
+  }
+  if (instance.slackAppToken) options.appToken = instance.slackAppToken;
+  if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
+  const meta = instance.profileMetadata;
+  if (!meta) return;
+  if (meta.replyToMode) options.replyToMode = meta.replyToMode;
+  if (meta.streamMode) options.streamMode = meta.streamMode;
+  if (meta.dmPolicy) options.dmPolicy = meta.dmPolicy;
+  if (meta.dmAllowlist) options.dmAllowlist = meta.dmAllowlist;
+}
+
+type ReconnectInstance = {
+  id: string;
+  name: string;
+  channel: string;
+  telegramBotToken?: string | null;
+  telegramReactionLevel?: string | null;
+  discordBotToken?: string | null;
+  discordPresence?: Record<string, unknown> | null;
+  slackBotToken?: string | null;
+  slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
+  profileMetadata?: Record<string, unknown> | null;
+};
+
+function buildReconnectOptions(instance: ReconnectInstance): {
+  credentials: Record<string, unknown>;
+  options: Record<string, unknown>;
+} {
+  const credentials: Record<string, unknown> = {};
+  const options: Record<string, unknown> = {};
+
+  switch (instance.channel) {
+    case 'telegram': {
+      if (instance.telegramBotToken) {
+        options.token = instance.telegramBotToken;
+      }
+      options.telegramReactionLevel = instance.telegramReactionLevel;
+      break;
+    }
+    case 'discord': {
+      if (instance.discordBotToken) {
+        options.token = instance.discordBotToken;
+      }
+      if (instance.discordPresence) {
+        options.presence = instance.discordPresence;
+      }
+      break;
+    }
+    case 'slack': {
+      applySlackReconnectOptions(options, instance);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return { credentials, options };
+}
+
+async function markInstanceInactive(db: Database, instanceId: string): Promise<void> {
+  const { instances } = await import('@omni/db');
+  const { eq } = await import('drizzle-orm');
+  await db.update(instances).set({ isActive: false }).where(eq(instances.id, instanceId));
+}
+
+async function reconnectInstance(
+  plugin: ChannelPlugin,
+  instance: ReconnectInstance,
+  config: { credentials: Record<string, unknown>; options: Record<string, unknown> },
+  db: Database,
+): Promise<boolean> {
+  try {
+    await plugin.connect(instance.id, {
+      instanceId: instance.id,
+      credentials: config.credentials,
+      options: config.options,
+    });
+
+    logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
+    return true;
+  } catch (error) {
+    logger.error('Failed to reconnect instance', {
+      instanceId: instance.id,
+      name: instance.name,
+      error: String(error),
+    });
+
+    await markInstanceInactive(db, instance.id);
+    return false;
+  }
+}
+
 /**
  * Auto-reconnect previously active instances on startup
  *
@@ -186,48 +284,30 @@ export async function autoReconnectInstances(db: Database): Promise<{
   let failed = 0;
 
   for (const instance of activeInstances) {
-    try {
-      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-      if (!plugin) {
-        logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
-        failed++;
-        continue;
-      }
+    const reconnectInstanceRecord = instance as ReconnectInstance;
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
 
-      // Reconnect the instance (uses stored auth state from database)
-      // Pass channel-specific tokens from DB for reconnection
-      const credentials: Record<string, unknown> = {};
-      const options: Record<string, unknown> = {};
+    if (!plugin) {
+      logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
+      failed++;
+      continue;
+    }
 
-      // Telegram needs bot token and reaction level
-      if (instance.telegramBotToken) {
-        options.token = instance.telegramBotToken;
-      }
-      if (instance.channel === 'telegram') {
-        options.telegramReactionLevel = instance.telegramReactionLevel;
-      }
-      // Discord needs bot token
-      if (instance.discordBotToken) {
-        options.token = instance.discordBotToken;
-      }
+    // Hydrate per-guild config overrides into the plugin cache before connecting.
+    // This ensures guild configs are available after process restart, not just
+    // on manual connect via HTTP routes.
+    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+        instance.id,
+        instance.guildConfigOverrides as Record<string, unknown>,
+      );
+    }
 
-      await plugin.connect(instance.id, {
-        instanceId: instance.id,
-        credentials,
-        options,
-      });
-
-      logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
+    const reconnectConfig = buildReconnectOptions(reconnectInstanceRecord);
+    const ok = await reconnectInstance(plugin, reconnectInstanceRecord, reconnectConfig, db);
+    if (ok) {
       succeeded++;
-    } catch (error) {
-      logger.error('Failed to reconnect instance', {
-        instanceId: instance.id,
-        name: instance.name,
-        error: String(error),
-      });
-
-      // Mark instance as inactive since reconnection failed
-      await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
+    } else {
       failed++;
     }
   }

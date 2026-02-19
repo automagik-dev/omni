@@ -9,6 +9,10 @@ description: |
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
+> **DEPRECATED**: This skill has been superseded by the `plugins/omni` Claude Code plugin.
+> Install via `claude --plugin-dir ./plugins/omni` for individual focused skills.
+> This file is preserved for backward compatibility only.
+
 # Omni CLI - Complete Reference
 
 The Omni CLI is an **LLM-optimized** command-line interface for the Omni v2 platform. Every command supports `--json` output for agent consumption and scripting.

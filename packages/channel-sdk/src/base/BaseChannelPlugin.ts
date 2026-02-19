@@ -344,6 +344,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         instanceId: params.instanceId,
         channelType: this.id,
         source: `channel:${this.id}`,
+        ingestMode: params.isHistorySync ? 'history-sync' : 'realtime',
         timings: params.timings,
       },
     );

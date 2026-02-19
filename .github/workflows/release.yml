@@ -72,6 +72,32 @@ jobs:
             --title "${TAG}" \
             --notes "$RELEASE_NOTES"
 
+      - name: Setup Bun
+        if: steps.exists.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        with:
+          bun-version: "latest"
+
+      - name: Install dependencies
+        if: steps.exists.outputs.skip != 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI
+        if: steps.exists.outputs.skip != 'true'
+        run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Publish to npm
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
+            exit 1
+          fi
+          cd packages/cli && bun publish --access public
+
       # Note: CHANGELOG.md is intentionally not committed back to main.
       # main is a protected branch requiring PRs. The changelog is already
       # captured in the GitHub Release body above via git-cliff.

@@ -1,0 +1,50 @@
+{
+  "id": "plugin-openclaw",
+  "name": "@omni/plugin-openclaw",
+  "channels": ["omni"],
+  "configSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "channels": {
+        "type": "object",
+        "properties": {
+          "omni": {
+            "type": "object",
+            "properties": {
+              "accounts": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["apiUrl", "apiKey", "instanceId"],
+                  "properties": {
+                    "apiUrl": { "type": "string" },
+                    "apiKey": { "type": "string" },
+                    "instanceId": { "type": "string" },
+                    "enabled": { "type": "boolean", "default": true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "channel": {
+      "id": "omni",
+      "label": "Omni",
+      "selectionLabel": "Omni Multichannel (WhatsApp, Discord, Slack, Telegram)",
+      "docsPath": "/channels/omni",
+      "blurb": "Route messages via the Omni v2 multichannel stack.",
+      "order": 70,
+      "aliases": ["omni-channel", "omni-v2"]
+    },
+    "install": {
+      "npmSpec": "@omni/plugin-openclaw",
+      "defaultChoice": "npm"
+    }
+  }
+}

@@ -31,5 +31,9 @@ export { buildStickerContent, sendStickerMessage, getGuildStickers, getSticker }
 // Polls
 export { buildPoll, sendPollMessage, endPoll, getPollResults } from './poll';
 
+// Voice messages
+export { sendVoiceMessage, checkFfmpeg, resetFfmpegCache } from './voice';
+export type { VoiceMessageOptions, VoiceMessageResult } from './voice';
+
 // Unified content builder
 export { buildMessageContent, isSupportedContentType, getFileType } from './builders';

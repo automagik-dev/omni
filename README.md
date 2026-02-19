@@ -52,6 +52,23 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle — WhatsApp
 
 ## Install
 
+### Quickest (npm)
+
+```bash
+bun add -g @automagik/omni
+omni install              # interactive wizard: sets up server + PM2
+```
+
+> **Migrating from `@omni/cli`?** Run `bun remove -g @omni/cli` first.
+
+### Via install script (npm-first, git fallback)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install-client.sh | bash
+```
+
+### Full server from source
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash
 ```
@@ -62,7 +79,7 @@ Three modes: **CLI only** · **Full server** · **CLI + connect to remote**
 <summary>Non-interactive & manual install</summary>
 
 ```bash
-# CLI only
+# CLI only (tries npm first, falls back to git clone)
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli
 
 # CLI + connect to remote

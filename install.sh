@@ -137,6 +137,15 @@ ensure_git() {
 install_cli_only() {
   step "Installing Omni CLI (global)"
 
+  # ── NPM fast path ────────────────────────────────────────────────────────
+  info "Trying @automagik/omni from npm..."
+  if bun add -g @automagik/omni 2>/dev/null && has_cmd omni; then
+    ok "omni $(omni --version) installed from npm"
+    return 0
+  fi
+  warn "npm install failed — building from source..."
+
+  # ── existing git sparse-clone + build logic below (unchanged) ────────────
   local tmpdir
   tmpdir=$(mktemp -d)
   trap "rm -rf $tmpdir" EXIT
@@ -187,6 +196,8 @@ WRAPPER
 
 install_full_server() {
   step "Installing Omni v2 (full server)"
+
+  info "Tip: For a faster setup, try: bun add -g @automagik/omni && omni install"
 
   ask_input "Install directory:" "$HOME/omni"
   local install_dir="$REPLY"
@@ -496,9 +507,9 @@ wizard() {
   banner
 
   printf "${BOLD}What would you like to install?${NC}\n\n" >/dev/tty
-  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Control a remote Omni server from this machine\n" >/dev/tty
+  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Install from npm (fast) or source (fallback)\n" >/dev/tty
   printf "  ${CYAN}2)${NC} ${BOLD}Full server${NC}    — Install Omni v2 + all services locally\n" >/dev/tty
-  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI and configure remote server\n" >/dev/tty
+  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI (npm/source) and configure remote server\n" >/dev/tty
   printf "\n" >/dev/tty
 
   ask_input "Choose [1/2/3]:" "1"
@@ -583,7 +594,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   banner
   printf "Usage:\n"
   printf "  curl -fsSL <url>/install.sh | bash                             Interactive wizard\n"
-  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only\n"
+  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only (@automagik/omni from npm, git fallback)\n"
   printf "  curl -fsSL <url>/install.sh | bash -s -- --cli <api-url>       CLI + configure\n"
   printf "  curl -fsSL <url>/install.sh | bash -s -- --server              Full server\n"
   printf "\n"

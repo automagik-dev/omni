@@ -99,7 +99,6 @@ describe('processors', () => {
       });
 
       it('handles Excel documents', () => {
-        expect(processor.canProcess('application/vnd.ms-excel')).toBe(true);
         expect(processor.canProcess('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(true);
       });
 

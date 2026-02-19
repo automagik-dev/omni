@@ -11,7 +11,7 @@
 import type { Logger } from '@omni/channel-sdk';
 import { App, type AppOptions } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
-import type { RetryConfig, SlackConnectionOptions } from '../types';
+import type { SlackConnectionOptions } from '../types';
 import { SlackError, SlackErrorCode } from '../types';
 
 /**
@@ -28,29 +28,28 @@ export interface BoltConnection {
 }
 
 /**
- * Build Bolt.js retry configuration from our RetryConfig
+ * Create a Bolt.js App configured for Socket Mode (but NOT started yet).
+ *
+ * Handlers MUST be registered on the returned app BEFORE calling startBoltConnection().
+ * This is required because Bolt.js Socket Mode starts receiving events immediately
+ * after start(), and any events arriving before handlers are registered will be dropped.
  */
-function buildRetryOptions(config?: RetryConfig) {
-  return {
-    retries: config?.retries ?? 2,
-  };
-}
-
-/**
- * Create and start a Bolt.js App with Socket Mode
- */
-export async function createBoltConnection(options: SlackConnectionOptions, logger: Logger): Promise<BoltConnection> {
-  logger.info('Creating Bolt.js connection with Socket Mode');
-
-  const retryOptions = buildRetryOptions(options.retryConfig);
+export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+  logger.info('Creating Bolt.js app with Socket Mode (not started yet)');
 
   const appOptions: AppOptions = {
     token: options.botToken,
     appToken: options.appToken,
     socketMode: true,
-    // Disable built-in HTTP listener since we use Socket Mode
-    port: 0,
-    ...retryOptions,
+    clientOptions: {
+      retryConfig: {
+        retries: options.retryConfig?.retries ?? 2,
+        factor: options.retryConfig?.factor ?? 2,
+        minTimeout: options.retryConfig?.baseDelayMs ?? 500,
+        maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
+        randomize: true,
+      },
+    },
   };
 
   if (options.signingSecret) {
@@ -59,9 +58,48 @@ export async function createBoltConnection(options: SlackConnectionOptions, logg
 
   const app = new App(appOptions);
 
-  // Start the app (connects via Socket Mode)
+  // Register global error handler to surface Socket Mode issues
+  app.error(async (error) => {
+    logger.error('Bolt.js global error', { error: String(error) });
+  });
+
+  return {
+    app,
+    client: app.client,
+    botToken: options.botToken,
+  };
+}
+
+/**
+ * Start a previously created Bolt.js app (connects via Socket Mode).
+ *
+ * Call this AFTER all handlers have been registered on the app.
+ */
+export async function startBoltConnection(connection: BoltConnection, logger: Logger): Promise<BoltConnection> {
+  // Resolve bot identity BEFORE starting Socket Mode to avoid a race condition
+  // where incoming messages arrive before botUserId is set, causing the bot to
+  // process its own messages (shouldSkipMessage can't filter without botUserId).
   try {
-    await app.start();
+    const authResult = await connection.app.client.auth.test();
+    connection.botUserId = authResult.user_id ?? undefined;
+    connection.botName = authResult.user ?? undefined;
+    connection.teamId = authResult.team_id ?? undefined;
+    connection.teamName = authResult.team ?? undefined;
+    logger.info('Bot identity resolved', {
+      botUserId: connection.botUserId,
+      botName: connection.botName,
+      teamId: connection.teamId,
+      teamName: connection.teamName,
+    });
+  } catch (error) {
+    logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
+      error: String(error),
+    });
+  }
+
+  // Start the app (connects via Socket Mode WebSocket)
+  try {
+    await connection.app.start();
     logger.info('Bolt.js app started successfully in Socket Mode');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -69,32 +107,18 @@ export async function createBoltConnection(options: SlackConnectionOptions, logg
     throw new SlackError(SlackErrorCode.CONNECTION_FAILED, `Failed to start Slack connection: ${message}`);
   }
 
-  // Get bot info
-  let botUserId: string | undefined;
-  let botName: string | undefined;
-  let teamId: string | undefined;
-  let teamName: string | undefined;
+  return connection;
+}
 
-  try {
-    const authResult = await app.client.auth.test();
-    botUserId = authResult.user_id ?? undefined;
-    botName = authResult.user ?? undefined;
-    teamId = authResult.team_id ?? undefined;
-    teamName = authResult.team ?? undefined;
-    logger.info('Bot identity resolved', { botUserId, botName, teamId, teamName });
-  } catch (error) {
-    logger.warn('Failed to resolve bot identity', { error: String(error) });
-  }
-
-  return {
-    app,
-    client: app.client,
-    botToken: options.botToken,
-    botUserId,
-    botName,
-    teamId,
-    teamName,
-  };
+/**
+ * Create and start a Bolt.js App with Socket Mode (legacy convenience wrapper).
+ *
+ * NOTE: Prefer using createBoltApp() + register handlers + startBoltConnection()
+ * to ensure handlers are registered before Socket Mode starts receiving events.
+ */
+export async function createBoltConnection(options: SlackConnectionOptions, logger: Logger): Promise<BoltConnection> {
+  const connection = createBoltApp(options, logger);
+  return startBoltConnection(connection, logger);
 }
 
 /**
