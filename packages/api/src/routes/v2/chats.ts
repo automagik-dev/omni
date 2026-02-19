@@ -576,7 +576,14 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
   } else if ('markAsRead' in plugin && typeof plugin.markAsRead === 'function') {
     // Fall back to markAsRead with 'all' marker (WhatsApp style)
     await (
-      plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
+      plugin as {
+        markAsRead: (
+          instanceId: string,
+          chatId: string,
+          messageIds: string[],
+          messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        ) => Promise<void>;
+      }
     ).markAsRead(instanceId, chat.externalId, ['all']);
   } else {
     throw new OmniError({

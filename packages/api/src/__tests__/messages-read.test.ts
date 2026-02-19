@@ -21,7 +21,12 @@ import { describeWithDb, getTestDb } from './db-helper';
 function createMockPlugin(
   overrides: Partial<{
     canReceiveReadReceipts: boolean;
-    markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void>;
+    markAsRead: (
+      instanceId: string,
+      chatId: string,
+      messageIds: string[],
+      messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+    ) => Promise<void>;
     markChatAsRead: (instanceId: string, chatId: string) => Promise<void>;
   }> = {},
 ) {
@@ -64,7 +69,9 @@ describeWithDb('Read Receipt Endpoints', () => {
   let db: Database;
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
+  let testDmChat: { id: string; externalId: string };
   let testMessage: { id: string; externalId: string };
+  let testDmMessage: { id: string; externalId: string };
   const insertedInstanceIds: string[] = [];
   const insertedChatIds: string[] = [];
   const insertedMessageIds: string[] = [];
@@ -103,7 +110,7 @@ describeWithDb('Read Receipt Endpoints', () => {
     testChat = { id: chat.id, externalId: chat.externalId };
     insertedChatIds.push(chat.id);
 
-    // Create a test message
+    // Create a test message (with rawPayload containing participant for group read receipts)
     const [message] = await db
       .insert(messages)
       .values({
@@ -114,6 +121,7 @@ describeWithDb('Read Receipt Endpoints', () => {
         textContent: 'Test message',
         platformTimestamp: new Date(),
         isFromMe: false,
+        rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } },
       })
       .returning();
     if (!message) {
@@ -121,6 +129,39 @@ describeWithDb('Read Receipt Endpoints', () => {
     }
     testMessage = { id: message.id, externalId: message.externalId };
     insertedMessageIds.push(message.id);
+
+    // Create a DM chat (non-group — no participant needed)
+    const [dmChat] = await db
+      .insert(chats)
+      .values({
+        instanceId: testInstance.id,
+        externalId: '5511888888888@s.whatsapp.net',
+        chatType: 'dm',
+        channel: 'whatsapp-baileys',
+        name: 'DM Chat',
+      })
+      .returning();
+    if (!dmChat) throw new Error('Failed to create DM chat');
+    testDmChat = { id: dmChat.id, externalId: dmChat.externalId };
+    insertedChatIds.push(dmChat.id);
+
+    // Create a DM message (no participant in rawPayload)
+    const [dmMsg] = await db
+      .insert(messages)
+      .values({
+        chatId: testDmChat.id,
+        externalId: `BAE5DM${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'DM test message',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+        rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
+      })
+      .returning();
+    if (!dmMsg) throw new Error('Failed to create DM message');
+    testDmMessage = { id: dmMsg.id, externalId: dmMsg.externalId };
+    insertedMessageIds.push(dmMsg.id);
   });
 
   afterAll(async () => {
@@ -189,7 +230,13 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.data.messageId).toBe(testMessage.id);
       expect(body.data.externalMessageId).toBe(testMessage.externalId);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, [testMessage.externalId]);
+      // Plugin receives messageData with rawPayload so it can extract channel-specific keys
+      expect(markAsReadMock).toHaveBeenCalledWith(
+        testInstance.id,
+        testChat.externalId,
+        [testMessage.externalId],
+        [{ externalId: testMessage.externalId, rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } } }],
+      );
     });
 
     test('returns error when channel does not support read receipts', async () => {
@@ -277,7 +324,36 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.success).toBe(true);
       expect(body.data.messageCount).toBe(3);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds);
+      // messageIds don't exist in DB → messageData is empty array
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, []);
+    });
+
+    test('batch resolves messageData from DB for existing messages', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId,
+          messageIds: [testMessage.externalId], // real message in DB
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      // Plugin receives messageData with rawPayload containing participant
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toBe(testInstance.id);
+      expect(callArgs[1]).toBe(testChat.externalId);
+      expect(callArgs[2]).toEqual([testMessage.externalId]);
+      const messageData = callArgs[3] as Array<{ externalId: string; rawPayload: Record<string, unknown> }>;
+      expect(messageData).toHaveLength(1);
+      expect(messageData[0]?.externalId).toBe(testMessage.externalId);
+      expect(messageData[0]?.rawPayload).toEqual({ key: { participant: '5511999999999@s.whatsapp.net' } });
     });
 
     test('successfully marks batch using internal chat UUID', async () => {
@@ -302,7 +378,7 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.success).toBe(true);
       // Should resolve to external ID
       expect(body.data.chatId).toBe(testChat.externalId);
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds);
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, []);
     });
 
     test('returns error when channel does not support read receipts', async () => {
@@ -389,6 +465,56 @@ describeWithDb('Read Receipt Endpoints', () => {
       const body = (await res.json()) as { error: { code: string; message: string } };
       expect(body.error.code).toBe('VALIDATION');
       expect(body.error.message).toContain('Instance ID does not match');
+    });
+  });
+
+  describe('DM (non-group) read receipts', () => {
+    test('single DM message passes messageData without participant', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/messages/${testDmMessage.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceId: testInstance.id }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      // DM rawPayload has no participant field
+      expect(callArgs[3]).toEqual([
+        {
+          externalId: testDmMessage.externalId,
+          rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
+        },
+      ]);
+    });
+
+    test('batch DM passes messageData from DB', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testDmChat.externalId,
+          messageIds: [testDmMessage.externalId],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      const messageData = callArgs[3] as Array<{ externalId: string; rawPayload: { key: Record<string, unknown> } }>;
+      expect(messageData).toHaveLength(1);
+      expect(messageData[0]?.externalId).toBe(testDmMessage.externalId);
+      // rawPayload has no participant — plugin won't try to set one
+      expect(messageData[0]?.rawPayload.key.participant).toBeUndefined();
     });
   });
 
