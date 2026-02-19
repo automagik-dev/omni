@@ -17,7 +17,10 @@ export interface HistorySyncMessage {
   content: {
     type: string;
     text?: string;
+    /** Original platform URL (for reference) */
     mediaUrl?: string;
+    /** Local file path if the plugin already downloaded the media */
+    localPath?: string;
     mimeType?: string;
     caption?: string;
   };
