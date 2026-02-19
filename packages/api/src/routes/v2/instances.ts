@@ -61,7 +61,7 @@ const createInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
-    .enum(['per_user', 'per_chat'])
+    .enum(['per_user', 'per_chat', 'per_thread'])
     .default('per_chat')
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
