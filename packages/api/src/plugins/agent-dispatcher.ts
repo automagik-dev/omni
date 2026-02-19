@@ -2693,7 +2693,16 @@ async function resolveSlackThreadReply(
   context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: gate function intentionally handles many early-exit conditions
+/** True if the chat is a newsletter or broadcast channel (agent never processes these). */
+function isBroadcastOrNewsletter(chatId: string): boolean {
+  return chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
+}
+
+/** True if we need to resolve whether the bot was mentioned via a LID JID. */
+function needsLidMentionCheck(messageContext: MessageContext, instance: Instance): boolean {
+  return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2724,7 +2733,7 @@ async function shouldProcessMessage(
 
   // Never trigger the agent for newsletter/broadcast chats regardless of reply filter mode
   const chatId = payload.chatId ?? '';
-  if (chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast')) {
+  if (isBroadcastOrNewsletter(chatId)) {
     log.debug('Skipping newsletter/broadcast message', { instanceId: metadata.instanceId, chatId });
     return null;
   }
@@ -2743,12 +2752,12 @@ async function shouldProcessMessage(
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
-  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && instance.ownerIdentifier) {
+  if (needsLidMentionCheck(messageContext, instance)) {
     const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
     await resolveLidMentionBot(
       chatsService,
       metadata.instanceId,
-      instance.ownerIdentifier,
+      instance.ownerIdentifier as string,
       mentionedJids,
       messageContext,
     );

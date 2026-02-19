@@ -182,32 +182,41 @@ export class WhatsAppStreamSender implements StreamSender {
     await this.throttledEdit(displayText);
   }
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream send logic requires multiple branching paths
   private async handleEditModeFinal(finalContent: string): Promise<void> {
     const text = this.formatMode !== 'passthrough' ? markdownToWhatsApp(finalContent) : finalContent;
     const chunks = splitWhatsAppMessage(text, MAX_MESSAGE_LENGTH);
 
-    if (this.messageId && !this.editFailed) {
-      // Edit the placeholder with first chunk, send rest as new
-      const firstChunk = chunks[0];
-      if (!firstChunk) return;
-      try {
-        await this.doEditRaw(firstChunk);
-      } catch {
-        // Fall back to new messages
-        for (const c of chunks) {
-          if (c) await this.sendMessage(c);
-        }
-        return;
-      }
-      for (let i = 1; i < chunks.length; i++) {
-        // biome-ignore lint/style/noNonNullAssertion: guarded by if (chunks[i]) above
-        if (chunks[i]) await this.sendMessage(chunks[i]!);
-      }
-    } else {
-      for (const c of chunks) {
-        if (c) await this.sendMessage(c);
-      }
+    if (!(this.messageId && !this.editFailed)) {
+      await this.sendAllChunks(chunks);
+      return;
+    }
+
+    const firstChunk = chunks[0];
+    if (!firstChunk) return;
+
+    try {
+      await this.doEditRaw(firstChunk);
+    } catch {
+      // Edit failed — fall back to sending all chunks as new messages
+      await this.sendAllChunks(chunks);
+      return;
+    }
+
+    await this.sendChunksFrom(chunks, 1);
+  }
+
+  /** Send all non-empty chunks as new messages. */
+  private async sendAllChunks(chunks: string[]): Promise<void> {
+    for (const chunk of chunks) {
+      if (chunk) await this.sendMessage(chunk);
+    }
+  }
+
+  /** Send non-empty chunks starting from startIndex as new messages. */
+  private async sendChunksFrom(chunks: string[], startIndex: number): Promise<void> {
+    for (let i = startIndex; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk) await this.sendMessage(chunk);
     }
   }
 

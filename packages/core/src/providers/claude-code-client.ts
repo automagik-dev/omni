@@ -215,8 +215,36 @@ function handleBlockStart(
   return null;
 }
 
+/** Handle a thinking_delta: accumulate thinking text and optionally emit a thinking delta. */
+function handleThinkingDelta(
+  delta: Record<string, unknown>,
+  acc: StreamAccumulator,
+  flags: ResolvedStreamFlags,
+): StreamDelta | null {
+  acc.thinking += (delta.thinking as string) ?? '';
+  if (flags.showThinking && acc.thinkingStartMs) {
+    return { phase: 'thinking', thinking: acc.thinking, thinkingElapsedMs: Date.now() - acc.thinkingStartMs };
+  }
+  return null;
+}
+
+/** Handle a text_delta: track thinking XML tags and accumulate content or thinking text. */
+function handleTextDelta(text: string, acc: StreamAccumulator): void {
+  if (text.includes('<thinking>')) acc.insideXmlThinking = true;
+
+  if (acc.insideXmlThinking) {
+    // Accumulate thinking text separately (strip XML tags for clean storage)
+    const clean = text.replace(/<\/?thinking>/g, '');
+    if (clean) acc.thinking += clean;
+  } else {
+    acc.content += text;
+  }
+
+  if (text.includes('</thinking>')) acc.insideXmlThinking = false;
+  freezeThinking(acc);
+}
+
 /** Handle a content_block_delta event. Returns a delta to yield, or null. */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream delta handler requires branching on multiple delta types
 function handleBlockDelta(
   event: Record<string, unknown>,
   acc: StreamAccumulator,
@@ -228,46 +256,57 @@ function handleBlockDelta(
 
   const deltaType = delta.type as string;
 
-  if (deltaType === 'thinking_delta') {
-    acc.thinking += (delta.thinking as string) ?? '';
-    if (flags.showThinking && acc.thinkingStartMs) {
-      return { phase: 'thinking', thinking: acc.thinking, thinkingElapsedMs: Date.now() - acc.thinkingStartMs };
-    }
-    return null;
-  }
+  if (deltaType === 'thinking_delta') return handleThinkingDelta(delta, acc, flags);
 
   if (deltaType === 'text_delta') {
-    const text = (delta.text as string) ?? '';
-
-    // Track <thinking> XML tags — Claude Code wraps reasoning in these as regular text.
-    if (text.includes('<thinking>')) acc.insideXmlThinking = true;
-
-    if (acc.insideXmlThinking) {
-      // Accumulate thinking text separately (strip XML tags for clean storage)
-      const clean = text.replace(/<\/?thinking>/g, '');
-      if (clean) acc.thinking += clean;
-    } else {
-      acc.content += text;
-    }
-
-    if (text.includes('</thinking>')) acc.insideXmlThinking = false;
-
-    freezeThinking(acc);
+    handleTextDelta((delta.text as string) ?? '', acc);
     return null;
   }
 
   if (deltaType === 'input_json_delta' && flags.showToolCalls) {
     const toolBlock = acc.activeToolBlocks.get(index);
-    if (toolBlock) {
-      toolBlock.inputJson += (delta.partial_json as string) ?? '';
-    }
+    if (toolBlock) toolBlock.inputJson += (delta.partial_json as string) ?? '';
   }
 
   return null;
 }
 
+/** Handle a completed text block: emit accumulated content or a thinking annotation. */
+function handleTextBlockStop(index: number, acc: StreamAccumulator, flags: ResolvedStreamFlags): StreamDelta | null {
+  const startOffset = acc.activeTextBlockIndices.get(index);
+  if (startOffset === undefined) return null;
+  acc.activeTextBlockIndices.delete(index);
+
+  // If the block was pure thinking (no content added), optionally emit annotation
+  if (acc.content.length <= startOffset) {
+    if (flags.showThinking && acc.thinking) {
+      acc.content += formatThinkingAnnotation(acc.thinking);
+      return contentDelta(acc);
+    }
+    return null;
+  }
+
+  return contentDelta(acc);
+}
+
+/** Handle a completed tool_use block: append a formatted tool call annotation. */
+function handleToolBlockStop(index: number, acc: StreamAccumulator, flags: ResolvedStreamFlags): StreamDelta | null {
+  const toolBlock = acc.activeToolBlocks.get(index);
+  if (!toolBlock) return null;
+  acc.activeToolBlocks.delete(index);
+
+  let input: Record<string, unknown> = {};
+  try {
+    input = toolBlock.inputJson ? (JSON.parse(toolBlock.inputJson) as Record<string, unknown>) : {};
+  } catch {
+    input = { _raw: toolBlock.inputJson };
+  }
+  acc.content += formatToolCall(toolBlock.name, input, flags.toolCallFormat);
+  freezeThinking(acc);
+  return contentDelta(acc);
+}
+
 /** Handle a content_block_stop event. Returns a delta to yield, or null. */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: stream block-stop logic requires handling multiple block types
 function handleBlockStop(
   event: Record<string, unknown>,
   acc: StreamAccumulator,
@@ -275,40 +314,8 @@ function handleBlockStop(
 ): StreamDelta | null {
   const index = typeof event.index === 'number' ? event.index : -1;
 
-  // Text block completed — emit accumulated content as a delta
-  if (acc.activeTextBlockIndices.has(index)) {
-    // biome-ignore lint/style/noNonNullAssertion: guarded by has(index) above
-    const startOffset = acc.activeTextBlockIndices.get(index)!;
-    acc.activeTextBlockIndices.delete(index);
-
-    // If the block was pure thinking (no content added), optionally emit annotation
-    if (acc.content.length <= startOffset) {
-      if (flags.showThinking && acc.thinking) {
-        acc.content += formatThinkingAnnotation(acc.thinking);
-        return contentDelta(acc);
-      }
-      return null;
-    }
-
-    return contentDelta(acc);
-  }
-
-  // Tool use block completed — append tool call annotation if enabled
-  if (flags.showToolCalls) {
-    const toolBlock = acc.activeToolBlocks.get(index);
-    if (toolBlock) {
-      acc.activeToolBlocks.delete(index);
-      let input: Record<string, unknown> = {};
-      try {
-        input = toolBlock.inputJson ? (JSON.parse(toolBlock.inputJson) as Record<string, unknown>) : {};
-      } catch {
-        input = { _raw: toolBlock.inputJson };
-      }
-      acc.content += formatToolCall(toolBlock.name, input, flags.toolCallFormat);
-      freezeThinking(acc);
-      return contentDelta(acc);
-    }
-  }
+  if (acc.activeTextBlockIndices.has(index)) return handleTextBlockStop(index, acc, flags);
+  if (flags.showToolCalls) return handleToolBlockStop(index, acc, flags);
 
   return null;
 }
@@ -504,6 +511,146 @@ function processRunMessage(
 }
 
 // ---------------------------------------------------------------------------
+// Query options builder (module-level so generateStream can use it directly)
+// ---------------------------------------------------------------------------
+
+/** Build options for the @anthropic-ai/claude-agent-sdk query() call. */
+function buildQueryOptions(
+  config: ClaudeCodeConfig,
+  request: ProviderRequest,
+  opts?: { includePartialMessages?: boolean; abortSignal?: AbortSignal },
+): Record<string, unknown> {
+  const options: Record<string, unknown> = {
+    cwd: config.projectPath,
+    settingSources: ['project'],
+    permissionMode: config.permissionMode ?? 'bypassPermissions',
+    maxTurns: config.maxTurns ?? 10,
+  };
+
+  // bypassPermissions requires this flag
+  if (options.permissionMode === 'bypassPermissions') {
+    options.allowDangerouslySkipPermissions = true;
+  }
+
+  if (config.allowedTools) options.allowedTools = config.allowedTools;
+  if (config.model) options.model = config.model;
+  if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
+  if (config.mcpServers) options.mcpServers = config.mcpServers;
+
+  // Pass API key via env if provided (SDK reads ANTHROPIC_API_KEY)
+  if (config.apiKey) {
+    options.env = { ...process.env, ANTHROPIC_API_KEY: config.apiKey };
+  }
+
+  // Resume session if provided (must be a valid UUID — Claude Code SDK requires it)
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (request.sessionId && uuidPattern.test(request.sessionId)) {
+    options.resume = request.sessionId;
+  }
+
+  // Enable partial messages for streaming (stream_event, tool_progress, etc.)
+  if (opts?.includePartialMessages) {
+    options.includePartialMessages = true;
+  }
+
+  // Wire up abort support via AbortController (SDK uses abortController option)
+  if (opts?.abortSignal) {
+    const controller = new AbortController();
+    opts.abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    options.abortController = controller;
+  }
+
+  return options;
+}
+
+// ---------------------------------------------------------------------------
+// Mutable state for streamRun — shared between streamRun() and generateStream()
+// ---------------------------------------------------------------------------
+
+interface StreamRunState {
+  sessionId: string;
+  metrics: StreamRunMetrics | null;
+}
+
+/**
+ * Module-level generator for streamRun — lifted out of the class to avoid the
+ * inner-function nesting bonus that Biome's cognitive complexity metric applies.
+ */
+async function* generateStream(
+  config: ClaudeCodeConfig,
+  request: ProviderRequest,
+  flags: ResolvedStreamFlags,
+  abortSignal: AbortSignal | undefined,
+  state: StreamRunState,
+): AsyncGenerator<StreamDelta> {
+  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const startTime = Date.now();
+  const acc: StreamAccumulator = {
+    content: '',
+    thinking: '',
+    thinkingStartMs: 0,
+    thinkingDurationMs: undefined,
+    activeToolBlocks: new Map(),
+    activeTextBlockIndices: new Map(),
+    insideXmlThinking: false,
+  };
+
+  log.info('streamRun: starting', {
+    projectPath: config.projectPath,
+    sessionId: request.sessionId,
+    model: config.model,
+    showToolCalls: flags.showToolCalls,
+    showThinking: flags.showThinking,
+    showToolProgress: flags.showToolProgress,
+  });
+
+  try {
+    for await (const message of query({
+      prompt: request.message,
+      options: buildQueryOptions(config, request, { includePartialMessages: true, abortSignal }),
+    })) {
+      if (abortSignal?.aborted) {
+        yield { phase: 'error', error: 'Aborted' };
+        return;
+      }
+
+      const delta = processStreamRunMessage(message, acc, flags, startTime, state.sessionId);
+      if (!delta) continue;
+
+      // Result outcomes carry metrics and session updates
+      if ('kind' in delta) {
+        state.sessionId = delta.sessionId;
+        state.metrics = delta.metrics;
+        log.info(`streamRun: ${delta.kind}`, { sessionId: state.sessionId, durationMs: delta.metrics.durationMs });
+        yield delta.delta;
+        return;
+      }
+
+      yield delta;
+    }
+
+    // Loop ended without result — yield accumulated content as final
+    if (acc.content) {
+      freezeThinking(acc);
+      state.metrics = { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: Date.now() - startTime };
+      yield {
+        phase: 'final',
+        content: acc.content,
+        thinking: acc.thinking || undefined,
+        thinkingDurationMs: acc.thinkingDurationMs,
+      };
+    }
+  } catch (error) {
+    if (abortSignal?.aborted) {
+      yield { phase: 'error', error: 'Aborted' };
+      return;
+    }
+    log.error('streamRun: threw', { error: String(error), sessionId: state.sessionId });
+    yield { phase: 'error', error: `Agent error: ${String(error)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Client class
 // ---------------------------------------------------------------------------
 
@@ -513,56 +660,8 @@ export class ClaudeCodeClient implements IAgentClient {
   private buildOptions(
     request: ProviderRequest,
     opts?: { includePartialMessages?: boolean; abortSignal?: AbortSignal },
-  ) {
-    const options: Record<string, unknown> = {
-      cwd: this.config.projectPath,
-      settingSources: ['project'],
-      permissionMode: this.config.permissionMode ?? 'bypassPermissions',
-      maxTurns: this.config.maxTurns ?? 10,
-    };
-
-    // bypassPermissions requires this flag
-    if (options.permissionMode === 'bypassPermissions') {
-      options.allowDangerouslySkipPermissions = true;
-    }
-
-    if (this.config.allowedTools) {
-      options.allowedTools = this.config.allowedTools;
-    }
-    if (this.config.model) {
-      options.model = this.config.model;
-    }
-    if (this.config.systemPrompt) {
-      options.systemPrompt = this.config.systemPrompt;
-    }
-    if (this.config.mcpServers) {
-      options.mcpServers = this.config.mcpServers;
-    }
-
-    // Pass API key via env if provided (SDK reads ANTHROPIC_API_KEY)
-    if (this.config.apiKey) {
-      options.env = { ...process.env, ANTHROPIC_API_KEY: this.config.apiKey };
-    }
-
-    // Resume session if provided (must be a valid UUID — Claude Code SDK requires it)
-    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (request.sessionId && uuidPattern.test(request.sessionId)) {
-      options.resume = request.sessionId;
-    }
-
-    // Enable partial messages for streaming (stream_event, tool_progress, etc.)
-    if (opts?.includePartialMessages) {
-      options.includePartialMessages = true;
-    }
-
-    // Wire up abort support via AbortController (SDK uses abortController option)
-    if (opts?.abortSignal) {
-      const controller = new AbortController();
-      opts.abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
-      options.abortController = controller;
-    }
-
-    return options;
+  ): Record<string, unknown> {
+    return buildQueryOptions(this.config, request, opts);
   }
 
   async run(request: ProviderRequest): Promise<ProviderResponse> {
@@ -629,10 +728,6 @@ export class ClaudeCodeClient implements IAgentClient {
     streamConfig?: ClaudeCodeStreamConfig,
     abortSignal?: AbortSignal,
   ): StreamRunResult {
-    let sessionId = '';
-    let metrics: StreamRunMetrics | null = null;
-
-    const self = this;
     const cfg = streamConfig ?? {};
     const flags: ResolvedStreamFlags = {
       showToolCalls: cfg.showToolCalls ?? false,
@@ -641,87 +736,12 @@ export class ClaudeCodeClient implements IAgentClient {
       toolCallFormat: cfg.toolCallFormat ?? 'compact',
     };
 
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Generator must handle SDK message loop, system init, result outcomes, and error recovery inline
-    async function* generate(): AsyncGenerator<StreamDelta> {
-      const { query } = await import('@anthropic-ai/claude-agent-sdk');
-      const startTime = Date.now();
-      const acc: StreamAccumulator = {
-        content: '',
-        thinking: '',
-        thinkingStartMs: 0,
-        thinkingDurationMs: undefined,
-        activeToolBlocks: new Map(),
-        activeTextBlockIndices: new Map(),
-        insideXmlThinking: false,
-      };
-
-      log.info('streamRun: starting', {
-        projectPath: self.config.projectPath,
-        sessionId: request.sessionId,
-        model: self.config.model,
-        showToolCalls: flags.showToolCalls,
-        showThinking: flags.showThinking,
-        showToolProgress: flags.showToolProgress,
-      });
-
-      try {
-        for await (const message of query({
-          prompt: request.message,
-          options: self.buildOptions(request, { includePartialMessages: true, abortSignal }),
-        })) {
-          if (abortSignal?.aborted) {
-            yield { phase: 'error', error: 'Aborted' };
-            return;
-          }
-
-          // Capture session ID from system init (before routing)
-          const msg = message as Record<string, unknown>;
-
-          if (msg.type === 'system' && msg.subtype === 'init') {
-            sessionId = (msg.session_id as string) ?? '';
-            continue;
-          }
-
-          const delta = processStreamRunMessage(message, acc, flags, startTime, sessionId);
-          if (!delta) continue;
-
-          // Result outcomes carry metrics and session updates
-          if ('kind' in delta) {
-            sessionId = delta.sessionId;
-            metrics = delta.metrics;
-            log.info(`streamRun: ${delta.kind}`, { sessionId, durationMs: delta.metrics.durationMs });
-            yield delta.delta;
-            return;
-          }
-
-          yield delta;
-        }
-
-        // Loop ended without result — yield accumulated content as final
-        if (acc.content) {
-          freezeThinking(acc);
-          metrics = { inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: Date.now() - startTime };
-          yield {
-            phase: 'final',
-            content: acc.content,
-            thinking: acc.thinking || undefined,
-            thinkingDurationMs: acc.thinkingDurationMs,
-          };
-        }
-      } catch (error) {
-        if (abortSignal?.aborted) {
-          yield { phase: 'error', error: 'Aborted' };
-          return;
-        }
-        log.error('streamRun: threw', { error: String(error), sessionId });
-        yield { phase: 'error', error: `Agent error: ${String(error)}` };
-      }
-    }
+    const state: StreamRunState = { sessionId: '', metrics: null };
 
     return {
-      stream: generate(),
-      getSessionId: () => sessionId,
-      getMetrics: () => metrics,
+      stream: generateStream(this.config, request, flags, abortSignal, state),
+      getSessionId: () => state.sessionId,
+      getMetrics: () => state.metrics,
     };
   }
 
