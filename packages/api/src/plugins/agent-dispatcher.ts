@@ -2287,6 +2287,13 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Never trigger the agent for newsletter/broadcast chats regardless of reply filter mode
+  const chatId = payload.chatId ?? '';
+  if (chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast')) {
+    log.debug('Skipping newsletter/broadcast message', { instanceId: metadata.instanceId, chatId });
+    return null;
+  }
+
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentProviderId) {
     log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
