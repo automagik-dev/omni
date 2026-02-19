@@ -238,6 +238,21 @@ function resolveChatName(message: Message, isDMChannel: boolean, isThread: boole
 }
 
 /**
+ * Set threadId on a payload for messages in Discord thread channels.
+ * Skips DMs and channels that already have a threadId set.
+ */
+function applyThreadId(
+  payload: Record<string, unknown>,
+  chatId: string,
+  isThread: boolean,
+  isDMChannel: boolean,
+): void {
+  if (isThread && !isDMChannel && !payload.threadId) {
+    payload.threadId = chatId;
+  }
+}
+
+/**
  * Process a single message
  */
 async function processMessage(plugin: DiscordPlugin, instanceId: string, message: Message): Promise<void> {
@@ -346,6 +361,10 @@ async function processMessage(plugin: DiscordPlugin, instanceId: string, message
     extendedPayload.threadId = message.thread.id;
     extendedPayload.threadName = message.thread.name;
   }
+
+  // For messages IN a thread channel (per_thread session strategy):
+  // The thread channel ID is the threadId. Regular GUILD_TEXT replies are excluded.
+  applyThreadId(extendedPayload, chatId, isThread, isDMChannel);
 
   await plugin.handleMessageReceived(
     instanceId,

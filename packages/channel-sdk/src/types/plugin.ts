@@ -6,6 +6,7 @@
  */
 
 import type { ChannelType } from '@omni/core/types';
+import type { FetchHistoryOptions, FetchHistoryResult } from '../history';
 import type { ChannelCapabilities } from './capabilities';
 import type { PluginContext } from './context';
 import type { ConnectionStatus, InstanceConfig } from './instance';
@@ -323,4 +324,45 @@ export interface ChannelPlugin {
    * @returns HTTP response to send back
    */
   handleWebhook?(request: Request): Promise<Response>;
+
+  // ─────────────────────────────────────────────────────────────
+  // Thread History & Reactions (Optional — per_thread sessions)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Fetch message history for a channel or thread.
+   *
+   * Required for per_thread collaboration sessions. Implement to allow the
+   * dispatcher to fetch history on first activation and inject it as context.
+   *
+   * @param instanceId - Instance to fetch history for
+   * @param options - Fetch options including channelId and threadId
+   * @returns Fetched messages in standardized format
+   */
+  fetchHistory?(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult>;
+
+  /**
+   * Add a reaction emoji to a message.
+   *
+   * Used for per_thread media processing feedback (👀/🎧 → ✅).
+   * Graceful skip: channels without reaction support should not implement this.
+   *
+   * @param instanceId - Instance to react from
+   * @param chatId - Channel/chat ID containing the message
+   * @param messageId - Message to react to (platform-specific ID)
+   * @param emoji - Emoji to react with (e.g. '👀', '✅')
+   */
+  react?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
+   * Remove a reaction emoji from a message.
+   *
+   * Counterpart to react(). Used to replace the start emoji (👀/🎧) with ✅.
+   *
+   * @param instanceId - Instance to unreact from
+   * @param chatId - Channel/chat ID containing the message
+   * @param messageId - Message to remove reaction from
+   * @param emoji - Emoji to remove
+   */
+  unreact?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
 }
