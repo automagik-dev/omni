@@ -327,6 +327,24 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const data = c.req.valid('json');
   const services = c.get('services');
 
+  // When clearing agentProviderId, cascade-reset all agent fields to defaults.
+  // NOT NULL DB fields can't be set to null, so reset them to their schema defaults.
+  if (data.agentProviderId === null) {
+    Object.assign(data, {
+      agentId: null,
+      agentApiUrl: null,
+      agentApiKey: null,
+      agentReplyFilter: null,
+      agentSessionStrategy: null,
+      agentGateModel: null,
+      agentGatePrompt: null,
+      // Reset NOT NULL fields to schema defaults (cannot be null)
+      agentType: 'agent',
+      agentTimeout: 60,
+      agentStreamMode: false,
+    });
+  }
+
   // Default reply filter when binding an agent provider without explicit filter
   if (data.agentProviderId && !data.agentReplyFilter) {
     const existing = await services.instances.getById(id);
