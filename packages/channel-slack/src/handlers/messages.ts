@@ -124,8 +124,12 @@ export function setupMessageHandlers(
     const userId = msg.user as string;
     const meta = extractMessageMeta(msg);
     const text = (msg.text as string) ?? '';
+    const currentBotUserId = resolveBotUserId();
 
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
+
+    // Detect @mention of the bot in message text (Slack format: <@U...>)
+    const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
 
     logger.debug('Message received', {
       instanceId,
@@ -133,6 +137,7 @@ export function setupMessageHandlers(
       userId,
       isDm: meta.isDm,
       isThread: meta.isThreadReply,
+      isMention: isMentioningInstance,
     });
 
     await callbacks.onMessage(
@@ -142,7 +147,7 @@ export function setupMessageHandlers(
       userId,
       { type: 'text', text: text || undefined },
       meta.isThreadReply ? meta.threadTs : undefined,
-      buildRawPayload(meta, msg),
+      buildRawPayload(meta, msg, { isMentioningInstance }),
       slackTsToMs(meta.ts),
       meta,
     );

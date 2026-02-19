@@ -31,13 +31,14 @@ export const REQUIRED_BOT_SCOPES = [
   'reactions:read',
   'reactions:write',
   'users:read',
+  'users:write',
 ] as const;
 
 /**
  * All bot events to subscribe to
  */
 export const BOT_EVENTS = [
-  'app_mention',
+  // app_mention not needed — app.message() captures mentions via <@botUserId> detection
   'message.channels',
   'message.groups',
   'message.im',

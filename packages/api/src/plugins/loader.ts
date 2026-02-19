@@ -163,6 +163,22 @@ export async function getAllPlugins(): Promise<ChannelPlugin[]> {
   return channelRegistry.getAll();
 }
 
+/** Apply Slack tokens and profileMetadata config to connection options */
+function applySlackReconnectOptions(options: Record<string, unknown>, instance: ReconnectInstance): void {
+  if (instance.slackBotToken) {
+    options.botToken = instance.slackBotToken;
+    options.token = instance.slackBotToken;
+  }
+  if (instance.slackAppToken) options.appToken = instance.slackAppToken;
+  if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
+  const meta = instance.profileMetadata;
+  if (!meta) return;
+  if (meta.replyToMode) options.replyToMode = meta.replyToMode;
+  if (meta.streamMode) options.streamMode = meta.streamMode;
+  if (meta.dmPolicy) options.dmPolicy = meta.dmPolicy;
+  if (meta.dmAllowlist) options.dmAllowlist = meta.dmAllowlist;
+}
+
 type ReconnectInstance = {
   id: string;
   name: string;
@@ -174,6 +190,7 @@ type ReconnectInstance = {
   slackBotToken?: string | null;
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
+  profileMetadata?: Record<string, unknown> | null;
 };
 
 function buildReconnectOptions(instance: ReconnectInstance): {
@@ -195,24 +212,13 @@ function buildReconnectOptions(instance: ReconnectInstance): {
       if (instance.discordBotToken) {
         options.token = instance.discordBotToken;
       }
-      // Re-apply persisted presence on reconnect (plugin applies it in handleConnected)
       if (instance.discordPresence) {
         options.presence = instance.discordPresence;
       }
       break;
     }
     case 'slack': {
-      if (instance.slackBotToken) {
-        options.botToken = instance.slackBotToken;
-        // Keep generic alias for compatibility with old connectors.
-        options.token = instance.slackBotToken;
-      }
-      if (instance.slackAppToken) {
-        options.appToken = instance.slackAppToken;
-      }
-      if (instance.slackSigningSecret) {
-        options.signingSecret = instance.slackSigningSecret;
-      }
+      applySlackReconnectOptions(options, instance);
       break;
     }
     default:

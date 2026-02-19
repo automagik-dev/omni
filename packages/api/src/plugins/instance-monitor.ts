@@ -94,6 +94,42 @@ function wasAuthenticated(instance: InstanceInfo): boolean {
   return !!instance.ownerIdentifier;
 }
 
+/** Extract Slack-specific config from profileMetadata into connection options */
+function applySlackMetadata(
+  options: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (!metadata) return;
+  if (metadata.replyToMode) options.replyToMode = metadata.replyToMode;
+  if (metadata.streamMode) options.streamMode = metadata.streamMode;
+  if (metadata.dmPolicy) options.dmPolicy = metadata.dmPolicy;
+  if (metadata.dmAllowlist) options.dmAllowlist = metadata.dmAllowlist;
+}
+
+/** Build channel-specific connection options from instance DB fields */
+function buildInstanceConnectOptions(instance: {
+  channel: string;
+  telegramBotToken?: string | null;
+  telegramReactionLevel?: string | null;
+  discordBotToken?: string | null;
+  slackBotToken?: string | null;
+  slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
+  profileMetadata?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  if (instance.telegramBotToken) options.token = instance.telegramBotToken;
+  if (instance.channel === 'telegram') options.telegramReactionLevel = instance.telegramReactionLevel;
+  if (instance.discordBotToken) options.token = instance.discordBotToken;
+  if (instance.channel === 'slack') {
+    if (instance.slackBotToken) options.botToken = instance.slackBotToken;
+    if (instance.slackAppToken) options.appToken = instance.slackAppToken;
+    if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
+    applySlackMetadata(options, instance.profileMetadata);
+  }
+  return options;
+}
+
 /**
  * Connect a single instance via its plugin
  */
@@ -109,6 +145,7 @@ async function connectInstance(
     slackBotToken?: string | null;
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -118,8 +155,6 @@ async function connectInstance(
   }
 
   // Hydrate per-guild config overrides into the plugin cache before connecting.
-  // Without this, auto-reconnect and monitor-driven reconnects would connect
-  // without guild configs, causing incoming messages to lose guildConfig metadata.
   if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
     (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
       instance.id,
@@ -127,26 +162,10 @@ async function connectInstance(
     );
   }
 
-  // Pass channel-specific tokens from DB for reconnection
-  const options: Record<string, unknown> = {};
-  if (instance.telegramBotToken) {
-    options.token = instance.telegramBotToken;
-  }
-  if (instance.channel === 'telegram') {
-    options.telegramReactionLevel = instance.telegramReactionLevel;
-  }
-  if (instance.discordBotToken) {
-    options.token = instance.discordBotToken;
-  }
+  const options = buildInstanceConnectOptions(instance);
   // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
   if (instance.discordPresence) {
     options.presence = instance.discordPresence;
-  }
-  // Slack needs both botToken and appToken for Socket Mode
-  if (instance.channel === 'slack') {
-    if (instance.slackBotToken) options.botToken = instance.slackBotToken;
-    if (instance.slackAppToken) options.appToken = instance.slackAppToken;
-    if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
   }
 
   await plugin.connect(instance.id, {
@@ -467,9 +486,14 @@ export class InstanceMonitor {
     id: string;
     channel: string;
     telegramBotToken?: string | null;
+    telegramReactionLevel?: string | null;
     discordBotToken?: string | null;
     guildConfigOverrides?: Record<string, unknown> | null;
     discordPresence?: Record<string, unknown> | null;
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;

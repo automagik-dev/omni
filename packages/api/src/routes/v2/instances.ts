@@ -112,6 +112,7 @@ const createInstanceSchema = z.object({
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
+  slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -168,38 +169,35 @@ function persistedTokenForChannel(instance: {
   }
 }
 
-/** Build channel-specific connection options from instance data */
-function buildChannelConnectOptions(
-  channel: string,
-  base: Record<string, unknown>,
+/** Apply Slack-specific config from profileMetadata */
+function applySlackProfileMetadata(
+  opts: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (!metadata) return;
+  if (metadata.replyToMode) opts.replyToMode = metadata.replyToMode;
+  if (metadata.streamMode) opts.streamMode = metadata.streamMode;
+  if (metadata.dmPolicy) opts.dmPolicy = metadata.dmPolicy;
+  if (metadata.dmAllowlist) opts.dmAllowlist = metadata.dmAllowlist;
+}
+
+/** Apply Slack tokens and config to connection options */
+function applySlackConnectOptions(
+  opts: Record<string, unknown>,
   instance: {
-    telegramReactionLevel?: string | null;
     slackBotToken?: string | null;
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
   },
-  overrides?: {
-    slackBotToken?: string | null;
-    slackAppToken?: string | null;
-    slackSigningSecret?: string | null;
-    whatsapp?: unknown;
-  },
-): Record<string, unknown> {
-  const opts = { ...base };
-  if (channel === 'telegram') {
-    opts.telegramReactionLevel = instance.telegramReactionLevel;
-  }
-  if (channel === 'slack') {
-    opts.botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
-    if (overrides?.slackAppToken ?? instance.slackAppToken)
-      opts.appToken = overrides?.slackAppToken ?? instance.slackAppToken;
-    if (overrides?.slackSigningSecret ?? instance.slackSigningSecret)
-      opts.signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
-  }
-  if (overrides?.whatsapp) {
-    opts.whatsapp = overrides.whatsapp;
-  }
-  return opts;
+  overrides?: { slackBotToken?: string | null; slackAppToken?: string | null; slackSigningSecret?: string | null },
+): void {
+  opts.botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+  const appToken = overrides?.slackAppToken ?? instance.slackAppToken;
+  if (appToken) opts.appToken = appToken;
+  const signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
+  if (signingSecret) opts.signingSecret = signingSecret;
+  applySlackProfileMetadata(opts, instance.profileMetadata);
 }
 
 /**
@@ -815,9 +813,7 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
     }
     if (instance.channel === 'slack') {
-      restartOptions.botToken = instance.slackBotToken ?? restartToken;
-      restartOptions.appToken = instance.slackAppToken;
-      restartOptions.signingSecret = instance.slackSigningSecret;
+      applySlackConnectOptions(restartOptions, instance);
     }
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {
