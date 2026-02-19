@@ -649,7 +649,7 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -1012,7 +1012,7 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
