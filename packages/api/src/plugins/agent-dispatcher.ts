@@ -1169,7 +1169,16 @@ async function resolveStreamingCapabilities(
   };
 }
 
-/** Consume a streaming generator, routing each delta to the sender. Returns true if no error deltas. */
+/**
+ * Consume a streaming generator, routing each delta to the sender.
+ *
+ * Returns true if the stream should be treated as "handled" (no fallback needed).
+ * Returns false only if an error occurred AND no content was sent yet — meaning the
+ * fallback path should run so the user still gets a response.
+ *
+ * If content was already sent before the error, we return true to prevent a double
+ * reply from the fallback path.
+ */
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
   sender: StreamSender,
@@ -1179,9 +1188,11 @@ async function consumeStream(
 ): Promise<boolean> {
   const startTime = Date.now();
   let hadError = false;
+  let hadContent = false;
 
   for await (const delta of generator) {
     if (delta.phase === 'error') hadError = true;
+    if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
     await routeStreamDelta(sender, delta);
   }
 
@@ -1190,10 +1201,13 @@ async function consumeStream(
     chatId,
     durationMs: Date.now() - startTime,
     hadError,
+    hadContent,
     traceId,
   });
 
-  return !hadError;
+  // If we already sent content to the user, treat as handled even on error.
+  // Falling back would cause a double reply.
+  return hadContent || !hadError;
 }
 
 /** Extract thread ID from the first buffered message rawPayload (for per_thread session strategy) */
