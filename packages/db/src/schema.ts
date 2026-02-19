@@ -66,8 +66,9 @@ export interface AgentReplyFilter {
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
+ * - per_thread: Isolated session per thread/topic (lazy init, collaborative)
  */
-export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
+export const agentSessionStrategies = ['per_user', 'per_chat', 'per_thread'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
 export const ruleTypes = ['allow', 'deny', 'pending_pairing'] as const;
