@@ -646,6 +646,9 @@ async function waitForMediaProcessing(
 /**
  * Format processed media content for the agent.
  */
+/** Content types where the file path is not useful (already fully processed to text) */
+const SKIP_PATH_CONTENT_TYPES = new Set(['audio']);
+
 function formatProcessedMedia(
   contentType: string,
   fullPath: string | null,
@@ -653,7 +656,7 @@ function formatProcessedMedia(
   includePath: boolean,
 ): string {
   const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
-  if (includePath && fullPath) {
+  if (includePath && fullPath && !SKIP_PATH_CONTENT_TYPES.has(contentType)) {
     return `${icon} [${fullPath}]: ${processedText}`;
   }
   return `${icon}: ${processedText}`;
