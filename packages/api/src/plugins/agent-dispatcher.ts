@@ -813,6 +813,48 @@ async function resolveContactName(
   return null;
 }
 
+/** JID regex: supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net */
+const JID_PHONE_REGEX = /^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/;
+
+/**
+ * Build a JID-to-name lookup map from Baileys contact cache.
+ */
+function buildContactNameCache(
+  mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
+): Map<string, string> {
+  const cache = new Map<string, string>();
+  if (!mentionedContacts) return cache;
+  for (const contact of mentionedContacts) {
+    if (contact.name) {
+      cache.set(contact.jid, contact.name);
+    }
+  }
+  return cache;
+}
+
+/**
+ * Resolve a single JID mention and apply text replacement.
+ * Returns an update with the new text and a status flag.
+ */
+async function resolveMentionReplacement(
+  services: Services,
+  instanceId: string,
+  jid: string,
+  currentText: string,
+  jidToName: Map<string, string>,
+): Promise<{ text: string; status: 'replaced' | 'resolved' | 'unresolved' | 'skipped' }> {
+  const phoneMatch = jid.match(JID_PHONE_REGEX);
+  if (!phoneMatch) return { text: currentText, status: 'skipped' };
+
+  const contactName = await resolveContactName(services, instanceId, jid, jidToName);
+  if (!contactName) return { text: currentText, status: 'unresolved' };
+
+  const mentionPattern = `@${phoneMatch[1]}`;
+  const nextText = currentText.replaceAll(mentionPattern, `@${contactName}`);
+  const didReplace = nextText !== currentText;
+  return { text: nextText, status: didReplace ? 'replaced' : 'resolved' };
+}
+
 /**
  * Replace @phone mentions in text with actual contact names
  * Cache-aside pattern: Uses Baileys cache first, falls back to DB on miss
@@ -828,15 +870,7 @@ async function replaceMentionsWithContactNames(
 
   log.debug('Starting mention replacement', { mentionCount: mentionedJids.length });
 
-  // Create JID → name map from mentionedContacts (Baileys cache)
-  const jidToName = new Map<string, string>();
-  if (mentionedContacts) {
-    for (const contact of mentionedContacts) {
-      if (contact.name) {
-        jidToName.set(contact.jid, contact.name);
-      }
-    }
-  }
+  const jidToName = buildContactNameCache(mentionedContacts);
 
   let replacedText = text;
   let resolvedCount = 0;
@@ -845,28 +879,17 @@ async function replaceMentionsWithContactNames(
   let skippedCount = 0;
 
   for (const jid of mentionedJids) {
-    // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
-    const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
-    if (!phoneMatch) {
-      skippedCount++;
-      continue;
-    }
-
-    const phoneNumber = phoneMatch[1];
-    const mentionPattern = `@${phoneNumber}`;
-
-    // Resolve contact name (cache → DB fallback)
-    const contactName = await resolveContactName(services, instanceId, jid, jidToName);
-
-    if (contactName) {
+    const result = await resolveMentionReplacement(services, instanceId, jid, replacedText, jidToName);
+    replacedText = result.text;
+    if (result.status === 'replaced') {
       resolvedCount++;
-      const nextText = replacedText.replaceAll(mentionPattern, `@${contactName}`);
-      if (nextText !== replacedText) {
-        replacedCount++;
-        replacedText = nextText;
-      }
-    } else {
+      replacedCount++;
+    } else if (result.status === 'resolved') {
+      resolvedCount++;
+    } else if (result.status === 'unresolved') {
       unresolvedCount++;
+    } else {
+      skippedCount++;
     }
   }
 
