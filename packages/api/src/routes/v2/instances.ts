@@ -77,6 +77,11 @@ const createInstanceSchema = z.object({
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
+  agentSendMediaPathTypes: z
+    .array(z.string())
+    .optional()
+    .nullable()
+    .describe('Content types that receive file path (e.g. image, video, document). Default: all except audio'),
   messageDebounceMode: z
     .enum(['disabled', 'fixed', 'randomized'])
     .default('randomized')
