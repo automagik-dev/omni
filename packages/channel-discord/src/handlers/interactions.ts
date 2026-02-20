@@ -165,6 +165,7 @@ async function processContextMenu(plugin: DiscordPlugin, instanceId: string, int
 async function processButton(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isButton(interaction)) return;
   if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'button'))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -190,6 +191,7 @@ async function processButton(plugin: DiscordPlugin, instanceId: string, interact
 async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isStringSelectMenu(interaction)) return;
   if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'string select'))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -292,8 +294,9 @@ async function processEntitySelectMenu(
 
   // Defer update
   try {
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.deferUpdate();
+    const ci = interaction as MessageComponentInteraction;
+    if (!ci.replied && !ci.deferred) {
+      await ci.deferUpdate();
     }
   } catch (error) {
     log.warn('Failed to defer entity select menu update', { instanceId, error });

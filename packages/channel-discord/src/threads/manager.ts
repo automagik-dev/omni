@@ -84,6 +84,14 @@ export async function createThread(
     startMessageId: options.startMessageId,
   });
 
+  if (options.startMessageId && options.type) {
+    log.warn('Thread type option is ignored when startMessageId is provided — thread type is determined by Discord', {
+      channelId,
+      startMessageId: options.startMessageId,
+      requestedType: options.type,
+    });
+  }
+
   if (options.startMessageId) {
     // Create thread from existing message
     const message = await textChannel.messages.fetch(options.startMessageId);
