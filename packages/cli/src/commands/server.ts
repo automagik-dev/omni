@@ -226,7 +226,7 @@ async function runStart(): Promise<void> {
   // 3. Start omni-api via PM2
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const apiCode = await runPm2(
-    ['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'node', '--update-env'],
+    ['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun', '--update-env'],
     buildApiRuntimeEnv(apiPort),
   );
   if (apiCode !== 0) {
