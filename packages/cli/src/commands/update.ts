@@ -11,14 +11,15 @@
 import { createInterface } from 'node:readline';
 import { Command } from 'commander';
 import ora from 'ora';
+import { DEFAULT_API_PORT, waitForHealth } from '../health.js';
 import * as output from '../output.js';
+import { PM2_PROCESSES } from '../pm2.js';
 import { VERSION } from '../version.js';
 
 const PACKAGE_NAME = '@automagik/omni';
-const PM2_PROCESSES = ['omni-api', 'omni-nats'];
-const HEALTH_URL = 'http://localhost:8882/api/v2/health';
-const HEALTH_TIMEOUT_MS = 10_000;
-const HEALTH_POLL_INTERVAL_MS = 500;
+
+/** update uses a shorter timeout — services should restart quickly */
+const UPDATE_HEALTH_TIMEOUT_MS = 10_000;
 
 interface UpdateOptions {
   yes?: boolean;
@@ -63,8 +64,11 @@ function arePm2ServicesRunning(): boolean {
     const raw = new TextDecoder().decode(result.stdout).trim();
     if (!raw || raw === '[]') return false;
 
+    const pm2Names = Object.values(PM2_PROCESSES);
     const list = JSON.parse(raw) as Array<{ name?: string; pm2_env?: { status?: string } }>;
-    return list.some((proc) => PM2_PROCESSES.includes(proc.name ?? '') && proc.pm2_env?.status === 'online');
+    return list.some(
+      (proc) => pm2Names.includes(proc.name as (typeof pm2Names)[number]) && proc.pm2_env?.status === 'online',
+    );
   } catch {
     // pm2 not installed or parse error — skip restart
     return false;
@@ -87,7 +91,7 @@ async function installLatest(): Promise<boolean> {
 
 /** Restart PM2 processes, ignoring errors. */
 async function restartPm2Services(): Promise<void> {
-  for (const name of PM2_PROCESSES) {
+  for (const name of Object.values(PM2_PROCESSES)) {
     const proc = Bun.spawn({
       cmd: ['pm2', 'restart', name],
       stdout: 'pipe',
@@ -95,24 +99,6 @@ async function restartPm2Services(): Promise<void> {
     });
     await proc.exited;
   }
-}
-
-/** Poll health endpoint until it responds or timeout is reached. */
-async function waitForHealth(): Promise<boolean> {
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(1_000) });
-      if (response.ok) return true;
-    } catch {
-      // not ready yet
-    }
-
-    await Bun.sleep(HEALTH_POLL_INTERVAL_MS);
-  }
-
-  return false;
 }
 
 /** Prompt the user for y/n confirmation. Returns true if user confirms. */
@@ -176,7 +162,7 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     await restartPm2Services();
     restartSpinner.stop();
 
-    const healthy = await waitForHealth();
+    const healthy = await waitForHealth(DEFAULT_API_PORT, UPDATE_HEALTH_TIMEOUT_MS);
     if (healthy) {
       output.success('Services restarted successfully.');
     } else {

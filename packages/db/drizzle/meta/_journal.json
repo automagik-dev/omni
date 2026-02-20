@@ -57,6 +57,13 @@
       "when": 1771606971682,
       "tag": "0007_cultured_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1771615809421,
+      "tag": "0008_fixed_mockingbird",
+      "breakpoints": true
     }
   ]
 }

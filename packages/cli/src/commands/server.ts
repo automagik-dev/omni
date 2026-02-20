@@ -10,90 +10,24 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { Command } from 'commander';
 import { loadConfig } from '../config.js';
+import { DEFAULT_API_PORT, getHealthCheckUrl, waitForHealth } from '../health.js';
 import * as output from '../output.js';
+import { PM2_PROCESSES, capturePm2, isPm2Available, pm2NotFoundError, resolveProcessName, runPm2 } from '../pm2.js';
+import { bundleNotFoundError, getServerBundlePath } from '../server-bundle.js';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_API_PORT = 8882;
-const HEALTH_TIMEOUT_MS = 10_000;
-const HEALTH_POLL_INTERVAL_MS = 500;
-
-/** PM2 process names managed by omni */
-const PM2_PROCESSES = {
-  api: 'omni-api',
-  nats: 'omni-nats',
-} as const;
-
-/** Map CLI service arg to PM2 process name */
-function resolveProcessName(service: string): string {
-  if (service === 'api') return PM2_PROCESSES.api;
-  if (service === 'nats') return PM2_PROCESSES.nats;
-  return service;
-}
+/** server commands use a shorter health-check timeout than install */
+const SERVER_HEALTH_TIMEOUT_MS = 10_000;
 
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-/** Get path to the bundled server index.js relative to this binary */
-function getServerBundlePath(): string {
-  // When installed via npm, __filename resolves inside dist/
-  // dist/server/index.js lives next to dist/index.js
-  try {
-    const thisFile = fileURLToPath(import.meta.url);
-    const distDir = dirname(thisFile);
-    return join(distDir, 'server', 'index.js');
-  } catch {
-    // Fallback: relative to cwd (source installs / dev mode)
-    return join(process.cwd(), 'dist', 'server', 'index.js');
-  }
-}
-
-/** Check if PM2 is available in PATH */
-async function isPm2Available(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn({
-      cmd: ['pm2', '--version'],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const code = await proc.exited;
-    return code === 0;
-  } catch {
-    return false;
-  }
-}
-
-/** Run a PM2 command and return exit code */
-async function runPm2(args: string[], envOverrides?: Record<string, string>): Promise<number> {
-  const proc = Bun.spawn({
-    cmd: ['pm2', ...args],
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-    env: { ...process.env, ...envOverrides },
-  });
-  return proc.exited;
-}
-
-/** Run a PM2 command and capture stdout */
-async function capturePm2(...args: string[]): Promise<{ code: number; stdout: string }> {
-  const proc = Bun.spawn({
-    cmd: ['pm2', ...args],
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const code = await proc.exited;
-  return { code, stdout };
-}
 
 function resolveApiPort(): number {
   const envPort = Number.parseInt(process.env.API_PORT ?? '', 10);
@@ -113,10 +47,6 @@ function resolveApiPort(): number {
   return DEFAULT_API_PORT;
 }
 
-function getHealthCheckUrl(port: number): string {
-  return `http://localhost:${port}/api/v2/health`;
-}
-
 function buildApiRuntimeEnv(port: number): Record<string, string> {
   const env: Record<string, string> = {
     API_PORT: String(port),
@@ -130,40 +60,6 @@ function buildApiRuntimeEnv(port: number): Record<string, string> {
   }
 
   return env;
-}
-
-/** Wait for the health endpoint to respond (up to HEALTH_TIMEOUT_MS) */
-async function waitForHealth(port: number): Promise<boolean> {
-  const healthCheckUrl = getHealthCheckUrl(port);
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      const resp = await fetch(healthCheckUrl, { signal: AbortSignal.timeout(1000) });
-      if (resp.ok) return true;
-    } catch {
-      // keep polling
-    }
-    await Bun.sleep(HEALTH_POLL_INTERVAL_MS);
-  }
-  return false;
-}
-
-/** Abort with a human-readable PM2 install message */
-function pm2NotFoundError(): never {
-  output.error(
-    'PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then retry: omni server start',
-    undefined,
-    1,
-  );
-}
-
-/** Abort with a human-readable bundle-not-found message */
-function bundleNotFoundError(bundlePath: string): never {
-  output.error(
-    `Server bundle not found at: ${bundlePath}\n  This command requires @automagik/omni installed from npm.\n  Install: bun add -g @automagik/omni\n  Or build locally: make cli-build-full`,
-    undefined,
-    1,
-  );
 }
 
 // ============================================================================
@@ -246,13 +142,13 @@ async function runStart(): Promise<void> {
   }
 
   // 5. Wait for health check
-  const healthCheckUrl = getHealthCheckUrl(apiPort);
-  output.info(`Waiting for health check at ${healthCheckUrl}...`);
-  const healthy = await waitForHealth(apiPort);
+  const healthUrl = getHealthCheckUrl(apiPort);
+  output.info(`Waiting for health check at ${healthUrl}...`);
+  const healthy = await waitForHealth(apiPort, SERVER_HEALTH_TIMEOUT_MS);
   if (healthy) {
-    output.success(`Server is healthy at ${healthCheckUrl}`);
+    output.success(`Server is healthy at ${healthUrl}`);
   } else {
-    output.warn(`Health check did not pass within ${HEALTH_TIMEOUT_MS / 1000}s — server may still be starting`);
+    output.warn(`Health check did not pass within ${SERVER_HEALTH_TIMEOUT_MS / 1000}s — server may still be starting`);
   }
 }
 
@@ -284,13 +180,13 @@ async function runRestart(): Promise<void> {
   }
 
   // Wait for health
-  const healthCheckUrl = getHealthCheckUrl(apiPort);
-  output.info(`Waiting for health check at ${healthCheckUrl}...`);
-  const healthy = await waitForHealth(apiPort);
+  const healthUrl = getHealthCheckUrl(apiPort);
+  output.info(`Waiting for health check at ${healthUrl}...`);
+  const healthy = await waitForHealth(apiPort, SERVER_HEALTH_TIMEOUT_MS);
   if (healthy) {
     output.success('Server is healthy after restart');
   } else {
-    output.warn(`Health check did not pass within ${HEALTH_TIMEOUT_MS / 1000}s`);
+    output.warn(`Health check did not pass within ${SERVER_HEALTH_TIMEOUT_MS / 1000}s`);
   }
 }
 

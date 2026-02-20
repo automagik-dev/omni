@@ -1385,6 +1385,10 @@ async function buildContextMessages(
   currentMessageIds: string[],
 ): Promise<string[]> {
   try {
+    // Per-instance configurable limit, capped at 200 (0 = disabled)
+    const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
+    if (historyLimit === 0) return [];
+
     // Only provide context for group chats (not DMs)
     // chatId here is the external JID, not internal UUID
     const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
@@ -1392,11 +1396,11 @@ async function buildContextMessages(
       return [];
     }
 
-    // Query recent messages (last 50, ordered by timestamp desc by default)
+    // Query recent messages (configurable limit, ordered by timestamp desc by default)
     // Use the internal chat.id (UUID) for the query
     const messagesResult = await services.messages.list({
       chatId: chat.id,
-      limit: 50,
+      limit: historyLimit,
     });
 
     const recentMessages = messagesResult.items;
