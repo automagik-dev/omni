@@ -161,11 +161,14 @@ const buildAudio: ContentBuilder = (message) => {
  */
 const buildVideo: ContentBuilder = (message) => {
   const mentionJids = extractMentionJids(message);
+  // Detect GIF content: MIME type is image/gif or metadata explicitly flags gifPlayback
+  const isGif = message.content.mimeType === 'image/gif' || (message.metadata?.gifPlayback as boolean) === true;
   return {
     video: getMediaSource(message),
     caption: message.content.caption,
     ...(mentionJids ? { mentions: mentionJids } : {}),
     mimetype: message.content.mimeType,
+    ...(isGif ? { gifPlayback: true } : {}),
   };
 };
 

@@ -2,9 +2,44 @@
  * Read receipts for WhatsApp
  *
  * Handles marking messages as read and tracking read/delivery status.
+ * Supports per-instance read receipt modes: 'on' | 'off' | 'exclude-self'.
  */
 
 import type { WAMessageKey, WASocket } from '@whiskeysockets/baileys';
+
+/**
+ * Read receipt mode per-instance.
+ * - 'on': send read receipts for all messages (default)
+ * - 'off': never send read receipts
+ * - 'exclude-self': send receipts except for messages from the instance's own number
+ */
+export type ReadReceiptMode = 'on' | 'off' | 'exclude-self';
+
+/**
+ * Configuration for read receipt behavior
+ */
+export interface ReadReceiptConfig {
+  mode: ReadReceiptMode;
+  /** The instance's own JID (required for 'exclude-self' mode) */
+  ownerJid?: string;
+}
+
+/**
+ * Determine if a read receipt should be sent based on config.
+ *
+ * @param config - Read receipt configuration
+ * @param senderJid - JID of the message sender (optional, for exclude-self check)
+ * @returns true if the read receipt should be sent
+ */
+export function shouldSendReadReceipt(config: ReadReceiptConfig, senderJid?: string): boolean {
+  if (config.mode === 'off') return false;
+  if (config.mode === 'exclude-self' && config.ownerJid && senderJid) {
+    // Compare base JID (strip @s.whatsapp.net and device suffix)
+    const normalize = (jid: string) => (jid.split('@')[0] ?? jid).split(':')[0] ?? jid;
+    return normalize(senderJid) !== normalize(config.ownerJid);
+  }
+  return true;
+}
 
 /**
  * Mark a single message as read

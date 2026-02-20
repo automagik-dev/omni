@@ -3,7 +3,15 @@
  */
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { ReceiptTracker, createReceiptTracker, isDelivered, isRead, mapStatusCode } from '../receipts';
+import {
+  ReceiptTracker,
+  createReceiptTracker,
+  isDelivered,
+  isRead,
+  mapStatusCode,
+  shouldSendReadReceipt,
+} from '../receipts';
+import type { ReadReceiptConfig } from '../receipts';
 
 describe('Read Receipts', () => {
   describe('mapStatusCode', () => {
@@ -137,6 +145,55 @@ describe('Read Receipts', () => {
     it('creates a new ReceiptTracker instance', () => {
       const tracker = createReceiptTracker();
       expect(tracker).toBeInstanceOf(ReceiptTracker);
+    });
+  });
+
+  describe('shouldSendReadReceipt', () => {
+    it('returns true when mode is on', () => {
+      const config: ReadReceiptConfig = { mode: 'on' };
+      expect(shouldSendReadReceipt(config)).toBe(true);
+    });
+
+    it('returns false when mode is off', () => {
+      const config: ReadReceiptConfig = { mode: 'off' };
+      expect(shouldSendReadReceipt(config)).toBe(false);
+    });
+
+    it('returns true for exclude-self when sender is different', () => {
+      const config: ReadReceiptConfig = {
+        mode: 'exclude-self',
+        ownerJid: '5511999998888@s.whatsapp.net',
+      };
+      expect(shouldSendReadReceipt(config, '5511888887777@s.whatsapp.net')).toBe(true);
+    });
+
+    it('returns false for exclude-self when sender is self', () => {
+      const config: ReadReceiptConfig = {
+        mode: 'exclude-self',
+        ownerJid: '5511999998888@s.whatsapp.net',
+      };
+      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(false);
+    });
+
+    it('normalizes JIDs with device suffix for exclude-self', () => {
+      const config: ReadReceiptConfig = {
+        mode: 'exclude-self',
+        ownerJid: '5511999998888:42@s.whatsapp.net',
+      };
+      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(false);
+    });
+
+    it('returns true for exclude-self when no ownerJid configured', () => {
+      const config: ReadReceiptConfig = { mode: 'exclude-self' };
+      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(true);
+    });
+
+    it('returns true for exclude-self when no senderJid provided', () => {
+      const config: ReadReceiptConfig = {
+        mode: 'exclude-self',
+        ownerJid: '5511999998888@s.whatsapp.net',
+      };
+      expect(shouldSendReadReceipt(config)).toBe(true);
     });
   });
 });
