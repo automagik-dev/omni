@@ -495,7 +495,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     try {
       const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
-      const ext = mimeType.split('/')[1]?.split(';')[0] ?? 'bin';
+      const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
       const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
       await writeFile(tmpPath, buffer);
       return { mimeType, localPath: tmpPath };
