@@ -5,11 +5,12 @@
         test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
-        restart-api restart-nats restart-pgserve logs-api \
+        restart-api restart-nats logs-api \
         kill-ghosts reset sdk-generate \
         cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
-        _init-db-wait _sync-db
+        _init-db-wait _sync-db \
+        deploy
 
 # Default target
 help:
@@ -23,7 +24,7 @@ help:
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
 	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
-	@echo "  make dev-services  Start infrastructure (pgserve + NATS) via PM2"
+	@echo "  make dev-services  Start infrastructure (NATS) via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
@@ -58,13 +59,13 @@ help:
 	@echo "  make start         Start production (PM2)"
 	@echo "  make stop          Stop all services"
 	@echo "  make restart       Restart all services"
+	@echo "  make deploy        Pull + quality gate + restart (manual deploy)"
 	@echo "  make logs          View logs"
 	@echo "  make status        Check service status"
 	@echo ""
 	@echo "Individual Services:"
 	@echo "  make restart-api     Restart API only"
 	@echo "  make restart-nats    Restart NATS only"
-	@echo "  make restart-pgserve Restart PostgreSQL only"
 	@echo "  make logs-api        View API logs"
 	@echo ""
 	@echo "CLI:"
@@ -157,14 +158,14 @@ dev: dev-services _init-db-wait _build-dist
 dev-api:
 	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages bun --watch packages/api/src/index.ts
 
-# Start infrastructure services via PM2 (pgserve + NATS only)
+# Start infrastructure services via PM2 (NATS only — pgserve is embedded in the API)
 # API is NOT started here — turbo dev handles it (avoids port conflicts, see GH #14)
 dev-services: ensure-nats
 	@if [ ! -f .env ]; then \
 		echo "Creating .env from .env.example..."; \
 		cp .env.example .env; \
 	fi
-	@echo "Starting infrastructure services (pgserve + NATS)..."
+	@echo "Starting infrastructure services (NATS)..."
 	@set -a && . ./.env && set +a && API_MANAGED=false pm2 start ecosystem.config.cjs || true
 	@sleep 2
 	@$(MAKE) status
@@ -299,8 +300,18 @@ ensure-nats:
 # Production (PM2)
 # ============================================================================
 
+# Manual deploy: pull + quality gate + restart
+deploy:
+	@echo "Pulling latest from $$(git branch --show-current)..."
+	git pull --ff-only
+	bun install
+	@echo "Running quality gate (typecheck + lint, skipping tests)..."
+	$(MAKE) typecheck lint
+	@echo "Quality gate passed. Restarting services..."
+	@bash scripts/pm2-start.sh
+
 start: ensure-nats
-	@set -a && . ./.env && set +a && pm2 start ecosystem.config.cjs
+	@bash scripts/pm2-start.sh
 
 stop:
 	-pm2 stop all 2>/dev/null || true
@@ -308,7 +319,7 @@ stop:
 	@$(MAKE) kill-ghosts
 
 restart:
-	pm2 restart all
+	@bash scripts/pm2-start.sh
 
 logs:
 	pm2 logs
@@ -319,31 +330,25 @@ status:
 	@echo "Service URLs:"
 	@echo "  API:        http://localhost:$${API_PORT:-8882}"
 	@echo "  Swagger:    http://localhost:$${API_PORT:-8882}/api/v2/docs"
-	@echo "  PostgreSQL: localhost:$${PGSERVE_PORT:-8432}"
+	@echo "  PostgreSQL: embedded in API (port $${PGSERVE_PORT:-8432})"
 	@echo "  NATS:       localhost:$${NATS_PORT:-4222}"
 
 # Individual service control
 restart-api:
-	pm2 restart omni-api
+	pm2 restart omni-v2-api
 
 restart-nats:
-	pm2 restart omni-nats
-
-restart-pgserve:
-	pm2 restart omni-pgserve
+	pm2 restart omni-v2-nats
 
 logs-api:
-	pm2 logs omni-api --lines 100
+	pm2 logs omni-v2-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
 	@echo "Cleaning up ghost processes..."
-	-pkill -f "bun run" 2>/dev/null || true
-	-pkill -f "bunx pgserve" 2>/dev/null || true
 	-pkill -f "nats-server" 2>/dev/null || true
 	-lsof -ti :3000 | xargs kill -9 2>/dev/null || true
 	-lsof -ti :4222 | xargs kill -9 2>/dev/null || true
-	-lsof -ti :8432 | xargs kill -9 2>/dev/null || true
 	@echo "Ghost cleanup complete"
 
 # ============================================================================

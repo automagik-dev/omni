@@ -51,6 +51,9 @@ function applyAgentFields(body: Record<string, unknown>, opts: Record<string, un
   setBool(body, 'agentPrefixSenderName', opts.agentPrefixSenderName);
   setBool(body, 'agentWaitForMedia', opts.agentWaitForMedia);
   setBool(body, 'agentSendMediaPath', opts.agentSendMediaPath);
+  if (typeof opts.agentSendMediaPathTypes === 'string') {
+    body.agentSendMediaPathTypes = (opts.agentSendMediaPathTypes as string).split(',').map((s: string) => s.trim());
+  }
 }
 
 /** Extract reply filter fields from CLI options into body */
@@ -241,6 +244,10 @@ export function createInstancesCommand(): Command {
     .option('--no-agent-wait-for-media', 'Dispatch immediately without waiting for media')
     .option('--agent-send-media-path', 'Include file path in formatted media text')
     .option('--no-agent-send-media-path', 'Exclude file path from formatted media text')
+    .option(
+      '--agent-send-media-path-types <types>',
+      'Content types that receive file path (comma-separated: image,video,document)',
+    )
     // Reply filter
     .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
     .option('--reply-on-dm', 'Reply to DMs')
@@ -681,6 +688,10 @@ export function createInstancesCommand(): Command {
     .option('--no-agent-wait-for-media', 'Dispatch immediately without waiting for media')
     .option('--agent-send-media-path', 'Include file path in formatted media text')
     .option('--no-agent-send-media-path', 'Exclude file path from formatted media text')
+    .option(
+      '--agent-send-media-path-types <types>',
+      'Content types that receive file path (comma-separated: image,video,document)',
+    )
     // Reply filter
     .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
     .option('--reply-on-dm', 'Reply to DMs (requires --reply-filter-mode filtered)')

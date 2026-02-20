@@ -313,6 +313,7 @@ export const agentRoutes = pgTable(
     agentPrefixSenderName: boolean('agent_prefix_sender_name'),
     agentWaitForMedia: boolean('agent_wait_for_media'),
     agentSendMediaPath: boolean('agent_send_media_path'),
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
     agentGateEnabled: boolean('agent_gate_enabled'),
     agentGateModel: varchar('agent_gate_model', { length: 120 }),
     agentGatePrompt: text('agent_gate_prompt'),
@@ -669,6 +670,8 @@ export const instances = pgTable(
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
     /** Include the full file path in formatted text sent to agent */
     agentSendMediaPath: boolean('agent_send_media_path').notNull().default(true),
+    /** Content types that receive the file path (e.g. image, video, document). Null = default (all except audio) */
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
 
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */

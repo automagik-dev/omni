@@ -160,6 +160,7 @@ jobs:
         run: bun packages/api/src/index.ts &
         env:
           OMNI_PACKAGES_DIR: ${{ github.workspace }}/packages
+          PGSERVE_EMBEDDED: 'false'
 
       - name: Wait for API
         run: |

@@ -646,14 +646,19 @@ async function waitForMediaProcessing(
 /**
  * Format processed media content for the agent.
  */
+/** Default content types that receive the file path (audio is excluded — already transcribed) */
+const DEFAULT_SEND_MEDIA_PATH_TYPES = ['image', 'video', 'document'];
+
 function formatProcessedMedia(
   contentType: string,
   fullPath: string | null,
   processedText: string,
   includePath: boolean,
+  sendMediaPathTypes?: string[] | null,
 ): string {
   const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
-  if (includePath && fullPath) {
+  const allowedTypes = sendMediaPathTypes ?? DEFAULT_SEND_MEDIA_PATH_TYPES;
+  if (includePath && fullPath && allowedTypes.includes(contentType)) {
     return `${icon} [${fullPath}]: ${processedText}`;
   }
   return `${icon}: ${processedText}`;
@@ -813,7 +818,15 @@ async function collectProcessedMedia(
     );
 
     if (result.content) {
-      results.push(formatProcessedMedia(contentType, result.localPath, result.content, instance.agentSendMediaPath));
+      results.push(
+        formatProcessedMedia(
+          contentType,
+          result.localPath,
+          result.content,
+          instance.agentSendMediaPath,
+          instance.agentSendMediaPathTypes,
+        ),
+      );
     } else {
       const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
       results.push(`${icon}: [media processing unavailable]`);
