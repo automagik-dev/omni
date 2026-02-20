@@ -65,6 +65,7 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
    * Send the initial draft message
    */
   async function sendInitial(text: string): Promise<void> {
+    if (!text.trim()) return;
     try {
       const args = {
         channel: channelId,

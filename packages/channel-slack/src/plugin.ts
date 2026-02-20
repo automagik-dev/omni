@@ -259,7 +259,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): StreamSender {
     const connection = this.getConnection(instanceId);
     const slackConfig = this.slackConfigs.get(instanceId) ?? {};
-    const replyToMode = slackConfig.replyToMode ?? 'off';
+    const replyToMode = slackConfig.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
 
     return createSlackStreamSender({

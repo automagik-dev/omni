@@ -1,0 +1,37 @@
+[Unit]
+Description=PM2 process manager for Omni v2
+Documentation=https://pm2.keymetrics.io/
+After=network.target
+
+[Service]
+Type=forking
+User=genie
+LimitNOFILE=65536
+LimitNPROC=4096
+LimitCORE=infinity
+
+# Environment for PM2 daemon and child processes
+Environment=PATH=/home/genie/.bun/bin:/home/genie/.npm-global/bin:/home/genie/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PM2_HOME=/home/genie/.pm2
+Environment=HOME=/home/genie
+EnvironmentFile=-/home/genie/prod/omni/.env
+
+PIDFile=/home/genie/.pm2/pm2.pid
+
+# Start: load env + kill orphans + start ecosystem fresh
+ExecStart=/bin/bash -c 'set -a && . /home/genie/prod/omni/.env && set +a && cd /home/genie/prod/omni && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 start ecosystem.config.cjs && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 save'
+
+# Reload: graceful restart of all apps
+ExecReload=/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 reload all
+
+# Stop: save state then kill daemon
+ExecStop=/bin/bash -c '/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 save && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 kill'
+
+# Self-healing: restart on failure with backoff
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

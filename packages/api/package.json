@@ -37,6 +37,7 @@
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.1",
+    "pgserve": "^1.1.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
