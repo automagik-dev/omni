@@ -7,6 +7,8 @@ import type {
   ResolvedOmniAccount,
 } from './types.js';
 
+const OMNI_API_TIMEOUT_MS = 30_000;
+
 function resolveAccountFromContext(ctx: ChannelOutboundContext): ResolvedOmniAccount {
   const accounts = (ctx.cfg as OmniPluginConfig).channels?.omni?.accounts;
   const id = ctx.accountId ?? Object.keys(accounts ?? {})[0] ?? 'default';
@@ -43,6 +45,7 @@ export const omniOutbound: ChannelOutboundAdapter = {
         instanceId: account.instanceId,
         ...(ctx.replyToId ? { replyToId: ctx.replyToId } : {}),
       }),
+      signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -70,6 +73,7 @@ export const omniOutbound: ChannelOutboundAdapter = {
         instanceId: account.instanceId,
         ...(ctx.replyToId ? { replyToId: ctx.replyToId } : {}),
       }),
+      signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
     });
 
     if (!response.ok) {

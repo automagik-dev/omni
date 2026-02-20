@@ -186,7 +186,9 @@ describe('omniMessageActions', () => {
           Promise.resolve(new Response('Not Found', { status: 404, statusText: 'Not Found' })),
         ) as unknown as typeof fetch;
         const ctx = makeCtx('read', { messageId: 'msg-bad' });
-        await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow('Omni read failed: 404 Not Found');
+        await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow(
+          'Omni API /api/v2/messages/msg-bad/read failed: 404 Not Found',
+        );
       });
     });
 

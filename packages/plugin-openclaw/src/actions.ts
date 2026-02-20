@@ -32,6 +32,8 @@ function resolveAccountForAction(cfg: OmniPluginConfig, accountId?: string | nul
   };
 }
 
+const OMNI_API_TIMEOUT_MS = 30_000;
+
 async function omniApiRequest(account: ResolvedOmniAccount, path: string, body: unknown): Promise<unknown> {
   const url = `${account.apiUrl}${path}`;
   const response = await fetch(url, {
@@ -41,6 +43,7 @@ async function omniApiRequest(account: ResolvedOmniAccount, path: string, body: 
       'x-api-key': account.apiKey,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -88,20 +91,10 @@ export const omniMessageActions: ChannelMessageActionAdapter = {
 
     if (action === 'read') {
       const messageId = requireStringParam(params, 'messageId');
-      const url = `${account.apiUrl}/api/v2/messages/${messageId}/read`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': account.apiKey,
-        },
-        body: JSON.stringify({ instanceId: account.instanceId }),
+      const result = await omniApiRequest(account, `/api/v2/messages/${encodeURIComponent(messageId)}/read`, {
+        instanceId: account.instanceId,
       });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Omni read failed: ${response.status} ${response.statusText} ${text}`);
-      }
-      return { content: await response.json() };
+      return { content: result };
     }
 
     if (action === 'reply') {
