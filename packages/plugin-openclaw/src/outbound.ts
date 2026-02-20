@@ -32,7 +32,9 @@ export const omniOutbound: ChannelOutboundAdapter = {
 
   sendText: async (ctx: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
     const account = resolveAccountFromContext(ctx);
-    const url = `${account.apiUrl}/api/v2/messages`;
+    if (!account.enabled) throw new Error(`Omni account '${account.accountId}' is disabled`);
+    if (!account.configured) throw new Error(`Omni account '${account.accountId}' is not configured`);
+    const url = `${account.apiUrl}/api/v2/messages/send`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -40,10 +42,10 @@ export const omniOutbound: ChannelOutboundAdapter = {
         'x-api-key': account.apiKey,
       },
       body: JSON.stringify({
-        recipientId: ctx.to,
+        to: ctx.to,
         text: ctx.text,
         instanceId: account.instanceId,
-        ...(ctx.replyToId ? { replyToId: ctx.replyToId } : {}),
+        ...(ctx.replyToId ? { replyTo: ctx.replyToId } : {}),
       }),
       signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
     });
@@ -59,6 +61,8 @@ export const omniOutbound: ChannelOutboundAdapter = {
 
   sendMedia: async (ctx: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
     const account = resolveAccountFromContext(ctx);
+    if (!account.enabled) throw new Error(`Omni account '${account.accountId}' is disabled`);
+    if (!account.configured) throw new Error(`Omni account '${account.accountId}' is not configured`);
     const url = `${account.apiUrl}/api/v2/messages/send/media`;
     const response = await fetch(url, {
       method: 'POST',
@@ -67,11 +71,11 @@ export const omniOutbound: ChannelOutboundAdapter = {
         'x-api-key': account.apiKey,
       },
       body: JSON.stringify({
-        recipientId: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
+        to: ctx.to,
+        url: ctx.mediaUrl,
+        caption: ctx.text,
+        type: 'image',
         instanceId: account.instanceId,
-        ...(ctx.replyToId ? { replyToId: ctx.replyToId } : {}),
       }),
       signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
     });

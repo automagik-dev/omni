@@ -91,6 +91,26 @@ describe('omniMessageActions', () => {
       await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow("Omni account 'nonexistent' not found");
     });
 
+    test('throws when account is disabled', async () => {
+      const ctx: ChannelMessageActionContext = {
+        channel: 'omni',
+        action: 'send',
+        cfg: makeCfg({ enabled: false }),
+        params: { to: '123', message: 'hi' },
+      };
+      await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow('is disabled');
+    });
+
+    test('throws when account is not configured', async () => {
+      const ctx: ChannelMessageActionContext = {
+        channel: 'omni',
+        action: 'send',
+        cfg: makeCfg({ apiUrl: '', apiKey: '', instanceId: '' }),
+        params: { to: '123', message: 'hi' },
+      };
+      await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow('is not configured');
+    });
+
     describe('send action', () => {
       test('sends a text message', async () => {
         const ctx = makeCtx('send', { to: 'recipient-1', message: 'Hello!' });
@@ -100,10 +120,10 @@ describe('omniMessageActions', () => {
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         expect(fetchMock).toHaveBeenCalledTimes(1);
         const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe('https://api.test.com/api/v2/messages');
+        expect(url).toBe('https://api.test.com/api/v2/messages/send');
         expect(opts.method).toBe('POST');
         expect(JSON.parse(opts.body as string)).toEqual({
-          recipientId: 'recipient-1',
+          to: 'recipient-1',
           text: 'Hello!',
           instanceId: 'inst-1',
         });
@@ -116,7 +136,7 @@ describe('omniMessageActions', () => {
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-        expect(body.replyToId).toBe('msg-99');
+        expect(body.replyTo).toBe('msg-99');
       });
 
       test('throws when required param "to" is missing', async () => {
@@ -132,23 +152,24 @@ describe('omniMessageActions', () => {
 
     describe('react action', () => {
       test('sends a reaction with specified emoji', async () => {
-        const ctx = makeCtx('react', { messageId: 'msg-1', emoji: '🔥' });
+        const ctx = makeCtx('react', { messageId: 'msg-1', to: 'chat-1', emoji: '🔥' });
         const result = await omniMessageActions.handleAction?.(ctx);
         expect(result).toEqual({ content: { success: true } });
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe('https://api.test.com/api/v2/messages/reaction');
+        expect(url).toBe('https://api.test.com/api/v2/messages/send/reaction');
         const body = JSON.parse(opts.body as string);
         expect(body).toEqual({
           messageId: 'msg-1',
+          to: 'chat-1',
           emoji: '🔥',
           instanceId: 'inst-1',
         });
       });
 
       test('defaults emoji to thumbs-up when not provided', async () => {
-        const ctx = makeCtx('react', { messageId: 'msg-1' });
+        const ctx = makeCtx('react', { messageId: 'msg-1', to: 'chat-1' });
         await omniMessageActions.handleAction?.(ctx);
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
@@ -157,7 +178,7 @@ describe('omniMessageActions', () => {
       });
 
       test('throws when messageId is missing', async () => {
-        const ctx = makeCtx('react', {});
+        const ctx = makeCtx('react', { to: 'chat-1' });
         await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow('Missing required parameter: messageId');
       });
     });
@@ -200,13 +221,13 @@ describe('omniMessageActions', () => {
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe('https://api.test.com/api/v2/messages');
+        expect(url).toBe('https://api.test.com/api/v2/messages/send');
         const body = JSON.parse(opts.body as string);
         expect(body).toEqual({
-          recipientId: 'r1',
+          to: 'r1',
           text: 'Got it!',
           instanceId: 'inst-1',
-          replyToId: 'msg-10',
+          replyTo: 'msg-10',
         });
       });
 
@@ -216,7 +237,7 @@ describe('omniMessageActions', () => {
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-        expect(body.replyToId).toBe('msg-20');
+        expect(body.replyTo).toBe('msg-20');
       });
 
       test('accepts messageId as final fallback', async () => {
@@ -225,7 +246,7 @@ describe('omniMessageActions', () => {
 
         const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
         const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-        expect(body.replyToId).toBe('msg-30');
+        expect(body.replyTo).toBe('msg-30');
       });
 
       test('throws when required param "to" is missing', async () => {
@@ -246,7 +267,7 @@ describe('omniMessageActions', () => {
         ) as unknown as typeof fetch;
         const ctx = makeCtx('send', { to: 'r1', message: 'test' });
         await expect(omniMessageActions.handleAction?.(ctx)).rejects.toThrow(
-          'Omni API /api/v2/messages failed: 500 Internal Server Error',
+          'Omni API /api/v2/messages/send failed: 500 Internal Server Error',
         );
       });
     });

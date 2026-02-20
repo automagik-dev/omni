@@ -64,25 +64,29 @@ export const omniMessageActions: ChannelMessageActionAdapter = {
   handleAction: async (ctx: ChannelMessageActionContext): Promise<{ content: unknown }> => {
     const { action, params, cfg, accountId } = ctx;
     const account = resolveAccountForAction(cfg, accountId);
+    if (!account.enabled) throw new Error(`Omni account '${account.accountId}' is disabled`);
+    if (!account.configured) throw new Error(`Omni account '${account.accountId}' is not configured`);
 
     if (action === 'send') {
       const to = requireStringParam(params, 'to');
       const message = requireStringParam(params, 'message');
       const replyTo = readStringParam(params, 'replyTo');
-      const result = await omniApiRequest(account, '/api/v2/messages', {
-        recipientId: to,
+      const result = await omniApiRequest(account, '/api/v2/messages/send', {
+        to,
         text: message,
         instanceId: account.instanceId,
-        ...(replyTo ? { replyToId: replyTo } : {}),
+        ...(replyTo ? { replyTo } : {}),
       });
       return { content: result };
     }
 
     if (action === 'react') {
       const messageId = requireStringParam(params, 'messageId');
+      const to = requireStringParam(params, 'to');
       const emoji = readStringParam(params, 'emoji') ?? '\u{1F44D}';
-      const result = await omniApiRequest(account, '/api/v2/messages/reaction', {
+      const result = await omniApiRequest(account, '/api/v2/messages/send/reaction', {
         messageId,
+        to,
         emoji,
         instanceId: account.instanceId,
       });
@@ -100,15 +104,15 @@ export const omniMessageActions: ChannelMessageActionAdapter = {
     if (action === 'reply') {
       const to = requireStringParam(params, 'to');
       const message = requireStringParam(params, 'message');
-      const replyToId =
+      const replyTo =
         readStringParam(params, 'replyTo') ??
         readStringParam(params, 'replyToId') ??
         readStringParam(params, 'messageId');
-      const result = await omniApiRequest(account, '/api/v2/messages', {
-        recipientId: to,
+      const result = await omniApiRequest(account, '/api/v2/messages/send', {
+        to,
         text: message,
         instanceId: account.instanceId,
-        ...(replyToId ? { replyToId } : {}),
+        ...(replyTo ? { replyTo } : {}),
       });
       return { content: result };
     }

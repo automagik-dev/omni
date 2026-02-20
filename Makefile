@@ -9,7 +9,8 @@
         kill-ghosts reset sdk-generate \
         cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
-        _init-db-wait _sync-db
+        _init-db-wait _sync-db \
+        deploy
 
 # Default target
 help:
@@ -58,6 +59,7 @@ help:
 	@echo "  make start         Start production (PM2)"
 	@echo "  make stop          Stop all services"
 	@echo "  make restart       Restart all services"
+	@echo "  make deploy        Pull + quality gate + restart (manual deploy)"
 	@echo "  make logs          View logs"
 	@echo "  make status        Check service status"
 	@echo ""
@@ -297,6 +299,16 @@ ensure-nats:
 # ============================================================================
 # Production (PM2)
 # ============================================================================
+
+# Manual deploy: pull + quality gate + restart
+deploy:
+	@echo "Pulling latest from dev..."
+	git pull origin dev --ff-only
+	bun install
+	@echo "Running quality gate..."
+	$(MAKE) check
+	@echo "Quality gate passed. Restarting services..."
+	@bash scripts/pm2-start.sh
 
 start: ensure-nats
 	@bash scripts/pm2-start.sh

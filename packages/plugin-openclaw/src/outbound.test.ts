@@ -94,7 +94,7 @@ describe('omniOutbound.sendText', () => {
 
     const result = await omniOutbound.sendText?.(makeCtx());
 
-    expect(capturedUrl).toBe('https://omni.test/api/v2/messages');
+    expect(capturedUrl).toBe('https://omni.test/api/v2/messages/send');
     expect(capturedInit?.method).toBe('POST');
     expect(capturedInit?.headers).toEqual({
       'Content-Type': 'application/json',
@@ -103,7 +103,7 @@ describe('omniOutbound.sendText', () => {
 
     const body = JSON.parse(capturedInit?.body as string);
     expect(body).toEqual({
-      recipientId: '+5511999999999',
+      to: '+5511999999999',
       text: 'Hello from test',
       instanceId: 'inst-abc',
     });
@@ -122,7 +122,7 @@ describe('omniOutbound.sendText', () => {
     await omniOutbound.sendText?.(makeCtx({ replyToId: 'reply-xyz' }));
 
     const body = JSON.parse(capturedBody);
-    expect(body.replyToId).toBe('reply-xyz');
+    expect(body.replyTo).toBe('reply-xyz');
   });
 
   test('uses specified accountId instead of first account', async () => {
@@ -137,7 +137,7 @@ describe('omniOutbound.sendText', () => {
 
     await omniOutbound.sendText?.(makeCtx({ accountId: 'secondary' }));
 
-    expect(capturedUrl).toBe('https://omni2.test/api/v2/messages');
+    expect(capturedUrl).toBe('https://omni2.test/api/v2/messages/send');
     expect(capturedHeaders['x-api-key']).toBe('key-2');
   });
 
@@ -145,6 +145,24 @@ describe('omniOutbound.sendText', () => {
     await expect(omniOutbound.sendText?.(makeCtx({ accountId: 'nonexistent' }))).rejects.toThrow(
       "Omni account 'nonexistent' not found",
     );
+  });
+
+  test('throws when account is disabled', async () => {
+    const disabledCfg: OmniPluginConfig = {
+      channels: {
+        omni: {
+          accounts: {
+            default: {
+              apiUrl: 'https://omni.test',
+              apiKey: 'test-key-123',
+              instanceId: 'inst-abc',
+              enabled: false,
+            },
+          },
+        },
+      },
+    };
+    await expect(omniOutbound.sendText?.(makeCtx({ cfg: disabledCfg }))).rejects.toThrow('is disabled');
   });
 
   test('throws on non-ok response', async () => {
@@ -183,9 +201,10 @@ describe('omniOutbound.sendMedia', () => {
 
     const body = JSON.parse(capturedBody);
     expect(body).toEqual({
-      recipientId: '+5511999999999',
-      text: 'Hello from test',
-      mediaUrl: 'https://cdn.test/img.png',
+      to: '+5511999999999',
+      caption: 'Hello from test',
+      url: 'https://cdn.test/img.png',
+      type: 'image',
       instanceId: 'inst-abc',
     });
 
@@ -203,7 +222,7 @@ describe('omniOutbound.sendMedia', () => {
     await omniOutbound.sendMedia?.(makeCtx({ mediaUrl: 'https://cdn.test/img.png', replyToId: 'reply-abc' }));
 
     const body = JSON.parse(capturedBody);
-    expect(body.replyToId).toBe('reply-abc');
+    expect(body.to).toBe('+5511999999999');
   });
 
   test('throws on non-ok response', async () => {
