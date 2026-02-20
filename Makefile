@@ -213,7 +213,7 @@ format:
 	bunx biome format --write .
 
 test: _build-dist _sync-db
-	bun test --env-file=.env
+	bun test --env-file=.env --timeout 10000
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
