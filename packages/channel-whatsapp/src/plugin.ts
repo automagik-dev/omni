@@ -8,6 +8,8 @@
 import { BaseChannelPlugin } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -20,9 +22,14 @@ import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
-import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
+import {
+  cancelPendingReconnect,
+  resetConnectionState,
+  seedAuthenticated,
+  setupConnectionHandlers,
+} from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isUserJid, toJid } from './jid';
+import { fromJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -30,24 +37,8 @@ import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } f
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
-/**
- * Message from history sync
- */
-export interface HistorySyncMessage {
-  externalId: string;
-  chatId: string;
-  from: string;
-  timestamp: Date;
-  content: {
-    type: string;
-    text?: string;
-    mediaUrl?: string;
-    mimeType?: string;
-    caption?: string;
-  };
-  isFromMe: boolean;
-  rawPayload: unknown;
-}
+// Re-export for external consumers that previously imported from this module
+export type { HistorySyncMessage, FetchHistoryResult };
 
 /**
  * Anchor point for fetching older messages in a chat
@@ -66,7 +57,8 @@ export interface MessageAnchor {
 }
 
 /**
- * Options for fetchHistory method
+ * WhatsApp-specific options for fetchHistory method
+ * Extends the base FetchHistoryOptions with WhatsApp-specific anchors
  */
 export interface FetchHistoryOptions {
   /** Fetch messages since this date */
@@ -85,14 +77,6 @@ export interface FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
-}
-
-/**
- * Result of fetchHistory operation
- */
-export interface FetchHistoryResult {
-  totalFetched: number;
-  messages: HistorySyncMessage[];
 }
 
 /**
@@ -754,6 +738,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (config.options?.forceNewQr === true) {
       const existingSocket = this.sockets.get(instanceId);
       if (existingSocket) {
+        existingSocket.ev.removeAllListeners('connection.update');
         await closeSocket(existingSocket, false);
         this.sockets.delete(instanceId);
       }
@@ -779,10 +764,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Create a new Baileys connection using socket wrapper
    */
   private async createConnection(instanceId: string, config: InstanceConfig): Promise<void> {
+    // Cancel any pending reconnect timers to prevent duplicate sockets
+    cancelPendingReconnect(instanceId);
+
     // Close existing socket if any (critical: prevents duplicate connections)
     const existingSocket = this.sockets.get(instanceId);
     if (existingSocket) {
       this.logger.info('Closing existing socket before reconnect', { instanceId });
+      // Remove event listeners BEFORE closing to prevent the close event
+      // from triggering another reconnect via the old handler
+      existingSocket.ev.removeAllListeners('connection.update');
       await closeSocket(existingSocket, false);
       this.sockets.delete(instanceId);
     }
@@ -848,6 +839,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         // IMPORTANT: Close the old socket to release resources and event listeners
         const oldSocket = this.sockets.get(instanceId);
         if (oldSocket) {
+          oldSocket.ev.removeAllListeners('connection.update');
           await closeSocket(oldSocket, false);
           this.sockets.delete(instanceId);
         }
@@ -879,6 +871,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
     resetConnectionState(instanceId);
+
+    // Remove event listeners before closing to prevent ghost reconnects
+    sock.ev.removeAllListeners('connection.update');
 
     // Close socket WITHOUT logging out (preserves session for reconnect)
     await closeSocket(sock, false);
@@ -1301,13 +1296,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
-    // Read per-instance throttle from config
+    // Read per-instance stream config
     const instanceEntry = this.instances.get(instanceId);
-    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+    const streamOpts = instanceEntry?.config?.options ?? {};
 
     return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
-      throttleMs,
       formatMode: options?.formatMode,
+      editMode: (streamOpts.streamEditMode as boolean) ?? false,
+      throttleMs: (streamOpts.streamThrottleMs as number) ?? undefined,
     });
   }
 
@@ -1338,7 +1334,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param chatId - Chat ID (JID or phone number)
    * @param messageIds - Array of message IDs, or ['all'] to mark entire chat as read
    */
-  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+  ): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
@@ -1348,11 +1349,43 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       return;
     }
 
-    const keys = messageIds.map((id) => ({
-      remoteJid: jid,
-      id,
-      fromMe: false,
-    }));
+    const isGroup = jid.endsWith('@g.us');
+
+    // Build a lookup from messageData for group key construction
+    const dataByExternalId = new Map((messageData ?? []).map((m) => [m.externalId, m.rawPayload]));
+
+    const lidCache = isGroup ? this.getLidMappingCache(instanceId) : undefined;
+    let missingParticipants = 0;
+
+    const keys = messageIds.map((id) => {
+      const raw = dataByExternalId.get(id) as { key?: { participant?: string; fromMe?: boolean } } | null | undefined;
+      const fromMe = raw?.key?.fromMe ?? false;
+      let participant = raw?.key?.participant;
+
+      // Resolve LID participant to phone JID if mapping exists
+      if (participant && isLidJid(participant) && lidCache) {
+        participant = lidCache.get(participant) ?? participant;
+      }
+
+      if (isGroup && !participant) missingParticipants++;
+
+      return {
+        remoteJid: jid,
+        id,
+        fromMe,
+        // Groups require participant (sender JID) for read receipts — without it WhatsApp silently ignores
+        ...(isGroup && participant ? { participant } : {}),
+      };
+    });
+
+    if (missingParticipants > 0) {
+      this.logger.warn('Group read receipt missing participant for some messages', {
+        instanceId,
+        chatId: jid,
+        total: messageIds.length,
+        missingParticipants,
+      });
+    }
 
     await sock.readMessages(keys);
   }
@@ -2056,6 +2089,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Close and cleanup socket to prevent memory leaks
     const sock = this.sockets.get(instanceId);
     if (sock) {
+      sock.ev.removeAllListeners('connection.update');
       await closeSocket(sock, false);
       this.sockets.delete(instanceId);
     }

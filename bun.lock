@@ -13,7 +13,6 @@
         "@commitlint/cli": "^20.4.1",
         "@commitlint/config-conventional": "^20.4.1",
         "@openapitools/openapi-generator-cli": "^2.28.0",
-        "@types/lru-cache": "^7.10.10",
         "bun-types": "^1.1.42",
         "husky": "^9.1.7",
         "lru-cache": "^11.2.6",
@@ -23,7 +22,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -56,7 +55,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@hono/swagger-ui": "^0.4.1",
         "@hono/trpc-server": "^0.3.2",
@@ -89,7 +88,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -106,7 +105,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -117,7 +116,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -135,7 +134,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -152,7 +151,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -172,7 +171,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -192,7 +191,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.39",
         "croner": "^9.1.0",
@@ -207,10 +206,10 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@omni/core": "workspace:*",
-        "drizzle-orm": "^0.38.3",
+        "drizzle-orm": "^0.38.4",
         "postgres": "^3.4.5",
       },
       "devDependencies": {
@@ -221,7 +220,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -240,7 +239,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.7.3",
@@ -248,7 +247,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.20260219.4",
+      "version": "2.20260220.2",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -803,8 +802,6 @@
     "@types/jsonwebtoken": ["@types/jsonwebtoken@9.0.10", "", { "dependencies": { "@types/ms": "*", "@types/node": "*" } }, "sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA=="],
 
     "@types/long": ["@types/long@4.0.2", "", {}, "sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA=="],
-
-    "@types/lru-cache": ["@types/lru-cache@7.10.10", "", { "dependencies": { "lru-cache": "*" } }, "sha512-nEpVRPWW9EBmx2SCfNn3ClYxPL7IktPX12HhIoSc/H5mMjdeW3+YsXIpseLQ2xF35+OcpwKQbEUw5VtqE4PDNA=="],
 
     "@types/ms": ["@types/ms@2.1.0", "", {}, "sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA=="],
 

@@ -12,6 +12,8 @@
 import { BaseChannelPlugin } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  FetchHistoryOptions,
+  FetchHistoryResult,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -32,6 +34,7 @@ import {
   setupReactionHandlers,
 } from './handlers';
 import { removeChatQueue } from './middleware/sequentialize';
+import { removeAckReaction, setAckReaction } from './reactions/levels';
 import {
   sendAudio,
   sendContact,
@@ -822,6 +825,45 @@ export class TelegramPlugin extends BaseChannelPlugin {
    */
   getInstanceState(instanceId: string) {
     return this.instances.get(instanceId);
+  }
+
+  /**
+   * Fetch message history for a Telegram chat/topic.
+   *
+   * Note: Telegram Bot API does not provide a getChatHistory endpoint.
+   * Per-thread sessions will be initialized without historical context;
+   * only new messages (after the bot is triggered) accumulate in the session.
+   */
+  async fetchHistory(_instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    this.logger?.info('fetchHistory: Telegram Bot API does not support retroactive history retrieval', {
+      channelId: options.channelId,
+      threadId: options.threadId,
+    });
+    return { totalFetched: 0, messages: [] };
+  }
+
+  /**
+   * Add an emoji reaction to a message (used for per_thread processing feedback).
+   * Graceful skip if the bot lacks permissions.
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const bot = getBot(instanceId);
+    if (!bot) return;
+    const msgId = Number.parseInt(messageId, 10);
+    if (Number.isNaN(msgId)) return;
+    await setAckReaction(bot, chatId, msgId, emoji);
+  }
+
+  /**
+   * Remove an emoji reaction from a message (used for per_thread processing feedback).
+   * Graceful skip if the bot lacks permissions.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, _emoji: string): Promise<void> {
+    const bot = getBot(instanceId);
+    if (!bot) return;
+    const msgId = Number.parseInt(messageId, 10);
+    if (Number.isNaN(msgId)) return;
+    await removeAckReaction(bot, chatId, msgId);
   }
 
   /**

@@ -16,6 +16,23 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
+type ReplyFilter =
+  | { mode: string; conditions?: { onDm?: boolean; onMention?: boolean; onReply?: boolean } }
+  | null
+  | undefined;
+
+function formatReplyFilter(f: ReplyFilter): string {
+  if (f?.mode === 'all') return 'all';
+  if (f?.mode === 'filtered') {
+    const parts: string[] = [];
+    if (f.conditions?.onDm) parts.push('dm');
+    if (f.conditions?.onMention) parts.push('mention');
+    if (f.conditions?.onReply) parts.push('reply');
+    return parts.length > 0 ? `filtered:${parts.join(',')}` : 'filtered';
+  }
+  return 'none';
+}
+
 function buildRouteReplyFilter(mode: string | undefined):
   | {
       mode: 'all' | 'filtered';
@@ -191,6 +208,7 @@ export function createRoutesCommand(): Command {
           personId: r.personId ? r.personId.substring(0, 8) : '-',
           provider: r.agentProviderId.substring(0, 8),
           agent: r.agentId,
+          filter: formatReplyFilter(r.agentReplyFilter as ReplyFilter),
           label: r.label || '-',
           priority: r.priority,
           active: r.isActive ? 'yes' : 'no',

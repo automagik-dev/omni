@@ -17,8 +17,11 @@
  * - Preserves existing debouncing for message events
  */
 
+import { unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
+import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
   type AgentTrigger,
@@ -46,7 +49,10 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
+import { agentSessions } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
+import { createMediaProcessingService } from '@omni/media-processing';
+import { and, eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import {
   type MessageContext,
@@ -347,6 +353,19 @@ function buildWhatsAppMessageContext(
   return { isDirectMessage, mentionsBot, isReplyToBot, text };
 }
 
+/** Build message context for Discord channels */
+function buildDiscordMessageContext(
+  rawPayload: Record<string, unknown>,
+  instance: Instance,
+  text: string,
+): MessageContext {
+  const isDirectMessage = rawPayload.isDM === true;
+  const mentionedUsers = ((rawPayload.mentions as Record<string, unknown>)?.users as string[]) ?? [];
+  const botId = instance.ownerIdentifier ?? '';
+  const mentionsBot = (botId.length > 0 && mentionedUsers.includes(botId)) || rawPayload.isMentioningInstance === true;
+  return { isDirectMessage, mentionsBot, isReplyToBot: false, text };
+}
+
 function buildMessageContext(payload: MessageReceivedPayload, instance: Instance): MessageContext {
   const rawPayload = payload.rawPayload ?? {};
   const chatId = payload.chatId ?? '';
@@ -355,6 +374,10 @@ function buildMessageContext(payload: MessageReceivedPayload, instance: Instance
 
   if (channel === 'slack') {
     return buildSlackMessageContext(rawPayload, text);
+  }
+
+  if (channel === 'discord') {
+    return buildDiscordMessageContext(rawPayload, instance, text);
   }
 
   return buildWhatsAppMessageContext(rawPayload, chatId, instance, text);
@@ -596,7 +619,7 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
@@ -679,7 +702,7 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -1049,7 +1072,7 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -1101,13 +1124,34 @@ async function resolveStreamingCapabilities(
   traceId: string,
   db: Database,
 ): Promise<StreamCapabilities | null> {
-  if (!instance.agentStreamMode) return null;
+  if (!instance.agentStreamMode) {
+    log.debug('Stream guard: agentStreamMode is falsy', {
+      instanceId: instance.id,
+      agentStreamMode: instance.agentStreamMode,
+      chatId,
+    });
+    return null;
+  }
 
   const provider = await getAgentProvider(services, instance, db);
-  if (!provider?.triggerStream) return null;
+  if (!provider?.triggerStream) {
+    log.debug('Stream guard: provider has no triggerStream', {
+      instanceId: instance.id,
+      hasProvider: !!provider,
+      chatId,
+    });
+    return null;
+  }
 
   const plugin = await getPlugin(channel);
-  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) return null;
+  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) {
+    log.debug('Stream guard: channel does not support streaming', {
+      channel,
+      canStream: plugin?.capabilities?.canStreamResponse,
+      chatId,
+    });
+    return null;
+  }
 
   const streamKey = `${instance.id}:${chatId}`;
   if (activeStreams.has(streamKey)) {
@@ -1125,7 +1169,16 @@ async function resolveStreamingCapabilities(
   };
 }
 
-/** Consume a streaming generator, routing each delta to the sender. Returns true if no error deltas. */
+/**
+ * Consume a streaming generator, routing each delta to the sender.
+ *
+ * Returns true if the stream should be treated as "handled" (no fallback needed).
+ * Returns false only if an error occurred AND no content was sent yet — meaning the
+ * fallback path should run so the user still gets a response.
+ *
+ * If content was already sent before the error, we return true to prevent a double
+ * reply from the fallback path.
+ */
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
   sender: StreamSender,
@@ -1135,9 +1188,11 @@ async function consumeStream(
 ): Promise<boolean> {
   const startTime = Date.now();
   let hadError = false;
+  let hadContent = false;
 
   for await (const delta of generator) {
     if (delta.phase === 'error') hadError = true;
+    if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
     await routeStreamDelta(sender, delta);
   }
 
@@ -1146,10 +1201,23 @@ async function consumeStream(
     chatId,
     durationMs: Date.now() - startTime,
     hadError,
+    hadContent,
     traceId,
   });
 
-  return !hadError;
+  // If we already sent content to the user, treat as handled even on error.
+  // Falling back would cause a double reply.
+  return hadContent || !hadError;
+}
+
+/** Extract thread ID from the first buffered message rawPayload (for per_thread session strategy) */
+function extractThreadId(messages: BufferedMessage[]): string | undefined {
+  return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
+}
+
+/** Merge per-thread history context with DB-fetched context messages (extra comes first) */
+function mergeContextMessages(extra: string[] | undefined, db: string[]): string[] {
+  return extra?.length ? [...extra, ...db] : db;
 }
 
 /**
@@ -1169,6 +1237,7 @@ async function dispatchViaStreamingProvider(
   traceId: string,
   rawEvent: AgentTrigger['event'],
   db: Database,
+  extraContextMessages?: string[],
 ): Promise<boolean> {
   const resolved = await resolveStreamingCapabilities(services, instance, channel, chatId, traceId, db);
   if (!resolved) return false;
@@ -1177,8 +1246,14 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && !mediaFiles.length) return false;
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const rawThreadId = extractThreadId(messages);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+
+  const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
+  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1199,9 +1274,9 @@ async function dispatchViaStreamingProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
+    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
-  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
   const chatType = determineChatType(chatId, channel, rawPl);
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
@@ -1373,6 +1448,7 @@ async function dispatchViaProvider(
   traceId: string,
   rawEvent: AgentTrigger['event'],
   db: Database,
+  extraContextMessages?: string[],
 ): Promise<boolean> {
   const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
@@ -1389,11 +1465,13 @@ async function dispatchViaProvider(
     messageTexts.push('[Media message]');
   }
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const rawThreadId = extractThreadId(messages);
+  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
   // Build context messages for group conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const contextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1414,7 +1492,7 @@ async function dispatchViaProvider(
       text: messageTexts.join('\n'),
     },
     sessionId,
-    contextMessages: contextMessages.length > 0 ? contextMessages : undefined,
+    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
   const result = await provider.trigger(trigger);
@@ -1454,8 +1532,17 @@ async function dispatchViaLegacy(
   personId: string,
   senderName: string | undefined,
   traceId: string,
+  perThreadExtraContext?: string[],
 ): Promise<void> {
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+
+  if (perThreadExtraContext?.length) {
+    log.warn('per_thread context available but legacy dispatch path has limited support — prepending as text', {
+      instanceId: instance.id,
+      contextCount: perThreadExtraContext.length,
+    });
+    messageTexts.unshift(...perThreadExtraContext);
+  }
 
   if (!messageTexts.length && !mediaFiles.length) {
     log.debug('No text or media content in messages, skipping agent call');
@@ -1600,7 +1687,13 @@ async function handleSessionReset(
       ? 'group'
       : resolvedChatType;
 
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId);
+  const rawThreadIdForReset = (msgRawPayload as Record<string, unknown>).threadId as string | undefined;
+  const sessionId = computeSessionId(
+    instance.agentSessionStrategy ?? 'per_chat',
+    senderId,
+    chatId,
+    rawThreadIdForReset,
+  );
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
@@ -1630,6 +1723,303 @@ async function handleSessionReset(
 
   // Record activity for session tracking (sliding window for idle reset)
   sessionActivityStore.recordActivity(instance.id, sessionId, Date.now());
+}
+
+// ============================================================================
+// Per-Thread Session Tracking
+// ============================================================================
+
+/**
+ * Check whether a per_thread session has been initialized for this instance/thread.
+ * Uses the agentSessions table with a dedicated 'thread_init:' key prefix.
+ */
+async function checkPerThreadSessionExists(db: Database, instanceId: string, sessionId: string): Promise<boolean> {
+  const initKey = `thread_init:${sessionId}`;
+  const result = await db
+    .select({ instanceId: agentSessions.instanceId })
+    .from(agentSessions)
+    .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
+    .limit(1);
+  return result.length > 0;
+}
+
+/**
+ * Mark a per_thread session as initialized in the DB.
+ * Called after the first lazy-init dispatch so subsequent triggers skip history fetch.
+ */
+async function markPerThreadSessionInitialized(db: Database, instanceId: string, sessionId: string): Promise<void> {
+  const initKey = `thread_init:${sessionId}`;
+  const now = new Date();
+  await db
+    .insert(agentSessions)
+    .values({
+      instanceId,
+      sessionKey: initKey,
+      providerSessionData: { initialized: true, initializedAt: now.toISOString() },
+      lastUsedAt: now,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: [agentSessions.instanceId, agentSessions.sessionKey],
+      set: { lastUsedAt: now, updatedAt: now },
+    });
+  log.info('per_thread session initialized', { instanceId, sessionId });
+}
+
+// ============================================================================
+// Per-Thread Lazy Init: History Fetch + Media Processing
+// ============================================================================
+
+/** Emoji icons for media processing start/end reactions */
+const PROC_REACT_START: Record<string, string> = { audio: '🎧', image: '👀', video: '👀', document: '👀' };
+const PROC_REACT_DONE = '✅';
+
+/**
+ * Determine the content-type category from a MIME type string.
+ */
+function mimeToContentType(mimeType: string): 'audio' | 'image' | 'video' | 'document' {
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'document';
+}
+
+/**
+ * Download a URL to a temp file and return the local path.
+ * Returns null on any error (graceful degradation).
+ */
+async function downloadToTempFile(url: string, mimeType: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
+    const tmpPath = join(tmpdir(), `omni-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+    await writeFile(tmpPath, buffer);
+    return tmpPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Download or resolve a media file and run it through the media processing service.
+ * Returns the processed text content, or null if unavailable / processing failed.
+ */
+async function processMediaFile(
+  msg: HistorySyncMessage,
+  mimeType: string,
+  mediaService: ReturnType<typeof createMediaProcessingService> | null,
+): Promise<string | null> {
+  let localPath = msg.content.localPath ?? null;
+  let ownedTempFile = false;
+
+  if (!localPath && msg.content.mediaUrl && mediaService) {
+    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType);
+    if (localPath) ownedTempFile = true;
+  }
+
+  if (!localPath || !mediaService) return null;
+
+  try {
+    const result = await mediaService.process(localPath, mimeType, { caption: msg.content.caption });
+    return result.success && result.content ? result.content : null;
+  } catch (err) {
+    log.debug('Media processing failed for history message', { error: String(err), messageId: msg.externalId });
+    return null;
+  } finally {
+    if (ownedTempFile) {
+      unlink(localPath as string).catch(() => {});
+    }
+  }
+}
+
+/** Build the final formatted string for a history media message */
+function buildHistoryMediaResult(
+  header: string,
+  icon: string,
+  contentType: string,
+  processedContent: string | null,
+  caption: string | undefined,
+  text: string | undefined,
+): string {
+  if (!processedContent) {
+    return `${header} ${icon}: ${caption ?? text ?? `[${contentType}]`}`;
+  }
+  const suffix = caption ? ` (${caption})` : '';
+  return `${header} ${icon}: ${processedContent}${suffix}`;
+}
+
+/**
+ * Format a single history message as a context string, processing media when possible.
+ */
+async function processHistoryMessage(
+  msg: HistorySyncMessage,
+  mediaService: ReturnType<typeof createMediaProcessingService> | null,
+  reactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+  unreactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+): Promise<string> {
+  const timeStr = msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const header = `[${msg.from ?? 'Unknown'} - ${timeStr}]`;
+
+  if (!msg.content.mimeType || (!msg.content.localPath && !msg.content.mediaUrl)) {
+    return `${header} ${msg.content.text ?? ''}`.trim();
+  }
+
+  const mimeType = msg.content.mimeType;
+  const contentType = mimeToContentType(mimeType);
+  const icon = MEDIA_ICONS[contentType] ?? '📎';
+  const startEmoji = PROC_REACT_START[contentType] ?? '👀';
+
+  if (reactFn) reactFn(msg.externalId, startEmoji).catch(() => {});
+
+  const processedContent = await processMediaFile(msg, mimeType, mediaService);
+
+  // Always remove start emoji; add done emoji only on success
+  if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
+  if (processedContent && reactFn) reactFn(msg.externalId, PROC_REACT_DONE).catch(() => {});
+
+  return buildHistoryMediaResult(header, icon, contentType, processedContent, msg.content.caption, msg.content.text);
+}
+
+/**
+ * Fetch thread history, process media files, and return formatted context messages.
+ * Called on the first trigger of a per_thread session (lazy init).
+ */
+async function fetchAndProcessThreadHistory(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  threadId: string,
+): Promise<string[]> {
+  const plugin = await getPlugin(channel);
+  if (!plugin?.fetchHistory) {
+    log.debug('Channel plugin does not support fetchHistory', { instanceId: instance.id, channel });
+    return [];
+  }
+
+  let historyResult: FetchHistoryResult;
+  try {
+    historyResult = await plugin.fetchHistory(instance.id, {
+      channelId: chatId,
+      threadId,
+      limit: 200,
+    });
+  } catch (err) {
+    log.warn('fetchHistory failed, proceeding without thread context', {
+      error: String(err),
+      instanceId: instance.id,
+      channel,
+    });
+    return [];
+  }
+
+  // Build MediaProcessingService if API keys are configured
+  let mediaService: ReturnType<typeof createMediaProcessingService> | null = null;
+  try {
+    const [groqApiKey, openaiApiKey, geminiApiKey] = await Promise.all([
+      services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+      services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+      services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+    ]);
+    if (groqApiKey || openaiApiKey || geminiApiKey) {
+      mediaService = createMediaProcessingService({ groqApiKey, openaiApiKey, geminiApiKey });
+    }
+  } catch {
+    // Non-fatal: proceed without media processing
+  }
+
+  const boundReact = plugin.react?.bind(plugin);
+  const boundUnreact = plugin.unreact?.bind(plugin);
+  const reactFn = boundReact ? (msgId: string, emoji: string) => boundReact(instance.id, chatId, msgId, emoji) : null;
+  const unreactFn = boundUnreact
+    ? (msgId: string, emoji: string) => boundUnreact(instance.id, chatId, msgId, emoji)
+    : null;
+
+  // Process messages in parallel (with a cap of 5 concurrent media jobs)
+  const CONCURRENCY = 5;
+  const contextMessages: string[] = [];
+  const mediaMessages = historyResult.messages.filter((m) => !m.isFromMe);
+
+  // Process in batches to cap concurrency
+  for (let i = 0; i < mediaMessages.length; i += CONCURRENCY) {
+    const batch = mediaMessages.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn)));
+    contextMessages.push(...results);
+  }
+
+  log.info('Thread history fetched', {
+    instanceId: instance.id,
+    channel,
+    chatId,
+    threadId,
+    totalMessages: historyResult.totalFetched,
+    contextMessages: contextMessages.length,
+  });
+
+  return contextMessages;
+}
+
+/**
+ * Handle the first trigger in a per_thread session:
+ * fetch history, process media, mark session initialized, return context messages.
+ */
+async function handlePerThreadLazyInit(
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  threadId: string,
+  sessionId: string,
+  db: Database,
+): Promise<string[]> {
+  log.info('per_thread lazy init', {
+    instanceId: instance.id,
+    channel,
+    chatId,
+    threadId,
+    sessionId,
+  });
+
+  const contextMessages = await fetchAndProcessThreadHistory(services, instance, channel, chatId, threadId);
+
+  // Persist the init marker so subsequent triggers skip history fetch
+  try {
+    await markPerThreadSessionInitialized(db, instance.id, sessionId);
+  } catch (err) {
+    log.warn('Failed to mark per_thread session initialized', {
+      error: String(err),
+      instanceId: instance.id,
+      sessionId,
+    });
+  }
+
+  return contextMessages;
+}
+
+/**
+ * If the instance uses per_thread strategy and this is the first trigger for the thread,
+ * fetch and process thread history and return it as extra context messages.
+ * Returns undefined if no lazy init is needed.
+ */
+async function resolvePerThreadExtraContext(
+  db: Database,
+  services: Services,
+  instance: Instance,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  firstMessage: BufferedMessage,
+): Promise<string[] | undefined> {
+  const strategy = instance.agentSessionStrategy ?? 'per_chat';
+  const rawThreadId = (firstMessage.payload.rawPayload as Record<string, unknown>)?.threadId as string | undefined;
+  if (strategy !== 'per_thread' || !rawThreadId) return undefined;
+  const sessionId = computeSessionId('per_thread', senderId, chatId, rawThreadId);
+  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId);
+  if (sessionExists) return undefined;
+  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
 }
 
 async function processAgentResponse(
@@ -1696,6 +2086,19 @@ async function processAgentResponse(
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
+  // ── Per-thread lazy init ──
+  // On the first trigger in a per_thread session: fetch thread history, process media,
+  // and inject the formatted messages as extra context for the agent.
+  const perThreadExtraContext = await resolvePerThreadExtraContext(
+    db,
+    services,
+    instance,
+    channel,
+    chatId,
+    senderId,
+    firstMessage,
+  );
+
   try {
     // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
     // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
@@ -1719,6 +2122,7 @@ async function processAgentResponse(
         traceId,
         rawEvent,
         db,
+        perThreadExtraContext,
       );
 
       // B-1b: Fall back to accumulate-then-reply
@@ -1736,6 +2140,7 @@ async function processAgentResponse(
           traceId,
           rawEvent,
           db,
+          perThreadExtraContext,
         );
       }
     } catch (providerError) {
@@ -1769,6 +2174,7 @@ async function processAgentResponse(
       personId,
       senderName,
       traceId,
+      perThreadExtraContext,
     );
   } catch (error) {
     log.error('Failed to process agent response', {
@@ -1896,6 +2302,14 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
+      streamConfig: schemaConfig.streamConfig as
+        | {
+            showToolCalls?: boolean;
+            showThinking?: boolean;
+            showToolProgress?: boolean;
+            toolCallFormat?: 'compact' | 'verbose';
+          }
+        | undefined,
     },
   );
 }
@@ -2024,6 +2438,9 @@ async function resolveEffectiveInstance(
     routeScope: route.scope,
     agentProviderId: route.agentProviderId,
     agentId: route.agentId,
+    agentStreamMode: effectiveInstance.agentStreamMode,
+    routeAgentStreamMode: route.agentStreamMode,
+    instanceAgentStreamMode: instance.agentStreamMode,
   });
 
   return { instance: effectiveInstance, routeId: route.id };
@@ -2300,6 +2717,16 @@ async function resolveSlackThreadReply(
   context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
 }
 
+/** True if the chat is a newsletter or broadcast channel (agent never processes these). */
+function isBroadcastOrNewsletter(chatId: string): boolean {
+  return chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
+}
+
+/** True if we need to resolve whether the bot was mentioned via a LID JID. */
+function needsLidMentionCheck(messageContext: MessageContext, instance: Instance): boolean {
+  return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2328,6 +2755,13 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Never trigger the agent for newsletter/broadcast chats regardless of reply filter mode
+  const chatId = payload.chatId ?? '';
+  if (isBroadcastOrNewsletter(chatId)) {
+    log.debug('Skipping newsletter/broadcast message', { instanceId: metadata.instanceId, chatId });
+    return null;
+  }
+
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentProviderId) {
     log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
@@ -2342,12 +2776,12 @@ async function shouldProcessMessage(
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
-  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && instance.ownerIdentifier) {
+  if (needsLidMentionCheck(messageContext, instance)) {
     const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
     await resolveLidMentionBot(
       chatsService,
       metadata.instanceId,
-      instance.ownerIdentifier,
+      instance.ownerIdentifier as string,
       mentionedJids,
       messageContext,
     );

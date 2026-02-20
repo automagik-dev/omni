@@ -41,7 +41,6 @@ import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { timeoutMiddleware } from '../../middleware/timeout';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
@@ -51,10 +50,6 @@ const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
-
-// Apply a long timeout to all send routes — debounce + typing simulation can take 10-60s+
-// The global default is 30s which is insufficient for heavily debounced instances
-messagesRoutes.use('/send*', timeoutMiddleware({ timeoutMs: 120_000 }));
 
 // ============================================================================
 // Helper Functions
@@ -178,7 +173,7 @@ async function getReplyContext(
   chatExternalId: string,
   replyToId: string,
 ): Promise<{ replyToFromMe?: boolean; replyToRawPayload?: Record<string, unknown>; replyToText?: string }> {
-  const chat = await services.chats.getByExternalId(instanceId, chatExternalId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatExternalId);
   if (!chat) return {};
 
   const originalMessage = await services.messages.getByExternalId(chat.id, replyToId);
@@ -1081,7 +1076,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // This is a best-effort check — if the message isn't in the DB yet
   // (e.g. new Slack channel, history not synced), we still send the
   // reaction and let the channel plugin handle it directly.
-  const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (!target) {
@@ -1576,7 +1571,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
 
   // Fetch the original message from our DB to get rawPayload
   // Chat externalId is the platform chat ID (e.g., WhatsApp JID)
-  const chat = await services.chats.getByExternalId(instanceId, fromChatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, fromChatId);
   if (!chat) {
     throw new OmniError({
       code: ERROR_CODES.NOT_FOUND,
@@ -1786,10 +1781,19 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
     });
   }
 
-  // Call plugin with external message ID
+  // Pass message data so the plugin can build channel-specific keys (e.g., group participant)
+  const messageData = [{ externalId: message.externalId, rawPayload: message.rawPayload ?? null }];
+
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, chat.externalId, [message.externalId]);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, chat.externalId, [message.externalId], messageData);
 
   return c.json({
     success: true,
@@ -1832,6 +1836,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   // chatId can be either external chat ID or internal UUID
   // Try to resolve as UUID first, fall back to external ID
   let externalChatId = chatId;
+  let internalChatId: string | undefined;
   const UUID_REGEX_LOCAL = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (UUID_REGEX_LOCAL.test(chatId)) {
     const chat = await services.chats.getById(chatId);
@@ -1844,11 +1849,30 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
       });
     }
     externalChatId = chat.externalId;
+    internalChatId = chat.id;
+  }
+
+  // Fetch message data so the plugin can build channel-specific keys (e.g., group participant)
+  if (!internalChatId) {
+    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+    if (chat) internalChatId = chat.id;
+  }
+  let messageData: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }> | undefined;
+  if (internalChatId) {
+    const msgs = await services.messages.getByExternalIds(internalChatId, messageIds);
+    messageData = msgs.map((m) => ({ externalId: m.externalId, rawPayload: m.rawPayload ?? null }));
   }
 
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, externalChatId, messageIds);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, externalChatId, messageIds, messageData);
 
   return c.json({
     success: true,
@@ -2019,7 +2043,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
   let replyToFromMe: boolean | undefined;
   let replyToRawPayload: Record<string, unknown> | undefined;
   if (data.replyTo) {
-    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
+    const chat = await services.chats.findByExternalIdSmart(data.instanceId, resolvedTo);
     if (chat) {
       const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
       if (originalMessage) {

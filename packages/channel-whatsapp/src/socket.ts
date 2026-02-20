@@ -56,9 +56,9 @@ export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
   browser: Browsers.ubuntu('Chrome'),
   mobile: false,
   connectTimeoutMs: 60_000,
-  defaultQueryTimeoutMs: 60_000,
+  defaultQueryTimeoutMs: 15_000,
   keepAliveIntervalMs: 25_000,
-  syncFullHistory: true,
+  syncFullHistory: false,
   generateHighQualityLinkPreview: true,
   markOnlineOnConnect: true,
 };

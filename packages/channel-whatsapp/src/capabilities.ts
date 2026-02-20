@@ -37,7 +37,7 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
   canSendSticker: true,
   canSendPoll: true,
 
-  // Streaming (progressive response edits)
+  // Streaming — uses paragraph-based sending (no message edits) by default
   canStreamResponse: true,
 
   // Group/broadcast

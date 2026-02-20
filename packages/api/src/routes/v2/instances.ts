@@ -61,7 +61,7 @@ const createInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
-    .enum(['per_user', 'per_chat'])
+    .enum(['per_user', 'per_chat', 'per_thread'])
     .default('per_chat')
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
@@ -469,6 +469,24 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // When clearing agentProviderId, cascade-reset all agent fields to defaults.
+  // NOT NULL DB fields can't be set to null, so reset them to their schema defaults.
+  if (data.agentProviderId === null) {
+    Object.assign(data, {
+      agentId: null,
+      agentApiUrl: null,
+      agentApiKey: null,
+      agentReplyFilter: null,
+      agentSessionStrategy: null,
+      agentGateModel: null,
+      agentGatePrompt: null,
+      // Reset NOT NULL fields to schema defaults (cannot be null)
+      agentType: 'agent',
+      agentTimeout: 60,
+      agentStreamMode: false,
+    });
+  }
 
   // Default reply filter when binding an agent provider without explicit filter
   if (data.agentProviderId && !data.agentReplyFilter) {

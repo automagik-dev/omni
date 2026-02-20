@@ -5,9 +5,15 @@
  * Handles connection, messaging, streaming, interactions, and file handling.
  */
 
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BaseChannelPlugin } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  FetchHistoryOptions,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -22,7 +28,7 @@ import type { BoltConnection } from './connection/bolt-client';
 import { checkBoltHealth, createBoltApp, destroyBoltConnection, startBoltConnection } from './connection/bolt-client';
 import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
-import { extractFileInfo, getContentTypeFromMime } from './handlers/files';
+import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
@@ -400,6 +406,177 @@ export class SlackPlugin extends BaseChannelPlugin {
       default:
         // 'off' or unrecognized: only thread if already in a thread context
         return threadId;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Thread History & Reactions (per_thread collaboration sessions)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Map unicode emoji to Slack reaction names */
+  private static readonly EMOJI_TO_SLACK: Record<string, string> = {
+    '👀': 'eyes',
+    '🎧': 'headphones',
+    '✅': 'white_check_mark',
+    '❌': 'x',
+  };
+
+  /**
+   * Fetch message history for a Slack thread (conversations.replies).
+   * Supports per_thread collaboration session lazy init.
+   */
+  async fetchHistory(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    const connection = this.getConnection(instanceId);
+    const channelId = options.channelId ?? options.threadId;
+    const threadTs = options.threadId;
+
+    if (!channelId || !threadTs) return { totalFetched: 0, messages: [] };
+
+    const botUserId = connection.botUserId;
+    const botToken = (this.slackConfigs.get(instanceId) as Record<string, unknown>)?.botToken as string | undefined;
+    if (!botToken) {
+      this.logger.warn('fetchHistory: no botToken for instance', { instanceId });
+      return { totalFetched: 0, messages: [] };
+    }
+
+    const messages = await this.paginateThreadHistory(
+      connection,
+      channelId,
+      threadTs,
+      botUserId,
+      botToken,
+      options.limit ?? 200,
+    );
+    return { totalFetched: messages.length, messages };
+  }
+
+  /** Paginate through conversations.replies and collect HistorySyncMessages. */
+  private async paginateThreadHistory(
+    connection: BoltConnection,
+    channelId: string,
+    threadTs: string,
+    botUserId: string | undefined,
+    botToken: string,
+    maxMessages: number,
+  ): Promise<HistorySyncMessage[]> {
+    const messages: HistorySyncMessage[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await connection.client.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: Math.min(200, maxMessages - messages.length),
+        cursor,
+      });
+
+      for (const msg of (response.messages ?? []) as Record<string, unknown>[]) {
+        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken);
+        if (result) messages.push(result);
+        if (messages.length >= maxMessages) break;
+      }
+
+      cursor = response.response_metadata?.next_cursor ?? undefined;
+    } while (cursor && messages.length < maxMessages);
+
+    return messages;
+  }
+
+  /** Download a Slack private file to a temp path and return its MIME type + local path. */
+  private async downloadSlackMediaToTemp(
+    file: Record<string, unknown>,
+    botToken: string,
+    ts: string,
+  ): Promise<{ mimeType: string; localPath: string | undefined }> {
+    const mimeType = (file.mimetype as string) ?? 'application/octet-stream';
+    const urlPrivate = (file.url_private_download as string | undefined) ?? (file.url_private as string | undefined);
+
+    if (!urlPrivate) return { mimeType, localPath: undefined };
+
+    try {
+      const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
+      const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
+      const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+      await writeFile(tmpPath, buffer);
+      return { mimeType, localPath: tmpPath };
+    } catch (err) {
+      this.logger.debug('fetchHistory: file download failed', { error: String(err), ts });
+      return { mimeType, localPath: undefined };
+    }
+  }
+
+  /** Convert a raw Slack message to HistorySyncMessage, or null to skip (bot/own message). */
+  private async buildHistorySyncMessage(
+    msg: Record<string, unknown>,
+    channelId: string,
+    botUserId: string | undefined,
+    botToken: string,
+  ): Promise<HistorySyncMessage | null> {
+    const userId = msg.user as string | undefined;
+    if (msg.bot_id || (botUserId && userId === botUserId) || !userId) return null;
+
+    const ts = msg.ts as string;
+    const text = (msg.text as string | undefined) ?? '';
+    const files = msg.files as Record<string, unknown>[] | undefined;
+    const timestamp = new Date(Number.parseFloat(ts) * 1000);
+
+    if (files && files.length > 0) {
+      const { mimeType, localPath } = await this.downloadSlackMediaToTemp(
+        files[0] as Record<string, unknown>,
+        botToken,
+        ts,
+      );
+      return {
+        externalId: ts,
+        chatId: channelId,
+        from: userId,
+        timestamp,
+        content: {
+          type: getContentTypeFromMime(mimeType),
+          text: text || undefined,
+          mimeType,
+          localPath,
+          caption: text || undefined,
+        },
+        isFromMe: false,
+        rawPayload: msg,
+      };
+    }
+
+    return {
+      externalId: ts,
+      chatId: channelId,
+      from: userId,
+      timestamp,
+      content: { type: 'text', text: text || undefined },
+      isFromMe: false,
+      rawPayload: msg,
+    };
+  }
+
+  /**
+   * Add a reaction emoji to a Slack message (per_thread media processing feedback).
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    try {
+      await connection.client.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
+    } catch (err) {
+      this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Remove a reaction emoji from a Slack message.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    try {
+      await connection.client.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
+    } catch (err) {
+      this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
     }
   }
 

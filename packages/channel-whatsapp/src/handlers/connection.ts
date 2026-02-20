@@ -39,6 +39,12 @@ const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
 const reconnectAttempts = new Map<string, number>();
 
 /**
+ * Track pending reconnect timeouts per instance so they can be cancelled
+ * when a new connection is created (prevents duplicate sockets)
+ */
+const pendingReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
  * Track QR code generation attempts per instance (within a cycle)
  * Only counts QR codes that expire without being scanned (not connection errors)
  * After MAX_QR_ATTEMPTS expired QRs, we clear auth state and start fresh
@@ -213,9 +219,13 @@ function scheduleReconnect(
   config: ReconnectConfig,
   onReconnect: () => Promise<void>,
 ): void {
-  const delay = getBackoffDelay(attempt, config);
+  // Cancel any pending reconnect for this instance to prevent duplicate sockets
+  cancelPendingReconnect(instanceId);
 
-  setTimeout(async () => {
+  const backoffDelay = getBackoffDelay(attempt, config);
+
+  const timer = setTimeout(async () => {
+    pendingReconnectTimers.delete(instanceId);
     try {
       await onReconnect();
     } catch (reconnectError) {
@@ -225,7 +235,9 @@ function scheduleReconnect(
         true,
       );
     }
-  }, delay);
+  }, backoffDelay);
+
+  pendingReconnectTimers.set(instanceId, timer);
 }
 
 /**
@@ -261,7 +273,18 @@ async function handleConnectionClose(
     qrCodeAttempts.delete(instanceId);
     qrCycleAttempts.delete(instanceId);
     authenticatedInstances.delete(instanceId);
+    cancelPendingReconnect(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
+    return;
+  }
+
+  // If connection was replaced (conflict), do NOT auto-reconnect.
+  // The replacing connection (our own reconnect or createConnection) is already active.
+  // Reconnecting here would create a duplicate socket → infinite conflict loop.
+  if (statusCode === DisconnectReason.connectionReplaced) {
+    log.info('Connection replaced by another session, not reconnecting', { instanceId });
+    reconnectAttempts.delete(instanceId);
+    cancelPendingReconnect(instanceId);
     return;
   }
 
@@ -379,11 +402,24 @@ export function setupConnectionHandlers(
 }
 
 /**
+ * Cancel any pending reconnect timer for an instance.
+ * Call this before creating a new connection to prevent duplicate sockets.
+ */
+export function cancelPendingReconnect(instanceId: string): void {
+  const timer = pendingReconnectTimers.get(instanceId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingReconnectTimers.delete(instanceId);
+  }
+}
+
+/**
  * Reset reconnection attempts for an instance
  * Call this when manually disconnecting
  */
 export function resetReconnectAttempts(instanceId: string): void {
   reconnectAttempts.delete(instanceId);
+  cancelPendingReconnect(instanceId);
 }
 
 /**
@@ -397,6 +433,7 @@ export function resetConnectionState(instanceId: string): void {
   activeQrCodes.delete(instanceId);
   authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
+  cancelPendingReconnect(instanceId);
 }
 
 /**
