@@ -18,31 +18,26 @@
 
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import ora from 'ora';
 import { saveConfig } from '../config.js';
+import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
+import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
+import { getServerBundlePath } from '../server-bundle.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_API_PORT = 8882;
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
 const NATS_VERSION = 'v2.10.24';
-const HEALTH_TIMEOUT_MS = 15_000;
-const HEALTH_POLL_INTERVAL_MS = 500;
-
-/** PM2 process names managed by omni */
-const PM2_API_PROCESS = 'omni-api';
-const PM2_NATS_PROCESS = 'omni-nats';
 
 // ============================================================================
 // TYPES
@@ -62,73 +57,6 @@ interface WizardConfig {
   databaseUrl: string;
   apiKey: string;
   processManager: ProcessManager;
-}
-
-// ============================================================================
-// HELPERS - PATH RESOLUTION
-// ============================================================================
-
-/** Get path to the bundled server index.js relative to this binary */
-function getServerBundlePath(): string {
-  try {
-    const thisFile = fileURLToPath(import.meta.url);
-    const distDir = dirname(thisFile);
-    return join(distDir, 'server', 'index.js');
-  } catch {
-    return join(process.cwd(), 'dist', 'server', 'index.js');
-  }
-}
-
-// ============================================================================
-// HELPERS - PM2
-// ============================================================================
-
-/** Check if PM2 is available in PATH */
-async function isPm2Available(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn({
-      cmd: ['pm2', '--version'],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const code = await proc.exited;
-    return code === 0;
-  } catch {
-    return false;
-  }
-}
-
-/** Run a PM2 command (inherited stdio) */
-async function runPm2(args: string[], envOverrides?: Record<string, string>): Promise<number> {
-  const proc = Bun.spawn({
-    cmd: ['pm2', ...args],
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-    env: { ...process.env, ...envOverrides },
-  });
-  return proc.exited;
-}
-
-// ============================================================================
-// HELPERS - HEALTH CHECK
-// ============================================================================
-
-/** Wait for the health endpoint to respond (up to HEALTH_TIMEOUT_MS) */
-async function waitForHealth(port: number): Promise<boolean> {
-  const url = `http://localhost:${port}/api/v2/health`;
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(1000) });
-      if (resp.ok) return true;
-    } catch {
-      // keep polling
-    }
-    await Bun.sleep(HEALTH_POLL_INTERVAL_MS);
-  }
-  return false;
 }
 
 // ============================================================================
@@ -370,7 +298,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env node ${bundlePath}
+ExecStart=/usr/bin/env bun ${bundlePath}
 Restart=on-failure
 ${formatSystemdEnvironment('API_PORT', runtimeEnv.API_PORT)}
 ${formatSystemdEnvironment('DATABASE_URL', runtimeEnv.DATABASE_URL)}
@@ -524,21 +452,21 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   }
 
   const runtimeEnv = buildApiRuntimeEnv(cfg);
-  const apiSpinner = ora(`Starting ${PM2_API_PROCESS} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_API_PROCESS, '--interpreter', 'node'], runtimeEnv);
+  const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
+  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], runtimeEnv);
   if (apiCode !== 0) {
-    apiSpinner.fail(`Failed to start ${PM2_API_PROCESS} (pm2 exit code ${apiCode})`);
+    apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
   } else {
-    apiSpinner.succeed(`${PM2_API_PROCESS} started`);
+    apiSpinner.succeed(`${PM2_PROCESSES.api} started`);
   }
 
   if (existsSync(NATS_BINARY_PATH)) {
-    const natsSpinner = ora(`Starting ${PM2_NATS_PROCESS}...`).start();
-    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_NATS_PROCESS]);
+    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
+    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_PROCESSES.nats]);
     if (natsCode !== 0) {
-      natsSpinner.warn(`${PM2_NATS_PROCESS} failed to start — check NATS binary`);
+      natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
     } else {
-      natsSpinner.succeed(`${PM2_NATS_PROCESS} started`);
+      natsSpinner.succeed(`${PM2_PROCESSES.nats} started`);
     }
   } else {
     output.warn(`NATS binary not found at ${NATS_BINARY_PATH} — skipping`);
