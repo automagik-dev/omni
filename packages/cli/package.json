@@ -20,7 +20,7 @@
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist",
-    "build:server": "bun build ../api/src/index.ts --outfile dist/server/index.js --target node",
+    "build:server": "bun build ../api/src/index.ts --outfile dist/server/index.js --target bun",
     "prepack": "bun run build && bun run build:server"
   },
   "dependencies": {
