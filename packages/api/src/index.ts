@@ -8,7 +8,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { createDb } from '@omni/db';
+import { closeDb, createDb } from '@omni/db';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -206,6 +206,10 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>): void {
         shutdownLog.info('Closing NATS connection');
         await globalEventBus.close();
       }
+
+      // Drain DB connection pool before stopping embedded pgserve
+      shutdownLog.info('Closing database connections');
+      await closeDb();
 
       // Stop embedded pgserve last (after all DB consumers are done)
       await stopEmbeddedPgserve();

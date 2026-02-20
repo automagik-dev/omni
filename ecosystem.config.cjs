@@ -67,15 +67,18 @@ if (natsManaged) {
 
 // ---------------------------------------------------------------------------
 // 2. API — Omni API server (Bun runtime, embedded pgserve)
-//    Note: --watch is intentional for dev; bun restarts on file changes.
-//    PM2 autorestart handles crash recovery separately.
+//    --watch is only enabled in development; production runs without it
+//    to prevent file-change-triggered restarts during deploys.
 // ---------------------------------------------------------------------------
 if (apiManaged) {
+  const isDev = (process.env.NODE_ENV || 'development') !== 'production';
+  const apiArgs = isDev ? '--watch packages/api/src/index.ts' : 'packages/api/src/index.ts';
+
   apps.push({
     ...SHARED,
     name: 'omni-v2-api',
     script: 'bun',
-    args: '--watch packages/api/src/index.ts',
+    args: apiArgs,
     env: {
       NODE_ENV: process.env.NODE_ENV || 'development',
       OMNI_PACKAGES_DIR: path.join(__dirname, 'packages'),

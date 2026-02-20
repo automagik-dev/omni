@@ -737,7 +737,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     config: SlackConfig,
   ): Promise<string> {
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const replyToMode = config.replyToMode ?? 'off';
+    const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     return sendTextMessage(
@@ -764,7 +764,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     message: OutgoingMessage,
     config: SlackConfig,
   ): Promise<string> {
-    const replyToMode = config.replyToMode ?? 'off';
+    const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     if (message.metadata?.base64) {

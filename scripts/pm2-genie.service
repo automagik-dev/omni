@@ -21,11 +21,11 @@ PIDFile=/home/genie/.pm2/pm2.pid
 # Start: load env + kill orphans + start ecosystem fresh
 ExecStart=/bin/bash -c 'set -a && . /home/genie/prod/omni/.env && set +a && cd /home/genie/prod/omni && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 start ecosystem.config.cjs && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 save'
 
-# Reload: graceful restart of all apps
-ExecReload=/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 reload all
+# Reload: graceful restart of Omni processes only
+ExecReload=/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 reload omni-v2-nats omni-v2-api
 
-# Stop: save state then kill daemon
-ExecStop=/bin/bash -c '/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 save && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 kill'
+# Stop: save state then stop Omni processes (not the entire PM2 daemon)
+ExecStop=/bin/bash -c '/home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 save && /home/genie/.npm-global/lib/node_modules/pm2/bin/pm2 stop omni-v2-nats omni-v2-api'
 
 # Self-healing: restart on failure with backoff
 Restart=on-failure
