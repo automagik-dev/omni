@@ -192,8 +192,14 @@ export interface ChannelPlugin {
    * @param instanceId - Instance to mark messages read for
    * @param chatId - Chat ID containing the messages
    * @param messageIds - Array of message IDs to mark as read, or ['all'] to mark entire chat
+   * @param messageData - Optional message records from DB (plugins use these to build channel-specific keys)
    */
-  markAsRead?(instanceId: string, chatId: string, messageIds: string[]): Promise<void>;
+  markAsRead?(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+  ): Promise<void>;
 
   /**
    * Mark entire chat as read

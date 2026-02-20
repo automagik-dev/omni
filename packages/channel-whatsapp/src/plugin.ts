@@ -29,7 +29,7 @@ import {
   setupConnectionHandlers,
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isUserJid, toJid } from './jid';
+import { fromJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -1333,7 +1333,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param chatId - Chat ID (JID or phone number)
    * @param messageIds - Array of message IDs, or ['all'] to mark entire chat as read
    */
-  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+  ): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
@@ -1343,11 +1348,43 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       return;
     }
 
-    const keys = messageIds.map((id) => ({
-      remoteJid: jid,
-      id,
-      fromMe: false,
-    }));
+    const isGroup = jid.endsWith('@g.us');
+
+    // Build a lookup from messageData for group key construction
+    const dataByExternalId = new Map((messageData ?? []).map((m) => [m.externalId, m.rawPayload]));
+
+    const lidCache = isGroup ? this.getLidMappingCache(instanceId) : undefined;
+    let missingParticipants = 0;
+
+    const keys = messageIds.map((id) => {
+      const raw = dataByExternalId.get(id) as { key?: { participant?: string; fromMe?: boolean } } | null | undefined;
+      const fromMe = raw?.key?.fromMe ?? false;
+      let participant = raw?.key?.participant;
+
+      // Resolve LID participant to phone JID if mapping exists
+      if (participant && isLidJid(participant) && lidCache) {
+        participant = lidCache.get(participant) ?? participant;
+      }
+
+      if (isGroup && !participant) missingParticipants++;
+
+      return {
+        remoteJid: jid,
+        id,
+        fromMe,
+        // Groups require participant (sender JID) for read receipts — without it WhatsApp silently ignores
+        ...(isGroup && participant ? { participant } : {}),
+      };
+    });
+
+    if (missingParticipants > 0) {
+      this.logger.warn('Group read receipt missing participant for some messages', {
+        instanceId,
+        chatId: jid,
+        total: messageIds.length,
+        missingParticipants,
+      });
+    }
 
     await sock.readMessages(keys);
   }

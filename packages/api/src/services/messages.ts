@@ -367,6 +367,15 @@ export class MessageService {
     return result ?? null;
   }
 
+  /** Get multiple messages by external IDs in a single query */
+  async getByExternalIds(chatId: string, externalIds: string[]): Promise<Message[]> {
+    if (externalIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), inArray(messages.externalId, externalIds)));
+  }
+
   /**
    * Create a new message
    */

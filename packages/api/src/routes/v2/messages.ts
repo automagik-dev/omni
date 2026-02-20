@@ -1781,10 +1781,19 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
     });
   }
 
-  // Call plugin with external message ID
+  // Pass message data so the plugin can build channel-specific keys (e.g., group participant)
+  const messageData = [{ externalId: message.externalId, rawPayload: message.rawPayload ?? null }];
+
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, chat.externalId, [message.externalId]);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, chat.externalId, [message.externalId], messageData);
 
   return c.json({
     success: true,
@@ -1827,6 +1836,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   // chatId can be either external chat ID or internal UUID
   // Try to resolve as UUID first, fall back to external ID
   let externalChatId = chatId;
+  let internalChatId: string | undefined;
   const UUID_REGEX_LOCAL = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (UUID_REGEX_LOCAL.test(chatId)) {
     const chat = await services.chats.getById(chatId);
@@ -1839,11 +1849,30 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
       });
     }
     externalChatId = chat.externalId;
+    internalChatId = chat.id;
+  }
+
+  // Fetch message data so the plugin can build channel-specific keys (e.g., group participant)
+  if (!internalChatId) {
+    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+    if (chat) internalChatId = chat.id;
+  }
+  let messageData: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }> | undefined;
+  if (internalChatId) {
+    const msgs = await services.messages.getByExternalIds(internalChatId, messageIds);
+    messageData = msgs.map((m) => ({ externalId: m.externalId, rawPayload: m.rawPayload ?? null }));
   }
 
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, externalChatId, messageIds);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, externalChatId, messageIds, messageData);
 
   return c.json({
     success: true,
