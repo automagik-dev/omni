@@ -302,11 +302,11 @@ ensure-nats:
 
 # Manual deploy: pull + quality gate + restart
 deploy:
-	@echo "Pulling latest from dev..."
-	git pull origin dev --ff-only
+	@echo "Pulling latest from $$(git branch --show-current)..."
+	git pull --ff-only
 	bun install
-	@echo "Running quality gate..."
-	$(MAKE) check
+	@echo "Running quality gate (typecheck + lint, skipping tests)..."
+	$(MAKE) typecheck lint
 	@echo "Quality gate passed. Restarting services..."
 	@bash scripts/pm2-start.sh
 

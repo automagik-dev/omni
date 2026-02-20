@@ -76,6 +76,7 @@ export const omniOutbound: ChannelOutboundAdapter = {
         caption: ctx.text,
         type: 'image',
         instanceId: account.instanceId,
+        ...(ctx.replyToId ? { replyTo: ctx.replyToId } : {}),
       }),
       signal: AbortSignal.timeout(OMNI_API_TIMEOUT_MS),
     });

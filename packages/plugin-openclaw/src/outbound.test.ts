@@ -223,6 +223,7 @@ describe('omniOutbound.sendMedia', () => {
 
     const body = JSON.parse(capturedBody);
     expect(body.to).toBe('+5511999999999');
+    expect(body.replyTo).toBe('reply-abc');
   });
 
   test('throws on non-ok response', async () => {
