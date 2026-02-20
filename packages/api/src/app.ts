@@ -85,7 +85,7 @@ export function createApp(
   // result is harmless. For writes, the handler keeps running after timeout,
   // orphaning mutexes and corrupting state (see #72 / #70).
   app.use('*', async (c, next) => {
-    if (c.req.method !== 'GET') return next();
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
     return defaultTimeoutMiddleware(c, next);
   });
   app.use('*', defaultBodyLimitMiddleware);
