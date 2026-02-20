@@ -619,7 +619,7 @@ async function waitForMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.getByExternalId(instanceId, chatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
@@ -702,7 +702,7 @@ async function resolveQuotedMessage(
   replyToId: string,
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
@@ -1072,7 +1072,7 @@ async function fetchChatMetadata(
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.getByExternalId(instanceId, chatId);
+    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -1124,13 +1124,34 @@ async function resolveStreamingCapabilities(
   traceId: string,
   db: Database,
 ): Promise<StreamCapabilities | null> {
-  if (!instance.agentStreamMode) return null;
+  if (!instance.agentStreamMode) {
+    log.debug('Stream guard: agentStreamMode is falsy', {
+      instanceId: instance.id,
+      agentStreamMode: instance.agentStreamMode,
+      chatId,
+    });
+    return null;
+  }
 
   const provider = await getAgentProvider(services, instance, db);
-  if (!provider?.triggerStream) return null;
+  if (!provider?.triggerStream) {
+    log.debug('Stream guard: provider has no triggerStream', {
+      instanceId: instance.id,
+      hasProvider: !!provider,
+      chatId,
+    });
+    return null;
+  }
 
   const plugin = await getPlugin(channel);
-  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) return null;
+  if (!plugin?.capabilities?.canStreamResponse || !plugin.createStreamSender) {
+    log.debug('Stream guard: channel does not support streaming', {
+      channel,
+      canStream: plugin?.capabilities?.canStreamResponse,
+      chatId,
+    });
+    return null;
+  }
 
   const streamKey = `${instance.id}:${chatId}`;
   if (activeStreams.has(streamKey)) {
@@ -1148,7 +1169,16 @@ async function resolveStreamingCapabilities(
   };
 }
 
-/** Consume a streaming generator, routing each delta to the sender. Returns true if no error deltas. */
+/**
+ * Consume a streaming generator, routing each delta to the sender.
+ *
+ * Returns true if the stream should be treated as "handled" (no fallback needed).
+ * Returns false only if an error occurred AND no content was sent yet — meaning the
+ * fallback path should run so the user still gets a response.
+ *
+ * If content was already sent before the error, we return true to prevent a double
+ * reply from the fallback path.
+ */
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
   sender: StreamSender,
@@ -1158,9 +1188,11 @@ async function consumeStream(
 ): Promise<boolean> {
   const startTime = Date.now();
   let hadError = false;
+  let hadContent = false;
 
   for await (const delta of generator) {
     if (delta.phase === 'error') hadError = true;
+    if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
     await routeStreamDelta(sender, delta);
   }
 
@@ -1169,10 +1201,13 @@ async function consumeStream(
     chatId,
     durationMs: Date.now() - startTime,
     hadError,
+    hadContent,
     traceId,
   });
 
-  return !hadError;
+  // If we already sent content to the user, treat as handled even on error.
+  // Falling back would cause a double reply.
+  return hadContent || !hadError;
 }
 
 /** Extract thread ID from the first buffered message rawPayload (for per_thread session strategy) */
@@ -2257,6 +2292,14 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
+      streamConfig: schemaConfig.streamConfig as
+        | {
+            showToolCalls?: boolean;
+            showThinking?: boolean;
+            showToolProgress?: boolean;
+            toolCallFormat?: 'compact' | 'verbose';
+          }
+        | undefined,
     },
   );
 }
@@ -2385,6 +2428,9 @@ async function resolveEffectiveInstance(
     routeScope: route.scope,
     agentProviderId: route.agentProviderId,
     agentId: route.agentId,
+    agentStreamMode: effectiveInstance.agentStreamMode,
+    routeAgentStreamMode: route.agentStreamMode,
+    instanceAgentStreamMode: instance.agentStreamMode,
   });
 
   return { instance: effectiveInstance, routeId: route.id };
@@ -2661,6 +2707,16 @@ async function resolveSlackThreadReply(
   context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
 }
 
+/** True if the chat is a newsletter or broadcast channel (agent never processes these). */
+function isBroadcastOrNewsletter(chatId: string): boolean {
+  return chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
+}
+
+/** True if we need to resolve whether the bot was mentioned via a LID JID. */
+function needsLidMentionCheck(messageContext: MessageContext, instance: Instance): boolean {
+  return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -2689,6 +2745,13 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Never trigger the agent for newsletter/broadcast chats regardless of reply filter mode
+  const chatId = payload.chatId ?? '';
+  if (isBroadcastOrNewsletter(chatId)) {
+    log.debug('Skipping newsletter/broadcast message', { instanceId: metadata.instanceId, chatId });
+    return null;
+  }
+
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentProviderId) {
     log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
@@ -2703,12 +2766,12 @@ async function shouldProcessMessage(
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
-  if (!messageContext.mentionsBot && !messageContext.isDirectMessage && instance.ownerIdentifier) {
+  if (needsLidMentionCheck(messageContext, instance)) {
     const mentionedJids = (rawPayloadWithMentions?.mentionedJids as string[]) ?? [];
     await resolveLidMentionBot(
       chatsService,
       metadata.instanceId,
-      instance.ownerIdentifier,
+      instance.ownerIdentifier as string,
       mentionedJids,
       messageContext,
     );

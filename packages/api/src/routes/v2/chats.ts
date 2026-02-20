@@ -518,7 +518,7 @@ chatsRoutes.get('/by-external', async (c) => {
     return c.json({ error: 'instanceId and externalId are required' }, 400);
   }
 
-  const chat = await services.chats.getByExternalId(instanceId, externalId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
 
   if (!chat) {
     return c.json({ data: null });

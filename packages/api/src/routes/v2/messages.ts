@@ -173,7 +173,7 @@ async function getReplyContext(
   chatExternalId: string,
   replyToId: string,
 ): Promise<{ replyToFromMe?: boolean; replyToRawPayload?: Record<string, unknown>; replyToText?: string }> {
-  const chat = await services.chats.getByExternalId(instanceId, chatExternalId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatExternalId);
   if (!chat) return {};
 
   const originalMessage = await services.messages.getByExternalId(chat.id, replyToId);
@@ -1076,7 +1076,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // This is a best-effort check — if the message isn't in the DB yet
   // (e.g. new Slack channel, history not synced), we still send the
   // reaction and let the channel plugin handle it directly.
-  const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (!target) {
@@ -1571,7 +1571,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
 
   // Fetch the original message from our DB to get rawPayload
   // Chat externalId is the platform chat ID (e.g., WhatsApp JID)
-  const chat = await services.chats.getByExternalId(instanceId, fromChatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, fromChatId);
   if (!chat) {
     throw new OmniError({
       code: ERROR_CODES.NOT_FOUND,
@@ -2043,7 +2043,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
   let replyToFromMe: boolean | undefined;
   let replyToRawPayload: Record<string, unknown> | undefined;
   if (data.replyTo) {
-    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
+    const chat = await services.chats.findByExternalIdSmart(data.instanceId, resolvedTo);
     if (chat) {
       const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
       if (originalMessage) {

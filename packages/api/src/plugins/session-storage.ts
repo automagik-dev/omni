@@ -11,7 +11,14 @@ function scopeSessionKey(providerId: string, sessionKey: string): string {
   return `provider:${providerId}:session:${sessionKey}`;
 }
 
-export function createSessionStorage(db: Database, providerId = 'default'): SessionStorage {
+/** Default max session age: 4 hours. Sessions older than this are considered stale and cleared. */
+const DEFAULT_MAX_SESSION_AGE_MS = 4 * 60 * 60 * 1000;
+
+export function createSessionStorage(
+  db: Database,
+  providerId = 'default',
+  maxSessionAgeMs = DEFAULT_MAX_SESSION_AGE_MS,
+): SessionStorage {
   return {
     async getSession(instanceId: string, sessionKey: string) {
       const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
@@ -27,9 +34,19 @@ export function createSessionStorage(db: Database, providerId = 'default'): Sess
 
       if (!session) return null;
 
-      // Check if expired
-      if (session.expiresAt && session.expiresAt < new Date()) {
-        // Delete expired session
+      const now = new Date();
+
+      // Check hard expiry
+      if (session.expiresAt && session.expiresAt < now) {
+        await db
+          .delete(agentSessions)
+          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
+        return null;
+      }
+
+      // Check max age — sessions older than the threshold are likely zombie/stale.
+      // Resuming a killed or terminal-owned session causes agents to stop mid-reply.
+      if (session.lastUsedAt && now.getTime() - session.lastUsedAt.getTime() > maxSessionAgeMs) {
         await db
           .delete(agentSessions)
           .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
