@@ -1330,22 +1330,40 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Mark messages as read
    *
+   * Respects per-instance read receipt mode when provided.
+   *
    * @param instanceId - Instance ID
    * @param chatId - Chat ID (JID or phone number)
    * @param messageIds - Array of message IDs, or ['all'] to mark entire chat as read
+   * @param messageData - Optional per-message data for group key construction
+   * @param readReceiptMode - Optional read receipt mode ('on' | 'off' | 'exclude-self')
    */
   async markAsRead(
     instanceId: string,
     chatId: string,
     messageIds: string[],
     messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
   ): Promise<void> {
+    // Check read receipt config
+    if (readReceiptMode === 'off') return;
+    if (readReceiptMode === 'exclude-self') {
+      const ownerJid = this.instances.get(instanceId)?.status?.metadata?.ownerIdentifier;
+      if (ownerJid) {
+        const normalize = (jid: string) => (jid.split('@')[0] ?? jid).split(':')[0] ?? jid;
+        const chatBase = normalize(chatId);
+        const ownerBase = normalize(ownerJid);
+        // DM with yourself — skip entirely
+        if (chatBase === ownerBase) return;
+      }
+    }
+
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
     // Handle 'all' marker - marks entire chat as read
     if (messageIds.length === 1 && messageIds[0] === 'all') {
-      await this.markChatAsRead(instanceId, chatId);
+      await this.markChatAsRead(instanceId, chatId, readReceiptMode);
       return;
     }
 
@@ -1387,7 +1405,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       });
     }
 
-    await sock.readMessages(keys);
+    // In exclude-self mode, skip read receipts for self-authored messages
+    const filteredKeys = readReceiptMode === 'exclude-self' ? keys.filter((k) => !k.fromMe) : keys;
+    if (filteredKeys.length === 0) return;
+
+    await sock.readMessages(filteredKeys);
   }
 
   /**
@@ -1397,8 +1419,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    *
    * @param instanceId - Instance ID
    * @param chatId - Chat ID (JID or phone number)
+   * @param readReceiptMode - Optional per-instance receipt mode; skips sending if 'off' or 'exclude-self' for own chat
    */
-  async markChatAsRead(instanceId: string, chatId: string): Promise<void> {
+  async markChatAsRead(
+    instanceId: string,
+    chatId: string,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    // Respect per-instance read receipt mode
+    if (readReceiptMode === 'off') return;
+    if (readReceiptMode === 'exclude-self') {
+      const ownerJid = this.instances.get(instanceId)?.status?.metadata?.ownerIdentifier;
+      if (ownerJid) {
+        const normalize = (jid: string) => (jid.split('@')[0] ?? jid).split(':')[0] ?? jid;
+        if (normalize(chatId) === normalize(ownerJid)) return;
+      }
+    }
+
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 

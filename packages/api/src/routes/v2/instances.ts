@@ -118,9 +118,25 @@ const createInstanceSchema = z.object({
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
   slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
+  readReceipts: z
+    .enum(['on', 'off', 'exclude-self'])
+    .default('on')
+    .describe('Read receipt mode: on (default), off, or exclude-self (skip receipts for the instance own number)'),
+  groupHistorySize: z
+    .number()
+    .int()
+    .min(0)
+    .max(200)
+    .default(50)
+    .describe(
+      'Number of context messages to include for group chats when dispatching to agent (0 = disabled, max 200)',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
+// NOTE: .partial() on fields with .default() still fires the default for omitted keys,
+// so we must explicitly override fields that have defaults to strip the default value.
+// Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
 const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Nullable fields in DB - can be set to null
   agentProviderId: z.string().uuid().nullable().optional(),
@@ -134,6 +150,11 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
+
+  // Override fields with .default() to strip the default — omitted keys must stay undefined
+  // so PATCH only updates what is explicitly sent (not reset to defaults)
+  readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+  groupHistorySize: z.number().int().min(0).max(200).optional(),
 });
 
 /**

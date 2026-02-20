@@ -395,6 +395,10 @@ const sendMediaSchema = z.object({
   base64: z.string().optional().describe('Base64 encoded media'),
   filename: z.string().optional().describe('Filename for documents'),
   caption: z.string().optional().describe('Caption for media'),
+  mimeType: z
+    .string()
+    .optional()
+    .describe('MIME type of the media (e.g. image/gif enables GIF playback for video type)'),
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
 });
 
@@ -974,6 +978,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       mediaUrl: data.url,
       caption: data.caption,
       filename: data.filename,
+      mimeType: data.mimeType,
     } as OutgoingContent,
     metadata: {
       base64: data.base64,
@@ -1784,6 +1789,9 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   // Pass message data so the plugin can build channel-specific keys (e.g., group participant)
   const messageData = [{ externalId: message.externalId, rawPayload: message.rawPayload ?? null }];
 
+  // Respect per-instance read receipt mode
+  const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
+
   await (
     plugin as {
       markAsRead: (
@@ -1791,9 +1799,10 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
         chatId: string,
         messageIds: string[],
         messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        readReceiptMode?: 'on' | 'off' | 'exclude-self',
       ) => Promise<void>;
     }
-  ).markAsRead(instanceId, chat.externalId, [message.externalId], messageData);
+  ).markAsRead(instanceId, chat.externalId, [message.externalId], messageData, readReceiptMode);
 
   return c.json({
     success: true,
@@ -1863,6 +1872,9 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
     messageData = msgs.map((m) => ({ externalId: m.externalId, rawPayload: m.rawPayload ?? null }));
   }
 
+  // Respect per-instance read receipt mode
+  const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
+
   await (
     plugin as {
       markAsRead: (
@@ -1870,9 +1882,10 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
         chatId: string,
         messageIds: string[],
         messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        readReceiptMode?: 'on' | 'off' | 'exclude-self',
       ) => Promise<void>;
     }
-  ).markAsRead(instanceId, externalChatId, messageIds, messageData);
+  ).markAsRead(instanceId, externalChatId, messageIds, messageData, readReceiptMode);
 
   return c.json({
     success: true,
