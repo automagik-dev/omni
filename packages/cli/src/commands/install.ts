@@ -165,10 +165,10 @@ async function downloadNats(): Promise<boolean> {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const tarCode = await tarProc.exited;
+    const [tarCode, tarStderr] = await Promise.all([tarProc.exited, new Response(tarProc.stderr).text()]);
 
     if (tarCode !== 0) {
-      spinner.fail('Failed to extract NATS archive');
+      spinner.fail(`Failed to extract NATS archive${tarStderr.trim() ? `: ${tarStderr.trim()}` : ''}`);
       return false;
     }
 

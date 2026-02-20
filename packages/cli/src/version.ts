@@ -21,7 +21,13 @@ function readVersionFromArtifact(): string | null {
   return (vj?.version as string) || null;
 }
 
-/** Read the short git hash directly from .git/HEAD (no subprocess needed) */
+/**
+ * Read the short git hash directly from .git/HEAD via filesystem reads.
+ *
+ * Bun-specific: execSync cannot be used here because Bun's ESM loader
+ * deadlocks when a blocking subprocess runs during concurrent static import
+ * resolution (e.g. chalk, commander). Direct filesystem reads avoid this.
+ */
 function readGitHash(repoRoot: string): string | null {
   try {
     const headPath = join(repoRoot, '.git', 'HEAD');

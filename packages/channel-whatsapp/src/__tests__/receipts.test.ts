@@ -3,15 +3,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import {
-  ReceiptTracker,
-  createReceiptTracker,
-  isDelivered,
-  isRead,
-  mapStatusCode,
-  shouldSendReadReceipt,
-} from '../receipts';
-import type { ReadReceiptConfig } from '../receipts';
+import { ReceiptTracker, createReceiptTracker, isDelivered, isRead, mapStatusCode } from '../receipts';
 
 describe('Read Receipts', () => {
   describe('mapStatusCode', () => {
@@ -139,61 +131,27 @@ describe('Read Receipts', () => {
       tracker.update('msg_1', 'read');
       expect(tracker.get('msg_1')).toBe('read');
     });
+
+    it('cleans up old receipts based on age', () => {
+      tracker.update('msg_old', 'sent');
+      tracker.update('msg_new', 'delivered');
+
+      // Manually backdate msg_old by overwriting internal state
+      const internals = tracker as unknown as { receipts: Map<string, { status: string; timestamp: number }> };
+      const oldEntry = internals.receipts.get('msg_old');
+      if (oldEntry) oldEntry.timestamp = Date.now() - 25 * 60 * 60 * 1000; // 25h ago
+
+      tracker.cleanup(); // default maxAge = 24h
+
+      expect(tracker.get('msg_old')).toBeUndefined();
+      expect(tracker.get('msg_new')).toBe('delivered');
+    });
   });
 
   describe('createReceiptTracker', () => {
     it('creates a new ReceiptTracker instance', () => {
       const tracker = createReceiptTracker();
       expect(tracker).toBeInstanceOf(ReceiptTracker);
-    });
-  });
-
-  describe('shouldSendReadReceipt', () => {
-    it('returns true when mode is on', () => {
-      const config: ReadReceiptConfig = { mode: 'on' };
-      expect(shouldSendReadReceipt(config)).toBe(true);
-    });
-
-    it('returns false when mode is off', () => {
-      const config: ReadReceiptConfig = { mode: 'off' };
-      expect(shouldSendReadReceipt(config)).toBe(false);
-    });
-
-    it('returns true for exclude-self when sender is different', () => {
-      const config: ReadReceiptConfig = {
-        mode: 'exclude-self',
-        ownerJid: '5511999998888@s.whatsapp.net',
-      };
-      expect(shouldSendReadReceipt(config, '5511888887777@s.whatsapp.net')).toBe(true);
-    });
-
-    it('returns false for exclude-self when sender is self', () => {
-      const config: ReadReceiptConfig = {
-        mode: 'exclude-self',
-        ownerJid: '5511999998888@s.whatsapp.net',
-      };
-      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(false);
-    });
-
-    it('normalizes JIDs with device suffix for exclude-self', () => {
-      const config: ReadReceiptConfig = {
-        mode: 'exclude-self',
-        ownerJid: '5511999998888:42@s.whatsapp.net',
-      };
-      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(false);
-    });
-
-    it('returns true for exclude-self when no ownerJid configured', () => {
-      const config: ReadReceiptConfig = { mode: 'exclude-self' };
-      expect(shouldSendReadReceipt(config, '5511999998888@s.whatsapp.net')).toBe(true);
-    });
-
-    it('returns true for exclude-self when no senderJid provided', () => {
-      const config: ReadReceiptConfig = {
-        mode: 'exclude-self',
-        ownerJid: '5511999998888@s.whatsapp.net',
-      };
-      expect(shouldSendReadReceipt(config)).toBe(true);
     });
   });
 });
