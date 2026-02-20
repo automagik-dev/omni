@@ -1794,7 +1794,7 @@ async function downloadToTempFile(url: string, mimeType: string): Promise<string
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
-    const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/g, '');
+    const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
     const tmpPath = join(tmpdir(), `omni-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
     await writeFile(tmpPath, buffer);
     return tmpPath;
