@@ -30,7 +30,7 @@ jobs:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
 
   quality-gate:
-    name: Quality Gate (typecheck + lint + dead-code + test)
+    name: Quality Gate (typecheck + lint + test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
