@@ -23,7 +23,7 @@ const qrCodes = new Map<string, StoredQrCode>();
 /**
  * Store a QR code for an instance
  */
-export function storeQrCode(instanceId: string, qrCode: string, expiresAt: Date): void {
+function storeQrCode(instanceId: string, qrCode: string, expiresAt: Date): void {
   qrCodes.set(instanceId, {
     code: qrCode,
     expiresAt,
@@ -57,7 +57,7 @@ export function clearQrCode(instanceId: string): void {
 /**
  * Print QR code to terminal (dev mode only)
  */
-export async function printQrCodeToTerminal(qrCode: string, instanceId: string): Promise<void> {
+async function printQrCodeToTerminal(qrCode: string, instanceId: string): Promise<void> {
   if (process.env.NODE_ENV === 'production') return;
 
   try {

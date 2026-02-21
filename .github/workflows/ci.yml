@@ -96,6 +96,9 @@ jobs:
       - name: Lint
         run: bunx biome check .
 
+      - name: Dead code check (knip)
+        run: bunx knip
+
       - name: Test
         run: bun test --env-file=.env
         env:

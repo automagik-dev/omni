@@ -387,17 +387,6 @@ export function truncate(text: string, maxLength: number, ellipsis = '...'): str
 }
 
 /**
- * Count how many chunks a message will be split into
- *
- * @param text - Text to check
- * @param maxLength - Maximum length per chunk
- * @returns Number of chunks
- */
-export function countChunks(text: string, maxLength = MAX_MESSAGE_LENGTH): number {
-  return chunkMessage(text, maxLength).length;
-}
-
-/**
  * Check if a message needs to be chunked
  *
  * @param text - Text to check

@@ -43,7 +43,7 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
-// import { gzipMiddleware } from './middleware/compression'; // Disabled - see note below
+
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';

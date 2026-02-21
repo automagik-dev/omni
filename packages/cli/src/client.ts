@@ -69,10 +69,3 @@ export function getOptionalClient(): OmniClient | null {
 
   return cachedClient;
 }
-
-/**
- * Clear cached client (for testing or re-auth).
- */
-export function clearClientCache(): void {
-  cachedClient = null;
-}

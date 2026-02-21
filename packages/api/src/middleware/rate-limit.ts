@@ -33,7 +33,7 @@ setInterval(() => {
 /**
  * Default rate limits by endpoint category
  */
-export const RATE_LIMITS = {
+const RATE_LIMITS = {
   messages: { windowMs: 60 * 1000, maxRequests: 60 }, // 60 per minute
   events: { windowMs: 60 * 1000, maxRequests: 100 }, // 100 per minute
   instances: { windowMs: 60 * 1000, maxRequests: 30 }, // 30 per minute
@@ -43,7 +43,7 @@ export const RATE_LIMITS = {
 /**
  * Create rate limiting middleware
  */
-export function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
+function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Use API key ID as identifier, fall back to IP
     const apiKey = c.get('apiKey');

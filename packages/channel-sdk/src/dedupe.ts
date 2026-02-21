@@ -32,11 +32,6 @@ export interface DedupeStats {
   cacheSize: number;
 }
 
-export interface DedupeCacheEntry {
-  firstSeenAt: string;
-  duplicateCount: number;
-}
-
 export interface DedupeCache {
   /**
    * Check if a message is a duplicate.

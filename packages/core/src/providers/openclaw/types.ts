@@ -30,8 +30,6 @@ export interface EventFrame {
   stateVersion?: number;
 }
 
-export type Frame = ReqFrame | ResFrame | EventFrame;
-
 // === Chat Types ===
 
 export type ChatEventState = 'delta' | 'final' | 'error' | 'aborted';

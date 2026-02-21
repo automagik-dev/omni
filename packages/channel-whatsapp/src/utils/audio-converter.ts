@@ -25,7 +25,7 @@ interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
 /**
  * Check if ffmpeg is available on the system
  */
-export async function isFFmpegAvailable(): Promise<boolean> {
+async function isFFmpegAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
     const proc = spawn('ffmpeg', ['-version']) as ChildProcessWithEvents;
     proc.on('error', () => resolve(false));
@@ -83,7 +83,7 @@ function detectFromUrl(url: string): string | null {
 /**
  * Get the audio format from MIME type or URL
  */
-export function getAudioFormat(mimeType?: string, url?: string): string | null {
+function getAudioFormat(mimeType?: string, url?: string): string | null {
   if (mimeType) {
     const format = detectFromMime(mimeType);
     if (format) return format;
@@ -97,7 +97,7 @@ export function getAudioFormat(mimeType?: string, url?: string): string | null {
 /**
  * Check if audio needs conversion for WhatsApp voice notes
  */
-export function needsConversion(mimeType?: string, url?: string): boolean {
+function needsConversion(mimeType?: string, url?: string): boolean {
   const format = getAudioFormat(mimeType, url);
   // OGG/OPUS doesn't need conversion
   return format !== 'ogg';
@@ -285,41 +285,4 @@ export async function convertBufferForVoiceNote(
       await fs.unlink(outputPath).catch(() => {});
     }
   }
-}
-
-/**
- * Get audio duration using ffprobe (optional, for waveform generation)
- */
-export async function getAudioDuration(filePath: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    const ffprobe = spawn('ffprobe', [
-      '-i',
-      filePath,
-      '-show_entries',
-      'format=duration',
-      '-v',
-      'quiet',
-      '-of',
-      'csv=p=0',
-    ]) as ChildProcessWithEvents;
-
-    let stdout = '';
-
-    ffprobe.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString();
-    });
-
-    ffprobe.on('close', (code: number | null) => {
-      if (code === 0 && stdout.trim()) {
-        const duration = Number.parseFloat(stdout.trim());
-        resolve(Number.isNaN(duration) ? null : duration);
-      } else {
-        resolve(null);
-      }
-    });
-
-    ffprobe.on('error', () => {
-      resolve(null);
-    });
-  });
 }

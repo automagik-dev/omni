@@ -62,12 +62,8 @@ export * from './history';
 export * from './base';
 
 // ─────────────────────────────────────────────────────────────
-// Helpers
+// Helpers (internal — not re-exported; consumed by BaseChannelPlugin only)
 // ─────────────────────────────────────────────────────────────
-
-export * from './helpers/events';
-export * from './helpers/typing';
-export * from './helpers/message';
 
 // ─────────────────────────────────────────────────────────────
 // Reaction Acknowledgment
@@ -93,9 +89,6 @@ export type { SanitizeOptions, SanitizeResult } from './sanitize';
 
 export { createDownloadGuard, DownloadTooLargeError } from './download-guard';
 export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from './download-guard';
-
-export { createDebounceBridge } from './debounce-bridge';
-export type { DebounceBridge, DebounceBridgeConfig, DebounceBridgeMessage, BatchCallback } from './debounce-bridge';
 
 // Explicit streaming type export for package root access
 export type { StreamSender } from './types/streaming';

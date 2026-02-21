@@ -939,14 +939,3 @@ export function setupMessageHandlers(
     }
   });
 }
-
-/**
- * Build message key from identifiers
- */
-export function buildMessageKey(chatId: string, messageId: string, fromMe: boolean): WAMessageKey {
-  return {
-    remoteJid: chatId,
-    id: messageId,
-    fromMe,
-  };
-}

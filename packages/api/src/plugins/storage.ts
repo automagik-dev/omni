@@ -18,7 +18,7 @@ const log = createLogger('api:storage');
  *
  * Uses PostgreSQL for persistence across API restarts.
  */
-export class DatabasePluginStorage implements PluginStorage {
+class DatabasePluginStorage implements PluginStorage {
   private readonly prefix: string;
 
   constructor(
@@ -166,7 +166,7 @@ export class DatabasePluginStorage implements PluginStorage {
 /**
  * In-memory storage fallback (for testing or when DB is unavailable)
  */
-export class InMemoryPluginStorage implements PluginStorage {
+class InMemoryPluginStorage implements PluginStorage {
   private data = new Map<string, { value: unknown; expiresAt?: number }>();
   private readonly prefix: string;
 

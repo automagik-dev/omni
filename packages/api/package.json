@@ -24,11 +24,8 @@
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
-    "@hono/trpc-server": "^0.3.2",
-    "@hono/zod-openapi": "^0.18.3",
     "@hono/zod-validator": "^0.4.3",
     "@omni/channel-sdk": "workspace:*",
-    "@omni/channel-whatsapp": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
