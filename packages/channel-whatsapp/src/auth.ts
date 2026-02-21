@@ -248,7 +248,7 @@ export async function createStorageAuthState(
 
             // Cache miss — read from storage
             const value = await storage.get<unknown>(key);
-            if (value) {
+            if (value !== null && value !== undefined) {
               const parsed = parseStorageValue(value);
               setCachedValue(key, parsed);
               data[id] = deserializeSignalData(type, parsed);
@@ -331,7 +331,9 @@ export async function clearAuthState(storage: PluginStorage, instanceId: string)
 
   // Delete all keys matching the prefix
   const keys = await storage.keys(`${keyPrefix}:*`);
-  for (const key of keys) {
-    await storage.delete(key);
+  const batchSize = 50;
+  for (let i = 0; i < keys.length; i += batchSize) {
+    const batch = keys.slice(i, i + batchSize);
+    await Promise.all(batch.map((key) => storage.delete(key)));
   }
 }

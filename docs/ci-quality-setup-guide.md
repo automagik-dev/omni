@@ -462,9 +462,9 @@ Key config decisions:
 ### Running
 
 ```bash
-bunx knip              # Full report
-bunx knip --fix        # Auto-remove unused exports (use carefully)
-make dead-code         # Same as bunx knip (Makefile target)
+bunx knip@5.85.0       # Full report
+bunx knip@5.85.0 --fix # Auto-remove unused exports (use carefully)
+make dead-code         # Same as bunx knip@5.85.0 (Makefile target)
 ```
 
 ### Pipeline Placement
@@ -495,7 +495,7 @@ Triggers on push to `main`/`dev` and all PRs targeting them.
 | Job | What | Timeout |
 |-----|------|---------|
 | `secrets-scan` | GitGuardian scans for leaked secrets | 5m |
-| `quality-gate` | Build → Typecheck → Lint → Test | 15m |
+| `quality-gate` | Build → Typecheck → Lint → Dead-code → Test | 15m |
 | `smoke-test` | Full boot: start API, hit `/health`, verify | 15m |
 
 **Quality Gate steps:**
@@ -509,7 +509,7 @@ Triggers on push to `main`/`dev` and all PRs targeting them.
 8. Verify build outputs exist (`packages/sdk/dist`, `packages/cli/dist`)
 9. `bun run typecheck` (turbo, all packages)
 10. `bunx biome check .` (lint, all files)
-11. `bunx knip` (dead code — unused exports, dead files, unused deps)
+11. `bunx knip@5.85.0` (dead code — unused exports, dead files, unused deps)
 12. `bun test --env-file=.env` (all tests)
 
 **Smoke Test steps:**

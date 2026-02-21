@@ -240,12 +240,18 @@ class InMemoryPluginStorage implements PluginStorage {
  * Storage factory - creates appropriate storage based on available resources
  */
 let globalDb: Database | null = null;
+const storageInstances = new Map<string, PluginStorage>();
 
 export function setStorageDatabase(db: Database): void {
   globalDb = db;
-}
 
-const storageInstances = new Map<string, PluginStorage>();
+  // Upgrade previously-created in-memory stores once DB becomes available.
+  for (const [pluginId, storage] of storageInstances.entries()) {
+    if (storage instanceof InMemoryPluginStorage) {
+      storageInstances.set(pluginId, new DatabasePluginStorage(db, pluginId));
+    }
+  }
+}
 
 /**
  * Get or create storage for a plugin

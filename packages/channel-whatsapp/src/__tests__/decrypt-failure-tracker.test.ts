@@ -40,6 +40,13 @@ describe('DecryptFailureTracker', () => {
     expect(tracker.shouldIgnore('good@lid')).toBe(false);
   });
 
+  it('normalizes JID device suffix for consistent tracking', () => {
+    tracker.recordFailure('sender@lid');
+    tracker.recordFailure('sender:5@lid');
+    tracker.recordFailure('sender:99@lid');
+    expect(tracker.shouldIgnore('sender:0@lid')).toBe(true);
+  });
+
   it('unblocks after blockDurationMs expires', async () => {
     // Use a very short block duration for testing
     const fastTracker = new DecryptFailureTracker({

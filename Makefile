@@ -243,7 +243,7 @@ test-file:
 	bun test $(F)
 
 dead-code:
-	bunx knip
+	bunx knip@5.85.0
 
 # Run all quality checks
 check: typecheck lint dead-code test

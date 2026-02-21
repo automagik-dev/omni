@@ -12,7 +12,13 @@
 
 import { describe, expect, it } from 'bun:test';
 import type { PluginStorage } from '@omni/channel-sdk';
-import { createStorageAuthState } from '../auth';
+import { clearSenderKeys, createStorageAuthState } from '../auth';
+
+function patternToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const wildcardPattern = escaped.replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${wildcardPattern}$`);
+}
 
 /**
  * Create a mock PluginStorage where set() hangs forever (simulating the #70 bug)
@@ -50,8 +56,11 @@ function createHangingStorage(): PluginStorage & { getCalls: string[]; setCalls:
     async has(key: string): Promise<boolean> {
       return data.has(key);
     },
-    async keys(): Promise<string[]> {
-      return Array.from(data.keys());
+    async keys(pattern?: string): Promise<string[]> {
+      const keys = Array.from(data.keys());
+      if (!pattern) return keys;
+      const regex = patternToRegex(pattern);
+      return keys.filter((key) => regex.test(key));
     },
   };
 }
@@ -88,8 +97,11 @@ function createFastStorage(): PluginStorage & {
     async has(key: string): Promise<boolean> {
       return data.has(key);
     },
-    async keys(): Promise<string[]> {
-      return Array.from(data.keys());
+    async keys(pattern?: string): Promise<string[]> {
+      const keys = Array.from(data.keys());
+      if (!pattern) return keys;
+      const regex = patternToRegex(pattern);
+      return keys.filter((key) => regex.test(key));
     },
   };
 }
@@ -252,8 +264,11 @@ describe('Auth key store write-behind cache (#70)', () => {
         async has(key: string): Promise<boolean> {
           return persisted.has(key);
         },
-        async keys(): Promise<string[]> {
-          return Array.from(persisted.keys());
+        async keys(pattern?: string): Promise<string[]> {
+          const keys = Array.from(persisted.keys());
+          if (!pattern) return keys;
+          const regex = patternToRegex(pattern);
+          return keys.filter((key) => regex.test(key));
         },
       };
 
@@ -274,6 +289,31 @@ describe('Auth key store write-behind cache (#70)', () => {
       expect(storedRaw).toBeTruthy();
       const stored = JSON.parse(storedRaw ?? '{}') as { value?: string };
       expect(stored.value).toBe('second');
+    });
+  });
+
+  describe('clearSenderKeys', () => {
+    it('removes only sender-key entries for the target instance', async () => {
+      const storage = createFastStorage();
+      const otherInstanceId = 'other-instance';
+
+      const senderKeyA = `auth:${instanceId}:keys:sender-key:group-a@g.us::participant-a::0`;
+      const senderKeyB = `auth:${instanceId}:keys:sender-key:group-b@g.us::participant-b::0`;
+      const nonSenderKey = `auth:${instanceId}:keys:session:peer-1`;
+      const otherInstanceSenderKey = `auth:${otherInstanceId}:keys:sender-key:group-c@g.us::participant-c::0`;
+
+      storage.data.set(senderKeyA, JSON.stringify({ key: 'a' }));
+      storage.data.set(senderKeyB, JSON.stringify({ key: 'b' }));
+      storage.data.set(nonSenderKey, JSON.stringify({ session: 'keep' }));
+      storage.data.set(otherInstanceSenderKey, JSON.stringify({ key: 'keep' }));
+
+      const deleted = await clearSenderKeys(storage, instanceId);
+
+      expect(deleted).toBe(2);
+      expect(storage.data.has(senderKeyA)).toBe(false);
+      expect(storage.data.has(senderKeyB)).toBe(false);
+      expect(storage.data.has(nonSenderKey)).toBe(true);
+      expect(storage.data.has(otherInstanceSenderKey)).toBe(true);
     });
   });
 });

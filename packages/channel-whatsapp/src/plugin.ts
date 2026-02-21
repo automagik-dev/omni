@@ -2334,14 +2334,28 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       if (allParticipantJids.size === 0) return;
 
       const jids = [...allParticipantJids];
+      const configuredDeviceBatchSize = Number.parseInt(process.env.WHATSAPP_PREWARM_DEVICE_BATCH_SIZE ?? '500', 10);
+      const deviceBatchSize =
+        Number.isFinite(configuredDeviceBatchSize) && configuredDeviceBatchSize > 0 ? configuredDeviceBatchSize : 500;
+      const configuredSessionBatchSize = Number.parseInt(process.env.WHATSAPP_PREWARM_SESSION_BATCH_SIZE ?? '500', 10);
+      const sessionBatchSize =
+        Number.isFinite(configuredSessionBatchSize) && configuredSessionBatchSize > 0
+          ? configuredSessionBatchSize
+          : 500;
 
-      // 1. Pre-warm device cache for all participants at once
-      const devices = await sock.getUSyncDevices(jids, true, false);
+      // 1. Pre-warm device cache in bounded batches to avoid large single requests.
+      const devices: Awaited<ReturnType<WASocket['getUSyncDevices']>> = [];
+      for (let i = 0; i < jids.length; i += deviceBatchSize) {
+        const batch = jids.slice(i, i + deviceBatchSize);
+        const batchDevices = await sock.getUSyncDevices(batch, true, false);
+        devices.push(...batchDevices);
+      }
 
-      // 2. Pre-warm session cache for all device JIDs
-      const deviceJids = devices.map((d) => d.jid).filter(Boolean);
-      if (deviceJids.length) {
-        await sock.assertSessions(deviceJids, false);
+      // 2. Pre-warm session cache for all device JIDs (also in batches).
+      const deviceJids = devices.map((d) => d.jid).filter((jid): jid is string => Boolean(jid));
+      for (let i = 0; i < deviceJids.length; i += sessionBatchSize) {
+        const batch = deviceJids.slice(i, i + sessionBatchSize);
+        await sock.assertSessions(batch, false);
       }
 
       this.logger.info('Pre-warmed device/session caches for all groups', {

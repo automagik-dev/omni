@@ -21,7 +21,7 @@ interface RateLimitEntry {
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
 // Cleanup old entries periodically
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitStore.entries()) {
     if (entry.resetAt < now) {
@@ -29,6 +29,7 @@ setInterval(() => {
     }
   }
 }, 60 * 1000); // Every minute
+cleanupTimer.unref();
 
 /**
  * Default rate limits by endpoint category
@@ -48,8 +49,8 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
     const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
     const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
     const remoteAddr = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
-    const rawIp = remoteAddr ?? trustedProxyIp;
-    const normalizedIp = rawIp?.split(',')[0]?.trim() || rawIp?.trim();
+    const rawIp = trustedProxyIp ?? remoteAddr;
+    const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
     const key = `ratelimit:${identifier}`;
