@@ -1,5 +1,19 @@
 {
   "enabledPlugins": {
     "typescript-lsp@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/git-safety.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }

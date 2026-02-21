@@ -20,20 +20,6 @@ const log = createLogger('services:media-storage');
 const DEFAULT_MEDIA_PATH = './data/media';
 
 /**
- * Media metadata from message
- */
-export interface MediaMetadata {
-  mimeType?: string;
-  size?: number;
-  width?: number;
-  height?: number;
-  duration?: number;
-  waveform?: number[];
-  isVoiceNote?: boolean;
-  filename?: string;
-}
-
-/**
  * Stored media result
  */
 export interface StoredMediaResult {

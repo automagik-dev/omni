@@ -84,15 +84,6 @@ export const apiKeyCache = new MemoryCache({
 });
 
 /**
- * Response cache for read-only, rarely-changing endpoints.
- */
-export const responseCache = new MemoryCache({
-  defaultTtlMs: CacheTTL.INFO,
-  maxSize: 1_000,
-  cleanupIntervalMs: 60_000,
-});
-
-/**
  * Access check cache - caches allow/deny decisions per user per instance.
  */
 export const accessCache = new MemoryCache({

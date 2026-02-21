@@ -5,13 +5,8 @@
  * Handles socket configuration, lifecycle, and common operations.
  */
 
-import type { AuthenticationState, WASocket } from '@whiskeysockets/baileys';
-import {
-  Browsers,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  default as makeWASocket,
-} from '@whiskeysockets/baileys';
+import type { AuthenticationState, GroupMetadata, WASocket } from '@whiskeysockets/baileys';
+import { Browsers, fetchLatestBaileysVersion, default as makeWASocket } from '@whiskeysockets/baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';
 
@@ -32,7 +27,7 @@ export interface SocketConfig {
   browser?: [string, string, string];
   /** Mobile flag for web multi-device (default: false) */
   mobile?: boolean;
-  /** Connection timeout in ms (default: 60000) */
+  /** Connection timeout in ms (default: 20000) */
   connectTimeoutMs?: number;
   /** Default query timeout in ms (default: 60000) */
   defaultQueryTimeoutMs?: number;
@@ -46,17 +41,37 @@ export interface SocketConfig {
   generateHighQualityLinkPreview?: boolean;
   /** Mark messages as online when sending read receipts (default: true) */
   markOnlineOnConnect?: boolean;
+
+  // === Performance Options ===
+  /**
+   * Cached group metadata callback — prevents Baileys from fetching group
+   * metadata during the encryption transaction (keys.transaction), which
+   * holds ev.buffer() open. Without this, a network round-trip inside the
+   * buffer can exceed the 30s auto-flush timeout and corrupt socket state.
+   */
+  cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+
+  /**
+   * Callback to dynamically ignore JIDs with broken sessions (#70).
+   * When true, Baileys ACKs the message but skips decrypt entirely —
+   * no transaction, no mutex contention.
+   * Note: for groups, jid = group JID (not participant), so this only
+   * helps with broken DM sessions, not broken group participants.
+   */
+  shouldIgnoreJid?: (jid: string) => boolean;
 }
 
 /**
  * Default socket configuration values
  */
-export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
+export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid'> = {
   logLevel: 'warn',
   browser: Browsers.ubuntu('Chrome'),
   mobile: false,
-  connectTimeoutMs: 60_000,
-  defaultQueryTimeoutMs: 15_000,
+  connectTimeoutMs: 20_000,
+  // Baileys default (60s). Previously reduced to 15s to cap mutex hold time (#70),
+  // but the write-behind cache now eliminates DB blocking inside the mutex entirely.
+  defaultQueryTimeoutMs: 60_000,
   keepAliveIntervalMs: 25_000,
   syncFullHistory: false,
   generateHighQualityLinkPreview: true,
@@ -66,19 +81,42 @@ export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth'> = {
 /**
  * Create a Pino logger for Baileys with newsletter noise filtered out
  */
+/** Baileys log messages to suppress (noisy, non-actionable) */
+const SUPPRESSED_LOG_PATTERNS = [
+  'mex newsletter notification', // raw byte array dumps (Baileys bug in rc.9)
+  'Fetching history for chat', // debug spam during sync
+  'loading from store', // high-volume debug noise
+  'updated cache',
+  'caching in transaction',
+  'no mutations in transaction',
+  'released buffered events',
+];
+
+function isAckError479Log(msg: string, inputArgs: unknown[]): boolean {
+  if (!msg.includes('received error in ack')) return false;
+
+  for (const arg of inputArgs) {
+    if (!arg || typeof arg !== 'object' || !('attrs' in arg)) continue;
+    const attrs = (arg as { attrs?: { error?: unknown } }).attrs;
+    if (!attrs) continue;
+    if (attrs.error === 479 || attrs.error === '479') return true;
+  }
+
+  return false;
+}
+
 function createLogger(level: string) {
   return pino({
     level,
     hooks: {
       logMethod(inputArgs, method) {
-        // Suppress noisy "Invalid mex newsletter notification" warnings
-        // that dump massive raw byte arrays into logs (Baileys bug in rc.9)
         const msg = inputArgs.find((a): a is string => typeof a === 'string');
-        if (msg?.includes('mex newsletter notification')) return;
-        // Suppress "received error in ack" warnings (error 479 = offline recipient, normal)
-        if (msg?.includes('received error in ack')) return;
-        // Suppress "Fetching history for chat" debug spam during sync
-        if (msg?.includes('Fetching history for chat')) return;
+        if (!msg) {
+          method.apply(this, inputArgs as Parameters<typeof method>);
+          return;
+        }
+        if (isAckError479Log(msg, inputArgs)) return;
+        if (SUPPRESSED_LOG_PATTERNS.some((p) => msg.includes(p))) return;
         method.apply(this, inputArgs as Parameters<typeof method>);
       },
     },
@@ -102,17 +140,25 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
   // Create message retry counter cache
   const msgRetryCounterCache = new NodeCache();
 
-  // Wrap keys with caching layer
-  const wrappedKeys = makeCacheableSignalKeyStore(config.auth.keys, logger);
+  // #70: Skip makeCacheableSignalKeyStore — its single cacheMutex serializes ALL
+  // key operations through one async-mutex lock. With PostgreSQL-backed storage
+  // (vs Ravi's file-based), each operation holds the mutex for a network RTT,
+  // causing the transaction commit after group sends to wait indefinitely.
+  // Baileys' addTransactionCapability (applied in socket.js:260) already provides
+  // per-key mutexes and transaction-level caching, so the extra global mutex is
+  // unnecessary and actively harmful with network-backed stores.
 
   return makeWASocket({
     version,
     logger,
     auth: {
       creds: config.auth.creds,
-      keys: wrappedKeys,
+      keys: config.auth.keys,
     },
     msgRetryCounterCache,
+    // Cached group metadata prevents Baileys from fetching group participants
+    // during the encryption transaction — avoids 30s buffer timeout. See #70.
+    ...(config.cachedGroupMetadata ? { cachedGroupMetadata: config.cachedGroupMetadata } : {}),
     // All options below are configurable per-instance
     // Note: printQRInTerminal is deprecated in Baileys v7 - we handle QR via connection.update event
     mobile: mergedConfig.mobile,
@@ -123,6 +169,8 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     defaultQueryTimeoutMs: mergedConfig.defaultQueryTimeoutMs,
     keepAliveIntervalMs: mergedConfig.keepAliveIntervalMs,
     markOnlineOnConnect: mergedConfig.markOnlineOnConnect,
+    // Dynamic JID ignore for broken sessions (#70):
+    ...(config.shouldIgnoreJid ? { shouldIgnoreJid: config.shouldIgnoreJid } : {}),
   });
 }
 

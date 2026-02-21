@@ -1,0 +1,65 @@
+{
+  "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/test-messaging.ts"],
+      "project": ["scripts/**/*.ts"],
+      "ignore": [
+        "scripts/backfill-*.ts",
+        "scripts/check-*.ts",
+        "scripts/fix-*.ts",
+        "scripts/find-*.ts",
+        "scripts/compare-*.ts",
+        "scripts/verify-*.ts",
+        "scripts/redownload-*.ts",
+        "scripts/test-pgboss.ts",
+        "scripts/perf/**"
+      ],
+      "ignoreDependencies": ["@openapitools/openapi-generator-cli"]
+    },
+    "packages/api": {
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/plugins/agent-responder.ts"],
+      "ignoreDependencies": ["nats"]
+    },
+    "packages/core": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/channel-sdk": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/channel-discord": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/channel-slack": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/channel-telegram": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/channel-whatsapp": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/cli": {
+      "entry": ["src/commands/*.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/db": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/media-processing": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/plugin-openclaw": {
+      "project": ["src/**/*.ts"]
+    },
+    "apps/ui": {
+      "entry": ["src/pages/*.tsx", "src/components/ui/*.tsx", "src/hooks/*.ts", "src/lib/*.ts", "src/types/*.ts"],
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignoreDependencies": ["tailwindcss"]
+    }
+  },
+  "ignoreWorkspaces": ["packages/sdk", "packages/sdk-go", "packages/sdk-python", "packages/audio-decode-shim"],
+  "exclude": ["classMembers", "unresolved", "duplicates", "enumMembers"],
+  "ignoreExportsUsedInFile": true
+}

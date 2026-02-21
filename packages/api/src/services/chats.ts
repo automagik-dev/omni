@@ -28,15 +28,6 @@ export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
 }
 
-export interface ChatSummary extends Chat {
-  participantCount: number;
-  lastMessage?: {
-    textContent: string | null;
-    senderDisplayName: string | null;
-    platformTimestamp: Date;
-  };
-}
-
 export interface ListChatsOptions {
   instanceId?: string;
   channel?: ChannelType[];

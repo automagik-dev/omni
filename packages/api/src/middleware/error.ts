@@ -345,9 +345,3 @@ export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c
 
   return routeError(c, error);
 };
-
-/**
- * Legacy middleware export for backwards compatibility
- * @deprecated Use errorHandler with app.onError() instead
- */
-export const errorMiddleware = errorHandler;

@@ -1,6 +1,6 @@
 {
   "name": "@omni/media-processing",
-  "version": "2.20260220.6",
+  "version": "2.20260221.1",
   "type": "module",
   "exports": {
     ".": {
@@ -27,7 +27,6 @@
   },
   "dependencies": {
     "@omni/core": "workspace:*",
-    "@omni/db": "workspace:*",
     "groq-sdk": "^0.15.0",
     "openai": "^4.77.0",
     "@google/generative-ai": "^0.21.0",

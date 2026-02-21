@@ -81,11 +81,3 @@ export interface PaginatedResponse<T> {
     total?: number;
   };
 }
-
-/**
- * Success response
- */
-export interface SuccessResponse<T = void> {
-  success: true;
-  data?: T;
-}

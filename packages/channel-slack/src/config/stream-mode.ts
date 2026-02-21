@@ -7,16 +7,16 @@
  * - off: No streaming, wait for complete response
  */
 
-import type { StreamMode } from '../types';
+import { STREAM_MODES, type StreamMode } from '../types';
 
-export const DEFAULT_STREAM_MODE: StreamMode = 'replace';
-export const DEFAULT_STREAM_THROTTLE_MS = 1000;
+const DEFAULT_STREAM_MODE: StreamMode = 'replace';
+const DEFAULT_STREAM_THROTTLE_MS = 1000;
 
 /**
  * Validate a stream mode value
  */
-export function isValidStreamMode(mode: string): mode is StreamMode {
-  return mode === 'replace' || mode === 'status_final' || mode === 'off';
+function isValidStreamMode(mode: string): mode is StreamMode {
+  return (STREAM_MODES as readonly string[]).includes(mode);
 }
 
 /**

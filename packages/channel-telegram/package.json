@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-telegram",
-  "version": "2.20260220.6",
+  "version": "2.20260221.1",
   "description": "Telegram channel plugin for Omni v2 using grammy",
   "type": "module",
   "main": "src/index.ts",
@@ -16,8 +16,7 @@
   "dependencies": {
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
-    "grammy": "^1.35.0",
-    "pino": "^9.6.0"
+    "grammy": "^1.35.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

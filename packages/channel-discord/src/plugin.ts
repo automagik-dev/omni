@@ -155,7 +155,7 @@ async function sendTextContent(client: Client, channelId: string, message: Outgo
 }
 
 /** Sentinel returned by sendMediaContent when dedup suppresses the send. */
-export const DEDUP_SKIPPED = '__dedup_skipped__';
+const DEDUP_SKIPPED = '__dedup_skipped__';
 
 /**
  * Send media content (image, audio, video, document)

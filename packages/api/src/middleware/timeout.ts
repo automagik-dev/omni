@@ -60,13 +60,3 @@ export function timeoutMiddleware(config: TimeoutConfig = {}) {
  * Pre-configured 30-second timeout middleware
  */
 export const defaultTimeoutMiddleware = timeoutMiddleware();
-
-/**
- * Pre-configured 60-second timeout for long operations
- */
-export const longTimeoutMiddleware = timeoutMiddleware({ timeoutMs: 60_000 });
-
-/**
- * Pre-configured 5-second timeout for quick operations
- */
-export const shortTimeoutMiddleware = timeoutMiddleware({ timeoutMs: 5_000 });

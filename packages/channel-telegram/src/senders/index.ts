@@ -7,4 +7,3 @@ export { sendPhoto, sendAudio, sendVideo, sendDocument, sendSticker, sendContact
 export { sendInlineButtons } from './buttons';
 export { sendPoll } from './poll';
 export { setReaction, removeReaction } from './reaction';
-export { TelegramStreamSender } from './stream';

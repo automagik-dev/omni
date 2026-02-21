@@ -22,7 +22,7 @@ export default plugin;
 // Named exports for flexibility
 export { WhatsAppPlugin } from './plugin';
 export { WHATSAPP_CAPABILITIES } from './capabilities';
-export { createStorageAuthState, clearAuthState } from './auth';
+export { createStorageAuthState, clearAuthState, clearSenderKeys } from './auth';
 export { toJid, toGroupJid, fromJid, isGroupJid, isUserJid, extractPhone, normalizeJid } from './jid';
 export { WhatsAppError, ErrorCode, mapBaileysError, isRetryable } from './utils/errors';
 

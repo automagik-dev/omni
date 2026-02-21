@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
-  TypingManager,
   audioMessage,
   documentMessage,
   getTextContent,
@@ -16,7 +15,8 @@ import {
   textMessage,
   truncateText,
   videoMessage,
-} from '../src';
+} from '../src/helpers/message';
+import { TypingManager } from '../src/helpers/typing';
 
 describe('Message helpers', () => {
   it('should create text messages', () => {

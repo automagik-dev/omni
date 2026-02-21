@@ -1,5 +1,5 @@
 /**
- * Regression tests for socket defaults that prevent mutex starvation.
+ * Regression tests for socket defaults.
  * See: #70
  */
 
@@ -11,7 +11,7 @@ describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
     expect(DEFAULT_SOCKET_CONFIG.syncFullHistory).toBe(false);
   });
 
-  it('defaultQueryTimeoutMs is 15s (limits mutex hold time)', () => {
-    expect(DEFAULT_SOCKET_CONFIG.defaultQueryTimeoutMs).toBe(15_000);
+  it('defaultQueryTimeoutMs uses Baileys default (60s)', () => {
+    expect(DEFAULT_SOCKET_CONFIG.defaultQueryTimeoutMs).toBe(60_000);
   });
 });

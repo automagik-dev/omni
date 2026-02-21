@@ -87,35 +87,6 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   },
 };
 
-/** Default visible categories (core + standard) */
-const DEFAULT_VISIBLE_CATEGORIES: CommandCategory[] = ['core', 'standard'];
-
-/** Get which command categories should be visible */
-export function getVisibleCategories(): CommandCategory[] | 'all' {
-  // Environment variable override
-  const envShow = process.env.OMNI_SHOW_COMMANDS;
-  if (envShow) {
-    if (envShow === 'all') return 'all';
-    return envShow.split(',').map((c) => c.trim()) as CommandCategory[];
-  }
-
-  // Config file
-  const config = loadConfig();
-  if (config.showCommands) {
-    if (config.showCommands === 'all') return 'all';
-    return config.showCommands.split(',').map((c) => c.trim()) as CommandCategory[];
-  }
-
-  return DEFAULT_VISIBLE_CATEGORIES;
-}
-
-/** Check if a category should be visible */
-export function isCategoryVisible(category: CommandCategory): boolean {
-  const visible = getVisibleCategories();
-  if (visible === 'all') return true;
-  return visible.includes(category);
-}
-
 /** Get config directory path */
 export function getConfigDir(): string {
   return join(homedir(), '.omni');

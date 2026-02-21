@@ -14,7 +14,7 @@ const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 /**
  * Body limit middleware configuration
  */
-export interface BodyLimitConfig {
+interface BodyLimitConfig {
   /** Maximum body size in bytes. Default: 10MB */
   maxSize?: number;
   /** Custom error message */
@@ -27,7 +27,7 @@ export interface BodyLimitConfig {
  * Rejects requests with bodies larger than the configured limit
  * with a 413 Payload Too Large response.
  */
-export function bodyLimitMiddleware(config: BodyLimitConfig = {}) {
+function bodyLimitMiddleware(config: BodyLimitConfig = {}) {
   const { maxSize = DEFAULT_MAX_SIZE, message = 'Payload too large' } = config;
 
   return bodyLimit({
@@ -51,13 +51,3 @@ export function bodyLimitMiddleware(config: BodyLimitConfig = {}) {
  * Pre-configured 10MB body limit middleware
  */
 export const defaultBodyLimitMiddleware = bodyLimitMiddleware();
-
-/**
- * Pre-configured 1MB body limit for smaller payloads
- */
-export const smallBodyLimitMiddleware = bodyLimitMiddleware({ maxSize: 1024 * 1024 });
-
-/**
- * Pre-configured 50MB body limit for file uploads
- */
-export const largeBodyLimitMiddleware = bodyLimitMiddleware({ maxSize: 50 * 1024 * 1024 });

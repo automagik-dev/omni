@@ -17,6 +17,7 @@ import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
 import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
+import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 import { getMediaSize } from './media';
 
@@ -832,10 +833,41 @@ async function processStatusUpdate(
   }
 }
 
+/** proto.WebMessageInfo.StubType.CIPHERTEXT — stable in the WhatsApp protobuf spec */
+const STUB_TYPE_CIPHERTEXT = 2;
+const TRACK_GROUP_DECRYPT_FAILURES = process.env.WHATSAPP_TRACK_GROUP_DECRYPT_FAILURES !== 'false';
+
+/**
+ * Record decrypt failures for messages that arrived as CIPHERTEXT stubs (#70).
+ * Only StubType.CIPHERTEXT (2) indicates a decrypt failure — other stub types
+ * (GROUP_PARTICIPANT_ADD, GROUP_CHANGE_SUBJECT, etc.) are normal system events
+ * that also have no message body. Tracking only CIPHERTEXT avoids false
+ * positives that would block legitimate JIDs.
+ */
+function trackDecryptFailures(tracker: DecryptFailureTracker, messages: WAMessage[]): void {
+  for (const msg of messages) {
+    if (!msg.message && msg.messageStubType === STUB_TYPE_CIPHERTEXT) {
+      const remoteJid = msg.key.remoteJid;
+      if (!remoteJid) continue;
+
+      // Preserve #70 behavior by default: group traffic can be tracked by remoteJid.
+      // Operators can disable group tracking if needed via env var.
+      if (remoteJid.endsWith('@g.us') && !TRACK_GROUP_DECRYPT_FAILURES) continue;
+
+      tracker.recordFailure(remoteJid);
+    }
+  }
+}
+
 /**
  * Set up message event handlers for a Baileys socket
  */
-export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, instanceId: string): void {
+export function setupMessageHandlers(
+  sock: WASocket,
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  decryptTracker?: DecryptFailureTracker,
+): void {
   sock.ev.on('messages.upsert', async (upsert: { messages: WAMessage[]; type: MessageUpsertType }) => {
     // Log all message types to diagnose missing messages
     log.debug('messages.upsert received', {
@@ -844,6 +876,11 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
       count: upsert.messages.length,
       messageIds: upsert.messages.map((m) => m.key.id),
     });
+
+    // Track decrypt failures for dynamic JID blocking (#70)
+    if (decryptTracker) {
+      trackDecryptFailures(decryptTracker, upsert.messages);
+    }
 
     // Process all message types, not just 'notify'
     // 'notify' = incoming messages
@@ -908,15 +945,4 @@ export function setupMessageHandlers(sock: WASocket, plugin: WhatsAppPlugin, ins
       );
     }
   });
-}
-
-/**
- * Build message key from identifiers
- */
-export function buildMessageKey(chatId: string, messageId: string, fromMe: boolean): WAMessageKey {
-  return {
-    remoteJid: chatId,
-    id: messageId,
-    fromMe,
-  };
 }

@@ -15,10 +15,6 @@ export interface ListInstancesOptions {
   cursor?: string;
 }
 
-export interface InstanceWithStatus extends Instance {
-  connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error';
-}
-
 export class InstanceService {
   constructor(
     private db: Database,

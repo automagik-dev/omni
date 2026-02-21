@@ -156,26 +156,3 @@ export class MemoryCache implements CacheProvider {
     return total > 0 ? this._hits / total : 0;
   }
 }
-
-// Singleton instance for app-wide caching
-let globalCache: MemoryCache | null = null;
-
-/**
- * Get the global cache instance.
- */
-export function getCache(): MemoryCache {
-  if (!globalCache) {
-    globalCache = new MemoryCache();
-  }
-  return globalCache;
-}
-
-/**
- * Reset the global cache (mainly for testing).
- */
-export function resetCache(): void {
-  if (globalCache) {
-    globalCache.dispose();
-    globalCache = null;
-  }
-}

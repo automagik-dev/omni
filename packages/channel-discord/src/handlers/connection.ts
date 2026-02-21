@@ -210,13 +210,6 @@ export function setupConnectionHandlers(
 }
 
 /**
- * Reset reconnection state for an instance
- */
-export function resetReconnectState(instanceId: string): void {
-  reconnectAttempts.delete(instanceId);
-}
-
-/**
  * Reset all connection state for an instance
  */
 export function resetConnectionState(instanceId: string): void {

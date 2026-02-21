@@ -2,7 +2,7 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
+        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats logs-api \
@@ -28,12 +28,13 @@ help:
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check         Run all quality checks (typecheck + lint + test)"
+	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + test)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
 	@echo "  make lint-fix      Fix auto-fixable lint issues"
 	@echo "  make lint-api      Lint API package only"
 	@echo "  make format        Format code with Biome"
+	@echo "  make dead-code     Run knip dead code detection"
 	@echo "  make test          Run all tests"
 	@echo "  make test-watch    Run tests in watch mode"
 	@echo "  make test-api      Run API package tests only"
@@ -241,8 +242,11 @@ test-file:
 	@if [ -z "$(F)" ]; then echo "Usage: make test-file F=<path-to-test-file>"; exit 1; fi
 	bun test $(F)
 
+dead-code:
+	bunx knip@5.85.0
+
 # Run all quality checks
-check: typecheck lint test
+check: typecheck lint dead-code test
 	@echo ""
 	@echo "All checks passed!"
 
@@ -305,8 +309,8 @@ deploy:
 	@echo "Pulling latest from $$(git branch --show-current)..."
 	git pull --ff-only
 	bun install
-	@echo "Running quality gate (typecheck + lint, skipping tests)..."
-	$(MAKE) typecheck lint
+	@echo "Running quality gate (typecheck + lint + dead-code, skipping tests)..."
+	$(MAKE) typecheck lint dead-code
 	@echo "Quality gate passed. Restarting services..."
 	@bash scripts/pm2-start.sh
 

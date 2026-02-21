@@ -48,12 +48,6 @@ export interface PairingRequest {
   createdAt: Date;
 }
 
-export interface PairingActionResult {
-  action: 'approve' | 'deny';
-  ruleId?: string;
-  reason?: string;
-}
-
 /** Thrown when a pairing request has expired */
 export class PairingRequestExpiredError extends Error {
   constructor(requestId: string) {

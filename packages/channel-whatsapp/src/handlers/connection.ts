@@ -435,10 +435,3 @@ export function resetConnectionState(instanceId: string): void {
   clearConnectionTimeout(instanceId);
   cancelPendingReconnect(instanceId);
 }
-
-/**
- * Get current QR attempt count for an instance
- */
-export function getQrAttemptCount(instanceId: string): number {
-  return qrCodeAttempts.get(instanceId) || 0;
-}

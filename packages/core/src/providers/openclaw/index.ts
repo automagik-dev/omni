@@ -18,7 +18,6 @@ export type {
   ContentBlock,
   EventFrame,
   EventListener,
-  Frame,
   HelloPayload,
   OpenClawClientConfig,
   OpenClawProviderConfig,

@@ -154,7 +154,7 @@ export function shouldAgentReply(filter: AgentReplyFilter | null | undefined, co
  * Split response on double newlines (\n\n)
  * Trims each part and filters empty ones
  */
-export function splitResponse(content: string, enableSplit: boolean): string[] {
+function splitResponse(content: string, enableSplit: boolean): string[] {
   if (!enableSplit) {
     return [content.trim()].filter(Boolean);
   }
@@ -233,28 +233,9 @@ export function computeSessionId(
 // ============================================================================
 
 /**
- * Format a message with optional sender name prefix
- *
- * @param message - The message content
- * @param senderName - The sender's display name (optional)
- * @param prefixEnabled - Whether to prefix with sender name
- * @returns Formatted message: "[Name]: message" or just "message"
- */
-export function formatMessageWithSender(
-  message: string,
-  senderName: string | undefined,
-  prefixEnabled: boolean,
-): string {
-  if (!prefixEnabled || !senderName) {
-    return message;
-  }
-  return `[${senderName}]: ${message}`;
-}
-
-/**
  * Format multiple messages with optional sender name prefix
  */
-export function formatMessagesWithSender(
+function formatMessagesWithSender(
   messages: string[],
   senderName: string | undefined,
   prefixEnabled: boolean,

@@ -85,16 +85,6 @@ function mapStartFrom(startFrom: SubscribeOptions['startFrom']): DeliverPolicy {
 }
 
 /**
- * Get the start time for by_start_time delivery policy
- */
-export function getStartTime(startFrom: SubscribeOptions['startFrom']): Date | undefined {
-  if (startFrom instanceof Date) {
-    return startFrom;
-  }
-  return undefined;
-}
-
-/**
  * Generate a unique consumer name for non-durable consumers
  */
 export function generateConsumerName(pattern: string): string {

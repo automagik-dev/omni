@@ -28,20 +28,6 @@ function c(): ChalkInstance {
 }
 
 /**
- * Format a section with title and indented content.
- *
- * @example
- * formatSection('Quick Start', 'omni send --to +55 --text "Hi"')
- * // Returns:
- * // Quick Start:
- * //   omni send --to +55 --text "Hi"
- */
-export function formatSection(title: string, content: string): string {
-  const lines = content.split('\n').map((line) => `  ${line}`);
-  return `${c().bold(title)}:\n${lines.join('\n')}`;
-}
-
-/**
  * Format a group of options with a group title.
  *
  * @example
@@ -75,32 +61,6 @@ export function formatExamples(examples: Example[]): string {
   });
 
   return `${c().bold('Examples')}:\n${lines.join('\n')}`;
-}
-
-/**
- * Format key-value pairs in a compact display.
- *
- * @example
- * formatKeyValue({ instance: 'cezar-personal', format: 'human' })
- * // Returns: "instance=cezar-personal, format=human"
- */
-export function formatKeyValue(pairs: Record<string, string | undefined>): string {
-  const entries = Object.entries(pairs)
-    .filter(([, v]) => v !== undefined)
-    .map(([k, v]) => `${k}=${v}`);
-
-  return entries.join(', ');
-}
-
-/**
- * Indent text by a number of spaces.
- */
-export function indent(text: string, spaces = 2): string {
-  const pad = ' '.repeat(spaces);
-  return text
-    .split('\n')
-    .map((line) => `${pad}${line}`)
-    .join('\n');
 }
 
 /**

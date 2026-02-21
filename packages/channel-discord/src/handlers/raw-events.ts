@@ -10,11 +10,11 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Client, GatewayDispatchEvents } from 'discord.js';
+import type { Client } from 'discord.js';
 
 const log = createLogger('discord:raw');
 
-export const DEBUG_PAYLOADS = process.env.DEBUG_PAYLOADS === 'true';
+const DEBUG_PAYLOADS = process.env.DEBUG_PAYLOADS === 'true';
 
 /**
  * Raw gateway packet structure
@@ -65,108 +65,3 @@ export function setupRawEventHandler(client: Client, instanceId: string): void {
     });
   });
 }
-
-/**
- * List of all Discord gateway dispatch events we might receive
- * This is for documentation - the raw handler captures ALL of them
- */
-export const DISCORD_EVENTS: (keyof typeof GatewayDispatchEvents)[] = [
-  // Connection
-  'Ready',
-  'Resumed',
-
-  // Guilds
-  'GuildCreate',
-  'GuildUpdate',
-  'GuildDelete',
-  'GuildBanAdd',
-  'GuildBanRemove',
-  'GuildEmojisUpdate',
-  'GuildStickersUpdate',
-  'GuildIntegrationsUpdate',
-  'GuildMemberAdd',
-  'GuildMemberRemove',
-  'GuildMemberUpdate',
-  'GuildMembersChunk',
-  'GuildRoleCreate',
-  'GuildRoleUpdate',
-  'GuildRoleDelete',
-  'GuildScheduledEventCreate',
-  'GuildScheduledEventUpdate',
-  'GuildScheduledEventDelete',
-  'GuildScheduledEventUserAdd',
-  'GuildScheduledEventUserRemove',
-  'GuildAuditLogEntryCreate',
-
-  // Channels
-  'ChannelCreate',
-  'ChannelUpdate',
-  'ChannelDelete',
-  'ChannelPinsUpdate',
-
-  // Threads
-  'ThreadCreate',
-  'ThreadUpdate',
-  'ThreadDelete',
-  'ThreadListSync',
-  'ThreadMemberUpdate',
-  'ThreadMembersUpdate',
-
-  // Messages
-  'MessageCreate',
-  'MessageUpdate',
-  'MessageDelete',
-  'MessageDeleteBulk',
-  'MessageReactionAdd',
-  'MessageReactionRemove',
-  'MessageReactionRemoveAll',
-  'MessageReactionRemoveEmoji',
-  'MessagePollVoteAdd',
-  'MessagePollVoteRemove',
-
-  // Presence
-  'PresenceUpdate',
-  'TypingStart',
-  'UserUpdate',
-
-  // Voice
-  'VoiceStateUpdate',
-  'VoiceServerUpdate',
-
-  // Interactions
-  'InteractionCreate',
-
-  // Invites
-  'InviteCreate',
-  'InviteDelete',
-
-  // Stage
-  'StageInstanceCreate',
-  'StageInstanceUpdate',
-  'StageInstanceDelete',
-
-  // Webhooks
-  'WebhooksUpdate',
-
-  // Auto Moderation
-  'AutoModerationRuleCreate',
-  'AutoModerationRuleUpdate',
-  'AutoModerationRuleDelete',
-  'AutoModerationActionExecution',
-
-  // Entitlements
-  'EntitlementCreate',
-  'EntitlementUpdate',
-  'EntitlementDelete',
-
-  // Subscriptions
-  'SubscriptionCreate',
-  'SubscriptionUpdate',
-  'SubscriptionDelete',
-
-  // Soundboard
-  'GuildSoundboardSoundCreate',
-  'GuildSoundboardSoundUpdate',
-  'GuildSoundboardSoundDelete',
-  'GuildSoundboardSoundsUpdate',
-];
