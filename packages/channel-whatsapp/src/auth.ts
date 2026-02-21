@@ -244,6 +244,9 @@ export async function createStorageAuthState(
  * where the DB persist never completed. After clearing, the next group send
  * will generate new sender keys and distribute them to all participants.
  *
+ * Note: This only clears persisted keys in storage, not the in-memory keyCache.
+ * Intended for use as a recovery tool between sessions, not during an active connection.
+ *
  * @param storage - PluginStorage instance
  * @param instanceId - Instance identifier
  * @returns Number of keys deleted

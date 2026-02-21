@@ -69,6 +69,8 @@ export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth' | 'cache
   browser: Browsers.ubuntu('Chrome'),
   mobile: false,
   connectTimeoutMs: 20_000,
+  // Baileys default (60s). Previously reduced to 15s to cap mutex hold time (#70),
+  // but the write-behind cache now eliminates DB blocking inside the mutex entirely.
   defaultQueryTimeoutMs: 60_000,
   keepAliveIntervalMs: 25_000,
   syncFullHistory: false,

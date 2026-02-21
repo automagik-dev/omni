@@ -62,16 +62,13 @@ function createHangingStorage(): PluginStorage & { getCalls: string[]; setCalls:
 function createFastStorage(): PluginStorage & {
   data: Map<string, string>;
   setCalls: string[];
-  setResolvers: Map<string, () => void>;
 } {
   const data = new Map<string, string>();
   const setCalls: string[] = [];
-  const setResolvers = new Map<string, () => void>();
 
   return {
     data,
     setCalls,
-    setResolvers,
     async get<T>(key: string): Promise<T | null> {
       const val = data.get(key);
       if (!val) return null;
@@ -101,7 +98,7 @@ describe('Auth key store write-behind cache (#70)', () => {
   const instanceId = 'test-instance';
 
   describe('keys.set — must not block on storage', () => {
-    it('returns within 50ms even when storage.set hangs forever', async () => {
+    it('returns within 200ms even when storage.set hangs forever', async () => {
       const storage = createHangingStorage();
       const { state } = await createStorageAuthState(storage, instanceId);
 
@@ -169,9 +166,6 @@ describe('Auth key store write-behind cache (#70)', () => {
       await state.keys.set({
         session: { 'peer-123': { session: 'data' } as never },
       });
-
-      // Wait a tick for background persist
-      await new Promise((r) => setTimeout(r, 10));
 
       // Clear the storage to prove we read from cache
       storage.data.clear();

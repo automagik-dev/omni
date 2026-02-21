@@ -940,6 +940,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
+    // recentMessageKeys uses composite keys — clean entries for this instance
+    for (const key of this.recentMessageKeys.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.recentMessageKeys.delete(key);
+    }
   }
 
   /**

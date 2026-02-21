@@ -55,6 +55,7 @@ describe('DecryptFailureTracker', () => {
     // Wait for block to expire
     await new Promise((r) => setTimeout(r, 100));
     expect(fastTracker.shouldIgnore('temp@lid')).toBe(false);
+    fastTracker.clearAll();
   });
 
   it('clear() removes tracking for a JID', () => {
@@ -100,5 +101,6 @@ describe('DecryptFailureTracker', () => {
     fastTracker.recordFailure('bad@lid');
     fastTracker.recordFailure('bad@lid');
     expect(fastTracker.shouldIgnore('bad@lid')).toBe(true);
+    fastTracker.clearAll();
   });
 });
