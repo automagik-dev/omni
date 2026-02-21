@@ -921,7 +921,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     await closeSocket(sock, false);
     this.sockets.delete(instanceId);
 
-    // Clean up ALL per-instance caches to prevent memory leaks on reconnect
+    this.clearInstanceCaches(instanceId);
+
+    // Emit disconnected event
+    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /** Clear all per-instance caches to prevent memory leaks on reconnect cycles */
+  private clearInstanceCaches(instanceId: string): void {
     this.groupMetadataCache.delete(instanceId);
     this.groupsCache.delete(instanceId);
     this.contactsCache.delete(instanceId);
@@ -933,9 +940,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
-
-    // Emit disconnected event
-    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
 
   /**
