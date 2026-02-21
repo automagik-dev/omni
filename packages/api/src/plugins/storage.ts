@@ -9,7 +9,7 @@ import type { PluginStorage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { pluginStorage } from '@omni/db';
-import { and, eq, gt, isNull, like, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
 
 const log = createLogger('api:storage');
 
@@ -50,7 +50,11 @@ class DatabasePluginStorage implements PluginStorage {
 
     const elapsed = Date.now() - t0;
     if (elapsed > 500) {
-      log.warn('Slow storage.get', { key: fullKey.slice(-80), elapsedMs: elapsed });
+      log.warn('Slow storage.get', {
+        pluginId: this.pluginId,
+        key: fullKey.slice(-80),
+        elapsedMs: elapsed,
+      });
     }
 
     const row = result[0];
@@ -153,8 +157,8 @@ class DatabasePluginStorage implements PluginStorage {
       .where(
         and(
           eq(pluginStorage.pluginId, this.pluginId),
-          gt(sql`${pluginStorage.expiresAt}`, sql`NULL`),
-          sql`${pluginStorage.expiresAt} < NOW()`,
+          isNotNull(pluginStorage.expiresAt),
+          lt(pluginStorage.expiresAt, sql`NOW()`),
         ),
       )
       .returning({ id: pluginStorage.id });

@@ -26,7 +26,7 @@ const log = createLogger('whatsapp:decrypt-tracker');
  * This ensures recording (from msg.key.remoteJid) and checking (from node.attrs.from)
  * match even when one includes the `:device` part and the other doesn't.
  */
-function normalizeJid(jid: string): string {
+function stripDeviceSuffix(jid: string): string {
   return jid.replace(/:\d+@/, '@');
 }
 
@@ -51,6 +51,7 @@ export class DecryptFailureTracker {
   private readonly threshold: number;
   private readonly windowMs: number;
   private readonly blockDurationMs: number;
+  private lastGlobalPruneAt = 0;
 
   constructor(options?: DecryptFailureTrackerOptions) {
     this.threshold = options?.threshold ?? 3;
@@ -63,8 +64,10 @@ export class DecryptFailureTracker {
    * Call this from the messages.upsert handler when a message has CIPHERTEXT stub.
    */
   recordFailure(jid: string): void {
-    const key = normalizeJid(jid);
+    const key = stripDeviceSuffix(jid);
     const now = Date.now();
+    this.maybePruneStaleEntries(now);
+
     let entry = this.state.get(key);
     if (!entry) {
       entry = { failures: [], blockedUntil: 0 };
@@ -85,6 +88,20 @@ export class DecryptFailureTracker {
     }
   }
 
+  /** Opportunistically prune stale entries to keep memory bounded in long-lived sessions. */
+  private maybePruneStaleEntries(now: number): void {
+    if (now - this.lastGlobalPruneAt < this.windowMs) return;
+    this.lastGlobalPruneAt = now;
+
+    for (const [key, entry] of this.state.entries()) {
+      if (entry.blockedUntil > now) continue;
+      entry.failures = entry.failures.filter((t) => now - t < this.windowMs);
+      if (entry.failures.length === 0) {
+        this.state.delete(key);
+      }
+    }
+  }
+
   /**
    * Check if a JID should be ignored.
    * Pass this as the `shouldIgnoreJid` callback to Baileys.
@@ -92,7 +109,7 @@ export class DecryptFailureTracker {
    */
   shouldIgnore = (jid: string): boolean => {
     if (!jid) return false;
-    const key = normalizeJid(jid);
+    const key = stripDeviceSuffix(jid);
     const entry = this.state.get(key);
     if (!entry) return false;
 
@@ -112,7 +129,7 @@ export class DecryptFailureTracker {
 
   /** Clear tracking for a specific JID (e.g., on session recreation) */
   clear(jid: string): void {
-    this.state.delete(normalizeJid(jid));
+    this.state.delete(stripDeviceSuffix(jid));
   }
 
   /** Clear all tracking state */

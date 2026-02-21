@@ -8,7 +8,7 @@
 export { loadChannelPlugins } from './loader';
 
 // QR code storage
-export { setupQrCodeListener } from './qr-store';
+export { clearQrCode, getQrCode, setupQrCodeListener } from './qr-store';
 
 // Event listeners (connection, messages)
 export {

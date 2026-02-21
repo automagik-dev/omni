@@ -37,7 +37,8 @@ export interface SlackConfig {
 /**
  * Stream mode for progressive response rendering
  */
-export type StreamMode = 'replace' | 'status_final' | 'off';
+export const STREAM_MODES = ['replace', 'status_final', 'off'] as const;
+export type StreamMode = (typeof STREAM_MODES)[number];
 
 /**
  * DM policy for controlling direct message access

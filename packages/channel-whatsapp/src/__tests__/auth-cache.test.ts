@@ -225,5 +225,55 @@ describe('Auth key store write-behind cache (#70)', () => {
       const result = await state.keys.get('pre-key', ['100']);
       expect(result['100']).toBeTruthy();
     });
+
+    it('serializes background persists for the same key', async () => {
+      const persisted = new Map<string, string>();
+      let isFirstWrite = true;
+
+      const storage: PluginStorage = {
+        async get<T>(key: string): Promise<T | null> {
+          const value = persisted.get(key);
+          if (!value) return null;
+          return JSON.parse(value) as T;
+        },
+        async set(key: string, value: unknown): Promise<void> {
+          // Simulate out-of-order completion risk:
+          // first write is slower than second write.
+          const shouldDelay = isFirstWrite;
+          isFirstWrite = false;
+          if (shouldDelay) {
+            await new Promise((r) => setTimeout(r, 75));
+          }
+          persisted.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+        },
+        async delete(key: string): Promise<boolean> {
+          return persisted.delete(key);
+        },
+        async has(key: string): Promise<boolean> {
+          return persisted.has(key);
+        },
+        async keys(): Promise<string[]> {
+          return Array.from(persisted.keys());
+        },
+      };
+
+      const { state } = await createStorageAuthState(storage, instanceId);
+      const keyId = 'ordered-key';
+
+      await state.keys.set({
+        'pre-key': { [keyId]: { value: 'first' } as never },
+      });
+      await state.keys.set({
+        'pre-key': { [keyId]: { value: 'second' } as never },
+      });
+
+      // Allow queued background writes to drain.
+      await new Promise((r) => setTimeout(r, 200));
+
+      const storedRaw = persisted.get(`auth:${instanceId}:keys:pre-key:${keyId}`);
+      expect(storedRaw).toBeTruthy();
+      const stored = JSON.parse(storedRaw ?? '{}') as { value?: string };
+      expect(stored.value).toBe('second');
+    });
   });
 });

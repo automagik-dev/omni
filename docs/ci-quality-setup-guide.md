@@ -393,9 +393,9 @@ Biome and TypeScript analyze one file or one project at a time. Knip traces the 
 
 ### knip.json
 
-```json
+```jsonc
 {
-  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
   "workspaces": {
     ".": {
       "entry": ["scripts/test-messaging.ts"],

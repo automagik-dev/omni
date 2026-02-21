@@ -14,7 +14,7 @@ const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 /**
  * Body limit middleware configuration
  */
-export interface BodyLimitConfig {
+interface BodyLimitConfig {
   /** Maximum body size in bytes. Default: 10MB */
   maxSize?: number;
   /** Custom error message */

@@ -835,6 +835,7 @@ async function processStatusUpdate(
 
 /** proto.WebMessageInfo.StubType.CIPHERTEXT — stable in the WhatsApp protobuf spec */
 const STUB_TYPE_CIPHERTEXT = 2;
+const TRACK_GROUP_DECRYPT_FAILURES = process.env.WHATSAPP_TRACK_GROUP_DECRYPT_FAILURES !== 'false';
 
 /**
  * Record decrypt failures for messages that arrived as CIPHERTEXT stubs (#70).
@@ -846,8 +847,14 @@ const STUB_TYPE_CIPHERTEXT = 2;
 function trackDecryptFailures(tracker: DecryptFailureTracker, messages: WAMessage[]): void {
   for (const msg of messages) {
     if (!msg.message && msg.messageStubType === STUB_TYPE_CIPHERTEXT) {
-      const senderJid = msg.key.remoteJid;
-      if (senderJid) tracker.recordFailure(senderJid);
+      const remoteJid = msg.key.remoteJid;
+      if (!remoteJid) continue;
+
+      // Preserve #70 behavior by default: group traffic can be tracked by remoteJid.
+      // Operators can disable group tracking if needed via env var.
+      if (remoteJid.endsWith('@g.us') && !TRACK_GROUP_DECRYPT_FAILURES) continue;
+
+      tracker.recordFailure(remoteJid);
     }
   }
 }

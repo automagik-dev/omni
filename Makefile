@@ -309,8 +309,8 @@ deploy:
 	@echo "Pulling latest from $$(git branch --show-current)..."
 	git pull --ff-only
 	bun install
-	@echo "Running quality gate (typecheck + lint, skipping tests)..."
-	$(MAKE) typecheck lint
+	@echo "Running quality gate (typecheck + lint + dead-code, skipping tests)..."
+	$(MAKE) typecheck lint dead-code
 	@echo "Quality gate passed. Restarting services..."
 	@bash scripts/pm2-start.sh
 

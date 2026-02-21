@@ -27,7 +27,7 @@ export interface SocketConfig {
   browser?: [string, string, string];
   /** Mobile flag for web multi-device (default: false) */
   mobile?: boolean;
-  /** Connection timeout in ms (default: 60000) */
+  /** Connection timeout in ms (default: 20000) */
   connectTimeoutMs?: number;
   /** Default query timeout in ms (default: 60000) */
   defaultQueryTimeoutMs?: number;
@@ -84,7 +84,6 @@ export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth' | 'cache
 /** Baileys log messages to suppress (noisy, non-actionable) */
 const SUPPRESSED_LOG_PATTERNS = [
   'mex newsletter notification', // raw byte array dumps (Baileys bug in rc.9)
-  'received error in ack', // error 479 = offline recipient, normal
   'Fetching history for chat', // debug spam during sync
   'loading from store', // high-volume debug noise
   'updated cache',
@@ -92,6 +91,19 @@ const SUPPRESSED_LOG_PATTERNS = [
   'no mutations in transaction',
   'released buffered events',
 ];
+
+function isAckError479Log(msg: string, inputArgs: unknown[]): boolean {
+  if (!msg.includes('received error in ack')) return false;
+
+  for (const arg of inputArgs) {
+    if (!arg || typeof arg !== 'object' || !('attrs' in arg)) continue;
+    const attrs = (arg as { attrs?: { error?: unknown } }).attrs;
+    if (!attrs) continue;
+    if (attrs.error === 479 || attrs.error === '479') return true;
+  }
+
+  return false;
+}
 
 function createLogger(level: string) {
   return pino({
@@ -103,6 +115,7 @@ function createLogger(level: string) {
           method.apply(this, inputArgs as Parameters<typeof method>);
           return;
         }
+        if (isAckError479Log(msg, inputArgs)) return;
         if (SUPPRESSED_LOG_PATTERNS.some((p) => msg.includes(p))) return;
         method.apply(this, inputArgs as Parameters<typeof method>);
       },

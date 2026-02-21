@@ -30,7 +30,7 @@ jobs:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
 
   quality-gate:
-    name: Quality Gate (typecheck + lint + test)
+    name: Quality Gate (typecheck + lint + dead-code + test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -97,7 +97,7 @@ jobs:
         run: bunx biome check .
 
       - name: Dead code check (knip)
-        run: bunx knip
+        run: bunx knip@5.85.0
 
       - name: Test
         run: bun test --env-file=.env

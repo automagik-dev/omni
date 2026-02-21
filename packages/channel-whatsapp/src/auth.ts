@@ -155,8 +155,38 @@ export async function createStorageAuthState(
   // all transactions, so cache is always consistent between transactions.
   // DB persist is for durability across restarts only.
   const keyCache = new Map<string, unknown>();
+  const persistQueues = new Map<string, Promise<void>>();
+  const configuredKeyCacheLimit = Number.parseInt(process.env.WHATSAPP_AUTH_KEY_CACHE_MAX_ENTRIES ?? '50000', 10);
+  const keyCacheMaxEntries =
+    Number.isFinite(configuredKeyCacheLimit) && configuredKeyCacheLimit > 0 ? configuredKeyCacheLimit : 50_000;
   // Sentinel to distinguish "cached null/deleted" from "not in cache"
   const DELETED = Symbol('deleted');
+
+  /** Set cache entry with bounded size to avoid unbounded long-lived growth */
+  function setCachedValue(key: string, value: unknown): void {
+    // Refresh insertion order so oldest entries can be evicted first.
+    if (keyCache.has(key)) keyCache.delete(key);
+    keyCache.set(key, value);
+
+    let scanned = 0;
+    while (keyCache.size > keyCacheMaxEntries) {
+      const oldestKey = keyCache.keys().next().value;
+      if (oldestKey === undefined) break;
+
+      // Keep keys with in-flight persistence in cache until background write finishes.
+      if (persistQueues.has(oldestKey)) {
+        const oldestValue = keyCache.get(oldestKey);
+        keyCache.delete(oldestKey);
+        keyCache.set(oldestKey, oldestValue);
+        scanned++;
+        if (scanned >= keyCache.size) break;
+        continue;
+      }
+
+      keyCache.delete(oldestKey);
+      scanned = 0;
+    }
+  }
 
   /** Parse a raw storage value into a usable object, reconstructing Buffers */
   function parseStorageValue(value: unknown): unknown {
@@ -164,17 +194,35 @@ export async function createStorageAuthState(
     return JSON.parse(JSON.stringify(value), bufferReviver);
   }
 
-  /** Persist a single key-value pair to storage in the background (fire-and-forget) */
+  /**
+   * Persist a single key-value pair to storage in the background.
+   * Writes are serialized per key so stale writes cannot overtake newer ones.
+   */
   function backgroundPersist(type: string, id: string, key: string, value: unknown): void {
-    if (value !== null && value !== undefined) {
-      storage.set(key, serialize(value)).catch((err) => {
-        log.error('Background key persist failed', { type, id: id.slice(-40), instanceId, err: String(err) });
-      });
-    } else {
-      storage.delete(key).catch((err) => {
+    const previousPersist = persistQueues.get(key) ?? Promise.resolve();
+    const nextPersist = previousPersist
+      .catch(() => {})
+      .then(async () => {
+        if (value !== null && value !== undefined) {
+          await storage.set(key, serialize(value));
+          return;
+        }
+        await storage.delete(key);
+      })
+      .catch((err) => {
+        if (value !== null && value !== undefined) {
+          log.error('Background key persist failed', { type, id: id.slice(-40), instanceId, err: String(err) });
+          return;
+        }
         log.error('Background key delete failed', { type, id: id.slice(-40), instanceId, err: String(err) });
+      })
+      .finally(() => {
+        if (persistQueues.get(key) === nextPersist) {
+          persistQueues.delete(key);
+        }
       });
-    }
+
+    persistQueues.set(key, nextPersist);
   }
 
   return {
@@ -202,7 +250,7 @@ export async function createStorageAuthState(
             const value = await storage.get<unknown>(key);
             if (value) {
               const parsed = parseStorageValue(value);
-              keyCache.set(key, parsed);
+              setCachedValue(key, parsed);
               data[id] = deserializeSignalData(type, parsed);
             }
           }
@@ -210,10 +258,7 @@ export async function createStorageAuthState(
           return data;
         },
 
-        // Ordering guarantee: Baileys' meId mutex serializes all transactions,
-        // and within a transaction keys.set() is called once with all mutations
-        // batched. Per-key background persist ordering is therefore ensured by
-        // the single-threaded JS event loop + Baileys' own concurrency model.
+        // Ordering guarantee: background persists are explicitly serialized per key.
         set: async (
           data: {
             [T in SignalDataType]?: {
@@ -226,7 +271,7 @@ export async function createStorageAuthState(
             for (const [id, value] of Object.entries(entries)) {
               const key = `${keyPrefix}:${type}:${id}`;
               // 1. Update in-memory cache synchronously — instant, never blocks
-              keyCache.set(key, value !== null && value !== undefined ? value : DELETED);
+              setCachedValue(key, value !== null && value !== undefined ? value : DELETED);
               // 2. Persist to DB in background — fire-and-forget (#70)
               backgroundPersist(type, id, key, value);
             }
@@ -258,11 +303,13 @@ export async function createStorageAuthState(
 export async function clearSenderKeys(storage: PluginStorage, instanceId: string): Promise<number> {
   const keyPrefix = `auth:${instanceId}:keys`;
   const allKeys = await storage.keys(`${keyPrefix}:sender-key*`);
+  const batchSize = 50;
 
   let deleted = 0;
-  for (const key of allKeys) {
-    await storage.delete(key);
-    deleted++;
+  for (let i = 0; i < allKeys.length; i += batchSize) {
+    const batch = allKeys.slice(i, i + batchSize);
+    await Promise.all(batch.map((key) => storage.delete(key)));
+    deleted += batch.length;
   }
 
   log.info('Cleared sender keys', { instanceId, deleted });
