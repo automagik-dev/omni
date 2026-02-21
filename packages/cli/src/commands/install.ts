@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Command } from 'commander';
 import ora from 'ora';
-import { saveConfig } from '../config.js';
+import { saveConfig, saveServerConfig } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
@@ -276,12 +276,12 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
     DATABASE_URL: cfg.databaseUrl,
     OMNI_API_KEY: cfg.apiKey,
     MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
+    PGSERVE_EMBEDDED: 'true',
+    PGSERVE_DATA: join(cfg.dataDir, 'pglite'),
+    NATS_URL: 'nats://localhost:4222',
+    NODE_ENV: 'production',
+    LOG_LEVEL: 'info',
   };
-}
-
-function formatSystemdEnvironment(name: string, value: string): string {
-  const escaped = value.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `Environment="${name}=${escaped}"`;
 }
 
 // ============================================================================
@@ -289,21 +289,18 @@ function formatSystemdEnvironment(name: string, value: string): string {
 // ============================================================================
 
 /** Write a systemd unit file to /etc/systemd/system/omni-api.service */
-async function writeSystemdUnit(cfg: WizardConfig): Promise<boolean> {
-  const bundlePath = getServerBundlePath();
-  const runtimeEnv = buildApiRuntimeEnv(cfg);
+async function writeSystemdUnit(_cfg: WizardConfig): Promise<boolean> {
   const unitContent = `[Unit]
 Description=Omni API Server
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/env bun ${bundlePath}
+Type=forking
+ExecStart=/usr/bin/env omni start
+ExecStop=/usr/bin/env omni stop
+ExecReload=/usr/bin/env omni restart
 Restart=on-failure
-${formatSystemdEnvironment('API_PORT', runtimeEnv.API_PORT)}
-${formatSystemdEnvironment('DATABASE_URL', runtimeEnv.DATABASE_URL)}
-${formatSystemdEnvironment('OMNI_API_KEY', runtimeEnv.OMNI_API_KEY)}
-${formatSystemdEnvironment('MEDIA_STORAGE_PATH', runtimeEnv.MEDIA_STORAGE_PATH)}
+PIDFile=${homedir()}/.pm2/pm2.pid
 
 [Install]
 WantedBy=multi-user.target
@@ -427,7 +424,7 @@ async function promptApiKey(nonInteractive: boolean): Promise<ApiKeyPromptResult
 /** Step 8: Start services */
 async function startServices(cfg: WizardConfig): Promise<void> {
   if (cfg.processManager === 'manual') {
-    output.info('Skipping service start. Run: omni server start');
+    output.info('Skipping service start. Run: omni start');
     return;
   }
 
@@ -439,7 +436,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   // PM2 path
   const pm2Ok = await isPm2Available();
   if (!pm2Ok) {
-    output.warn('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then run: omni server start');
+    output.warn('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then run: omni start');
     return;
   }
 
@@ -480,7 +477,7 @@ async function checkHealth(port: number): Promise<boolean> {
   if (healthy) {
     spinner.succeed('Server is healthy');
   } else {
-    spinner.warn(`Health check failed after ${HEALTH_TIMEOUT_MS / 1000}s — check: omni server logs api`);
+    spinner.warn(`Health check failed after ${HEALTH_TIMEOUT_MS / 1000}s — check: omni logs --process api`);
   }
   return healthy;
 }
@@ -515,7 +512,7 @@ async function printDoneBanner(
   Key:    ${displayedKey}${keyHint}
 
   omni status              Check connection
-  omni server logs api     View API logs
+  omni logs --process api  View API logs
   omni instances list      Manage channels
 `);
 
@@ -573,6 +570,13 @@ async function runInstall(options: InstallOptions): Promise<void> {
 
   // Step 10: Write config
   writeConfigFile(port, apiKey);
+
+  // Save server configuration for `omni start`
+  saveServerConfig({
+    port: cfg.port,
+    databaseUrl: cfg.databaseUrl,
+    dataDir: cfg.dataDir,
+  });
 
   // Step 11: Done banner
   await printDoneBanner(port, apiKey, nonInteractive, apiKeyGenerated);
