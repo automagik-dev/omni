@@ -11,8 +11,28 @@ import { join } from 'node:path';
 /** Command visibility categories */
 export type CommandCategory = 'core' | 'standard' | 'advanced' | 'debug';
 
-/** Valid config keys */
-export type ConfigKey = 'apiUrl' | 'apiKey' | 'defaultInstance' | 'format' | 'showCommands' | 'updateChannel';
+/** Server-side configuration */
+export interface ServerConfig {
+  port: number;
+  databaseUrl: string;
+  dataDir: string;
+  logLevel: string;
+  nodeEnv: string;
+}
+
+/** Valid config keys (top-level and dot-notation server.* keys) */
+export type ConfigKey =
+  | 'apiUrl'
+  | 'apiKey'
+  | 'defaultInstance'
+  | 'format'
+  | 'showCommands'
+  | 'updateChannel'
+  | 'server.port'
+  | 'server.databaseUrl'
+  | 'server.dataDir'
+  | 'server.logLevel'
+  | 'server.nodeEnv';
 
 /** Config file structure */
 export interface Config {
@@ -22,12 +42,22 @@ export interface Config {
   format?: 'human' | 'json';
   showCommands?: string; // 'all' or comma-separated categories
   updateChannel?: 'main' | 'dev';
+  server?: Partial<ServerConfig>;
 }
 
 /** Default config values */
 const DEFAULT_CONFIG: Config = {
   apiUrl: 'http://localhost:8882',
   format: 'human',
+};
+
+/** Default server config with production defaults */
+export const DEFAULT_SERVER_CONFIG: ServerConfig = {
+  port: 8882,
+  databaseUrl: 'postgresql://postgres:postgres@localhost:5432/omni',
+  dataDir: join(homedir(), '.omni', 'data'),
+  logLevel: 'info',
+  nodeEnv: 'production',
 };
 
 /** Valid config keys with descriptions */
@@ -43,6 +73,17 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   updateChannel: {
     description: 'Update track for omni update',
     values: ['main', 'dev'],
+  },
+  'server.port': { description: 'Server port (default: 8882)' },
+  'server.databaseUrl': { description: 'PostgreSQL connection URL' },
+  'server.dataDir': { description: 'Data directory for PGlite and media storage' },
+  'server.logLevel': {
+    description: 'Log level',
+    values: ['debug', 'info', 'warn', 'error'],
+  },
+  'server.nodeEnv': {
+    description: 'Node environment',
+    values: ['production', 'development'],
   },
 };
 
@@ -120,12 +161,38 @@ export function saveConfig(config: Config): void {
 /** Get a single config value */
 export function getConfigValue(key: ConfigKey): string | undefined {
   const config = loadConfig();
-  return config[key];
+
+  // Handle dot-notation server.* keys
+  if (key.startsWith('server.')) {
+    const field = key.slice('server.'.length) as keyof ServerConfig;
+    if (config.server && config.server[field] !== undefined) {
+      return String(config.server[field]);
+    }
+    // Return default if not explicitly set
+    return String(DEFAULT_SERVER_CONFIG[field]);
+  }
+
+  return config[key as keyof Omit<Config, 'server'>];
 }
 
-/** Set a single config value */
-export function setConfigValue(key: ConfigKey, value: string): void {
-  const config = loadConfig();
+/** Set a server.* config field */
+function setServerField(config: Config, field: keyof ServerConfig, value: string): void {
+  if (!config.server) {
+    config.server = {};
+  }
+  if (field === 'port') {
+    const numValue = Number(value);
+    if (Number.isNaN(numValue) || numValue <= 0 || numValue > 65535) {
+      throw new Error(`Invalid port value: ${value}. Must be a number between 1 and 65535.`);
+    }
+    config.server.port = numValue;
+  } else {
+    (config.server as Record<string, unknown>)[field] = value;
+  }
+}
+
+/** Set a top-level config field */
+function setTopLevelField(config: Config, key: ConfigKey, value: string): void {
   if (key === 'format') {
     if (value !== 'human' && value !== 'json') {
       throw new Error(`Invalid format value: ${value}. Must be 'human' or 'json'.`);
@@ -148,13 +215,39 @@ export function setConfigValue(key: ConfigKey, value: string): void {
   } else {
     (config as Record<string, unknown>)[key] = value;
   }
+}
+
+/** Set a single config value */
+export function setConfigValue(key: ConfigKey, value: string): void {
+  const config = loadConfig();
+
+  if (key.startsWith('server.')) {
+    setServerField(config, key.slice('server.'.length) as keyof ServerConfig, value);
+  } else {
+    setTopLevelField(config, key, value);
+  }
   saveConfig(config);
 }
 
 /** Delete a config value */
 export function deleteConfigValue(key: ConfigKey): void {
   const config = loadConfig();
-  delete config[key];
+
+  // Handle dot-notation server.* keys
+  if (key.startsWith('server.')) {
+    const field = key.slice('server.'.length) as keyof ServerConfig;
+    if (config.server) {
+      (config.server as Record<string, unknown>)[field] = undefined;
+      // Clean up empty server object
+      if (Object.values(config.server).every((v) => v === undefined)) {
+        config.server = undefined;
+      }
+    }
+    saveConfig(config);
+    return;
+  }
+
+  (config as Record<string, unknown>)[key] = undefined;
   saveConfig(config);
 }
 
@@ -190,6 +283,19 @@ export function getOutputFormat(): 'human' | 'json' {
 
   // 3. TTY auto-detection
   return process.stdout.isTTY ? 'human' : 'json';
+}
+
+/** Load server config with production defaults merged */
+export function loadServerConfig(): ServerConfig {
+  const config = loadConfig();
+  return { ...DEFAULT_SERVER_CONFIG, ...config.server };
+}
+
+/** Save partial server config (merges with defaults and existing config) */
+export function saveServerConfig(partial: Partial<ServerConfig>): void {
+  const config = loadConfig();
+  config.server = { ...DEFAULT_SERVER_CONFIG, ...config.server, ...partial };
+  saveConfig(config);
 }
 
 /** Check if auth is configured */

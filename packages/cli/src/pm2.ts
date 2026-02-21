@@ -61,9 +61,5 @@ export async function capturePm2(...args: string[]): Promise<{ code: number; std
 
 /** Abort with a human-readable PM2 install message */
 export function pm2NotFoundError(): never {
-  output.error(
-    'PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then retry: omni server start',
-    undefined,
-    1,
-  );
+  output.error('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then retry: omni start', undefined, 1);
 }

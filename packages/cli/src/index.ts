@@ -31,11 +31,13 @@ import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
-import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
+import { createStopCommand } from './commands/stop.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
@@ -170,10 +172,22 @@ const COMMANDS: CommandDef[] = [
     helpDescription: 'Update CLI to latest version',
   },
   {
-    create: createServerCommand,
-    category: 'standard',
+    create: createStartCommand,
+    category: 'core',
     helpGroup: 'System',
-    helpDescription: 'Manage server processes (start/stop/restart/logs/status)',
+    helpDescription: 'Start Omni services (API + NATS)',
+  },
+  {
+    create: createStopCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Stop Omni services',
+  },
+  {
+    create: createRestartCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Restart Omni services',
   },
   {
     create: createInstallCommand,
