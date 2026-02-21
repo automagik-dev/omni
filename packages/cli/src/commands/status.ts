@@ -81,7 +81,7 @@ async function getProcessStatus(): Promise<ProcessRow[] | null> {
     service: p.name ?? '-',
     pid: p.pid !== undefined ? String(p.pid) : '-',
     status: p.pm2_env?.status ?? '-',
-    uptime: formatUptime(p.pm2_env?.pm_uptime),
+    uptime: p.pm2_env?.pm_uptime ? formatUptime(Date.now() - p.pm2_env.pm_uptime) : '-',
     cpu: p.monit?.cpu !== undefined ? `${p.monit.cpu}%` : '-',
     memory: formatMemory(p.monit?.memory),
   }));

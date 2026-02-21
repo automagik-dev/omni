@@ -67,12 +67,10 @@ async function runStart(): Promise<void> {
   // 3. Start omni-api via PM2 with complete env from config
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const env = buildApiRuntimeEnv();
-  const apiCode = await runPm2(
-    ['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun', '--update-env'],
-    env,
-  );
+  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], env);
   if (apiCode !== 0) {
-    output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
+    output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
+    return;
   }
 
   // 4. Start omni-nats if binary exists
