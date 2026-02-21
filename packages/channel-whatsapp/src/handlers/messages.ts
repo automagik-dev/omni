@@ -833,14 +833,19 @@ async function processStatusUpdate(
   }
 }
 
+/** proto.WebMessageInfo.StubType.CIPHERTEXT — stable in the WhatsApp protobuf spec */
+const STUB_TYPE_CIPHERTEXT = 2;
+
 /**
  * Record decrypt failures for messages that arrived as CIPHERTEXT stubs (#70).
- * These messages have no body and a messageStubType, indicating the session
- * failed to decrypt them. Tracking enables dynamic JID blocking.
+ * Only StubType.CIPHERTEXT (2) indicates a decrypt failure — other stub types
+ * (GROUP_PARTICIPANT_ADD, GROUP_CHANGE_SUBJECT, etc.) are normal system events
+ * that also have no message body. Tracking only CIPHERTEXT avoids false
+ * positives that would block legitimate JIDs.
  */
 function trackDecryptFailures(tracker: DecryptFailureTracker, messages: WAMessage[]): void {
   for (const msg of messages) {
-    if (!msg.message && msg.messageStubType) {
+    if (!msg.message && msg.messageStubType === STUB_TYPE_CIPHERTEXT) {
       const senderJid = msg.key.remoteJid;
       if (senderJid) tracker.recordFailure(senderJid);
     }

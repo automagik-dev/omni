@@ -210,6 +210,10 @@ export async function createStorageAuthState(
           return data;
         },
 
+        // Ordering guarantee: Baileys' meId mutex serializes all transactions,
+        // and within a transaction keys.set() is called once with all mutations
+        // batched. Per-key background persist ordering is therefore ensured by
+        // the single-threaded JS event loop + Baileys' own concurrency model.
         set: async (
           data: {
             [T in SignalDataType]?: {
