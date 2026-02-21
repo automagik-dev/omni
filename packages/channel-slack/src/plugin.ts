@@ -259,7 +259,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): StreamSender {
     const connection = this.getConnection(instanceId);
     const slackConfig = this.slackConfigs.get(instanceId) ?? {};
-    const replyToMode = slackConfig.replyToMode ?? 'off';
+    const replyToMode = slackConfig.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
 
     return createSlackStreamSender({
@@ -495,7 +495,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     try {
       const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
-      const ext = mimeType.split('/')[1]?.split(';')[0] ?? 'bin';
+      const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
       const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
       await writeFile(tmpPath, buffer);
       return { mimeType, localPath: tmpPath };
@@ -737,7 +737,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     config: SlackConfig,
   ): Promise<string> {
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const replyToMode = config.replyToMode ?? 'off';
+    const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     return sendTextMessage(
@@ -764,7 +764,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     message: OutgoingMessage,
     config: SlackConfig,
   ): Promise<string> {
-    const replyToMode = config.replyToMode ?? 'off';
+    const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     if (message.metadata?.base64) {

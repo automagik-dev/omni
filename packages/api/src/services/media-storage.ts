@@ -5,7 +5,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, relative } from 'node:path';
 
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -145,7 +145,7 @@ export class MediaStorageService {
     log.debug('Stored media from base64', { messageId, localPath, size: buffer.length });
 
     return {
-      localPath: localPath.replace(this.basePath, '').replace(/^\//, ''),
+      localPath: relative(this.basePath, localPath),
       size: buffer.length,
       mimeType,
     };
@@ -174,7 +174,7 @@ export class MediaStorageService {
     log.debug('Stored media from buffer', { messageId, localPath, size: buffer.length });
 
     return {
-      localPath: localPath.replace(this.basePath, '').replace(/^\//, ''),
+      localPath: relative(this.basePath, localPath),
       size: buffer.length,
       mimeType,
     };

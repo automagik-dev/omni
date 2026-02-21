@@ -1,0 +1,27 @@
+[Unit]
+Description=Omni v2 — Omnichannel Platform
+Documentation=https://github.com/automagik-dev/omni
+After=network.target
+
+[Service]
+Type=forking
+User=genie
+LimitNOFILE=65536
+LimitNPROC=4096
+
+Environment=PATH=/home/genie/.bun/bin:/home/genie/.npm-global/bin:/home/genie/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/genie
+
+PIDFile=/home/genie/.pm2/pm2.pid
+
+ExecStart=/home/genie/.bun/bin/bun /home/genie/.bun/bin/omni start
+ExecReload=/home/genie/.bun/bin/bun /home/genie/.bun/bin/omni restart
+ExecStop=/home/genie/.bun/bin/bun /home/genie/.bun/bin/omni stop
+
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

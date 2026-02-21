@@ -17,7 +17,7 @@
  * - Preserves existing debouncing for message events
  */
 
-import { writeFile } from 'node:fs/promises';
+import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
@@ -646,14 +646,19 @@ async function waitForMediaProcessing(
 /**
  * Format processed media content for the agent.
  */
+/** Default content types that receive the file path (audio is excluded — already transcribed) */
+const DEFAULT_SEND_MEDIA_PATH_TYPES = ['image', 'video', 'document'];
+
 function formatProcessedMedia(
   contentType: string,
   fullPath: string | null,
   processedText: string,
   includePath: boolean,
+  sendMediaPathTypes?: string[] | null,
 ): string {
   const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
-  if (includePath && fullPath) {
+  const allowedTypes = sendMediaPathTypes ?? DEFAULT_SEND_MEDIA_PATH_TYPES;
+  if (includePath && fullPath && allowedTypes.includes(contentType)) {
     return `${icon} [${fullPath}]: ${processedText}`;
   }
   return `${icon}: ${processedText}`;
@@ -813,7 +818,15 @@ async function collectProcessedMedia(
     );
 
     if (result.content) {
-      results.push(formatProcessedMedia(contentType, result.localPath, result.content, instance.agentSendMediaPath));
+      results.push(
+        formatProcessedMedia(
+          contentType,
+          result.localPath,
+          result.content,
+          instance.agentSendMediaPath,
+          instance.agentSendMediaPathTypes,
+        ),
+      );
     } else {
       const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
       results.push(`${icon}: [media processing unavailable]`);
@@ -1246,9 +1259,9 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && !mediaFiles.length) return false;
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
-  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
-  const rawThreadId = rawPl.threadId as string | undefined;
+  const rawThreadId = extractThreadId(messages);
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -1372,6 +1385,10 @@ async function buildContextMessages(
   currentMessageIds: string[],
 ): Promise<string[]> {
   try {
+    // Per-instance configurable limit, capped at 200 (0 = disabled)
+    const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
+    if (historyLimit === 0) return [];
+
     // Only provide context for group chats (not DMs)
     // chatId here is the external JID, not internal UUID
     const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
@@ -1379,11 +1396,11 @@ async function buildContextMessages(
       return [];
     }
 
-    // Query recent messages (last 50, ordered by timestamp desc by default)
+    // Query recent messages (configurable limit, ordered by timestamp desc by default)
     // Use the internal chat.id (UUID) for the query
     const messagesResult = await services.messages.list({
       chatId: chat.id,
-      limit: 50,
+      limit: historyLimit,
     });
 
     const recentMessages = messagesResult.items;
@@ -1532,8 +1549,17 @@ async function dispatchViaLegacy(
   personId: string,
   senderName: string | undefined,
   traceId: string,
+  perThreadExtraContext?: string[],
 ): Promise<void> {
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
+
+  if (perThreadExtraContext?.length) {
+    log.warn('per_thread context available but legacy dispatch path has limited support — prepending as text', {
+      instanceId: instance.id,
+      contextCount: perThreadExtraContext.length,
+    });
+    messageTexts.unshift(...perThreadExtraContext);
+  }
 
   if (!messageTexts.length && !mediaFiles.length) {
     log.debug('No text or media content in messages, skipping agent call');
@@ -1754,6 +1780,7 @@ async function markPerThreadSessionInitialized(db: Database, instanceId: string,
       target: [agentSessions.instanceId, agentSessions.sessionKey],
       set: { lastUsedAt: now, updatedAt: now },
     });
+  log.info('per_thread session initialized', { instanceId, sessionId });
 }
 
 // ============================================================================
@@ -1784,7 +1811,7 @@ async function downloadToTempFile(url: string, mimeType: string): Promise<string
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
-    const ext = mimeType.split('/')[1]?.split(';')[0] ?? 'bin';
+    const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
     const tmpPath = join(tmpdir(), `omni-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
     await writeFile(tmpPath, buffer);
     return tmpPath;
@@ -1820,9 +1847,7 @@ async function processMediaFile(
     return null;
   } finally {
     if (ownedTempFile) {
-      import('node:fs').then(({ unlink }) => {
-        unlink(localPath as string, () => {});
-      });
+      unlink(localPath as string).catch(() => {});
     }
   }
 }
@@ -1868,10 +1893,9 @@ async function processHistoryMessage(
 
   const processedContent = await processMediaFile(msg, mimeType, mediaService);
 
-  if (processedContent) {
-    if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
-    if (reactFn) reactFn(msg.externalId, PROC_REACT_DONE).catch(() => {});
-  }
+  // Always remove start emoji; add done emoji only on success
+  if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
+  if (processedContent && reactFn) reactFn(msg.externalId, PROC_REACT_DONE).catch(() => {});
 
   return buildHistoryMediaResult(header, icon, contentType, processedContent, msg.content.caption, msg.content.text);
 }
@@ -1912,9 +1936,11 @@ async function fetchAndProcessThreadHistory(
   // Build MediaProcessingService if API keys are configured
   let mediaService: ReturnType<typeof createMediaProcessingService> | null = null;
   try {
-    const groqApiKey = await services.settings.getSecret('groq.api_key', 'GROQ_API_KEY');
-    const openaiApiKey = await services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY');
-    const geminiApiKey = await services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY');
+    const [groqApiKey, openaiApiKey, geminiApiKey] = await Promise.all([
+      services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+      services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+      services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+    ]);
     if (groqApiKey || openaiApiKey || geminiApiKey) {
       mediaService = createMediaProcessingService({ groqApiKey, openaiApiKey, geminiApiKey });
     }
@@ -2165,6 +2191,7 @@ async function processAgentResponse(
       personId,
       senderName,
       traceId,
+      perThreadExtraContext,
     );
   } catch (error) {
     log.error('Failed to process agent response', {

@@ -6,7 +6,6 @@
 set -euo pipefail
 
 VERSION="2.0.0"
-REPO="https://github.com/automagik-dev/omni.git"
 DEFAULT_API_URL="http://localhost:8882"
 
 # Colors
@@ -122,11 +121,17 @@ ensure_bun() {
   fi
 }
 
-ensure_git() {
-  if has_cmd git; then
-    ok "git $(git --version | awk '{print $3}')"
+ensure_pm2() {
+  if has_cmd pm2; then
+    ok "pm2 $(pm2 --version 2>/dev/null || echo '?')"
+    return 0
+  fi
+  info "Installing PM2..."
+  bun add -g pm2 >/dev/null 2>&1
+  if has_cmd pm2; then
+    ok "pm2 installed"
   else
-    fail "git is required. Install: macOS → xcode-select --install | Linux → sudo apt install git"
+    warn "Could not install PM2 globally. Install manually: bun add -g pm2"
   fi
 }
 
@@ -137,57 +142,12 @@ ensure_git() {
 install_cli_only() {
   step "Installing Omni CLI (global)"
 
-  # ── NPM fast path ────────────────────────────────────────────────────────
-  info "Trying @automagik/omni from npm..."
+  info "Installing @automagik/omni from npm..."
   if bun add -g @automagik/omni 2>/dev/null && has_cmd omni; then
     ok "omni $(omni --version) installed from npm"
     return 0
   fi
-  warn "npm install failed — building from source..."
-
-  # ── existing git sparse-clone + build logic below (unchanged) ────────────
-  local tmpdir
-  tmpdir=$(mktemp -d)
-  trap "rm -rf $tmpdir" EXIT
-
-  info "Cloning repository (sparse — CLI + SDK only)..."
-  git clone --depth 1 --filter=blob:none --sparse "$REPO" "$tmpdir/omni" 2>/dev/null
-  cd "$tmpdir/omni"
-  git sparse-checkout set packages/sdk packages/cli 2>/dev/null
-  ok "Source downloaded"
-
-  info "Building SDK..."
-  cd packages/sdk
-  bun install --frozen-lockfile 2>/dev/null || bun install 2>/dev/null
-  bun run build 2>/dev/null
-  ok "SDK built"
-
-  info "Building CLI..."
-  cd ../cli
-  bun install --frozen-lockfile 2>/dev/null || bun install 2>/dev/null
-  bun run build 2>/dev/null
-  ok "CLI built"
-
-  info "Linking globally..."
-  bun link 2>/dev/null || true
-
-  if has_cmd omni; then
-    ok "'omni' command available"
-  else
-    local bin_dir="$HOME/.omni/bin"
-    mkdir -p "$bin_dir"
-    cp -r "$tmpdir/omni/packages/cli" "$HOME/.omni/cli-pkg"
-    cp -r "$tmpdir/omni/packages/sdk" "$HOME/.omni/sdk-pkg"
-    cat > "$bin_dir/omni" << 'WRAPPER'
-#!/usr/bin/env bash
-exec bun "$HOME/.omni/cli-pkg/src/index.ts" "$@"
-WRAPPER
-    chmod +x "$bin_dir/omni"
-    warn "Installed to ~/.omni/bin/omni — add to PATH: export PATH=\"\$HOME/.omni/bin:\$PATH\""
-  fi
-
-  trap - EXIT
-  rm -rf "$tmpdir"
+  fail "npm install failed. Check your network and try again: bun add -g @automagik/omni"
 }
 
 # ============================================================================
@@ -197,51 +157,16 @@ WRAPPER
 install_full_server() {
   step "Installing Omni v2 (full server)"
 
-  info "Tip: For a faster setup, try: bun add -g @automagik/omni && omni install"
+  ensure_pm2
 
-  ask_input "Install directory:" "$HOME/omni"
-  local install_dir="$REPLY"
-
-  if [[ -d "$install_dir/.git" ]]; then
-    info "Existing install detected, pulling latest..."
-    cd "$install_dir"
-    git pull 2>/dev/null
-  else
-    info "Cloning repository..."
-    git clone "$REPO" "$install_dir" 2>&1 | tail -1
-    cd "$install_dir"
+  info "Installing @automagik/omni from npm..."
+  if ! bun add -g @automagik/omni 2>/dev/null || ! has_cmd omni; then
+    fail "npm install failed. Check your network and try again: bun add -g @automagik/omni"
   fi
-  ok "Repository ready at $install_dir"
+  ok "omni $(omni --version) installed"
 
-  info "Running make install..."
-  make install 2>&1 | tail -5
-  ok "Dependencies installed + DB initialized"
-
-  info "Downloading NATS..."
-  make ensure-nats 2>&1 | tail -2
-  ok "NATS ready"
-
-  if ask_yn "Start services now?"; then
-    make start 2>&1 | tail -8
-    sleep 5
-    local health
-    health=$(curl -s http://localhost:8882/api/v2/health 2>/dev/null || echo '{"status":"error"}')
-    if echo "$health" | grep -q '"healthy"'; then
-      ok "Server is healthy!"
-      local api_key
-      api_key=$(pm2 logs omni-v2-api --nostream --lines 50 2>&1 | grep -o 'omni_sk_[A-Za-z0-9]*' | head -1)
-      if [[ -n "$api_key" ]]; then
-        printf "\n  ${BOLD}API Key:${NC} ${GREEN}%s${NC}\n" "$api_key"
-        printf "  ${YELLOW}Save this key — shown only once!${NC}\n\n"
-        mkdir -p "$HOME/.omni"
-        printf '{\n  "apiUrl": "http://localhost:8882",\n  "apiKey": "%s",\n  "format": "human"\n}\n' "$api_key" > "$HOME/.omni/config.json"
-        chmod 600 "$HOME/.omni/config.json"
-        ok "CLI auto-configured with local server"
-      fi
-    else
-      warn "Server started but health check failed. Check: pm2 logs"
-    fi
-  fi
+  info "Running omni install (this will download NATS, configure PM2, etc.)..."
+  omni install --non-interactive
 }
 
 # ============================================================================
@@ -507,16 +432,15 @@ wizard() {
   banner
 
   printf "${BOLD}What would you like to install?${NC}\n\n" >/dev/tty
-  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Install from npm (fast) or source (fallback)\n" >/dev/tty
-  printf "  ${CYAN}2)${NC} ${BOLD}Full server${NC}    — Install Omni v2 + all services locally\n" >/dev/tty
-  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI (npm/source) and configure remote server\n" >/dev/tty
+  printf "  ${CYAN}1)${NC} ${BOLD}CLI only${NC}       — Install from npm\n" >/dev/tty
+  printf "  ${CYAN}2)${NC} ${BOLD}Full server${NC}    — Install CLI + run omni install\n" >/dev/tty
+  printf "  ${CYAN}3)${NC} ${BOLD}CLI + connect${NC}  — Install CLI and configure remote server\n" >/dev/tty
   printf "\n" >/dev/tty
 
   ask_input "Choose [1/2/3]:" "1"
   local choice="$REPLY"
 
   step "Checking dependencies"
-  ensure_git
   ensure_bun
 
   case "$choice" in
@@ -580,13 +504,13 @@ wizard() {
 # ============================================================================
 
 if [[ "${1:-}" == "--cli" ]]; then
-  ensure_git; ensure_bun; install_cli_only
+  ensure_bun; install_cli_only
   [[ -n "${2:-}" ]] && { DEFAULT_API_URL="$2"; configure_connection; }
   exit 0
 fi
 
 if [[ "${1:-}" == "--server" ]]; then
-  ensure_git; ensure_bun; install_full_server
+  ensure_bun; install_full_server
   exit 0
 fi
 
@@ -594,7 +518,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   banner
   printf "Usage:\n"
   printf "  curl -fsSL <url>/install.sh | bash                             Interactive wizard\n"
-  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only (@automagik/omni from npm, git fallback)\n"
+  printf "  curl -fsSL <url>/install.sh | bash -s -- --cli                 CLI only (npm)\n"
   printf "  curl -fsSL <url>/install.sh | bash -s -- --cli <api-url>       CLI + configure\n"
   printf "  curl -fsSL <url>/install.sh | bash -s -- --server              Full server\n"
   printf "\n"

@@ -26,8 +26,13 @@ function createMockPlugin(
       chatId: string,
       messageIds: string[],
       messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      readReceiptMode?: 'on' | 'off' | 'exclude-self',
     ) => Promise<void>;
-    markChatAsRead: (instanceId: string, chatId: string) => Promise<void>;
+    markChatAsRead: (
+      instanceId: string,
+      chatId: string,
+      readReceiptMode?: 'on' | 'off' | 'exclude-self',
+    ) => Promise<void>;
   }> = {},
 ) {
   return {
@@ -230,12 +235,14 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.data.messageId).toBe(testMessage.id);
       expect(body.data.externalMessageId).toBe(testMessage.externalId);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
-      // Plugin receives messageData with rawPayload so it can extract channel-specific keys
+      // Plugin receives messageData with rawPayload so it can extract channel-specific keys,
+      // plus readReceiptMode ('on' is the default for new instances)
       expect(markAsReadMock).toHaveBeenCalledWith(
         testInstance.id,
         testChat.externalId,
         [testMessage.externalId],
         [{ externalId: testMessage.externalId, rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } } }],
+        'on',
       );
     });
 
@@ -324,8 +331,8 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.success).toBe(true);
       expect(body.data.messageCount).toBe(3);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
-      // messageIds don't exist in DB → messageData is empty array
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, []);
+      // messageIds don't exist in DB → messageData is empty array; readReceiptMode defaults to 'on'
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, [], 'on');
     });
 
     test('batch resolves messageData from DB for existing messages', async () => {
@@ -354,6 +361,8 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(messageData).toHaveLength(1);
       expect(messageData[0]?.externalId).toBe(testMessage.externalId);
       expect(messageData[0]?.rawPayload).toEqual({ key: { participant: '5511999999999@s.whatsapp.net' } });
+      // readReceiptMode is the 5th argument
+      expect(callArgs[4]).toBe('on');
     });
 
     test('successfully marks batch using internal chat UUID', async () => {
@@ -378,7 +387,7 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.success).toBe(true);
       // Should resolve to external ID
       expect(body.data.chatId).toBe(testChat.externalId);
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, []);
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, [], 'on');
     });
 
     test('returns error when channel does not support read receipts', async () => {
@@ -490,6 +499,7 @@ describeWithDb('Read Receipt Endpoints', () => {
           rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
         },
       ]);
+      expect(callArgs[4]).toBe('on');
     });
 
     test('batch DM passes messageData from DB', async () => {
@@ -515,6 +525,7 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(messageData[0]?.externalId).toBe(testDmMessage.externalId);
       // rawPayload has no participant — plugin won't try to set one
       expect(messageData[0]?.rawPayload.key.participant).toBeUndefined();
+      expect(callArgs[4]).toBe('on');
     });
   });
 
@@ -538,7 +549,7 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.data.chatId).toBe(testChat.id);
       expect(body.data.externalChatId).toBe(testChat.externalId);
       expect(markChatAsReadMock).toHaveBeenCalledTimes(1);
-      expect(markChatAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId);
+      expect(markChatAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, 'on');
     });
 
     test('falls back to markAsRead with "all" when markChatAsRead not available', async () => {
@@ -580,7 +591,7 @@ describeWithDb('Read Receipt Endpoints', () => {
 
       expect(res.status).toBe(200);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
-      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, ['all']);
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, ['all'], undefined, 'on');
     });
 
     test('returns error when channel does not support read receipts', async () => {

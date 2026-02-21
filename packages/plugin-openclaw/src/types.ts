@@ -15,50 +15,130 @@ export interface OmniPluginConfig {
   };
 }
 
-export interface OpenClawMessage {
+export interface ResolvedOmniAccount {
   accountId: string;
-  recipientId: string;
-  text: string;
-  metadata?: Record<string, unknown>;
+  name?: string;
+  enabled: boolean;
+  configured: boolean;
+  apiUrl: string;
+  apiKey: string;
+  instanceId: string;
 }
 
-export interface OpenClawInboundMessage {
-  accountId: string;
-  senderId: string;
-  text: string;
-  timestamp: number;
-  rawEvent?: unknown;
+export interface OpenClawPluginApi {
+  runtime: PluginRuntime;
+  registerChannel(opts: { plugin: OpenClawChannel }): void;
 }
 
-export interface OpenClawChannelAPI {
-  registerChannel(options: { plugin: OpenClawChannel }): void;
+export interface PluginRuntime {
+  channel: {
+    text: {
+      chunkMarkdownText: (text: string, limit: number) => string[];
+    };
+  };
+}
+
+export interface ChannelOutboundAdapter {
+  deliveryMode: string;
+  chunker?: ((text: string, limit: number) => string[]) | null;
+  chunkerMode?: string;
+  textChunkLimit?: number;
+  sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
+  sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
+}
+
+export interface ChannelOutboundContext {
+  cfg: OmniPluginConfig;
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  accountId?: string | null;
+}
+
+export interface OutboundDeliveryResult {
+  channel: string;
+  messageId?: string;
+  [key: string]: unknown;
+}
+
+export interface ChannelGatewayContext {
+  cfg: OmniPluginConfig;
+  accountId: string;
+  account: ResolvedOmniAccount;
+  runtime: unknown;
+  abortSignal: AbortSignal;
+  log?: ChannelLogSink;
+  getStatus: () => ChannelAccountSnapshot;
+  setStatus: (next: ChannelAccountSnapshot) => void;
+}
+
+export interface ChannelLogSink {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  error: (msg: string) => void;
+  debug?: (msg: string) => void;
+}
+
+export interface ChannelAccountSnapshot {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  running?: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  baseUrl?: string;
+  [key: string]: unknown;
+}
+
+export interface ChannelMessageActionAdapter {
+  listActions?: (params: { cfg: OmniPluginConfig }) => string[];
+  supportsAction?: (params: { action: string }) => boolean;
+  handleAction?: (ctx: ChannelMessageActionContext) => Promise<{ content: unknown }>;
+}
+
+export interface ChannelMessageActionContext {
+  channel: string;
+  action: string;
+  cfg: OmniPluginConfig;
+  params: Record<string, unknown>;
+  accountId?: string | null;
 }
 
 export interface OpenClawChannel {
   id: string;
   meta: {
+    id?: string;
     label: string;
     selectionLabel: string;
     docsPath: string;
     blurb: string;
-    aliases: string[];
+    aliases?: string[];
+    order?: number;
   };
   capabilities: {
     chatTypes: string[];
+    reactions?: boolean;
+    media?: boolean;
   };
   config: {
     listAccountIds(cfg: OmniPluginConfig): string[];
-    resolveAccount(cfg: OmniPluginConfig, accountId: string): OmniAccountConfig | undefined;
+    resolveAccount(cfg: OmniPluginConfig, accountId?: string | null): ResolvedOmniAccount;
+    isConfigured?: (account: ResolvedOmniAccount) => boolean;
+    describeAccount?: (account: ResolvedOmniAccount) => ChannelAccountSnapshot;
   };
-  outbound: {
-    sendText(account: OmniAccountConfig, message: OpenClawMessage): Promise<void>;
+  outbound?: ChannelOutboundAdapter;
+  actions?: ChannelMessageActionAdapter;
+  gateway?: {
+    startAccount?: (ctx: ChannelGatewayContext) => Promise<unknown>;
   };
-  gateway: {
-    start(
-      account: OmniAccountConfig,
-      accountId: string,
-      onMessage: (msg: OpenClawInboundMessage) => void,
-    ): Promise<void>;
-    stop(accountId: string): Promise<void>;
+  status?: {
+    defaultRuntime?: ChannelAccountSnapshot;
+    collectStatusIssues?: (
+      accounts: ChannelAccountSnapshot[],
+    ) => Array<{ channel: string; accountId: string; kind: string; message: string }>;
   };
 }

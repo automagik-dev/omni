@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,16 +21,41 @@ function readVersionFromArtifact(): string | null {
   return (vj?.version as string) || null;
 }
 
+/**
+ * Read the short git hash directly from .git/HEAD via filesystem reads.
+ *
+ * Bun-specific: execSync cannot be used here because Bun's ESM loader
+ * deadlocks when a blocking subprocess runs during concurrent static import
+ * resolution (e.g. chalk, commander). Direct filesystem reads avoid this.
+ */
+function readGitHash(repoRoot: string): string | null {
+  try {
+    const headPath = join(repoRoot, '.git', 'HEAD');
+    if (!existsSync(headPath)) return null;
+    const head = readFileSync(headPath, 'utf-8').trim();
+
+    let fullHash: string;
+    if (head.startsWith('ref: ')) {
+      // Symbolic ref — e.g. "ref: refs/heads/main"
+      const refPath = join(repoRoot, '.git', head.slice(5));
+      if (!existsSync(refPath)) return null;
+      fullHash = readFileSync(refPath, 'utf-8').trim();
+    } else {
+      // Detached HEAD — raw commit hash
+      fullHash = head;
+    }
+
+    return fullHash.length >= 7 ? fullHash.slice(0, 7) : null;
+  } catch {
+    return null;
+  }
+}
+
 function readVersionFromPackage(): string {
   const pkg = readJsonFile(join(__dirname, '..', 'package.json'));
   let version = (pkg?.version as string) || '0.0.1';
-  try {
-    const gitDir = join(__dirname, '..', '..', '..');
-    const hash = execSync('git rev-parse --short HEAD 2>/dev/null', { cwd: gitDir, encoding: 'utf-8' }).trim();
-    if (hash) version += `+${hash}`;
-  } catch {
-    /* ignore */
-  }
+  const hash = readGitHash(join(__dirname, '..', '..', '..'));
+  if (hash) version += `+${hash}`;
   return version;
 }
 

@@ -2,13 +2,14 @@
  * @omni/api - HTTP API Server
  *
  * Entry point for the Omni v2 API server.
- * Uses Node.js HTTP server (required for Baileys WebSocket compatibility).
+ * Uses Bun.serve with embedded pgserve (PGlite) for zero-dependency PostgreSQL.
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { createDb, getDefaultDatabaseUrl } from '@omni/db';
+import { closeDb, createDb } from '@omni/db';
+import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
 configureLogging({
@@ -21,7 +22,6 @@ const log = createLogger('api:startup');
 const natsLog = createLogger('api:nats');
 const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
-const httpLog = createLogger('api:http');
 import packageJson from '../package.json';
 import { type App, createApp } from './app';
 import {
@@ -47,7 +47,6 @@ import { printStartupBanner } from './utils/startup-banner';
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
-const DATABASE_URL = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
 // Global references for plugin system
@@ -152,61 +151,20 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
- * Convert Node.js request headers to a plain object
+ * Start the HTTP server using Bun.serve
  */
-function convertNodeHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'string') {
-      result[key] = value;
-    } else if (Array.isArray(value)) {
-      result[key] = value.join(', ');
-    }
-  }
-  return result;
-}
-
-/**
- * Start the HTTP server
- */
-async function startServer(app: App): Promise<{ close: (cb: () => void) => void }> {
-  const http = await import('node:http');
-
-  const server = http.createServer((req, res) => {
-    const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-    const headers = convertNodeHeaders(req.headers as Record<string, string | string[] | undefined>);
-
-    const fetchRequest = new Request(`http://${req.headers.host}${req.url}`, {
-      method: req.method,
-      headers,
-      ...(hasBody && ({ body: req, duplex: 'half' } as unknown as { body: ReadableStream })),
-    });
-
-    Promise.resolve(app.fetch(fetchRequest))
-      .then(async (response: Response) => {
-        res.writeHead(response.status, {
-          ...Object.fromEntries(response.headers),
-          'Content-Type': response.headers.get('Content-Type') || 'application/json',
-        });
-        // Use arrayBuffer() instead of text() to preserve binary data (images, audio, etc.)
-        // text() would corrupt non-UTF-8 bytes (0xEFBFBD replacement char mangling)
-        res.end(response.body ? Buffer.from(await response.arrayBuffer()) : undefined);
-      })
-      .catch((error: Error) => {
-        httpLog.error('Request error', { error: error.message, stack: error.stack });
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Internal server error' }));
-      });
+function startBunServer(app: App) {
+  return Bun.serve({
+    port: PORT,
+    hostname: HOST,
+    fetch: app.fetch,
   });
-
-  server.listen(PORT, HOST);
-  return server;
 }
 
 /**
  * Set up graceful shutdown handlers
  */
-function setupShutdownHandlers(server: { close: (cb: () => void) => void }): void {
+function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>): void {
   let isShuttingDown = false;
 
   const shutdown = async () => {
@@ -218,7 +176,7 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
     const forceExitTimer = setTimeout(() => {
       shutdownLog.warn('Force exiting (timeout)');
       process.exit(1);
-    }, 10000);
+    }, 15000);
     forceExitTimer.unref();
 
     try {
@@ -226,7 +184,8 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
       shutdownLog.info('Stopping scheduler');
       stopScheduler();
 
-      server.close(() => shutdownLog.info('HTTP server closed'));
+      shutdownLog.info('Stopping HTTP server');
+      server.stop();
 
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
@@ -247,6 +206,13 @@ function setupShutdownHandlers(server: { close: (cb: () => void) => void }): voi
         shutdownLog.info('Closing NATS connection');
         await globalEventBus.close();
       }
+
+      // Drain DB connection pool before stopping embedded pgserve
+      shutdownLog.info('Closing database connections');
+      await closeDb();
+
+      // Stop embedded pgserve last (after all DB consumers are done)
+      await stopEmbeddedPgserve();
 
       shutdownLog.info('Graceful shutdown complete');
       clearTimeout(forceExitTimer);
@@ -322,9 +288,13 @@ async function main() {
   // Enable default Node.js metrics (CPU, memory, event loop)
   enableDefaultMetrics();
 
+  // Start embedded pgserve (before DB connection)
+  const pgserveConfig = resolvePgserveConfig();
+  const databaseUrl = await startEmbeddedPgserve(pgserveConfig);
+
   // Create database connection
   log.info('Connecting to database');
-  const db = createDb({ url: DATABASE_URL });
+  const db = createDb({ url: databaseUrl });
 
   // Connect to NATS
   const eventBus = await connectToNats(db);
@@ -379,7 +349,7 @@ async function main() {
   setupScheduler(services, globalChannelRegistry);
 
   // Start HTTP server
-  const server = await startServer(app);
+  const server = startBunServer(app);
 
   // Print startup banner
   printStartupBanner({

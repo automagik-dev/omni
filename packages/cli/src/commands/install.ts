@@ -18,31 +18,26 @@
 
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import ora from 'ora';
-import { saveConfig } from '../config.js';
+import { saveConfig, saveServerConfig } from '../config.js';
+import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
+import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
+import { getServerBundlePath } from '../server-bundle.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const DEFAULT_API_PORT = 8882;
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
 const NATS_VERSION = 'v2.10.24';
-const HEALTH_TIMEOUT_MS = 15_000;
-const HEALTH_POLL_INTERVAL_MS = 500;
-
-/** PM2 process names managed by omni */
-const PM2_API_PROCESS = 'omni-api';
-const PM2_NATS_PROCESS = 'omni-nats';
 
 // ============================================================================
 // TYPES
@@ -62,73 +57,6 @@ interface WizardConfig {
   databaseUrl: string;
   apiKey: string;
   processManager: ProcessManager;
-}
-
-// ============================================================================
-// HELPERS - PATH RESOLUTION
-// ============================================================================
-
-/** Get path to the bundled server index.js relative to this binary */
-function getServerBundlePath(): string {
-  try {
-    const thisFile = fileURLToPath(import.meta.url);
-    const distDir = dirname(thisFile);
-    return join(distDir, 'server', 'index.js');
-  } catch {
-    return join(process.cwd(), 'dist', 'server', 'index.js');
-  }
-}
-
-// ============================================================================
-// HELPERS - PM2
-// ============================================================================
-
-/** Check if PM2 is available in PATH */
-async function isPm2Available(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn({
-      cmd: ['pm2', '--version'],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const code = await proc.exited;
-    return code === 0;
-  } catch {
-    return false;
-  }
-}
-
-/** Run a PM2 command (inherited stdio) */
-async function runPm2(args: string[], envOverrides?: Record<string, string>): Promise<number> {
-  const proc = Bun.spawn({
-    cmd: ['pm2', ...args],
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-    env: { ...process.env, ...envOverrides },
-  });
-  return proc.exited;
-}
-
-// ============================================================================
-// HELPERS - HEALTH CHECK
-// ============================================================================
-
-/** Wait for the health endpoint to respond (up to HEALTH_TIMEOUT_MS) */
-async function waitForHealth(port: number): Promise<boolean> {
-  const url = `http://localhost:${port}/api/v2/health`;
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(1000) });
-      if (resp.ok) return true;
-    } catch {
-      // keep polling
-    }
-    await Bun.sleep(HEALTH_POLL_INTERVAL_MS);
-  }
-  return false;
 }
 
 // ============================================================================
@@ -237,10 +165,10 @@ async function downloadNats(): Promise<boolean> {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    const tarCode = await tarProc.exited;
+    const [tarCode, tarStderr] = await Promise.all([tarProc.exited, new Response(tarProc.stderr).text()]);
 
     if (tarCode !== 0) {
-      spinner.fail('Failed to extract NATS archive');
+      spinner.fail(`Failed to extract NATS archive${tarStderr.trim() ? `: ${tarStderr.trim()}` : ''}`);
       return false;
     }
 
@@ -348,12 +276,12 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
     DATABASE_URL: cfg.databaseUrl,
     OMNI_API_KEY: cfg.apiKey,
     MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
+    PGSERVE_EMBEDDED: 'true',
+    PGSERVE_DATA: join(cfg.dataDir, 'pglite'),
+    NATS_URL: 'nats://localhost:4222',
+    NODE_ENV: 'production',
+    LOG_LEVEL: 'info',
   };
-}
-
-function formatSystemdEnvironment(name: string, value: string): string {
-  const escaped = value.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `Environment="${name}=${escaped}"`;
 }
 
 // ============================================================================
@@ -361,21 +289,18 @@ function formatSystemdEnvironment(name: string, value: string): string {
 // ============================================================================
 
 /** Write a systemd unit file to /etc/systemd/system/omni-api.service */
-async function writeSystemdUnit(cfg: WizardConfig): Promise<boolean> {
-  const bundlePath = getServerBundlePath();
-  const runtimeEnv = buildApiRuntimeEnv(cfg);
+async function writeSystemdUnit(_cfg: WizardConfig): Promise<boolean> {
   const unitContent = `[Unit]
 Description=Omni API Server
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/env node ${bundlePath}
+Type=forking
+ExecStart=/usr/bin/env omni start
+ExecStop=/usr/bin/env omni stop
+ExecReload=/usr/bin/env omni restart
 Restart=on-failure
-${formatSystemdEnvironment('API_PORT', runtimeEnv.API_PORT)}
-${formatSystemdEnvironment('DATABASE_URL', runtimeEnv.DATABASE_URL)}
-${formatSystemdEnvironment('OMNI_API_KEY', runtimeEnv.OMNI_API_KEY)}
-${formatSystemdEnvironment('MEDIA_STORAGE_PATH', runtimeEnv.MEDIA_STORAGE_PATH)}
+PIDFile=${homedir()}/.pm2/pm2.pid
 
 [Install]
 WantedBy=multi-user.target
@@ -499,7 +424,7 @@ async function promptApiKey(nonInteractive: boolean): Promise<ApiKeyPromptResult
 /** Step 8: Start services */
 async function startServices(cfg: WizardConfig): Promise<void> {
   if (cfg.processManager === 'manual') {
-    output.info('Skipping service start. Run: omni server start');
+    output.info('Skipping service start. Run: omni start');
     return;
   }
 
@@ -511,7 +436,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   // PM2 path
   const pm2Ok = await isPm2Available();
   if (!pm2Ok) {
-    output.warn('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then run: omni server start');
+    output.warn('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then run: omni start');
     return;
   }
 
@@ -524,21 +449,21 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   }
 
   const runtimeEnv = buildApiRuntimeEnv(cfg);
-  const apiSpinner = ora(`Starting ${PM2_API_PROCESS} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_API_PROCESS, '--interpreter', 'node'], runtimeEnv);
+  const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
+  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], runtimeEnv);
   if (apiCode !== 0) {
-    apiSpinner.fail(`Failed to start ${PM2_API_PROCESS} (pm2 exit code ${apiCode})`);
+    apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
   } else {
-    apiSpinner.succeed(`${PM2_API_PROCESS} started`);
+    apiSpinner.succeed(`${PM2_PROCESSES.api} started`);
   }
 
   if (existsSync(NATS_BINARY_PATH)) {
-    const natsSpinner = ora(`Starting ${PM2_NATS_PROCESS}...`).start();
-    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_NATS_PROCESS]);
+    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
+    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_PROCESSES.nats]);
     if (natsCode !== 0) {
-      natsSpinner.warn(`${PM2_NATS_PROCESS} failed to start — check NATS binary`);
+      natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
     } else {
-      natsSpinner.succeed(`${PM2_NATS_PROCESS} started`);
+      natsSpinner.succeed(`${PM2_PROCESSES.nats} started`);
     }
   } else {
     output.warn(`NATS binary not found at ${NATS_BINARY_PATH} — skipping`);
@@ -552,7 +477,7 @@ async function checkHealth(port: number): Promise<boolean> {
   if (healthy) {
     spinner.succeed('Server is healthy');
   } else {
-    spinner.warn(`Health check failed after ${HEALTH_TIMEOUT_MS / 1000}s — check: omni server logs api`);
+    spinner.warn(`Health check failed after ${HEALTH_TIMEOUT_MS / 1000}s — check: omni logs --process api`);
   }
   return healthy;
 }
@@ -587,7 +512,7 @@ async function printDoneBanner(
   Key:    ${displayedKey}${keyHint}
 
   omni status              Check connection
-  omni server logs api     View API logs
+  omni logs --process api  View API logs
   omni instances list      Manage channels
 `);
 
@@ -645,6 +570,13 @@ async function runInstall(options: InstallOptions): Promise<void> {
 
   // Step 10: Write config
   writeConfigFile(port, apiKey);
+
+  // Save server configuration for `omni start`
+  saveServerConfig({
+    port: cfg.port,
+    databaseUrl: cfg.databaseUrl,
+    dataDir: cfg.dataDir,
+  });
 
   // Step 11: Done banner
   await printDoneBanner(port, apiKey, nonInteractive, apiKeyGenerated);

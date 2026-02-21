@@ -1,5 +1,5 @@
 {
-  "id": "plugin-openclaw",
+  "id": "omni",
   "name": "@omni/plugin-openclaw",
   "channels": ["omni"],
   "configSchema": {

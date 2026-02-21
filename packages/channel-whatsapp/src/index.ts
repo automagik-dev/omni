@@ -48,10 +48,11 @@ export {
   mapStatusCode,
   isDelivered,
   isRead,
+  shouldSendReadReceipt,
   ReceiptTracker,
   createReceiptTracker,
 } from './receipts';
-export type { MessageStatus } from './receipts';
+export type { MessageStatus, ReadReceiptMode, ReadReceiptConfig } from './receipts';
 
 // Media utilities
 export {

@@ -131,6 +131,21 @@ describe('Read Receipts', () => {
       tracker.update('msg_1', 'read');
       expect(tracker.get('msg_1')).toBe('read');
     });
+
+    it('cleans up old receipts based on age', () => {
+      tracker.update('msg_old', 'sent');
+      tracker.update('msg_new', 'delivered');
+
+      // Manually backdate msg_old by overwriting internal state
+      const internals = tracker as unknown as { receipts: Map<string, { status: string; timestamp: number }> };
+      const oldEntry = internals.receipts.get('msg_old');
+      if (oldEntry) oldEntry.timestamp = Date.now() - 25 * 60 * 60 * 1000; // 25h ago
+
+      tracker.cleanup(); // default maxAge = 24h
+
+      expect(tracker.get('msg_old')).toBeUndefined();
+      expect(tracker.get('msg_new')).toBe('delivered');
+    });
   });
 
   describe('createReceiptTracker', () => {

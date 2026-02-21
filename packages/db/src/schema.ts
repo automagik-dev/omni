@@ -313,6 +313,7 @@ export const agentRoutes = pgTable(
     agentPrefixSenderName: boolean('agent_prefix_sender_name'),
     agentWaitForMedia: boolean('agent_wait_for_media'),
     agentSendMediaPath: boolean('agent_send_media_path'),
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
     agentGateEnabled: boolean('agent_gate_enabled'),
     agentGateModel: varchar('agent_gate_model', { length: 120 }),
     agentGatePrompt: text('agent_gate_prompt'),
@@ -669,6 +670,19 @@ export const instances = pgTable(
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
     /** Include the full file path in formatted text sent to agent */
     agentSendMediaPath: boolean('agent_send_media_path').notNull().default(true),
+    /** Content types that receive the file path (e.g. image, video, document). Null = default (all except audio) */
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
+
+    // ---- WhatsApp Read Receipts ----
+    /** Per-instance read receipt mode: 'on' (default), 'off', or 'exclude-self' */
+    readReceipts: varchar('read_receipts', { length: 20 })
+      .notNull()
+      .default('on')
+      .$type<'on' | 'off' | 'exclude-self'>(),
+
+    // ---- Group History Context ----
+    /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
+    groupHistorySize: integer('group_history_size').notNull().default(50),
 
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */
