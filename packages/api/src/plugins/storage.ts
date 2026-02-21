@@ -35,6 +35,7 @@ export class DatabasePluginStorage implements PluginStorage {
   async get<T>(key: string): Promise<T | null> {
     const fullKey = this.getFullKey(key);
 
+    const t0 = Date.now();
     const result = await this.db
       .select()
       .from(pluginStorage)
@@ -46,6 +47,11 @@ export class DatabasePluginStorage implements PluginStorage {
         ),
       )
       .limit(1);
+
+    const elapsed = Date.now() - t0;
+    if (elapsed > 500) {
+      log.warn('Slow storage.get', { key: fullKey.slice(-80), elapsedMs: elapsed });
+    }
 
     const row = result[0];
     if (!row) return null;

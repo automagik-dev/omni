@@ -139,6 +139,44 @@ export async function createStorageAuthState(
     log.info('Created new credentials', { instanceId });
   }
 
+  // #70 FIX: Write-behind cache for signal keys.
+  //
+  // Root cause: PostgreSQL UPSERT on sender-key rows can hang indefinitely
+  // due to row-level locks from concurrent incoming message processing.
+  // Baileys' commitWithRetry awaits our keys.set(), holding the meId
+  // transaction mutex — freezing ALL message processing.
+  //
+  // Fix: keys.set() updates an in-memory cache and returns immediately.
+  // DB persist happens in the background (fire-and-forget).
+  // keys.get() checks cache first, falls through to DB for misses.
+  //
+  // Safety: Baileys' addTransactionCapability already caches mutations
+  // within a transaction via AsyncLocalStorage. The meId mutex serializes
+  // all transactions, so cache is always consistent between transactions.
+  // DB persist is for durability across restarts only.
+  const keyCache = new Map<string, unknown>();
+  // Sentinel to distinguish "cached null/deleted" from "not in cache"
+  const DELETED = Symbol('deleted');
+
+  /** Parse a raw storage value into a usable object, reconstructing Buffers */
+  function parseStorageValue(value: unknown): unknown {
+    if (typeof value === 'string') return deserialize<unknown>(value);
+    return JSON.parse(JSON.stringify(value), bufferReviver);
+  }
+
+  /** Persist a single key-value pair to storage in the background (fire-and-forget) */
+  function backgroundPersist(type: string, id: string, key: string, value: unknown): void {
+    if (value !== null && value !== undefined) {
+      storage.set(key, serialize(value)).catch((err) => {
+        log.error('Background key persist failed', { type, id: id.slice(-40), instanceId, err: String(err) });
+      });
+    } else {
+      storage.delete(key).catch((err) => {
+        log.error('Background key delete failed', { type, id: id.slice(-40), instanceId, err: String(err) });
+      });
+    }
+  }
+
   return {
     state: {
       creds,
@@ -151,17 +189,20 @@ export async function createStorageAuthState(
 
           for (const id of ids) {
             const key = `${keyPrefix}:${type}:${id}`;
-            const value = await storage.get<unknown>(key);
 
+            // Check write-behind cache first (#70)
+            const cached = keyCache.get(key);
+            if (cached === DELETED) continue;
+            if (cached !== undefined) {
+              data[id] = deserializeSignalData(type, cached);
+              continue;
+            }
+
+            // Cache miss — read from storage
+            const value = await storage.get<unknown>(key);
             if (value) {
-              // Handle both: raw object (from storage.get parsing) or JSON string (legacy)
-              let parsed: unknown;
-              if (typeof value === 'string') {
-                parsed = deserialize<unknown>(value);
-              } else {
-                // Storage already parsed it, reconstruct Buffers
-                parsed = JSON.parse(JSON.stringify(value), bufferReviver);
-              }
+              const parsed = parseStorageValue(value);
+              keyCache.set(key, parsed);
               data[id] = deserializeSignalData(type, parsed);
             }
           }
@@ -176,19 +217,14 @@ export async function createStorageAuthState(
             };
           },
         ): Promise<void> => {
-          let _savedCount = 0;
           for (const [type, entries] of Object.entries(data)) {
             if (!entries) continue;
-
             for (const [id, value] of Object.entries(entries)) {
               const key = `${keyPrefix}:${type}:${id}`;
-
-              if (value !== null && value !== undefined) {
-                await storage.set(key, serialize(value));
-                _savedCount++;
-              } else {
-                await storage.delete(key);
-              }
+              // 1. Update in-memory cache synchronously — instant, never blocks
+              keyCache.set(key, value !== null && value !== undefined ? value : DELETED);
+              // 2. Persist to DB in background — fire-and-forget (#70)
+              backgroundPersist(type, id, key, value);
             }
           }
         },
@@ -199,6 +235,31 @@ export async function createStorageAuthState(
       await storage.set(credsKey, serialize(creds));
     },
   };
+}
+
+/**
+ * Clear sender keys for an instance — forces fresh key generation + redistribution.
+ *
+ * Use this to recover from sender key desync caused by previous hung sessions
+ * where the DB persist never completed. After clearing, the next group send
+ * will generate new sender keys and distribute them to all participants.
+ *
+ * @param storage - PluginStorage instance
+ * @param instanceId - Instance identifier
+ * @returns Number of keys deleted
+ */
+export async function clearSenderKeys(storage: PluginStorage, instanceId: string): Promise<number> {
+  const keyPrefix = `auth:${instanceId}:keys`;
+  const allKeys = await storage.keys(`${keyPrefix}:sender-key*`);
+
+  let deleted = 0;
+  for (const key of allKeys) {
+    await storage.delete(key);
+    deleted++;
+  }
+
+  log.info('Cleared sender keys', { instanceId, deleted });
+  return deleted;
 }
 
 /**
