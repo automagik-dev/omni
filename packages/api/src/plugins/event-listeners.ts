@@ -10,6 +10,7 @@ import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { sanitizeText } from '../utils/utf8';
+import { recoverInterruptedStreams } from './agent-dispatcher';
 import { clearQrCode } from './qr-store';
 
 const instanceLog = createLogger('instance');
@@ -29,6 +30,11 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
 
       // Clear QR code
       clearQrCode(instanceId);
+
+      // Abort stale in-flight streams and notify affected chats
+      recoverInterruptedStreams(instanceId, channelType).catch((err) => {
+        instanceLog.warn('Stream recovery failed', { instanceId, error: String(err) });
+      });
 
       // Update database with connection info
       if (db) {
