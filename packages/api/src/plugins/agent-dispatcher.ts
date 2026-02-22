@@ -35,6 +35,7 @@ import {
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
   type MessageReceivedPayload,
+  type OmniEvent,
   OpenClawAgentProvider,
   OpenClawClient,
   type OpenClawClientConfig,
@@ -82,6 +83,8 @@ interface BufferedMessage {
   payload: MessageReceivedPayload;
   metadata: DispatchMetadata;
   timestamp: number;
+  /** The full NATS event envelope — preserves id/type/timestamp for AgentTrigger.event */
+  event: OmniEvent;
 }
 
 interface DispatchMetadata {
@@ -2289,11 +2292,7 @@ async function processAgentResponse(
 
   try {
     // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
-    // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
-    // a type mismatch. BufferedMessage doesn't carry the original NATS event envelope.
-    // Providers reading context.event fields (id, type, timestamp) will get undefined.
-    // Fix: either store the full OmniEvent in BufferedMessage, or make AgentTrigger.event optional.
-    const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
+    const rawEvent = firstMessage.event;
     let handled = false;
     try {
       // B-1a: Try streaming dispatch first (if instance + provider + channel support it)
@@ -3379,6 +3378,7 @@ export async function setupAgentDispatcher(
             payload.chatId,
             {
               payload,
+              event,
               metadata: {
                 instanceId: instance.id,
                 channelType: metadata.channelType,
