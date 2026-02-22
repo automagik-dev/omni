@@ -178,7 +178,7 @@ export class BatchJobService {
       processedItems: 0,
       failedItems: 0,
       progressPercent: 0,
-      totalCostUsd: 0,
+      totalCostUsd: '0',
       totalTokens: 0,
       errors: [],
     };
@@ -501,7 +501,7 @@ export class BatchJobService {
     return {
       processedItems: job.processedItems,
       failedItems: job.failedItems,
-      totalCostCents: job.totalCostUsd ?? 0,
+      totalCostCents: Number(job.totalCostUsd ?? 0),
       totalTokens: job.totalTokens ?? 0,
       errors: (job.errors as Array<{ itemId: string; error: string }>) ?? [],
     };
@@ -619,7 +619,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent,
-        totalCostUsd: Math.round(state.totalCostCents),
+        totalCostUsd: String(Math.round(state.totalCostCents)),
         totalTokens: state.totalTokens,
         errors: state.errors,
       })
@@ -676,7 +676,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent: 100,
-        totalCostUsd: Math.round(state.totalCostCents),
+        totalCostUsd: String(Math.round(state.totalCostCents)),
         totalTokens: state.totalTokens,
         errors: state.errors,
         currentItem: null,
@@ -819,7 +819,7 @@ export class BatchJobService {
       language: result.language,
       duration: result.duration,
       tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-      costUsd: result.costCents,
+      costUsd: String(result.costCents),
       processingTimeMs: result.processingTimeMs,
       batchJobId,
     });
@@ -950,7 +950,7 @@ export class BatchJobService {
       skippedItems: 0, // Not stored in DB
       currentItem: job.currentItem ?? undefined,
       progressPercent: job.progressPercent,
-      totalCostCents: job.totalCostUsd ?? 0,
+      totalCostCents: Number(job.totalCostUsd ?? 0),
       totalTokens: job.totalTokens ?? 0,
     };
   }

@@ -278,7 +278,7 @@ async function persistProcessingResult(
       language: result.language,
       duration: result.duration,
       tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-      costUsd: result.costCents,
+      costUsd: String(result.costCents),
       processingTimeMs: result.processingTimeMs,
     });
   } catch (error) {
