@@ -239,7 +239,7 @@ export class WhatsAppStreamSender implements StreamSender {
         ? {
             quoted: {
               key: { id: quoteId, remoteJid: this.jid, fromMe: false },
-              message: {},
+              message: { conversation: ' ' },
             },
           }
         : undefined;
@@ -286,7 +286,7 @@ export class WhatsAppStreamSender implements StreamSender {
           ? {
               quoted: {
                 key: { id: this.replyToMessageId, remoteJid: this.jid, fromMe: false },
-                message: {},
+                message: { conversation: ' ' },
               },
             }
           : undefined;
