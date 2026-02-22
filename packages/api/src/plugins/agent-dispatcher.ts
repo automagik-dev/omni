@@ -1124,6 +1124,38 @@ export function getActiveStreamsForInstance(instanceId: string): Array<{ chatId:
   return result;
 }
 
+const recoveryLog = createLogger('stream-recovery');
+
+/**
+ * On reconnect: abort any stale in-flight streams and notify affected chats.
+ * Call this from the instance.connected event handler.
+ */
+export async function recoverInterruptedStreams(instanceId: string, channelType: ChannelType): Promise<void> {
+  const interrupted = getActiveStreamsForInstance(instanceId);
+  if (interrupted.length === 0) return;
+
+  recoveryLog.warn('Reconnect detected with in-flight streams — sending recovery notices', {
+    instanceId,
+    count: interrupted.length,
+    chats: interrupted.map((s) => s.chatId),
+  });
+
+  for (const { chatId, sender } of interrupted) {
+    const streamKey = `${instanceId}:${chatId}`;
+    activeStreams.delete(streamKey);
+    try {
+      await sender.abort();
+    } catch {
+      // Best-effort abort
+    }
+    try {
+      await sendTextMessage(channelType, instanceId, chatId, '_(mensagem interrompida por reconexão — aguarde)_');
+    } catch (err) {
+      recoveryLog.warn('Failed to send reconnect recovery notice', { instanceId, chatId, error: String(err) });
+    }
+  }
+}
+
 /** Route a single StreamDelta to the appropriate StreamSender method. */
 async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
   switch (delta.phase) {
