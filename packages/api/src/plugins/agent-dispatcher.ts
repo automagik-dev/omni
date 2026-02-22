@@ -1097,7 +1097,32 @@ async function fetchChatMetadata(
 }
 
 // ─── Per-chatId stream guard ──────────────────────────────
-const activeStreams = new Map<string, StreamSender>();
+const STREAM_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+interface ActiveStream {
+  sender: StreamSender;
+  startedAt: number;
+}
+const activeStreams = new Map<string, ActiveStream>();
+
+export function clearActiveStreamsForInstance(instanceId: string): void {
+  for (const key of activeStreams.keys()) {
+    if (key.startsWith(`${instanceId}:`)) {
+      activeStreams.delete(key);
+    }
+  }
+}
+
+export function getActiveStreamsForInstance(instanceId: string): Array<{ chatId: string; sender: StreamSender }> {
+  const result: Array<{ chatId: string; sender: StreamSender }> = [];
+  for (const [key, entry] of activeStreams.entries()) {
+    if (key.startsWith(`${instanceId}:`)) {
+      const chatId = key.slice(instanceId.length + 1);
+      result.push({ chatId, sender: entry.sender });
+    }
+  }
+  return result;
+}
 
 /** Route a single StreamDelta to the appropriate StreamSender method. */
 async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
@@ -1167,13 +1192,20 @@ async function resolveStreamingCapabilities(
   }
 
   const streamKey = `${instance.id}:${chatId}`;
-  if (activeStreams.has(streamKey)) {
-    log.info('Stream guard: parallel stream blocked, falling back to accumulate', {
-      instanceId: instance.id,
-      chatId,
-      traceId,
-    });
-    return null;
+  const existingStream = activeStreams.get(streamKey);
+  if (existingStream) {
+    const age = Date.now() - existingStream.startedAt;
+    if (age > STREAM_TTL_MS) {
+      log.warn('Evicting stale stream lock', { streamKey, ageMs: age });
+      activeStreams.delete(streamKey);
+    } else {
+      log.info('Stream guard: parallel stream blocked, falling back to accumulate', {
+        instanceId: instance.id,
+        chatId,
+        traceId,
+      });
+      return null;
+    }
   }
 
   return {
@@ -1294,7 +1326,7 @@ async function dispatchViaStreamingProvider(
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
-  activeStreams.set(streamKey, sender);
+  activeStreams.set(streamKey, { sender, startedAt: Date.now() });
 
   try {
     const generator = resolved.provider.triggerStream(trigger);

@@ -1017,7 +1017,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return {
       quoted: {
         key: { id: message.replyTo, remoteJid: jid, fromMe: replyToFromMe },
-        message: replyToText ? { conversation: replyToText } : {},
+        message: replyToText ? { conversation: replyToText } : { conversation: ' ' },
       },
     };
   }
@@ -2376,6 +2376,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleDisconnected(instanceId: string, reason: string, willReconnect: boolean): Promise<void> {
+    // TODO: clear active streams on disconnect via event (cannot import @omni/api directly)
+    // The api layer should listen for 'instance.disconnected' and call clearActiveStreamsForInstance(instanceId)
+
     // Close and cleanup socket to prevent memory leaks
     const sock = this.sockets.get(instanceId);
     if (sock) {
@@ -3191,8 +3194,33 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message receipt update (detailed read receipts)
    * @internal
    */
-  handleMessageReceiptUpdate(_instanceId: string, _update: unknown): void {
-    // TODO: Process detailed receipt info
+  async handleMessageReceiptUpdate(instanceId: string, update: unknown): Promise<void> {
+    const u = update as {
+      key?: { id?: string; remoteJid?: string };
+      receipt?: { readTimestamp?: number; playedTimestamp?: number; receiptTimestamp?: number };
+    };
+    const messageExternalId = u.key?.id;
+    const chatId = u.key?.remoteJid;
+    if (!messageExternalId || !chatId) return;
+
+    const receipt = u.receipt;
+    if (!receipt) return;
+
+    if (receipt.readTimestamp || receipt.playedTimestamp) {
+      await this.emitMessageRead({
+        instanceId,
+        externalId: messageExternalId,
+        chatId,
+        readAt: (receipt.readTimestamp ?? receipt.playedTimestamp ?? 0) * 1000 || Date.now(),
+      });
+    } else if (receipt.receiptTimestamp) {
+      await this.emitMessageDelivered({
+        instanceId,
+        externalId: messageExternalId,
+        chatId,
+        deliveredAt: receipt.receiptTimestamp * 1000,
+      });
+    }
   }
 
   /**

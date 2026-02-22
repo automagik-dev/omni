@@ -348,6 +348,9 @@ async function handleConnectionClose(
  * Handle connection open event
  */
 async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, sock: WASocket): Promise<void> {
+  // Detect if this is a reconnection (instance was previously authenticated)
+  const isReconnect = authenticatedInstances.has(instanceId);
+
   // Clear all tracking state on successful connection
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
@@ -358,7 +361,17 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
   authenticatedInstances.add(instanceId);
 
-  log.info('Connection opened', { instanceId });
+  if (isReconnect) {
+    // Any in-flight streams (LLM responses being sent paragraph-by-paragraph)
+    // were interrupted by the disconnect. The stream senders hold stale socket
+    // references and cannot resume. The API layer should detect this via the
+    // 'instance.connected' event and abort/clear affected streams.
+    // TODO: have event-listeners.ts call getActiveStreamsForInstance() on
+    // 'instance.connected' to abort stale streams and notify affected chats.
+    log.warn('WhatsApp reconnected — any in-flight streams were interrupted', { instanceId });
+  }
+
+  log.info('Connection opened', { instanceId, isReconnect });
   await plugin.handleConnected(instanceId, sock);
 }
 
