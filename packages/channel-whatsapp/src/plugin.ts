@@ -2376,9 +2376,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleDisconnected(instanceId: string, reason: string, willReconnect: boolean): Promise<void> {
-    // TODO: clear active streams on disconnect via event (cannot import @omni/api directly)
-    // The api layer should listen for 'instance.disconnected' and call clearActiveStreamsForInstance(instanceId)
-
     // Close and cleanup socket to prevent memory leaks
     const sock = this.sockets.get(instanceId);
     if (sock) {
