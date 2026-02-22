@@ -19,6 +19,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -1464,7 +1465,7 @@ export const mediaContent = pgTable(
     language: varchar('language', { length: 10 }),
     duration: integer('duration'), // For audio/video
     tokensUsed: integer('tokens_used'),
-    costUsd: integer('cost_usd'), // Stored as cents
+    costUsd: real('cost_usd'), // Stored as cents (fractional)
 
     // ---- Source Info ----
     batchJobId: uuid('batch_job_id').references(() => batchJobs.id, { onDelete: 'set null' }),
