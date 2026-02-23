@@ -78,6 +78,13 @@
       "when": 1771999999999,
       "tag": "0010_actor_model_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1771830578484,
+      "tag": "0011_instance_agent_fk",
+      "breakpoints": true
     }
   ]
 }

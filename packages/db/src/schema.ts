@@ -606,6 +606,8 @@ export const instances = pgTable(
 
     // ---- Agent Provider Reference ----
     agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    /** Proper FK to agents table. Preferred over legacy agentProviderId + agentId varchar combo. */
+    agentFkId: uuid('agent_fk_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Agent Configuration (Instance Override) ----
     agentApiUrl: text('agent_api_url'),
@@ -1557,6 +1559,10 @@ export const instancesRelations = relations(instances, ({ one, many }) => ({
   agentProvider: one(agentProviders, {
     fields: [instances.agentProviderId],
     references: [agentProviders.id],
+  }),
+  agent: one(agents, {
+    fields: [instances.agentFkId],
+    references: [agents.id],
   }),
   platformIdentities: many(platformIdentities),
   accessRules: many(accessRules),
