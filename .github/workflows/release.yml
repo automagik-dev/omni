@@ -56,7 +56,7 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         with:
           config: cliff.toml
-          args: ${{ steps.prev.outputs.tag && format('{0}..v{1}', steps.prev.outputs.tag, steps.pkg.outputs.version) || '' }}
+          args: ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
         env:
           GITHUB_REPO: ${{ github.repository }}
 
