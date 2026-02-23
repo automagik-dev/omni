@@ -8,7 +8,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { closeDb, createDb, migrateDb } from '@omni/db';
+import { applyMigrations, closeDb, createDb } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
@@ -348,12 +348,13 @@ async function main() {
   }
 
   // Apply pending migrations (idempotent — already-applied are skipped)
+  // applyMigrations() throws if Drizzle silently skipped any migration files
   log.info('Running database migrations');
   const migrationStart = Date.now();
   const MIGRATION_TIMEOUT_MS = 60_000;
   try {
     await Promise.race([
-      migrateDb(db),
+      applyMigrations(db, new URL('../../db/drizzle', import.meta.url).pathname),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
       ),
