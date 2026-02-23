@@ -424,6 +424,7 @@ async function sendTextMessage(
   text: string,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -432,7 +433,7 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text },
     replyTo,
-    metadata: { messageFormatMode },
+    metadata: { messageFormatMode, correlationId },
   });
 }
 
@@ -743,6 +744,7 @@ async function sendResponseParts(
   splitConfig: SplitDelayConfig,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -757,7 +759,7 @@ async function sendResponseParts(
 
   for (const [index, chunk] of allChunks.entries()) {
     const chunkReplyTo = isSlack || index === 0 ? replyTo : undefined;
-    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo);
+    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo, correlationId);
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1236,6 +1238,8 @@ async function resolveStreamingCapabilities(
  * If content was already sent before the error, we return true to prevent a double
  * reply from the fallback path.
  */
+const STREAM_INACTIVITY_MS = 30_000;
+
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
   sender: StreamSender,
@@ -1246,11 +1250,39 @@ async function consumeStream(
   const startTime = Date.now();
   let hadError = false;
   let hadContent = false;
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
-  for await (const delta of generator) {
-    if (delta.phase === 'error') hadError = true;
-    if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
-    await routeStreamDelta(sender, delta);
+  const clearInactivityTimer = () => {
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  };
+
+  const resetInactivityTimer = () => {
+    clearInactivityTimer();
+    inactivityTimer = setTimeout(() => {
+      log.warn('consumeStream: inactivity timeout, aborting stream', {
+        instanceId,
+        chatId,
+        traceId,
+        inactivityMs: STREAM_INACTIVITY_MS,
+      });
+      generator.return(undefined).catch(() => {});
+      sender.abort().catch(() => {});
+    }, STREAM_INACTIVITY_MS);
+  };
+
+  try {
+    resetInactivityTimer();
+    for await (const delta of generator) {
+      resetInactivityTimer();
+      if (delta.phase === 'error') hadError = true;
+      if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
+      await routeStreamDelta(sender, delta);
+    }
+  } finally {
+    clearInactivityTimer();
   }
 
   log.info('Streaming response complete', {
@@ -1589,6 +1621,15 @@ async function buildContextMessages(
   }
 }
 
+/** Record a journey checkpoint when tracking is active for this correlationId. */
+function recordJourneyCheckpoint(correlationId: string | undefined, stage: string, stageName: string): void {
+  if (!correlationId) return;
+  const tracker = getJourneyTracker();
+  if (tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, stage, stageName);
+  }
+}
+
 /**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
@@ -1668,7 +1709,12 @@ async function dispatchViaProvider(
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
+  const correlationId = messages[0]?.metadata.correlationId;
+
   const result = await provider.trigger(trigger);
+
+  // T7: Agent completed — response returned from provider
+  recordJourneyCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
 
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
@@ -1677,7 +1723,23 @@ async function dispatchViaProvider(
     const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+    // T8: Processing send request
+    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+    await sendResponseParts(
+      channel,
+      instance.id,
+      chatId,
+      parts,
+      getSplitDelayConfig(instance),
+      _fmtMode,
+      replyTo,
+      correlationId,
+    );
+
+    // T9: Outbound sent via plugin
+    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1752,6 +1814,8 @@ async function dispatchViaLegacy(
     mediaFiles.length > 0 ? (mediaFiles as unknown as ProviderFile[]) : undefined,
   );
 
+  const correlationId = messages[0]?.metadata.correlationId;
+
   const result = await services.agentRunner.run({
     instance,
     chatId,
@@ -1767,6 +1831,9 @@ async function dispatchViaLegacy(
     files: mediaFiles.length > 0 ? mediaFiles : undefined,
   });
 
+  // T7: Agent completed — response returned from legacy runner
+  recordJourneyCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
+
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
@@ -1775,7 +1842,23 @@ async function dispatchViaLegacy(
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+  // T8: Processing send request
+  recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+  await sendResponseParts(
+    channel,
+    instance.id,
+    chatId,
+    parts,
+    getSplitDelayConfig(instance),
+    _fmtMode,
+    replyTo,
+    correlationId,
+  );
+
+  // T9: Outbound sent via plugin
+  recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -3325,8 +3408,8 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
-    // T5: Agent notified — record journey checkpoint
-    if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
+    // T5: Agent notified — record for all agent-dispatched messages (not gated by sample rate)
+    if (firstMsg.metadata.correlationId) {
       const tracker = getJourneyTracker();
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
