@@ -107,8 +107,9 @@ function createMockInstance(overrides: Record<string, unknown> = {}) {
     id: 'inst-1',
     name: 'Test Instance',
     channel: 'whatsapp-baileys',
+    // agentId is now the UUID FK to agents (phase 3); agentProviderId/agentType are transient dispatch fields
+    agentId: 'agent-uuid-1',
     agentProviderId: 'provider-1',
-    agentId: 'agent-1',
     agentType: 'agent',
     agentTimeout: 60,
     agentStreamMode: false,
@@ -437,10 +438,10 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.run).not.toHaveBeenCalled();
     });
 
-    it('skips messages when instance has no agentProviderId', async () => {
+    it('skips messages when instance has no agentId', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ agentProviderId: null })),
+        getInstanceWithProvider: mock(async () => createMockInstance({ agentId: null })),
         getSenderName: mock(async () => 'User'),
         run: mock(async () => ({ parts: ['resp'], metadata: { runId: 'r', sessionId: 's', status: 'completed' } })),
       };

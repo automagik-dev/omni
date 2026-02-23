@@ -85,6 +85,13 @@
       "when": 1771830578484,
       "tag": "0011_instance_agent_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1771999999000,
+      "tag": "0012_instance_drop_legacy_agent_fields",
+      "breakpoints": true
     }
   ]
 }

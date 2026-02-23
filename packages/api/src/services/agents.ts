@@ -5,8 +5,8 @@
 import { NotFoundError } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type Agent, type NewAgent, agentProviders, agents, instances } from '@omni/db';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { type Agent, type NewAgent, agents } from '@omni/db';
+import { and, eq, sql } from 'drizzle-orm';
 
 export interface ListAgentsOptions {
   limit?: number;
@@ -116,50 +116,11 @@ export class AgentService {
   }
 
   /**
-   * Backfill Agent rows from instances that have agentProviderId set.
-   * Idempotent — uses onConflictDoNothing via name uniqueness awareness.
-   * Returns the count of rows inserted.
+   * Backfill Agent rows from instances.
+   * @deprecated Phase 3 (omni-930): instances.agentProviderId has been dropped.
+   * This method is now a no-op — all backfill was completed before the column drop.
    */
-  async backfillFromInstances(dryRun = false): Promise<{ found: number; inserted: number }> {
-    // Join instances with their agent providers
-    const rows = await this.db
-      .select({
-        instanceId: instances.id,
-        instanceName: instances.name,
-        agentProviderId: instances.agentProviderId,
-        providerSchema: agentProviders.schema,
-      })
-      .from(instances)
-      .innerJoin(agentProviders, eq(instances.agentProviderId, agentProviders.id))
-      .where(isNotNull(instances.agentProviderId));
-
-    const found = rows.length;
-
-    if (dryRun || found === 0) {
-      return { found, inserted: 0 };
-    }
-
-    // Map provider schema → AgentSystem
-    const schemaToSystem: Record<string, string> = {
-      agno: 'agno',
-      webhook: 'custom',
-      openclaw: 'custom',
-      'ag-ui': 'custom',
-      'claude-code': 'claude',
-    };
-
-    const values: NewAgent[] = rows.map((row) => ({
-      name: `${row.instanceName} agent`,
-      provider: (schemaToSystem[row.providerSchema] ?? 'custom') as Agent['provider'],
-      agentProviderId: row.agentProviderId,
-      agentType: 'assistant',
-      capabilities: [],
-      isInternal: false,
-      isActive: true,
-    }));
-
-    const result = await this.db.insert(agents).values(values).onConflictDoNothing().returning({ id: agents.id });
-
-    return { found, inserted: result.length };
+  async backfillFromInstances(_dryRun = false): Promise<{ found: number; inserted: number }> {
+    return { found: 0, inserted: 0 };
   }
 }
