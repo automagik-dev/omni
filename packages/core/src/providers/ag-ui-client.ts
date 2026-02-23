@@ -112,13 +112,11 @@ export class AgUiClient implements IAgentClient {
       throw new ProviderError('No response body from AG-UI endpoint', 'INVALID_RESPONSE');
     }
 
-    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     try {
-      yield* this.readAgUiChunks(reader, decoder);
+      yield* this.readAgUiChunks(response.body as ReadableStream<Uint8Array>, decoder);
     } finally {
       clearTimeout(timer);
-      reader.releaseLock();
     }
 
     // Stream ended without RUN_FINISHED — yield a final empty chunk
@@ -196,26 +194,42 @@ export class AgUiClient implements IAgentClient {
   }
 
   /** Reads the SSE stream and yields parsed AG-UI StreamChunks. */
-  private async *readAgUiChunks(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    decoder: TextDecoder,
-  ): AsyncGenerator<StreamChunk> {
+  private async *readAgUiChunks(body: ReadableStream<Uint8Array>, decoder: TextDecoder): AsyncGenerator<StreamChunk> {
+    const reader = body.getReader();
     let buffer = '';
     let runId = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const chunk = this.parseAgUiLine(line, runId);
-        if (!chunk) continue;
-        if (chunk.runId) runId = chunk.runId;
-        yield chunk;
-        if (chunk.isComplete) return;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        const result = this.processAgUiLines(lines, runId);
+        runId = result.runId;
+        for (const chunk of result.chunks) yield chunk;
+        if (result.isComplete) return;
       }
+    } finally {
+      reader.releaseLock();
     }
+  }
+
+  /** Processes a batch of SSE lines, returning parsed chunks and updated runId. */
+  private processAgUiLines(
+    lines: string[],
+    runId: string,
+  ): { chunks: StreamChunk[]; runId: string; isComplete: boolean } {
+    const chunks: StreamChunk[] = [];
+    let currentRunId = runId;
+    for (const line of lines) {
+      const chunk = this.parseAgUiLine(line, currentRunId);
+      if (!chunk) continue;
+      if (chunk.runId) currentRunId = chunk.runId;
+      chunks.push(chunk);
+      if (chunk.isComplete) return { chunks, runId: currentRunId, isComplete: true };
+    }
+    return { chunks, runId: currentRunId, isComplete: false };
   }
 
   /** Parses a single SSE data line into a StreamChunk or null. */
