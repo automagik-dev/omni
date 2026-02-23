@@ -283,7 +283,7 @@ async function connectWithDevice(
     role,
     scopes.join(','),
     String(signedAtMs),
-    '', // empty dev.token for first-time pairing
+    gatewayToken, // auth.token sent in connect frame — gateway includes this in signature payload
     nonce,
   ].join('|');
 
