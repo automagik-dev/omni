@@ -90,13 +90,11 @@ export class A2AClient implements IAgentClient {
       throw new ProviderError('No response body', 'INVALID_RESPONSE');
     }
 
-    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     try {
-      yield* this.readSseChunks(reader, decoder);
+      yield* this.readSseChunks(response.body as ReadableStream<Uint8Array>, decoder);
     } finally {
       clearTimeout(timer);
-      reader.releaseLock();
     }
   }
 
@@ -166,21 +164,23 @@ export class A2AClient implements IAgentClient {
   }
 
   /** Reads the SSE stream and yields parsed StreamChunks. */
-  private async *readSseChunks(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    decoder: TextDecoder,
-  ): AsyncGenerator<StreamChunk> {
+  private async *readSseChunks(body: ReadableStream<Uint8Array>, decoder: TextDecoder): AsyncGenerator<StreamChunk> {
+    const reader = body.getReader();
     let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const chunk = this.parseSseLine(line);
-        if (chunk) yield chunk;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const chunk = this.parseSseLine(line);
+          if (chunk) yield chunk;
+        }
       }
+    } finally {
+      reader.releaseLock();
     }
   }
 
