@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
 import { routesRoutes } from './agent-routes';
+import { agentsRoutes } from './agents';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
@@ -31,6 +32,7 @@ import { webhooksRoutes } from './webhooks';
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
 // Mount all route modules
+v2Routes.route('/agents', agentsRoutes);
 v2Routes.route('/auth', authRoutes);
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);

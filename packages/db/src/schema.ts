@@ -36,6 +36,14 @@ export type ChannelType = (typeof channelTypes)[number];
 export const agentTypes = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof agentTypes)[number];
 
+// What AI system powers the agent — distinct from AgentProvider (the table type)
+export const agentSystems = ['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal'] as const;
+export type AgentSystem = (typeof agentSystems)[number];
+
+// Role of the agent entity — distinct from existing agentTypes used on Instance/AgentRoute
+export const agentEntityTypes = ['assistant', 'workflow', 'team', 'tool'] as const;
+export type AgentEntityType = (typeof agentEntityTypes)[number];
+
 export const debounceMode = ['disabled', 'fixed', 'randomized'] as const;
 export type DebounceMode = (typeof debounceMode)[number];
 
@@ -274,6 +282,45 @@ export const agentProviders = pgTable(
     activeIdx: index('agent_providers_active_idx').on(table.isActive),
   }),
 );
+
+// ============================================================================
+// AGENTS
+// ============================================================================
+
+/**
+ * First-class agent entities with persistent identity.
+ * An agent is the AI actor that replies to messages. Previously agents existed
+ * only as loose config fields on instances and agent_routes; this table gives
+ * them a proper row in the database for observability and FK references.
+ */
+export const agents = pgTable(
+  'agents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    provider: varchar('provider', { length: 50 }).notNull().$type<AgentSystem>(),
+    model: varchar('model', { length: 120 }),
+    agentType: varchar('agent_type', { length: 20 }).notNull().default('assistant').$type<AgentEntityType>(),
+    capabilities: text('capabilities').array().notNull().default([]),
+    ownerId: uuid('owner_id').references(() => persons.id, { onDelete: 'set null' }),
+    agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    configPath: text('config_path'),
+    isInternal: boolean('is_internal').notNull().default(false),
+    isActive: boolean('is_active').notNull().default(true),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: index('agents_name_idx').on(table.name),
+    ownerIdx: index('agents_owner_idx').on(table.ownerId),
+    providerIdx: index('agents_provider_idx').on(table.provider),
+    activeIdx: index('agents_active_idx').on(table.isActive),
+  }),
+);
+
+export type Agent = typeof agents.$inferSelect;
+export type NewAgent = typeof agents.$inferInsert;
 
 // ============================================================================
 // AGENT ROUTES
@@ -1479,6 +1526,12 @@ export type NewPluginStorageRow = typeof pluginStorage.$inferInsert;
 
 export const agentProvidersRelations = relations(agentProviders, ({ many }) => ({
   instances: many(instances),
+  agents: many(agents),
+}));
+
+export const agentsRelations = relations(agents, ({ one }) => ({
+  owner: one(persons, { fields: [agents.ownerId], references: [persons.id] }),
+  agentProvider: one(agentProviders, { fields: [agents.agentProviderId], references: [agentProviders.id] }),
 }));
 
 export const instancesRelations = relations(instances, ({ one, many }) => ({
