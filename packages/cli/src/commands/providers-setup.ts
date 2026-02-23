@@ -6,18 +6,29 @@
  *   --gateway-token <token>
  *   --agent-id <agentId>
  *   [--name <name>]
+ *   [--instance-id <uuid>]
+ *   [--account-name <name>]
+ *   [--plugin-path <path>]
+ *   [--skip-openclaw-config]
  *   [--non-interactive]
  *
  * Single command that takes gateway URL + token + agent ID
  * and produces a fully working OpenClaw provider with device identity.
+ * Optionally auto-configures ~/.openclaw/openclaw.json with plugin
+ * registration and channel account when --instance-id is provided.
  */
 
+import { execFileSync, execSync } from 'node:child_process';
 import * as nodeCrypto from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { type DeviceKeypair, ED25519_PKCS8_PREFIX, generateDeviceKeypair } from '@omni/core';
 import { Command } from 'commander';
 import ora from 'ora';
 import { getClient } from '../client.js';
+import { loadConfig } from '../config.js';
 import * as output from '../output.js';
 
 // ============================================================================
@@ -74,6 +85,10 @@ interface SetupOpenClawOptions {
   agentId: string;
   name?: string;
   nonInteractive?: boolean;
+  instanceId?: string;
+  accountName?: string;
+  pluginPath?: string;
+  skipOpenclawConfig?: boolean;
 }
 
 interface PairingResult {
@@ -283,7 +298,7 @@ async function connectWithDevice(
     role,
     scopes.join(','),
     String(signedAtMs),
-    '', // empty dev.token for first-time pairing
+    '', // dev.token is empty for first-time pairing (matches gateway's buildDeviceAuthPayload)
     nonce,
   ].join('|');
 
@@ -353,6 +368,176 @@ async function pairDevice(
 }
 
 // ============================================================================
+// HELPERS - OPENCLAW CONFIG
+// ============================================================================
+
+const OPENCLAW_CONFIG_PATH = resolve(homedir(), '.openclaw', 'openclaw.json');
+const PLUGIN_MARKER = 'plugin-openclaw/omni.ts';
+
+/** Read openclaw.json, returning empty object if missing or empty */
+function readOpenClawConfig(configPath: string): Record<string, unknown> {
+  if (!existsSync(configPath)) return {};
+  const raw = readFileSync(configPath, 'utf-8').trim();
+  if (!raw) return {};
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+/** Write openclaw.json with 2-space indent */
+function writeOpenClawConfig(configPath: string, config: Record<string, unknown>): void {
+  mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Check if the omni plugin path is already in plugins.load.paths */
+function isPluginRegistered(config: Record<string, unknown>, marker: string, pluginPath?: string): boolean {
+  const plugins = config.plugins as Record<string, unknown> | undefined;
+  const load = plugins?.load as Record<string, unknown> | undefined;
+  const paths = load?.paths as string[] | undefined;
+  return paths?.some((p) => p.includes(marker) || (pluginPath !== undefined && p === pluginPath)) ?? false;
+}
+
+/** Ensure nested object path exists without clobbering siblings, return the leaf */
+function ensureNestedPath(obj: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  let current = obj;
+  for (const key of keys) {
+    if (!current[key] || typeof current[key] !== 'object') {
+      current[key] = {};
+    }
+    current = current[key] as Record<string, unknown>;
+  }
+  return current;
+}
+
+/** Check if openclaw CLI is available in PATH */
+function hasOpenClawCli(): boolean {
+  try {
+    execSync('openclaw --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Validate UUID v4 format */
+function isValidUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+/** Resolve the plugin entry point path */
+function resolvePluginPath(explicit?: string): string | null {
+  if (explicit) {
+    return existsSync(explicit) ? resolve(explicit) : null;
+  }
+  const cwdCandidate = resolve(process.cwd(), 'packages/plugin-openclaw/omni.ts');
+  return existsSync(cwdCandidate) ? cwdCandidate : null;
+}
+
+/** Try to register the plugin via openclaw CLI, falling back to JSON merge */
+function registerPlugin(
+  config: Record<string, unknown>,
+  pluginPath: string,
+  configPath: string,
+): { config: Record<string, unknown>; registered: boolean } {
+  if (hasOpenClawCli()) {
+    try {
+      execFileSync('openclaw', ['plugins', 'install', '--link', pluginPath], { stdio: 'ignore' });
+      try {
+        return { config: readOpenClawConfig(configPath), registered: true };
+      } catch {
+        return { config, registered: true };
+      }
+    } catch {
+      // CLI failed, fall back to JSON merge
+    }
+  }
+
+  // Fallback: JSON merge
+  const loadSection = ensureNestedPath(config, ['plugins', 'load']);
+  if (!Array.isArray(loadSection.paths)) {
+    loadSection.paths = [];
+  }
+  const existingPaths = loadSection.paths as string[];
+  if (!existingPaths.includes(pluginPath)) {
+    existingPaths.push(pluginPath);
+  }
+  return { config, registered: true };
+}
+
+/** Set the channel account fields in the config object */
+function setChannelAccount(config: Record<string, unknown>, accountName: string, instanceId: string): void {
+  const omniConfig = loadConfig();
+  const account = ensureNestedPath(config, ['channels', 'omni', 'accounts', accountName]);
+  if (account.apiUrl === undefined) account.apiUrl = omniConfig.apiUrl ?? 'http://localhost:8882';
+  if (account.apiKey === undefined) account.apiKey = omniConfig.apiKey ?? '';
+  account.instanceId = instanceId;
+  account.enabled = true;
+}
+
+/**
+ * Step 5: Configure openclaw.json — register plugin + create channel account.
+ * Non-fatal: logs warnings on failure, never throws.
+ */
+function configureOpenClawJson(opts: SetupOpenClawOptions, spinner: ReturnType<typeof ora>): void {
+  const instanceId = opts.instanceId;
+  if (!instanceId) return;
+
+  const accountName = opts.accountName ?? opts.agentId;
+  const configPath = OPENCLAW_CONFIG_PATH;
+
+  spinner.start('Configuring openclaw.json...');
+
+  let config: Record<string, unknown>;
+  try {
+    config = readOpenClawConfig(configPath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    spinner.warn(`Could not parse ${configPath}: ${msg}`);
+    output.info('  Tip: ensure openclaw.json is valid JSON, or use --skip-openclaw-config');
+    return;
+  }
+
+  // 5a. Register plugin
+  const pluginPath = resolvePluginPath(opts.pluginPath);
+  let pluginRegistered = isPluginRegistered(config, PLUGIN_MARKER, pluginPath ?? undefined);
+
+  if (!pluginRegistered && pluginPath) {
+    const result = registerPlugin(config, pluginPath, configPath);
+    config = result.config;
+    pluginRegistered = result.registered;
+  }
+
+  // Enable plugin
+  if (pluginRegistered) {
+    const entries = ensureNestedPath(config, ['plugins', 'entries']);
+    const existing = (entries.omni ?? {}) as Record<string, unknown>;
+    entries.omni = { ...existing, enabled: true };
+  }
+
+  // 5c. Create channel account
+  setChannelAccount(config, accountName, instanceId);
+
+  // Write back
+  try {
+    writeOpenClawConfig(configPath, config);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    spinner.warn(`Could not write ${configPath}: ${msg}`);
+    return;
+  }
+
+  spinner.succeed('OpenClaw config updated');
+
+  // 5d. Summary
+  if (pluginRegistered) {
+    output.info('  Plugin: omni (registered)');
+  } else if (!pluginPath) {
+    output.info('  Plugin: skipped (plugin-openclaw/omni.ts not found)');
+  }
+  output.info(`  Account: ${accountName} → instance ${instanceId}`);
+  output.info('  Run `openclaw gateway restart` to apply');
+}
+
+// ============================================================================
 // SETUP FLOW
 // ============================================================================
 
@@ -363,7 +548,22 @@ async function collectOptions(options: Partial<SetupOpenClawOptions>): Promise<S
   const agentId = options.agentId ?? (await promptLine('Default agent ID: '));
   const name = options.name ?? (await promptLine(`Provider name [openclaw-${agentId}]: `, `openclaw-${agentId}`));
 
-  return { gatewayUrl, gatewayToken, agentId, name, nonInteractive: options.nonInteractive };
+  let instanceId = options.instanceId;
+  if (!instanceId && !options.skipOpenclawConfig) {
+    instanceId = (await promptLine('Instance ID (Omni instance UUID, leave blank to skip config): ')) || undefined;
+  }
+
+  return {
+    gatewayUrl,
+    gatewayToken,
+    agentId,
+    name,
+    nonInteractive: options.nonInteractive,
+    instanceId,
+    accountName: options.accountName,
+    pluginPath: options.pluginPath,
+    skipOpenclawConfig: options.skipOpenclawConfig,
+  };
 }
 
 /** Validate the required fields are present */
@@ -389,6 +589,7 @@ function validateGatewayUrl(url: string): string | null {
  * 2. Pair device with gateway via connect frame (auto-approved from localhost)
  * 3. Create provider via Omni API
  * 4. Run health check
+ * 5. Configure openclaw.json (if --instance-id provided)
  */
 async function runOpenClawSetup(opts: SetupOpenClawOptions): Promise<void> {
   const spinner = ora();
@@ -434,6 +635,14 @@ async function runOpenClawSetup(opts: SetupOpenClawOptions): Promise<void> {
       output.info(`  omni providers test ${provider.id}`);
     }
 
+    // Step 5: Configure openclaw.json (optional)
+    if (!opts.skipOpenclawConfig && opts.instanceId) {
+      configureOpenClawJson(opts, spinner);
+    } else if (!opts.skipOpenclawConfig && !opts.instanceId) {
+      output.info('');
+      output.info('Skipping openclaw.json config (no --instance-id provided)');
+    }
+
     // Summary
     output.info('');
     output.success('OpenClaw provider setup complete');
@@ -468,6 +677,10 @@ export function createSetupCommand(): Command {
     .option('--gateway-token <token>', 'Gateway authentication token')
     .option('--agent-id <agentId>', 'Default agent ID')
     .option('--name <name>', 'Provider name (default: openclaw-<agent-id>)')
+    .option('--instance-id <uuid>', 'Omni instance UUID for the openclaw channel account')
+    .option('--account-name <name>', 'Account name in openclaw.json (default: agent-id)')
+    .option('--plugin-path <path>', 'Path to omni.ts plugin entry (auto-detected from CWD)')
+    .option('--skip-openclaw-config', 'Skip openclaw.json updates entirely')
     .option('--non-interactive', 'Error on missing required flags instead of prompting')
     .action(
       async (options: {
@@ -475,6 +688,10 @@ export function createSetupCommand(): Command {
         gatewayToken?: string;
         agentId?: string;
         name?: string;
+        instanceId?: string;
+        accountName?: string;
+        pluginPath?: string;
+        skipOpenclawConfig?: boolean;
         nonInteractive?: boolean;
       }) => {
         // Non-interactive mode: validate all required flags are present
@@ -486,12 +703,24 @@ export function createSetupCommand(): Command {
           }
         }
 
+        // Validate instance-id format if provided
+        if (options.instanceId && !isValidUuid(options.instanceId)) {
+          output.error(`Invalid --instance-id: must be a valid UUID. Got: ${options.instanceId}`);
+          return;
+        }
+
         // Interactive mode: prompt for missing flags
         let resolved: SetupOpenClawOptions;
         if (options.nonInteractive) {
           resolved = options as SetupOpenClawOptions;
         } else {
           resolved = await collectOptions(options);
+        }
+
+        // Validate instance-id from prompt
+        if (resolved.instanceId && !isValidUuid(resolved.instanceId)) {
+          output.error(`Invalid instance ID: must be a valid UUID. Got: ${resolved.instanceId}`);
+          return;
         }
 
         // Validate URL scheme
