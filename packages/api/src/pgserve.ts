@@ -73,8 +73,8 @@ export async function startEmbeddedPgserve(config: PgserveConfig): Promise<strin
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
 
-    // EADDRINUSE — another process already holds the port; fall through
-    if (msg.includes('EADDRINUSE') || msg.includes('address already in use')) {
+    // EADDRINUSE / pgserve "Failed to listen" — another process already holds the port; fall through
+    if (msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen')) {
       log.warn('Port already in use, assuming external pgserve is running', { port: config.port });
       const databaseUrl = `postgresql://postgres:postgres@localhost:${config.port}/omni`;
       return databaseUrl;
