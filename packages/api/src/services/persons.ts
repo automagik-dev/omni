@@ -647,7 +647,11 @@ export class PersonService {
 
     if (this.eventBus) {
       await this.eventBus.publish('identity.unlinked', {
-        personId: identityResult.personId,
+        personId:
+          identityResult.personId ??
+          (() => {
+            throw new Error('personId unexpectedly null after guard');
+          })(),
         platformIdentityId: identityId,
         reason,
       });
