@@ -3,7 +3,7 @@
  *
  * Services managed:
  *   1. nats      — NATS server with JetStream
- *   2. api       — Omni API (Bun + Hono) with embedded pgserve (PGlite)
+ *   2. api       — Omni API (Bun + Hono) with embedded pgserve (PostgreSQL 17)
  *
  * pgserve runs in-process inside the API server (PGSERVE_EMBEDDED=true).
  * No separate PM2 process needed for PostgreSQL.

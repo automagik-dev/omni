@@ -1,29 +1,19 @@
 /**
- * Database migration runner
+ * Programmatic database migration runner
  *
- * Usage: bun run packages/db/src/migrate.ts
+ * Runs all pending Drizzle migrations. Safe to call on every startup —
+ * already-applied migrations are tracked in __drizzle_migrations and skipped.
  */
 
-import { createLogger } from '@omni/core';
+import { resolve } from 'node:path';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { createDb } from './client';
+import type { Database } from './client';
 
-const log = createLogger('db:migrate');
-
-async function runMigrations() {
-  log.info('Running migrations');
-
-  const db = createDb();
-
-  try {
-    await migrate(db, { migrationsFolder: './drizzle' });
-    log.info('Migrations completed successfully');
-  } catch (error) {
-    log.error('Migration failed', { error: String(error) });
-    process.exit(1);
-  }
-
-  process.exit(0);
+/**
+ * Run all pending Drizzle migrations.
+ * Safe to call on every startup — already-applied migrations are skipped.
+ */
+export async function migrateDb(db: Database): Promise<void> {
+  const migrationsFolder = resolve(import.meta.dirname, '../drizzle');
+  await migrate(db, { migrationsFolder });
 }
-
-runMigrations();

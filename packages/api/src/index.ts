@@ -2,13 +2,13 @@
  * @omni/api - HTTP API Server
  *
  * Entry point for the Omni v2 API server.
- * Uses Bun.serve with embedded pgserve (PGlite) for zero-dependency PostgreSQL.
+ * Uses Bun.serve with embedded pgserve (PostgreSQL 17) for zero-dependency PostgreSQL.
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { closeDb, createDb } from '@omni/db';
+import { closeDb, createDb, migrateDb } from '@omni/db';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -295,6 +295,12 @@ async function main() {
   // Create database connection
   log.info('Connecting to database');
   const db = createDb({ url: databaseUrl });
+
+  // Apply pending migrations (idempotent — already-applied are skipped)
+  log.info('Running database migrations');
+  const migrationStart = Date.now();
+  await migrateDb(db);
+  log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
 
   // Connect to NATS
   const eventBus = await connectToNats(db);

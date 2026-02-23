@@ -1,7 +1,7 @@
 CREATE TABLE "access_rules" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"instance_id" uuid,
-	"rule_type" varchar(10) NOT NULL,
+	"rule_type" varchar(20) NOT NULL,
 	"phone_pattern" varchar(50),
 	"platform_user_id" varchar(255),
 	"person_id" uuid,
@@ -11,6 +11,7 @@ CREATE TABLE "access_rules" (
 	"expires_at" timestamp,
 	"action" varchar(20) DEFAULT 'block' NOT NULL,
 	"block_message" text,
+	"metadata" jsonb,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
@@ -55,6 +56,7 @@ CREATE TABLE "agent_routes" (
 	"agent_prefix_sender_name" boolean,
 	"agent_wait_for_media" boolean,
 	"agent_send_media_path" boolean,
+	"agent_send_media_path_types" text[],
 	"agent_gate_enabled" boolean,
 	"agent_gate_model" varchar(120),
 	"agent_gate_prompt" text,
@@ -284,11 +286,14 @@ CREATE TABLE "instances" (
 	"discord_slash_commands_enabled" boolean DEFAULT true,
 	"discord_webhook_url" text,
 	"discord_permissions" integer,
+	"guild_config_overrides" jsonb,
+	"discord_presence" jsonb,
 	"slack_bot_token" text,
 	"slack_app_token" text,
 	"slack_signing_secret" text,
 	"slack_team_id" varchar(50),
 	"telegram_bot_token" text,
+	"telegram_reaction_level" varchar(20) DEFAULT 'off' NOT NULL,
 	"agent_provider_id" uuid,
 	"agent_api_url" text,
 	"agent_api_key" text,
@@ -332,12 +337,19 @@ CREATE TABLE "instances" (
 	"message_split_delay_max_ms" integer DEFAULT 1000 NOT NULL,
 	"tts_voice_id" text,
 	"tts_model_id" text,
+	"reaction_ack" varchar(10) DEFAULT 'off' NOT NULL,
+	"reaction_ack_emoji" jsonb,
+	"ack_timeout_ms" integer DEFAULT 30000 NOT NULL,
+	"session_reset" jsonb,
 	"process_audio" boolean DEFAULT true NOT NULL,
 	"process_images" boolean DEFAULT true NOT NULL,
 	"process_video" boolean DEFAULT true NOT NULL,
 	"process_documents" boolean DEFAULT true NOT NULL,
 	"agent_wait_for_media" boolean DEFAULT true NOT NULL,
 	"agent_send_media_path" boolean DEFAULT true NOT NULL,
+	"agent_send_media_path_types" text[],
+	"read_receipts" varchar(20) DEFAULT 'on' NOT NULL,
+	"group_history_size" integer DEFAULT 50 NOT NULL,
 	"last_message_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
@@ -619,6 +631,7 @@ CREATE INDEX "access_rules_instance_idx" ON "access_rules" USING btree ("instanc
 CREATE INDEX "access_rules_phone_idx" ON "access_rules" USING btree ("phone_pattern");--> statement-breakpoint
 CREATE INDEX "access_rules_type_idx" ON "access_rules" USING btree ("rule_type");--> statement-breakpoint
 CREATE UNIQUE INDEX "access_rules_unique_idx" ON "access_rules" USING btree ("instance_id","phone_pattern","rule_type");--> statement-breakpoint
+CREATE INDEX "idx_access_rules_pairing" ON "access_rules" USING btree ("instance_id","rule_type","expires_at");--> statement-breakpoint
 CREATE INDEX "agent_providers_name_idx" ON "agent_providers" USING btree ("name");--> statement-breakpoint
 CREATE INDEX "agent_providers_schema_idx" ON "agent_providers" USING btree ("schema");--> statement-breakpoint
 CREATE INDEX "agent_providers_active_idx" ON "agent_providers" USING btree ("is_active");--> statement-breakpoint
@@ -692,6 +705,7 @@ CREATE INDEX "messages_type_idx" ON "messages" USING btree ("message_type");--> 
 CREATE INDEX "messages_status_idx" ON "messages" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "messages_platform_timestamp_idx" ON "messages" USING btree ("platform_timestamp");--> statement-breakpoint
 CREATE INDEX "messages_reply_to_idx" ON "messages" USING btree ("reply_to_message_id");--> statement-breakpoint
+CREATE INDEX "messages_reply_to_external_idx" ON "messages" USING btree ("chat_id","reply_to_external_id","is_from_me");--> statement-breakpoint
 CREATE INDEX "messages_has_media_idx" ON "messages" USING btree ("has_media");--> statement-breakpoint
 CREATE INDEX "messages_original_event_idx" ON "messages" USING btree ("original_event_id");--> statement-breakpoint
 CREATE INDEX "omni_events_external_id_idx" ON "omni_events" USING btree ("external_id");--> statement-breakpoint
