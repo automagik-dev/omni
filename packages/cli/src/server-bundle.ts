@@ -20,6 +20,17 @@ export function getServerBundlePath(): string {
   }
 }
 
+/** Get path to the shell launcher for PM2 */
+export function getServerLauncherPath(): string {
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    const distDir = dirname(thisFile);
+    return join(distDir, '..', 'bin', 'omni-server');
+  } catch {
+    return join(process.cwd(), 'bin', 'omni-server');
+  }
+}
+
 /** Abort with a human-readable bundle-not-found message */
 export function bundleNotFoundError(bundlePath: string): never {
   output.error(

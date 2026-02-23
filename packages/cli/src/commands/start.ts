@@ -12,7 +12,7 @@ import { loadConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
-import { bundleNotFoundError, getServerBundlePath } from '../server-bundle.js';
+import { bundleNotFoundError, getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 
 // ============================================================================
 // CONSTANTS
@@ -68,7 +68,8 @@ async function runStart(): Promise<void> {
   // 3. Start omni-api via PM2 with complete env from config
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const env = buildApiRuntimeEnv();
-  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], env);
+  const launcherPath = getServerLauncherPath();
+  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], env);
   if (apiCode !== 0) {
     output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
     return;
