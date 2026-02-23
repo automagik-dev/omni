@@ -2348,3 +2348,105 @@ export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
   }),
   triggerLogs: many(triggerLogs),
 }));
+
+// ============================================================================
+// AGENT TASKS
+// ============================================================================
+
+export const agentTaskStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled', 'waiting_input'] as const;
+export type AgentTaskStatus = (typeof agentTaskStatuses)[number];
+
+/**
+ * Persistent task history for agents.
+ * Each row represents a discrete unit of work performed by an agent
+ * (e.g. web search, code execution, API call, sub-agent delegation).
+ *
+ * @see docs/architecture/actor-model.md — "Agent Task (persistent)"
+ */
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // ---- Core FKs ----
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    /** The message that triggered this task (null for programmatically created tasks) */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+
+    // ---- Classification ----
+    /** Task type: 'web_search' | 'code_exec' | 'api_call' | 'sub_agent' | 'media_process' | 'custom.*' */
+    type: varchar('type', { length: 100 }).notNull(),
+    /** Human-readable title: "Searching for X" */
+    title: varchar('title', { length: 500 }).notNull(),
+    description: text('description'),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<AgentTaskStatus>(),
+    /** Progress percentage 0-100 */
+    progress: integer('progress').notNull().default(0),
+    priority: integer('priority').notNull().default(0),
+
+    // ---- Payload ----
+    /** Open per-task-type metadata — no migration needed for new fields */
+    metadata: jsonb('metadata').notNull().default({}).$type<Record<string, unknown>>(),
+    result: jsonb('result').$type<Record<string, unknown>>(),
+    error: text('error'),
+
+    // ---- Subtask nesting ----
+    parentTaskId: uuid('parent_task_id').references((): ReturnType<typeof uuid> => agentTasks.id, {
+      onDelete: 'set null',
+    }),
+    subtaskCount: integer('subtask_count').notNull().default(0),
+    completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
+    chatIdIdx: index('agent_tasks_chat_id_idx').on(table.chatId),
+    conversationIdIdx: index('agent_tasks_conversation_id_idx').on(table.conversationId),
+    parentTaskIdIdx: index('agent_tasks_parent_task_id_idx').on(table.parentTaskId),
+    statusIdx: index('agent_tasks_status_idx').on(table.status),
+    agentChatIdx: index('agent_tasks_agent_chat_idx').on(table.agentId, table.chatId),
+    agentStatusIdx: index('agent_tasks_agent_status_idx').on(table.agentId, table.status),
+  }),
+);
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type NewAgentTask = typeof agentTasks.$inferInsert;
+
+export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentTasks.agentId],
+    references: [agents.id],
+  }),
+  chat: one(chats, {
+    fields: [agentTasks.chatId],
+    references: [chats.id],
+  }),
+  conversation: one(conversations, {
+    fields: [agentTasks.conversationId],
+    references: [conversations.id],
+  }),
+  message: one(messages, {
+    fields: [agentTasks.messageId],
+    references: [messages.id],
+  }),
+  parentTask: one(agentTasks, {
+    fields: [agentTasks.parentTaskId],
+    references: [agentTasks.id],
+    relationName: 'parentChild',
+  }),
+  subtasks: many(agentTasks, {
+    relationName: 'parentChild',
+  }),
+}));

@@ -129,4 +129,18 @@ agentsRoutes.post('/:id/identities/link', zValidator('json', LinkIdentityToAgent
   return c.json({ data: identity }, 201);
 });
 
+/**
+ * GET /agents/:id/tasks - List tasks for this agent (shortcut)
+ */
+agentsRoutes.get('/:id/tasks', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  await services.agents.getById(id);
+
+  const result = await services.agentTasks.list({ agentId: id });
+
+  return c.json(result);
+});
+
 export { agentsRoutes };
