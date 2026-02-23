@@ -559,6 +559,11 @@ export class PersonService {
     }
 
     // Neither has a person - create one
+    // If either identity is agent-owned, do not create a spurious Person
+    if (identityA.agentId || identityB.agentId) {
+      throw new Error('Cannot use linkIdentities() to link agent-owned identities. Use linkIdentityToAgent() instead.');
+    }
+
     const [newPerson] = await this.db.insert(persons).values({}).returning();
     if (!newPerson) throw new Error('Failed to create person');
 
@@ -613,8 +618,8 @@ export class PersonService {
       throw new NotFoundError('PlatformIdentity', identityId);
     }
 
-    if (!identityResult.personId) {
-      throw new Error('Identity is not linked to any person');
+    if (!identityResult.personId && !identityResult.agentId) {
+      throw new Error('Identity is not linked to any person or agent');
     }
 
     // Create a new person for this identity
@@ -659,7 +664,8 @@ export class PersonService {
     targetPersonId: string,
     reason?: string,
   ): Promise<{ person: Person; mergedIdentityIds: string[]; deletedPersonId: string }> {
-    // Get identities from source person
+    // Get identities from source person.
+    // Agent-owned identities (personId = null) are intentionally excluded from person merges.
     const sourceIdentities = await this.db
       .select()
       .from(platformIdentities)
@@ -692,5 +698,35 @@ export class PersonService {
       mergedIdentityIds: identityIds,
       deletedPersonId: sourcePersonId,
     };
+  }
+
+  /**
+   * Link a platform identity to an agent
+   */
+  async linkIdentityToAgent(
+    platformIdentityId: string,
+    agentId: string,
+    options: { linkedBy: 'auto' | 'manual'; confidence?: number; linkReason?: string },
+  ): Promise<PlatformIdentity> {
+    const [updated] = await this.db
+      .update(platformIdentities)
+      .set({
+        agentId,
+        linkedBy: options.linkedBy,
+        confidence: options.confidence ?? 100,
+        linkReason: options.linkReason ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(platformIdentities.id, platformIdentityId))
+      .returning();
+    if (!updated) throw new Error(`PlatformIdentity not found: ${platformIdentityId}`);
+    return updated;
+  }
+
+  /**
+   * Get all platform identities linked to an agent
+   */
+  async getIdentitiesForAgent(agentId: string): Promise<PlatformIdentity[]> {
+    return this.db.select().from(platformIdentities).where(eq(platformIdentities.agentId, agentId));
   }
 }
