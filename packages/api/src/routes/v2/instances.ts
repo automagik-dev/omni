@@ -55,6 +55,7 @@ const agentReplyFilterSchema = z.object({
 const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
+  agentFkId: z.string().uuid().nullable().optional().describe('Agent FK UUID referencing agents table'),
   agentProviderId: z.string().uuid().optional().nullable().describe('Reference to agent provider'),
   agentId: z.string().max(255).default('default').describe('Agent ID within the provider'),
   agentType: z.enum(['agent', 'team', 'workflow']).default('agent').describe('Agent type (agent, team, or workflow)'),
@@ -156,6 +157,7 @@ const createInstanceSchema = z.object({
 // Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
 const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Nullable fields in DB - can be set to null
+  agentFkId: z.string().uuid().nullable().optional(),
   agentProviderId: z.string().uuid().nullable().optional(),
   agentId: z.string().max(255).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),

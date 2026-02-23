@@ -62,7 +62,7 @@ async function clearAgentSession(
   // Get instance with provider
   const instance = await services.agentRunner.getInstanceWithProvider(instanceId);
 
-  if (!instance?.agentProviderId) {
+  if (!instance?.agentProviderId && !instance?.agentFkId) {
     throw new Error('No agent provider configured for instance');
   }
 

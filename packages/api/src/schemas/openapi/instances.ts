@@ -19,6 +19,7 @@ export const InstanceSchema = z.object({
   profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
   profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
   ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
+  agentFkId: z.string().uuid().nullable().optional().openapi({ description: 'Agent FK UUID (agents table)' }),
   agentProviderId: z.string().uuid().nullable().openapi({ description: 'Agent provider UUID' }),
   agentId: z.string().nullable().openapi({ description: 'Agent ID' }),
   agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
@@ -33,6 +34,7 @@ export const InstanceSchema = z.object({
 export const CreateInstanceSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Unique name for the instance' }),
   channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
+  agentFkId: z.string().uuid().nullable().optional().openapi({ description: 'Agent FK UUID (agents table)' }),
   agentProviderId: z.string().uuid().optional().openapi({ description: 'Reference to agent provider' }),
   agentId: z.string().max(255).default('default').openapi({ description: 'Agent ID within the provider' }),
   agentTimeout: z.number().int().positive().default(60).openapi({ description: 'Agent timeout in seconds' }),
