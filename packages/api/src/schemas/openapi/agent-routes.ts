@@ -11,11 +11,6 @@ export const AgentRouteScopeOpenAPISchema = z.enum(['chat', 'user']).openapi({
   description: 'Route scope: chat (specific chat) or user (specific person)',
 });
 
-// Agent type enum
-export const AgentTypeOpenAPISchema = z.enum(['agent', 'team', 'workflow']).openapi({
-  description: 'Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)',
-});
-
 // Agent session strategy enum
 export const AgentSessionStrategyOpenAPISchema = z.enum(['per_user', 'per_chat', 'per_thread']).openapi({
   description:
@@ -49,9 +44,7 @@ export const AgentRouteSchema = z.object({
   chatId: z.string().uuid().nullable().openapi({ description: 'Chat UUID (required when scope=chat)' }),
   personId: z.string().uuid().nullable().openapi({ description: 'Person UUID (required when scope=user)' }),
 
-  agentProviderId: z.string().uuid().openapi({ description: 'Agent provider UUID' }),
-  agentId: z.string().min(1).max(255).openapi({ description: 'Agent ID within the provider' }),
-  agentType: AgentTypeOpenAPISchema,
+  agentId: z.string().uuid().nullable().openapi({ description: 'Agent UUID (FK to agents table)' }),
 
   // Behavior overrides (null = inherit from instance)
   agentTimeout: z.number().int().positive().nullable().openapi({ description: 'Agent timeout override (seconds)' }),
@@ -86,9 +79,7 @@ export const CreateAgentRouteRequestSchema = z.object({
   chatId: z.string().uuid().optional().openapi({ description: 'Chat UUID (required when scope=chat)' }),
   personId: z.string().uuid().optional().openapi({ description: 'Person UUID (required when scope=user)' }),
 
-  agentProviderId: z.string().uuid().openapi({ description: 'Agent provider UUID' }),
-  agentId: z.string().min(1).max(255).openapi({ description: 'Agent ID within the provider' }),
-  agentType: AgentTypeOpenAPISchema.default('agent'),
+  agentId: z.string().uuid().openapi({ description: 'Agent UUID (FK to agents table)' }),
 
   // Optional overrides
   agentTimeout: z.number().int().positive().optional().openapi({ description: 'Agent timeout (seconds)' }),
@@ -109,8 +100,12 @@ export const CreateAgentRouteRequestSchema = z.object({
 
 // Update agent route request
 export const UpdateAgentRouteRequestSchema = z.object({
-  agentId: z.string().min(1).max(255).optional().openapi({ description: 'Agent ID within the provider' }),
-  agentType: AgentTypeOpenAPISchema.optional(),
+  agentId: z
+    .string()
+    .uuid()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Agent UUID (FK to agents table). Set null to clear.' }),
 
   // Optional overrides (nullable to clear)
   agentTimeout: z.number().int().positive().nullable().optional().openapi({ description: 'Agent timeout (seconds)' }),

@@ -23,10 +23,7 @@ function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     scope: 'chat',
     chatId: TEST_CHAT_UUID,
     personId: null,
-    agentProviderId: 'provider-1',
-    agentId: 'agent-1',
-    agentType: 'agent',
-    agentFkId: null,
+    agentId: '00000000-0000-0000-0000-000000000001',
     agentTimeout: 60,
     agentStreamMode: true,
     agentReplyFilter: null,
@@ -130,7 +127,7 @@ describe('RouteResolver', () => {
 
     expect(result).not.toBeNull();
     expect(result?.scope).toBe('chat');
-    expect(result?.agentId).toBe('chat-agent');
+    expect(result?.agentId).toBe('00000000-0000-0000-0000-000000000002');
   });
 
   test('caches route resolution results', async () => {
