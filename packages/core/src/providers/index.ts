@@ -47,7 +47,13 @@ export { AgnoAgentProvider } from './agno-provider';
 export { ClaudeCodeAgentProvider } from './claude-code-provider';
 export type { ClaudeCodeProviderOptions, SessionStorage } from './claude-code-provider';
 export { WebhookAgentProvider } from './webhook-provider';
-export { OpenClawAgentProvider, OpenClawClient, createOpenClawProvider, generateDeviceKeypair } from './openclaw';
+export {
+  ED25519_PKCS8_PREFIX,
+  OpenClawAgentProvider,
+  OpenClawClient,
+  createOpenClawProvider,
+  generateDeviceKeypair,
+} from './openclaw';
 export type { DeviceKeypair, OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
 
 // Factory
