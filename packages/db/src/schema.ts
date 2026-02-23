@@ -351,6 +351,8 @@ export const agentRoutes = pgTable(
       .references(() => agentProviders.id, { onDelete: 'cascade' }),
     agentId: varchar('agent_id', { length: 255 }).notNull(),
     agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
+    /** Proper FK to agents table. Preferred over legacy agentId varchar + agentProviderId combo. */
+    agentFkId: uuid('agent_fk_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Behavior overrides (NULL = inherit from instance) ----
     agentTimeout: integer('agent_timeout'),
@@ -388,6 +390,7 @@ export const agentRoutes = pgTable(
     chatIdx: index('agent_routes_chat_idx').on(table.chatId),
     personIdx: index('agent_routes_person_idx').on(table.personId),
     activeIdx: index('agent_routes_active_idx').on(table.instanceId, table.isActive),
+    agentFkIdx: index('agent_routes_agent_fk_idx').on(table.agentFkId),
   }),
 );
 
@@ -791,6 +794,7 @@ export const platformIdentities = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
     instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
     platformUserId: varchar('platform_user_id', { length: 255 }).notNull(), // JID, Discord ID, etc.
@@ -814,6 +818,7 @@ export const platformIdentities = pgTable(
   },
   (table) => ({
     personIdx: index('platform_identities_person_idx').on(table.personId),
+    agentIdx: index('platform_identities_agent_idx').on(table.agentId),
     channelIdx: index('platform_identities_channel_idx').on(table.channel),
     instanceIdx: index('platform_identities_instance_idx').on(table.instanceId),
     platformUserIdx: index('platform_identities_platform_user_idx').on(table.platformUserId),
@@ -1033,7 +1038,10 @@ export const messages = pgTable(
     }),
     senderPlatformUserId: varchar('sender_platform_user_id', { length: 255 }),
     senderDisplayName: varchar('sender_display_name', { length: 255 }),
+    /** @deprecated Use senderAgentId IS NOT NULL. Kept for backward compat. */
     isFromMe: boolean('is_from_me').notNull().default(false),
+    /** FK to agents.id — set when the sender is a registered AI agent */
+    senderAgentId: uuid('sender_agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // === CONTENT (CURRENT STATE) ===
     messageType: varchar('message_type', { length: 50 }).notNull().$type<MessageType>(),
@@ -1109,6 +1117,7 @@ export const messages = pgTable(
     chatIdx: index('messages_chat_idx').on(table.chatId),
     senderPersonIdx: index('messages_sender_person_idx').on(table.senderPersonId),
     senderPlatformIdentityIdx: index('messages_sender_platform_identity_idx').on(table.senderPlatformIdentityId),
+    senderAgentIdx: index('messages_sender_agent_idx').on(table.senderAgentId),
     sourceIdx: index('messages_source_idx').on(table.source),
     typeIdx: index('messages_type_idx').on(table.messageType),
     statusIdx: index('messages_status_idx').on(table.status),
@@ -1165,8 +1174,11 @@ export const omniEvents = pgTable(
     // ---- Context ----
     replyToEventId: uuid('reply_to_event_id'),
     replyToExternalId: varchar('reply_to_external_id', { length: 255 }),
-    chatId: varchar('chat_id', { length: 255 }), // Chat/conversation ID
+    chatId: varchar('chat_id', { length: 255 }), // Chat/conversation ID (JID — stays varchar)
     canonicalChatId: varchar('canonical_chat_id', { length: 255 }), // Resolved @lid → phone
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id'), // no FK yet — conversations table pending
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1203,6 +1215,9 @@ export const omniEvents = pgTable(
     receivedAtIdx: index('omni_events_received_at_idx').on(table.receivedAt),
     chatIdIdx: index('omni_events_chat_id_idx').on(table.chatId),
     canonicalChatIdx: index('omni_events_canonical_chat_idx').on(table.canonicalChatId),
+    agentIdIdx: index('omni_events_agent_id_idx').on(table.agentId),
+    chatUuidIdx: index('omni_events_chat_uuid_idx').on(table.chatUuid),
+    conversationIdIdx: index('omni_events_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -1529,9 +1544,13 @@ export const agentProvidersRelations = relations(agentProviders, ({ many }) => (
   agents: many(agents),
 }));
 
-export const agentsRelations = relations(agents, ({ one }) => ({
+export const agentsRelations = relations(agents, ({ one, many }) => ({
   owner: one(persons, { fields: [agents.ownerId], references: [persons.id] }),
   agentProvider: one(agentProviders, { fields: [agents.agentProviderId], references: [agentProviders.id] }),
+  platformIdentities: many(platformIdentities),
+  sentMessages: many(messages),
+  omniEvents: many(omniEvents),
+  agentRoutes: many(agentRoutes),
 }));
 
 export const instancesRelations = relations(instances, ({ one, many }) => ({
@@ -1567,6 +1586,10 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
   person: one(persons, {
     fields: [platformIdentities.personId],
     references: [persons.id],
+  }),
+  agent: one(agents, {
+    fields: [platformIdentities.agentId],
+    references: [agents.id],
   }),
   instance: one(instances, {
     fields: [platformIdentities.instanceId],
@@ -1622,6 +1645,10 @@ export const messagesRelations = relations(messages, ({ one }) => ({
     fields: [messages.senderPlatformIdentityId],
     references: [platformIdentities.id],
   }),
+  senderAgent: one(agents, {
+    fields: [messages.senderAgentId],
+    references: [agents.id],
+  }),
   replyToMessage: one(messages, {
     fields: [messages.replyToMessageId],
     references: [messages.id],
@@ -1654,6 +1681,14 @@ export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
   platformIdentity: one(platformIdentities, {
     fields: [omniEvents.platformIdentityId],
     references: [platformIdentities.id],
+  }),
+  chat: one(chats, {
+    fields: [omniEvents.chatUuid],
+    references: [chats.id],
+  }),
+  agent: one(agents, {
+    fields: [omniEvents.agentId],
+    references: [agents.id],
   }),
   mediaContent: many(mediaContent),
 }));
@@ -2263,6 +2298,10 @@ export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
   }),
 }));
 
-export const agentRoutesRelations = relations(agentRoutes, ({ many }) => ({
+export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentRoutes.agentFkId],
+    references: [agents.id],
+  }),
   triggerLogs: many(triggerLogs),
 }));

@@ -14,6 +14,7 @@ function createMockIdentity(overrides: Partial<PlatformIdentity> = {}): Platform
   return {
     id: 'identity-123',
     personId: 'person-123',
+    agentId: null,
     channel: 'whatsapp-baileys',
     instanceId: 'instance-123',
     platformUserId: '+5511999001234@s.whatsapp.net',
