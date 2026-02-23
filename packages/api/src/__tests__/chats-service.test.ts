@@ -29,6 +29,7 @@ function createMockChat(overrides: Partial<Chat>): Chat {
     settings: null,
     platformMetadata: null,
     archivedAt: null,
+    conversationId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     deletedAt: null,
