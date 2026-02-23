@@ -32,7 +32,15 @@ import {
 // ENUMS
 // ============================================================================
 
-export const channelTypes = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
+export const channelTypes = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'a2a',
+  'internal',
+] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
 export const agentTypes = ['agent', 'team', 'workflow'] as const;
@@ -227,6 +235,7 @@ export const providerSchemas = [
   'openclaw',
   'ag-ui',
   'claude-code',
+  'a2a',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
@@ -310,6 +319,7 @@ export const agents = pgTable(
     isInternal: boolean('is_internal').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },

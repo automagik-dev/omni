@@ -1559,6 +1559,24 @@ function recordJourneyCheckpoint(correlationId: string | undefined, stage: strin
 }
 
 /**
+ * T10: Forward agent response parts to a chained instance via the internal channel plugin.
+ * Extracted to keep dispatchViaProvider below the complexity limit.
+ */
+async function forwardToChainedInstance(instance: Instance, parts: string[], correlationId: string): Promise<void> {
+  if (instance.chainMode === 'off' || !instance.agentChainToInstanceId) return;
+  const internalPlugin = await getPlugin('internal');
+  if (!internalPlugin) return;
+  for (const part of parts) {
+    await internalPlugin.sendMessage(instance.agentChainToInstanceId, {
+      to: instance.agentChainToInstanceId,
+      content: { type: 'text', text: part },
+      metadata: { sourceInstanceId: instance.id, chainMode: instance.chainMode },
+    });
+  }
+  recordJourneyCheckpoint(correlationId, 'T10', 'internal_chain_forwarded');
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1666,6 +1684,9 @@ async function dispatchViaProvider(
 
     // T9: Outbound sent via plugin
     recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+
+    // T10: Agent chaining — forward response to chained instance if configured
+    await forwardToChainedInstance(instance, parts, correlationId);
   }
 
   log.info('Agent response via IAgentProvider', {
