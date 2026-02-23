@@ -47,6 +47,7 @@ export type UpdatePersonInput = z.infer<typeof UpdatePersonSchema>;
 export const PlatformIdentitySchema = z.object({
   id: UuidSchema,
   personId: UuidSchema.nullable(),
+  agentId: UuidSchema.nullable(),
   channel: ChannelTypeSchema,
   instanceId: UuidSchema.nullable(),
   platformUserId: z.string().max(255),
@@ -70,6 +71,7 @@ export type PlatformIdentity = z.infer<typeof PlatformIdentitySchema>;
  */
 export const CreatePlatformIdentitySchema = z.object({
   personId: UuidSchema.optional(),
+  agentId: UuidSchema.optional(),
   channel: ChannelTypeSchema,
   instanceId: UuidSchema.optional(),
   platformUserId: z.string().max(255),
@@ -92,6 +94,19 @@ export const LinkIdentitySchema = z.object({
 });
 
 export type LinkIdentityInput = z.infer<typeof LinkIdentitySchema>;
+
+/**
+ * Link identity to agent input
+ */
+export const LinkIdentityToAgentSchema = z.object({
+  platformIdentityId: UuidSchema,
+  agentId: UuidSchema,
+  linkedBy: z.enum(['auto', 'manual']),
+  confidence: z.number().int().min(0).max(100).default(100),
+  linkReason: z.string().optional(),
+});
+
+export type LinkIdentityToAgentInput = z.infer<typeof LinkIdentityToAgentSchema>;
 
 /**
  * Person with identities (expanded view)
