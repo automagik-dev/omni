@@ -298,7 +298,7 @@ async function connectWithDevice(
     role,
     scopes.join(','),
     String(signedAtMs),
-    '', // dev.token is empty for first-time pairing (matches gateway's buildDeviceAuthPayload)
+    gatewayToken, // gateway uses auth.token in the payload: token = connectParams.auth?.token ?? null
     nonce,
   ].join('|');
 
