@@ -9,6 +9,7 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
 import { closeDb, createDb, migrateDb } from '@omni/db';
+import { sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -164,7 +165,12 @@ function startBunServer(app: App) {
 /**
  * Set up graceful shutdown handlers
  */
-function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>): void {
+function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdown?: () => Promise<void>): void {
+  if (earlyShutdown) {
+    process.removeListener('SIGINT', earlyShutdown);
+    process.removeListener('SIGTERM', earlyShutdown);
+  }
+
   let isShuttingDown = false;
 
   const shutdown = async () => {
@@ -280,6 +286,27 @@ async function setupEventBusServices(
 }
 
 /**
+ * Wait for database to become responsive.
+ * Retries SELECT 1 up to maxAttempts times, 1 second apart.
+ */
+async function waitForDatabaseReady(db: Database, maxAttempts = 30): Promise<void> {
+  log.info('Waiting for database readiness');
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await db.execute(sql`SELECT 1`);
+      log.info('Database ready', { attempt });
+      return;
+    } catch {
+      if (attempt === maxAttempts) {
+        throw new Error(`Database not ready after ${maxAttempts} attempts`);
+      }
+      log.warn('Database not ready, retrying...', { attempt });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -296,10 +323,29 @@ async function main() {
   log.info('Connecting to database');
   const db = createDb({ url: databaseUrl });
 
+  // Register early shutdown handler so SIGINT/SIGTERM during startup still cleans up
+  const earlyShutdown = async () => {
+    log.info('Shutdown during startup — cleaning up');
+    await closeDb();
+    await stopEmbeddedPgserve();
+    process.exit(1);
+  };
+  process.once('SIGINT', earlyShutdown);
+  process.once('SIGTERM', earlyShutdown);
+
+  // Wait for database to accept connections before running migrations
+  await waitForDatabaseReady(db);
+
   // Apply pending migrations (idempotent — already-applied are skipped)
   log.info('Running database migrations');
   const migrationStart = Date.now();
-  await migrateDb(db);
+  const MIGRATION_TIMEOUT_MS = 60_000;
+  await Promise.race([
+    migrateDb(db),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
+    ),
+  ]);
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
 
   // Connect to NATS
@@ -367,7 +413,7 @@ async function main() {
     metricsPath: '/api/v2/metrics',
     apiKey: apiKeyInfo,
   });
-  setupShutdownHandlers(server);
+  setupShutdownHandlers(server, earlyShutdown);
 }
 
 // Run

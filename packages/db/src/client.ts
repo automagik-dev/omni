@@ -28,16 +28,23 @@ export function getDefaultDatabaseUrl(): string {
 }
 
 /**
+ * Raw postgres.js connection pool — stored so closeDb() can call .end()
+ */
+let sqlClient: postgres.Sql | null = null;
+
+/**
  * Create a postgres client
  */
 export function createPostgresClient(config?: Partial<DbConfig>) {
   const url = config?.url ?? getDefaultDatabaseUrl();
 
-  return postgres(url, {
+  const client = postgres(url, {
     max: config?.maxConnections ?? 10,
     idle_timeout: config?.idleTimeout ?? 20,
     connect_timeout: config?.connectTimeout ?? 10,
   });
+  sqlClient = client;
+  return client;
 }
 
 /**
@@ -70,10 +77,12 @@ export function getDb(config?: Partial<DbConfig>): Database {
 
 /**
  * Close the database connection
- * (useful for graceful shutdown)
+ * Drains all postgres.js pooled connections so transaction locks are released.
  */
 export async function closeDb(): Promise<void> {
-  // Note: postgres.js handles connection pooling internally
-  // This is a placeholder for any cleanup needed
+  if (sqlClient) {
+    await sqlClient.end({ timeout: 5 });
+    sqlClient = null;
+  }
   dbInstance = null;
 }
