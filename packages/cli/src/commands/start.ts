@@ -37,6 +37,7 @@ function buildApiRuntimeEnv(): Record<string, string> {
     DATABASE_URL: serverConfig.databaseUrl,
     OMNI_API_KEY: config.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
+    OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
     PGSERVE_DATA: join(serverConfig.dataDir, 'pglite'),
     NATS_URL: 'nats://localhost:4222',
