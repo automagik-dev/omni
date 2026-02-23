@@ -31,6 +31,7 @@ import {
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isLidJid, isUserJid, toJid } from './jid';
 import { type ReceiptTracker, createReceiptTracker, isDelivered, isRead, mapStatusCode } from './receipts';
+import { resendStore } from './resend-store';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -958,6 +959,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
     this.receiptTrackers.delete(instanceId);
+    // Clear any pending resend entries — no point retrying after intentional disconnect/logout
+    resendStore.clear(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
@@ -1172,6 +1175,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Track this message ID so we can detect the echo when Baileys receives it back
       if (externalId) {
         this.trackSentMessageId(instanceId, externalId);
+        // Register in resend store so we can re-send if connection drops before server ACK
+        resendStore.register(instanceId, externalId, jid, message);
       }
 
       // Emit sent event
@@ -2238,6 +2243,59 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.prefetchGroupMetadata(instanceId, sock).catch((err) => {
       this.logger.warn('Failed to prefetch group metadata', { instanceId, error: String(err) });
     });
+
+    // Re-send any outbound messages that were in-flight when the connection dropped.
+    // Only fires on reconnects (when the resend store has pending entries) — new
+    // connections always have an empty store for this instanceId.
+    this.resendUnackedMessages(instanceId).catch((err) => {
+      this.logger.warn('Failed to resend unacked messages on reconnect', { instanceId, error: String(err) });
+    });
+  }
+
+  /**
+   * Re-send outbound messages that were in-flight when the connection dropped.
+   *
+   * On reconnect we query the ResendStore for messages sent in the last
+   * RESEND_WINDOW_MS (5 minutes) that have not yet received a server ACK
+   * (status >= 2). Each message is re-sent via the normal sendMessage() path,
+   * which will re-register it in the resend store with a fresh sentAt. The old
+   * entry was already cleaned up by the new send's register() call (it overwrites
+   * the same messageId is NOT reused — Baileys generates a new ID, so the old
+   * unacked entry stays until cleared or TTL). We clear it explicitly here after
+   * querying to avoid double-sends if handleConnected fires more than once.
+   *
+   * This is intentionally fire-and-forget (called with .catch) to avoid
+   * delaying the connection-open flow.
+   */
+  private async resendUnackedMessages(instanceId: string): Promise<void> {
+    const pending = resendStore.getPendingForResend(instanceId);
+    if (pending.length === 0) return;
+
+    this.logger.info('Reconnect: found unacked in-flight messages, re-sending', {
+      instanceId,
+      count: pending.length,
+    });
+
+    // Clear the pending list now — each successful resend will register new entries.
+    // If resend fails we won't retry again in this cycle (avoids infinite loops).
+    for (const [messageId] of pending) {
+      resendStore.ack(instanceId, messageId);
+    }
+
+    for (const [messageId, { jid, message, sentAt }] of pending) {
+      const ageSeconds = Math.round((Date.now() - sentAt) / 1000);
+      this.logger.info('Resending unacked message', { instanceId, messageId, jid, ageSeconds });
+      try {
+        await this.sendMessage(instanceId, message);
+      } catch (err) {
+        this.logger.error('Failed to resend unacked message', {
+          instanceId,
+          messageId,
+          jid,
+          error: String(err),
+        });
+      }
+    }
   }
 
   /**
@@ -2698,7 +2756,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    *
    * @internal
    */
+  /**
+   * Handle server ACK (status code 2 — message accepted by WhatsApp server).
+   *
+   * This is the earliest confirmation that a message was received by WhatsApp.
+   * We use it to remove the message from the resend store so it won't be
+   * retried if the connection drops shortly after (the server already has it).
+   *
+   * @internal
+   */
+  handleServerAck(instanceId: string, externalId: string): void {
+    resendStore.ack(instanceId, externalId);
+  }
+
   async handleMessageDelivered(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Ack from resend store — message reached the recipient's device (status >= 3)
+    resendStore.ack(instanceId, externalId);
+
     // Update in-memory tracker
     let tracker = this.receiptTrackers.get(instanceId);
     if (!tracker) {
@@ -2724,6 +2798,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleMessageRead(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Ack from resend store — message was read (status >= 4)
+    resendStore.ack(instanceId, externalId);
+
     // Update in-memory tracker
     let tracker = this.receiptTrackers.get(instanceId);
     if (!tracker) {

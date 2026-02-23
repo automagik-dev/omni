@@ -823,6 +823,12 @@ async function processStatusUpdate(
 
   const mappedStatus = mapStatusCode(status);
 
+  // status=2 is server_ack — the WhatsApp server accepted the message.
+  // Ack it out of the resend store so it won't be retried on reconnect.
+  if (status === 2) {
+    plugin.handleServerAck(instanceId, externalId);
+  }
+
   if (isRead(mappedStatus)) {
     await plugin.handleMessageRead(instanceId, externalId, chatId);
   } else if (isDelivered(mappedStatus)) {
