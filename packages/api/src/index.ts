@@ -340,12 +340,18 @@ async function main() {
   log.info('Running database migrations');
   const migrationStart = Date.now();
   const MIGRATION_TIMEOUT_MS = 60_000;
-  await Promise.race([
-    migrateDb(db),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
-    ),
-  ]);
+  try {
+    await Promise.race([
+      migrateDb(db),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
+      ),
+    ]);
+  } catch (error) {
+    await closeDb();
+    await stopEmbeddedPgserve();
+    throw error;
+  }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
 
   // Connect to NATS

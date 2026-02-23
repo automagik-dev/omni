@@ -18,7 +18,7 @@
  * registration and channel account when --instance-id is provided.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import * as nodeCrypto from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -384,8 +384,8 @@ function readOpenClawConfig(configPath: string): Record<string, unknown> {
 
 /** Write openclaw.json with 2-space indent */
 function writeOpenClawConfig(configPath: string, config: Record<string, unknown>): void {
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** Check if the omni plugin path is already in plugins.load.paths */
@@ -420,7 +420,7 @@ function hasOpenClawCli(): boolean {
 
 /** Validate UUID v4 format */
 function isValidUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 /** Resolve the plugin entry point path */
@@ -440,7 +440,7 @@ function registerPlugin(
 ): { config: Record<string, unknown>; registered: boolean } {
   if (hasOpenClawCli()) {
     try {
-      execSync(`openclaw plugins install --link "${pluginPath}"`, { stdio: 'ignore' });
+      execFileSync('openclaw', ['plugins', 'install', '--link', pluginPath], { stdio: 'ignore' });
       try {
         return { config: readOpenClawConfig(configPath), registered: true };
       } catch {
