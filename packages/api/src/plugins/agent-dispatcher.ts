@@ -53,7 +53,7 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
-import { agentSessions } from '@omni/db';
+import { agentSessions, agents } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import { and, eq } from 'drizzle-orm';
@@ -421,6 +421,8 @@ async function sendTextMessage(
   text: string,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
+  senderAgentId?: string,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -429,7 +431,7 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text },
     replyTo,
-    metadata: { messageFormatMode },
+    metadata: { messageFormatMode, correlationId, senderAgentId },
   });
 }
 
@@ -740,6 +742,8 @@ async function sendResponseParts(
   splitConfig: SplitDelayConfig,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
+  senderAgentId?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -754,7 +758,16 @@ async function sendResponseParts(
 
   for (const [index, chunk] of allChunks.entries()) {
     const chunkReplyTo = isSlack || index === 0 ? replyTo : undefined;
-    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo);
+    await sendTextMessage(
+      channel,
+      instanceId,
+      chatId,
+      chunk,
+      messageFormatMode,
+      chunkReplyTo,
+      correlationId,
+      senderAgentId,
+    );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1540,6 +1553,7 @@ async function dispatchViaProvider(
   rawEvent: AgentTrigger['event'],
   db: Database,
   extraContextMessages?: string[],
+  senderAgentId?: string,
 ): Promise<boolean> {
   const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
@@ -1610,7 +1624,24 @@ async function dispatchViaProvider(
     const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+    // T8: Processing send request
+    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+    await sendResponseParts(
+      channel,
+      instance.id,
+      chatId,
+      parts,
+      getSplitDelayConfig(instance),
+      _fmtMode,
+      replyTo,
+      correlationId,
+      senderAgentId,
+    );
+
+    // T9: Outbound sent via plugin
+    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1641,6 +1672,7 @@ async function dispatchViaLegacy(
   senderName: string | undefined,
   traceId: string,
   perThreadExtraContext?: string[],
+  senderAgentId?: string,
 ): Promise<void> {
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
 
@@ -1708,7 +1740,24 @@ async function dispatchViaLegacy(
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+  // T8: Processing send request
+  recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+  await sendResponseParts(
+    channel,
+    instance.id,
+    chatId,
+    parts,
+    getSplitDelayConfig(instance),
+    _fmtMode,
+    replyTo,
+    correlationId,
+    senderAgentId,
+  );
+
+  // T9: Outbound sent via plugin
+  recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -2146,6 +2195,24 @@ async function resolvePerThreadExtraContext(
   return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
 }
 
+/**
+ * Look up the agents.id UUID for the agent currently configured on the instance.
+ * Returns undefined if no agentProviderId is set or no matching active agent is found.
+ */
+async function resolveSenderAgentId(
+  db: Database,
+  agentProviderId: string | null | undefined,
+): Promise<string | undefined> {
+  if (!agentProviderId) return undefined;
+  const [agentRow] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.agentProviderId, agentProviderId), eq(agents.isActive, true)))
+    .orderBy(agents.createdAt)
+    .limit(1);
+  return agentRow?.id;
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -2199,6 +2266,10 @@ async function processAgentResponse(
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
 
+  // omni-h3q: Look up the Agent entity UUID for this agentProviderId so that
+  // sent messages can be attributed to the specific agent in the DB.
+  const senderAgentId = await resolveSenderAgentId(db, instance.agentProviderId);
+
   log.info('Dispatching to agent', {
     instanceId: instance.id,
     chatId,
@@ -2206,6 +2277,7 @@ async function processAgentResponse(
     triggerType,
     traceId,
     senderName,
+    senderAgentId,
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
@@ -2265,6 +2337,7 @@ async function processAgentResponse(
           rawEvent,
           db,
           perThreadExtraContext,
+          senderAgentId,
         );
       }
     } catch (providerError) {
@@ -2299,6 +2372,7 @@ async function processAgentResponse(
       senderName,
       traceId,
       perThreadExtraContext,
+      senderAgentId,
     );
   } catch (error) {
     log.error('Failed to process agent response', {
@@ -2514,6 +2588,37 @@ async function getAgentProvider(services: Services, instance: Instance, db: Data
 }
 
 /**
+ * omni-p7r: Apply agent entity overrides from the agentFkId FK on the route.
+ * Mutates effectiveInstance in-place with values from the Agent entity row.
+ */
+async function applyAgentFkOverrides(db: Database, agentFkId: string, effectiveInstance: Instance): Promise<void> {
+  const [agentRow] = await db
+    .select({
+      id: agents.id,
+      agentProviderId: agents.agentProviderId,
+      agentType: agents.agentType,
+      metadata: agents.metadata,
+      configPath: agents.configPath,
+    })
+    .from(agents)
+    .where(eq(agents.id, agentFkId))
+    .limit(1);
+
+  if (!agentRow) return;
+
+  // Override instance agent config from the Agent entity
+  effectiveInstance.agentProviderId = agentRow.agentProviderId ?? effectiveInstance.agentProviderId;
+  // Map agentType: AgentEntityType → AgentType
+  // 'assistant'|'tool' → 'agent', 'workflow' → 'workflow', 'team' → 'team'
+  const typeMap: Record<string, string> = { assistant: 'agent', tool: 'agent', workflow: 'workflow', team: 'team' };
+  effectiveInstance.agentType = (typeMap[agentRow.agentType] ??
+    effectiveInstance.agentType) as typeof effectiveInstance.agentType;
+  // Provider-internal agent name from metadata or configPath
+  const providerAgentId = (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath;
+  if (providerAgentId) effectiveInstance.agentId = providerAgentId as string;
+}
+
+/**
  * Resolve effective instance by applying route overrides.
  * Resolution priority: chat route > user route > instance default
  *
@@ -2561,6 +2666,12 @@ async function resolveEffectiveInstance(
     agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
   };
 
+  // omni-p7r: If route has a proper FK to the agents table, resolve the agent entity
+  // and override agentProviderId / agentType / agentId from the entity row.
+  if (route.agentFkId) {
+    await applyAgentFkOverrides(db, route.agentFkId, effectiveInstance);
+  }
+
   log.debug('Route resolved and merged', {
     instanceId: instance.id,
     chatId,
@@ -2572,6 +2683,7 @@ async function resolveEffectiveInstance(
     agentStreamMode: effectiveInstance.agentStreamMode,
     routeAgentStreamMode: route.agentStreamMode,
     instanceAgentStreamMode: instance.agentStreamMode,
+    agentFkId: route.agentFkId,
   });
 
   return { instance: effectiveInstance, routeId: route.id };

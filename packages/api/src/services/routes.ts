@@ -61,6 +61,7 @@ export class RouteService {
       agentProviderId: data.agentProviderId,
       agentId: data.agentId,
       agentType: data.agentType ?? 'agent',
+      agentFkId: data.agentFkId ?? null,
       agentTimeout: data.agentTimeout ?? null,
       agentStreamMode: data.agentStreamMode ?? null,
       agentReplyFilter: data.agentReplyFilter ?? null,
