@@ -31,7 +31,15 @@ import {
 // ENUMS
 // ============================================================================
 
-export const channelTypes = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
+export const channelTypes = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'a2a',
+  'internal',
+] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
 export const agentTypes = ['agent', 'team', 'workflow'] as const;
@@ -226,6 +234,7 @@ export const providerSchemas = [
   'openclaw',
   'ag-ui',
   'claude-code',
+  'a2a',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
@@ -309,6 +318,7 @@ export const agents = pgTable(
     isInternal: boolean('is_internal').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -730,6 +740,14 @@ export const instances = pgTable(
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */
     lastMessageAt: timestamp('last_message_at'),
+
+    // ---- Agent Chaining ----
+    /** Target instance for agent-to-agent chaining */
+    agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {
+      onDelete: 'set null',
+    }),
+    /** Chain mode: 'off' | 'forward' | 'bidirectional' */
+    chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'),
 
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),

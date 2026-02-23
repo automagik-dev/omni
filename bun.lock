@@ -80,6 +80,21 @@
       "name": "audio-decode",
       "version": "2.2.3",
     },
+    "packages/channel-a2a": {
+      "name": "@omni/channel-a2a",
+      "version": "0.1.0",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
       "version": "2.20260221.1",
@@ -87,6 +102,21 @@
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "discord.js": "^14.18.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
+    "packages/channel-internal": {
+      "name": "@omni/channel-internal",
+      "version": "0.1.0",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -555,7 +585,11 @@
 
     "@omni/api": ["@omni/api@workspace:packages/api"],
 
+    "@omni/channel-a2a": ["@omni/channel-a2a@workspace:packages/channel-a2a"],
+
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
+
+    "@omni/channel-internal": ["@omni/channel-internal@workspace:packages/channel-internal"],
 
     "@omni/channel-sdk": ["@omni/channel-sdk@workspace:packages/channel-sdk"],
 

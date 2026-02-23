@@ -70,6 +70,13 @@ export const CORE_EVENT_TYPES = [
   'agent.task.completed',
   'agent.task.failed',
   'agent.task.cancelled',
+  // A2A task lifecycle (inbound tasks from external A2A clients)
+  'agent.a2a.task_received',
+  'agent.a2a.task_updated',
+  'agent.a2a.task_completed',
+  'agent.a2a.task_failed',
+  // Internal agent-to-agent routing
+  'agent.internal.forwarded',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -659,6 +666,11 @@ export interface EventPayloadMap {
   'agent.task.completed': AgentTaskCompletedPayload;
   'agent.task.failed': AgentTaskFailedPayload;
   'agent.task.cancelled': AgentTaskCancelledPayload;
+  'agent.a2a.task_received': Record<string, unknown>;
+  'agent.a2a.task_updated': Record<string, unknown>;
+  'agent.a2a.task_completed': Record<string, unknown>;
+  'agent.a2a.task_failed': Record<string, unknown>;
+  'agent.internal.forwarded': Record<string, unknown>;
 }
 
 /**

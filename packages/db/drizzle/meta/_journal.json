@@ -120,6 +120,13 @@
       "when": 1772200000001,
       "tag": "0016_platform_identity_actor_constraint",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1771884315141,
+      "tag": "0017_material_maverick",
+      "breakpoints": true
     }
   ]
 }
