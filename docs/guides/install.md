@@ -68,9 +68,9 @@ omni install --non-interactive --port 9000
 sudo omni install --non-interactive --systemd
 ```
 
-Writes `/etc/systemd/system/omni-api.service`. Enable with:
+Writes `/etc/systemd/system/omni-api.service` and `/etc/systemd/system/omni-nats.service`. Enable both with:
 ```bash
-sudo systemctl enable --now omni-api
+sudo systemctl enable --now omni-api omni-nats
 ```
 
 ## Setup (Interactive)
@@ -114,23 +114,25 @@ omni config set apiUrl http://localhost:8882
 omni config set apiKey omni_sk_<your_key>
 ```
 
+> **Note:** The `apiKey` command stores the key in shell history. To avoid this, edit `~/.omni/config.json` directly or prefix the command with a space (requires `HISTCONTROL=ignorespace`).
+
 Config lives at `~/.omni/config.json`.
 
 ## Post-Install: Create a Channel Instance
 
 ```bash
 # WhatsApp (Baileys — QR-based)
-omni instances create --channel whatsapp --name "my-whatsapp"
+omni instances create --channel whatsapp-baileys --name "my-whatsapp"
 # → prints QR code to scan
 
 # Telegram
-omni instances create --channel telegram --name "my-telegram" --config '{"botToken": "<BOT_TOKEN>"}'
+omni instances create --channel telegram --name "my-telegram" --telegram-token "<BOT_TOKEN>"
 
 # Discord
-omni instances create --channel discord --name "my-discord" --config '{"botToken": "<BOT_TOKEN>"}'
+omni instances create --channel discord --name "my-discord" --discord-token "<BOT_TOKEN>"
 
 # Slack
-omni instances create --channel slack --name "my-slack" --config '{"appToken": "<APP_TOKEN>", "botToken": "<BOT_TOKEN>"}'
+omni instances create --channel slack --name "my-slack" --slack-app-token "<APP_TOKEN>" --slack-bot-token "<BOT_TOKEN>"
 ```
 
 ## Post-Install: Connect an OpenClaw Agent
@@ -185,6 +187,8 @@ bun add -g @automagik/omni@latest && omni restart
 ```
 
 ## Uninstall
+
+> **Warning:** The final step permanently deletes all Omni data including the embedded database, media files, and configuration. This cannot be undone.
 
 ```bash
 omni stop
