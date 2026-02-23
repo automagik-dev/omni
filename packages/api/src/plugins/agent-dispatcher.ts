@@ -31,6 +31,7 @@ import {
   type EventBus,
   type IAgentProvider,
   InMemorySessionActivityStore,
+  type InstanceDisconnectedPayload,
   JOURNEY_STAGES,
   type MessageReceivedPayload,
   type OmniEvent,
@@ -1129,17 +1130,23 @@ async function fetchChatMetadata(
 }
 
 // ─── Per-chatId stream guard ──────────────────────────────
+
+/** TTL for stream guard entries — protects against hung/leaked streams */
 const STREAM_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 interface ActiveStream {
   sender: StreamSender;
   startedAt: number;
+  /** setTimeout handle — cancelled on normal completion */
+  ttlTimer: ReturnType<typeof setTimeout>;
 }
+
 const activeStreams = new Map<string, ActiveStream>();
 
 export function clearActiveStreamsForInstance(instanceId: string): void {
-  for (const key of activeStreams.keys()) {
+  for (const [key, entry] of activeStreams.entries()) {
     if (key.startsWith(`${instanceId}:`)) {
+      clearTimeout(entry.ttlTimer);
       activeStreams.delete(key);
     }
   }
@@ -1154,6 +1161,46 @@ export function getActiveStreamsForInstance(instanceId: string): Array<{ chatId:
     }
   }
   return result;
+}
+
+/**
+ * Abort and remove all active stream entries for an instanceId on disconnect.
+ * Clears TTL timers so no ghost timeouts remain.
+ */
+function abortStreamsForInstance(instanceId: string): void {
+  for (const [key, entry] of activeStreams.entries()) {
+    if (key.startsWith(`${instanceId}:`)) {
+      clearTimeout(entry.ttlTimer);
+      entry.sender.abort().catch(() => {
+        // Best-effort — connection is already gone
+      });
+      activeStreams.delete(key);
+      log.info('Stream guard: aborted stream on disconnect', { instanceId, streamKey: key });
+    }
+  }
+}
+
+/**
+ * Register a stream sender in the guard map with a TTL timer.
+ * The timer auto-aborts the stream after STREAM_TTL_MS if it has not
+ * completed by then, preventing a hung stream from blocking the chat forever.
+ */
+function registerStreamGuard(streamKey: string, sender: StreamSender, instanceId: string, chatId: string): void {
+  const ttlTimer = setTimeout(() => {
+    const stale = activeStreams.get(streamKey);
+    if (stale) {
+      activeStreams.delete(streamKey);
+      stale.sender.abort().catch(() => {
+        // Best-effort — stream may already be gone
+      });
+      log.warn('Stream guard TTL expired — forcibly removed stale stream entry', {
+        instanceId,
+        chatId,
+        ttlMs: STREAM_TTL_MS,
+      });
+    }
+  }, STREAM_TTL_MS);
+  activeStreams.set(streamKey, { sender, startedAt: Date.now(), ttlTimer });
 }
 
 const recoveryLog = createLogger('stream-recovery');
@@ -1174,6 +1221,8 @@ export async function recoverInterruptedStreams(instanceId: string, channelType:
 
   for (const { chatId, sender } of interrupted) {
     const streamKey = `${instanceId}:${chatId}`;
+    const entry = activeStreams.get(streamKey);
+    if (entry) clearTimeout(entry.ttlTimer);
     activeStreams.delete(streamKey);
     try {
       await sender.abort();
@@ -1360,6 +1409,42 @@ function mergeContextMessages(extra: string[] | undefined, db: string[]): string
 }
 
 /**
+ * Execute a guarded stream: runs the provider generator, routes deltas to the sender,
+ * and cleans up the activeStreams guard on completion (whether success or failure).
+ * Extracted to keep dispatchViaStreamingProvider below the complexity limit.
+ */
+async function runGuardedStream(
+  provider: StreamCapabilities['provider'],
+  trigger: AgentTrigger,
+  sender: StreamSender,
+  streamKey: string,
+  instanceId: string,
+  chatId: string,
+  traceId: string,
+): Promise<boolean> {
+  try {
+    const generator = provider.triggerStream(trigger);
+    // Error deltas (timeout, circuit-breaker) are not exceptions — they just
+    // clean up the placeholder. Return false so the caller falls back to the
+    // accumulate-then-reply path and the user still gets a response.
+    return await consumeStream(generator, sender, instanceId, chatId, traceId);
+  } catch (err) {
+    log.error('Streaming dispatch failed, falling back', { instanceId, chatId, error: String(err), traceId });
+    try {
+      await sender.abort();
+    } catch {
+      // Best effort cleanup
+    }
+    return false;
+  } finally {
+    // Cancel the TTL timer — stream completed before the deadline.
+    const entry = activeStreams.get(streamKey);
+    if (entry) clearTimeout(entry.ttlTimer);
+    activeStreams.delete(streamKey);
+  }
+}
+
+/**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
  */
@@ -1420,31 +1505,11 @@ async function dispatchViaStreamingProvider(
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
-  activeStreams.set(streamKey, { sender, startedAt: Date.now() });
+  // Register the stream guard: stores the sender and sets a TTL timer so
+  // a hung stream is automatically aborted after STREAM_TTL_MS.
+  registerStreamGuard(streamKey, sender, instance.id, chatId);
 
-  try {
-    const generator = resolved.provider.triggerStream(trigger);
-
-    // Error deltas (timeout, circuit-breaker) are not exceptions — they just
-    // clean up the placeholder.  Return false so the caller falls back to the
-    // accumulate-then-reply path and the user still gets a response.
-    return await consumeStream(generator, sender, instance.id, chatId, traceId);
-  } catch (err) {
-    log.error('Streaming dispatch failed, falling back', {
-      instanceId: instance.id,
-      chatId,
-      error: String(err),
-      traceId,
-    });
-    try {
-      await sender.abort();
-    } catch {
-      // Best effort cleanup
-    }
-    return false;
-  } finally {
-    activeStreams.delete(streamKey);
-  }
+  return runGuardedStream(resolved.provider, trigger, sender, streamKey, instance.id, chatId, traceId);
 }
 
 /**
@@ -3627,6 +3692,32 @@ export async function setupAgentDispatcher(
       },
       {
         durable: 'agent-dispatcher-typing',
+        queue: 'agent-dispatcher',
+        maxRetries: 1,
+        startFrom: 'last',
+        concurrency: 10,
+      },
+    );
+
+    // ========================================
+    // Subscribe to instance.disconnected
+    // ========================================
+    await eventBus.subscribe(
+      'instance.disconnected',
+      async (event) => {
+        const payload = event.payload as InstanceDisconnectedPayload;
+        const { instanceId } = payload;
+        try {
+          abortStreamsForInstance(instanceId);
+        } catch (error) {
+          log.error('Error aborting streams on disconnect', {
+            instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'agent-dispatcher-disconnect',
         queue: 'agent-dispatcher',
         maxRetries: 1,
         startFrom: 'last',
