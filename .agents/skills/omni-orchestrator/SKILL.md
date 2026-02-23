@@ -3,6 +3,11 @@ name: omni-orchestrator
 description: Omni v2 instance orchestration specialist — use for setting up channels (WhatsApp, Telegram, Discord, Slack), configuring agent routing, managing instances lifecycle, and configuring providers via the omni CLI.
 version: "1.0"
 ---
+> ⚠️ DEPRECATED: Superseded by atomic skills in `plugins/omni/skills/`.
+> omni-orchestrator → use omni-instances/SKILL.md + omni-config/SKILL.md
+> omni-executor → use omni-send/SKILL.md
+> omni-analytics → use omni-events/SKILL.md
+
 
 # Omni Orchestrator
 

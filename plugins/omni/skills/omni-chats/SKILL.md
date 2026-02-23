@@ -1,88 +1,57 @@
 ---
 name: omni-chats
 description: |
-  Browse and manage Omni chats — list conversations with filters, archive, view participants, access group metadata, and browse message history.
+  Manage Omni conversations: list/get/create/update, archive/pin/mute, participants, disappearing messages, read state, and message history.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Chats
 
-Manage conversations across all Omni channel instances using `omni chats`.
-
-## List Chats
+## List and inspect
 
 ```bash
-omni chats list --instance <id>
-omni chats list --instance <id> --unread
-omni chats list --instance <id> --sort activity --verbose
-omni chats list --instance <id> --json | jq '.[] | {id, name, unreadCount}'
+omni chats list --instance <id> --limit 50 --json
+omni chats list --instance <id> --unread --sort activity --verbose --json
+omni chats list --channel whatsapp-baileys --type group --json
+omni chats get <chatId> --json
 ```
 
-## Chat Details
+## Create and update
 
 ```bash
-omni chats get <chat-id> --instance <id>
+omni chats create --instance <id> --external-id "whatsapp:+5511999" --channel whatsapp-baileys --type private --name "Lead" --json
+omni chats update <chatId> --name "New name" --description "Notes" --json
+omni chats delete <chatId> --json
 ```
 
-## Create Chat
+## Chat state actions
 
 ```bash
-omni chats create --instance <id> --external-id "whatsapp:+5511999" --channel whatsapp
+omni chats read <chatId> --instance <id> --json
+omni chats archive <chatId> --instance <id> --json
+omni chats unarchive <chatId> --instance <id> --json
+omni chats pin <chatId> --instance <id> --json
+omni chats unpin <chatId> --instance <id> --json
+omni chats mute <chatId> --instance <id> --duration 28800000 --json
+omni chats unmute <chatId> --instance <id> --json
+omni chats disappearing <chatId> --instance <id> --duration 24h --json
 ```
 
-## Browse Messages
+## Messages in a chat
 
 ```bash
-omni chats messages <chat-id> --limit 50
-omni chats messages <chat-id> --search "invoice" --limit 100
-omni chats messages <chat-id> --since 7d
-omni chats messages <chat-id> --audio-only
-omni chats messages <chat-id> --images-only
-omni chats messages <chat-id> --compact --truncate 100
-```
-
-## Mark as Read
-
-```bash
-omni chats read <chat-id> --instance <id>
-```
-
-## Archive / Unarchive
-
-```bash
-omni chats archive <chat-id> --instance <id>
-omni chats unarchive <chat-id> --instance <id>
-```
-
-## Pin / Unpin
-
-```bash
-omni chats pin <chat-id> --instance <id>
-omni chats unpin <chat-id> --instance <id>
-```
-
-## Mute / Unmute
-
-```bash
-omni chats mute <chat-id> --instance <id>
-omni chats unmute <chat-id> --instance <id>
-```
-
-## Disappearing Messages
-
-```bash
-omni chats disappearing <chat-id> --instance <id> --duration 24h
-omni chats disappearing <chat-id> --instance <id> --duration off
-```
-
-## Delete
-
-```bash
-omni chats delete <chat-id> --instance <id>
+omni chats messages <chatId> --limit 100 --json
+omni chats messages <chatId> --since 7d --search "invoice" --json
+omni chats messages <chatId> --audio-only --compact --truncate 120 --json
+omni chats messages <chatId> --images-only --before <cursor> --json
 ```
 
 ## Participants
 
 ```bash
-omni chats participants <chat-id> --instance <id>
+omni chats participants <chatId> --json
+omni chats participants <chatId> --add <userId> --name "Member" --role member --json
+omni chats participants <chatId> --promote <userId> --json
+omni chats participants <chatId> --demote <userId> --json
+omni chats participants <chatId> --remove <userId> --json
 ```

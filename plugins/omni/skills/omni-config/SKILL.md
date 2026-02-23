@@ -1,83 +1,73 @@
 ---
 name: omni-config
 description: |
-  Configure the Omni CLI — authenticate with API keys, set base URL, manage default instance, configure providers, and manage webhooks.
+  Operate Omni configuration and access surfaces: CLI config/auth, providers, API keys, and server settings.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Config
 
-Configure the Omni CLI and manage platform settings.
+Use this for runtime configuration and access management (not infrastructure bootstrap).
 
-## Authentication
+## Auth and status
 
 ```bash
-omni auth login --api-key sk_xxx --api-url http://localhost:8882
-omni auth status
-omni auth logout
+omni auth login --api-key <key> --api-url http://localhost:8882 --json
+omni auth status --json
+omni auth logout --json
+omni status --json
 ```
 
-Config file: `~/.omni/config.json` (mode 0o600)
-
-## CLI Configuration
+## CLI config
 
 ```bash
-# Set default instance
-omni config set defaultInstance <id>
-
-# Set API URL
-omni config set apiUrl http://localhost:8882
-
-# Set default output format
-omni config set format json
-
-# View all config
-omni config list
-
-# Get specific value
-omni config get defaultInstance
-
-# Remove setting
-omni config unset defaultInstance
-```
-
-### Available Config Keys
-
-| Key | Description | Default |
-|-----|-------------|---------|
-| `apiUrl` | API endpoint | `http://localhost:8882` |
-| `apiKey` | Authentication token | — |
-| `defaultInstance` | Default instance ID | — |
-| `format` | Output format | `human` |
-| `showCommands` | Visibility | `core,standard,advanced` |
-
-### Environment Overrides
-
-```bash
-export OMNI_FORMAT=json
-export OMNI_SHOW_COMMANDS=all
+omni config list --json
+omni config get defaultInstance --json
+omni config set defaultInstance <id> --json
+omni config set format json --json
+omni config unset defaultInstance --json
 ```
 
 ## Providers
 
 ```bash
-omni providers create --name "openai" --type openai --api-key sk_xxx
-omni providers test <provider-id>
-omni providers list
+omni providers list --json
+omni providers get <id> --json
+omni providers create \
+  --name "openclaw-prod" \
+  --schema openclaw \
+  --base-url wss://gateway.example/ws \
+  --api-key <key> \
+  --default-agent-id <agentId> \
+  --json
+omni providers test <id> --json
+omni providers agents <id> --json
+omni providers teams <id> --json
+omni providers workflows <id> --json
+omni providers delete <id> --force --json
 ```
 
-## Webhooks
+## API keys
 
 ```bash
-omni webhooks create --url https://example.com/hook --events message.received
-omni webhooks list
-omni webhooks delete <id>
+omni keys create --name "agent-key" --scopes messages:read,instances:write --instances <id1,id2> --json
+omni keys list --status active --limit 50 --json
+omni keys get <id> --json
+omni keys update <id> --rate-limit 120 --expires 2026-12-31T23:59:59Z --json
+omni keys revoke <id> --reason "rotation" --json
+omni keys delete <id> --json
 ```
 
-## System Status
+## Server settings
 
 ```bash
-omni status
+omni settings list --json
+omni settings list --category ai --json
+omni settings get <key> --json
+omni settings set <key> <value> --reason "ops update" --json
 ```
 
-Shows: config directory, API URL reachability, auth status, key validity, default instance, output format.
+## Notes
+
+- Prefer `--json` + `jq` for automation-safe parsing.
+- `omni providers setup` is interactive; avoid it in automated agent flows.

@@ -3,6 +3,11 @@ name: omni-analytics
 description: Omni v2 event analytics specialist — use for event replay, analytics queries, debugging message flows, investigating error spikes, and tracing message journeys via the omni CLI.
 version: "1.0"
 ---
+> ⚠️ DEPRECATED: Superseded by atomic skills in `plugins/omni/skills/`.
+> omni-orchestrator → use omni-instances/SKILL.md + omni-config/SKILL.md
+> omni-executor → use omni-send/SKILL.md
+> omni-analytics → use omni-events/SKILL.md
+
 
 # Omni Analytics
 
