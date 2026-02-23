@@ -14,7 +14,7 @@
 
 import * as nodeCrypto from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { type DeviceKeypair, generateDeviceKeypair } from '@omni/core';
+import { type DeviceKeypair, ED25519_PKCS8_PREFIX, generateDeviceKeypair } from '@omni/core';
 import { Command } from 'commander';
 import ora from 'ora';
 import { getClient } from '../client.js';
@@ -197,42 +197,76 @@ function openWs(url: string): Promise<WebSocket> {
 }
 
 /**
- * Connect to the gateway WS with a shared token only (no device),
- * completing the connect.challenge handshake.
+ * Connect to the gateway WS with device credentials, completing the
+ * connect.challenge handshake. From localhost the gateway sets silent: true
+ * and auto-approves, returning the device token in hello-ok.
  */
-async function connectWithToken(ws: WebSocket, token: string): Promise<void> {
+async function connectWithDevice(
+  ws: WebSocket,
+  gatewayToken: string,
+  keypair: DeviceKeypair,
+): Promise<Record<string, unknown>> {
+  // Wait for the connect.challenge event to get the nonce
   const challengeEvent = await waitForWsEvent(ws, 'connect.challenge');
-  // Challenge received; respond with token-only connect
-  const _nonce = (challengeEvent.payload as Record<string, unknown>)?.nonce;
+  const nonce = (challengeEvent.payload as Record<string, unknown>)?.nonce as string;
+
+  const role = 'operator';
+  const scopes = ['operator.read', 'operator.write'];
+  const clientId = 'gateway-client';
+  const clientMode = 'backend';
+  const signedAtMs = Date.now();
+
+  // Build payload matching gateway's buildDeviceAuthPayload (v2 with nonce)
+  // For first-time pairing, dev.token is empty string
+  const payload = [
+    'v2',
+    keypair.deviceId,
+    clientId,
+    clientMode,
+    role,
+    scopes.join(','),
+    String(signedAtMs),
+    '', // empty dev.token for first-time pairing
+    nonce,
+  ].join('|');
+
+  // Sign with Ed25519 private key (PKCS8 DER reconstruction)
+  const rawPrivKey = Buffer.from(keypair.privateKey, 'base64url');
+  const pkcs8Der = Buffer.concat([ED25519_PKCS8_PREFIX, rawPrivKey]);
+  const privateKey = nodeCrypto.createPrivateKey({ key: pkcs8Der, type: 'pkcs8', format: 'der' });
+  const signature = nodeCrypto.sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
 
   const params: WsConnectParams = {
     minProtocol: 3,
     maxProtocol: 3,
     client: {
-      id: 'omni-cli-setup',
+      id: clientId,
       version: '1.0.0',
       platform: 'omni',
-      mode: 'backend',
+      mode: clientMode,
     },
-    role: 'operator',
-    scopes: ['operator.pairing'],
+    role,
+    scopes,
     caps: [],
-    auth: { token },
+    auth: { token: gatewayToken },
     locale: 'en-US',
     userAgent: 'omni-cli/setup',
+    device: {
+      id: keypair.deviceId,
+      publicKey: keypair.publicKey,
+      signature,
+      signedAt: signedAtMs,
+      nonce,
+    },
   };
 
-  await sendWsRequest(ws, 'connect', params as unknown as Record<string, unknown>);
+  const result = await sendWsRequest(ws, 'connect', params as unknown as Record<string, unknown>);
+  return (result ?? {}) as Record<string, unknown>;
 }
 
 /**
- * Perform device pairing via gateway WS RPC.
- *
- * Steps:
- * 1. Connect to gateway with shared token
- * 2. Call node.pair.request with the device public key
- * 3. Call node.pair.approve to auto-approve (requires operator.pairing scope)
- * 4. Return the device token from the approval response
+ * Pair a device with the gateway using the connect frame with Ed25519 credentials.
+ * From localhost, the gateway auto-approves and returns the device token.
  */
 async function pairDevice(
   gatewayUrl: string,
@@ -244,61 +278,20 @@ async function pairDevice(
   const ws = await openWs(gatewayUrl);
 
   try {
-    spinner.text = 'Authenticating with gateway...';
-    await connectWithToken(ws, gatewayToken);
+    spinner.text = 'Authenticating with device credentials...';
+    const result = await connectWithDevice(ws, gatewayToken, keypair);
 
-    spinner.text = 'Requesting device pairing...';
-    const pairResult = (await sendWsRequest(ws, 'node.pair.request', {
-      deviceId: keypair.deviceId,
-      publicKey: keypair.publicKey,
-      name: `omni-provider-${keypair.deviceId.slice(0, 8)}`,
-    })) as Record<string, unknown> | undefined;
+    // Extract device token from hello-ok response: payload.auth.deviceToken
+    const auth = result.auth as Record<string, unknown> | undefined;
+    const deviceToken = auth?.deviceToken as string | undefined;
 
-    const requestId = pairResult?.requestId as string | undefined;
-    const alreadyApproved = pairResult?.token as string | undefined;
-
-    // If the gateway returns a token directly, the device was auto-approved
-    if (alreadyApproved) {
-      return { deviceToken: alreadyApproved };
+    if (!deviceToken) {
+      throw new Error('Gateway did not return a device token in connect response');
     }
 
-    spinner.text = 'Approving device pairing...';
-    try {
-      const approveResult = (await sendWsRequest(ws, 'node.pair.approve', {
-        deviceId: keypair.deviceId,
-        ...(requestId ? { requestId } : {}),
-      })) as Record<string, unknown> | undefined;
-
-      const deviceToken = approveResult?.token as string | undefined;
-      if (!deviceToken) {
-        throw new Error('Gateway did not return a device token after approval');
-      }
-
-      return { deviceToken };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('scope') || msg.includes('permission') || msg.includes('unauthorized')) {
-        throw new PairingScopeError(gatewayUrl, gatewayToken, keypair.deviceId);
-      }
-      throw err;
-    }
+    return { deviceToken };
   } finally {
     ws.close(1000, 'pairing complete');
-  }
-}
-
-// ============================================================================
-// ERRORS
-// ============================================================================
-
-class PairingScopeError extends Error {
-  constructor(
-    public readonly gatewayUrl: string,
-    public readonly _gatewayToken: string,
-    public readonly deviceId: string,
-  ) {
-    super('Token lacks operator.pairing scope');
-    this.name = 'PairingScopeError';
   }
 }
 
@@ -336,7 +329,7 @@ function validateGatewayUrl(url: string): string | null {
  * Main setup flow for OpenClaw provider.
  *
  * 1. Generate Ed25519 keypair
- * 2. Pair device with gateway via WS RPC
+ * 2. Pair device with gateway via connect frame (auto-approved from localhost)
  * 3. Create provider via Omni API
  * 4. Run health check
  */
@@ -351,21 +344,7 @@ async function runOpenClawSetup(opts: SetupOpenClawOptions): Promise<void> {
 
     // Step 2: Pair device with gateway
     spinner.start('Pairing device with gateway...');
-    let pairingResult: PairingResult;
-    try {
-      pairingResult = await pairDevice(opts.gatewayUrl, opts.gatewayToken, keypair, spinner);
-    } catch (err) {
-      if (err instanceof PairingScopeError) {
-        spinner.fail('Auto-approval failed: token lacks operator.pairing scope');
-        output.info('');
-        output.info('Device pairing requested. Approve it manually:');
-        output.info(`  openclaw devices approve --latest --url ${err.gatewayUrl}`);
-        output.info('');
-        output.info('Then re-run this command.');
-        return;
-      }
-      throw err;
-    }
+    const pairingResult = await pairDevice(opts.gatewayUrl, opts.gatewayToken, keypair, spinner);
     spinner.succeed('Device paired with gateway');
 
     // Step 3: Create provider via API
