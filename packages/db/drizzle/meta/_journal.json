@@ -36,6 +36,13 @@
       "when": 1771999999000,
       "tag": "0012_instance_drop_legacy_agent_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1772000000000,
+      "tag": "0013_conversations_table",
+      "breakpoints": true
     }
   ]
 }
