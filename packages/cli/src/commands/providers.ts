@@ -6,6 +6,7 @@
  * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
  *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
  *   OpenClaw: --default-agent-id <id>
+ * omni providers setup openclaw --gateway-url <url> --gateway-token <token> --agent-id <id>
  * omni providers agents <id>
  * omni providers teams <id>
  * omni providers workflows <id>
@@ -17,6 +18,7 @@ import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { createSetupCommand } from './providers-setup.js';
 
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
 const VALID_SCHEMAS: readonly string[] = PROVIDER_SCHEMAS;
@@ -104,6 +106,9 @@ function getHealthCheckHint(errorMsg: string): string {
 
 export function createProvidersCommand(): Command {
   const providers = new Command('providers').description('Manage AI/agent providers');
+
+  // omni providers setup <schema>
+  providers.addCommand(createSetupCommand());
 
   // omni providers list
   providers

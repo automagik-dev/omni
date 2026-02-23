@@ -27,6 +27,7 @@ import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
 import { getServerBundlePath } from '../server-bundle.js';
+import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -247,22 +248,6 @@ async function promptYesNo(question: string, defaultYes = true): Promise<boolean
       resolve(trimmed === 'y' || trimmed === 'yes');
     });
   });
-}
-
-/** Generate a random API key: omni_sk_ + 32 hex chars */
-function generateApiKey(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return `omni_sk_${hex}`;
-}
-
-/** Mask an API key for display: show first 12 chars + ... */
-function maskApiKey(key: string): string {
-  if (key.length <= 12) return key;
-  return `${key.slice(0, 12)}...`;
 }
 
 type ApiKeyPromptResult = {

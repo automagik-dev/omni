@@ -133,6 +133,36 @@ omni instances create --channel discord --name "my-discord" --config '{"botToken
 omni instances create --channel slack --name "my-slack" --config '{"appToken": "<APP_TOKEN>", "botToken": "<BOT_TOKEN>"}'
 ```
 
+## Post-Install: Connect an OpenClaw Agent
+
+```bash
+omni providers setup openclaw \
+  --gateway-url ws://127.0.0.1:18789 \
+  --gateway-token <YOUR_GATEWAY_TOKEN> \
+  --agent-id <YOUR_AGENT_ID>
+```
+
+Expected output:
+```
+✓ Generated device keypair
+✓ Registered device with gateway
+✓ Created provider: <name>
+✓ Provider is healthy
+```
+
+Then assign the provider to a channel instance:
+```bash
+omni instances update <instance-id> \
+  --agent-provider <provider-id> \
+  --agent <YOUR_AGENT_ID>
+```
+
+Verify the provider is healthy:
+```bash
+omni providers test <provider-id>
+# → Provider is healthy (latency: Nms)
+```
+
 ## Service Management
 
 ```bash
@@ -210,6 +240,28 @@ They must match. If not, update the config:
 omni config set apiKey <correct_key>
 ```
 
+If the key was lost or rotated (e.g. after a redeploy), run:
+```bash
+omni auth recover
+# → generates new key, restarts API, updates ~/.omni/config.json
+```
+
+Verify:
+```bash
+omni status | grep keyValid
+# → keyValid: yes
+```
+
+### pgserve port conflict (port 8432)
+
+If `omni install` fails with `EADDRINUSE 8432` or PM2 shows `omni-v2-pgserve` crashing:
+```bash
+pm2 delete omni-v2-pgserve
+omni restart
+```
+
+The embedded PGlite backend doesn't use port 8432 — a stale `omni-v2-pgserve` process is conflicting. Delete it and restart.
+
 ### PM2 not found
 
 ```bash
@@ -232,6 +284,31 @@ curl -L "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION
 mv nats-server-*/nats-server ~/.omni/nats-server
 chmod +x ~/.omni/nats-server
 ```
+
+### OpenClaw provider health check fails after delete/recreate
+
+After deleting and recreating an OpenClaw provider, the API client pool may hold a stale connection. Restart the API to flush it:
+```bash
+omni restart
+omni providers test <new-provider-id>
+# → Provider is healthy
+```
+
+### OpenClaw error: `operator.write` scope missing
+
+```
+Error: gateway rejected message — missing scope: operator.write
+```
+
+The device has not been paired with the gateway. Run the setup wizard to generate a keypair and register the device:
+```bash
+omni providers setup openclaw \
+  --gateway-url ws://127.0.0.1:18789 \
+  --gateway-token <YOUR_GATEWAY_TOKEN> \
+  --agent-id <YOUR_AGENT_ID>
+```
+
+This creates a new provider with a device token that has `operator.write` scope. If you already have a provider and want to re-pair only, delete the old one and run setup again.
 
 ## One-Liner (Full Setup from Zero)
 
