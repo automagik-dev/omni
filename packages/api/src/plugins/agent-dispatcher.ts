@@ -2213,6 +2213,16 @@ async function resolveSenderAgentId(
   return agentRow?.id;
 }
 
+/**
+ * omni-930: Resolve the agent entity UUID for a dispatched message.
+ * If the instance has agentFkId set, return it directly (no extra DB lookup needed).
+ * Otherwise fall back to looking up by agentProviderId.
+ */
+async function resolveDispatchSenderAgentId(db: Database, instance: Instance): Promise<string | undefined> {
+  if (instance.agentFkId) return instance.agentFkId;
+  return resolveSenderAgentId(db, instance.agentProviderId);
+}
+
 async function processAgentResponse(
   services: Services,
   instance: Instance,
@@ -2266,9 +2276,10 @@ async function processAgentResponse(
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
 
-  // omni-h3q: Look up the Agent entity UUID for this agentProviderId so that
+  // omni-h3q / omni-930: Look up the Agent entity UUID for this instance so that
   // sent messages can be attributed to the specific agent in the DB.
-  const senderAgentId = await resolveSenderAgentId(db, instance.agentProviderId);
+  // Uses agentFkId directly when set (phase 2a), otherwise falls back to agentProviderId lookup.
+  const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
   log.info('Dispatching to agent', {
     instanceId: instance.id,
@@ -2619,6 +2630,20 @@ async function applyAgentFkOverrides(db: Database, agentFkId: string, effectiveI
 }
 
 /**
+ * omni-930 phase 2a: Apply instance-level agentFkId overrides and return the result.
+ * Used as the no-route early-return path in resolveEffectiveInstance.
+ */
+async function applyInstanceFkAndReturn(
+  db: Database,
+  instance: Instance,
+): Promise<{ instance: Instance; routeId: null }> {
+  if (!instance.agentFkId) return { instance, routeId: null };
+  const effectiveInstance: Instance = { ...instance };
+  await applyAgentFkOverrides(db, instance.agentFkId, effectiveInstance);
+  return { instance: effectiveInstance, routeId: null };
+}
+
+/**
  * Resolve effective instance by applying route overrides.
  * Resolution priority: chat route > user route > instance default
  *
@@ -2626,6 +2651,7 @@ async function applyAgentFkOverrides(db: Database, agentFkId: string, effectiveI
  */
 async function resolveEffectiveInstance(
   services: Services,
+  db: Database,
   instance: Instance,
   chatId: string | undefined,
   personId?: string,
@@ -2641,8 +2667,9 @@ async function resolveEffectiveInstance(
   const route = await services.routeResolver.resolve(instance.id, chatId, personId);
 
   if (!route) {
-    // No route matched - use instance defaults
-    return { instance, routeId: null };
+    // No route matched - use instance defaults.
+    // omni-930 phase 2a: Apply instance-level agentFkId entity overrides if set.
+    return applyInstanceFkAndReturn(db, instance);
   }
 
   // Merge route overrides with instance defaults
@@ -2666,10 +2693,11 @@ async function resolveEffectiveInstance(
     agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
   };
 
-  // omni-p7r: If route has a proper FK to the agents table, resolve the agent entity
-  // and override agentProviderId / agentType / agentId from the entity row.
-  if (route.agentFkId) {
-    await applyAgentFkOverrides(db, route.agentFkId, effectiveInstance);
+  // omni-p7r / omni-930 phase 2a: Resolve agent entity overrides.
+  // Route-level agentFkId takes priority; fall back to instance-level agentFkId.
+  const effectiveAgentFkId = route.agentFkId ?? instance.agentFkId;
+  if (effectiveAgentFkId) {
+    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
   }
 
   log.debug('Route resolved and merged', {
@@ -2711,6 +2739,7 @@ async function processReactionTrigger(
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
     services,
+    db,
     baseInstance,
     internalChatId,
     metadata.personId,
@@ -3364,6 +3393,7 @@ export async function setupAgentDispatcher(
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(
       services,
+      db,
       baseInstance,
       internalChatId,
       personId,

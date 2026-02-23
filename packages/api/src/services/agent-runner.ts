@@ -396,7 +396,7 @@ export class AgentRunnerService {
       files,
     } = context;
 
-    if (!instance.agentProviderId) {
+    if (!instance.agentProviderId && !instance.agentFkId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
     }
 
@@ -404,7 +404,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    const client = await this.getClient(instance.agentProviderId as string);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -498,7 +498,7 @@ export class AgentRunnerService {
       messages,
     } = context;
 
-    if (!instance.agentProviderId) {
+    if (!instance.agentProviderId && !instance.agentFkId) {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
     }
 
@@ -506,7 +506,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    const client = await this.getClient(instance.agentProviderId as string);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
