@@ -825,6 +825,7 @@ export const platformIdentities = pgTable(
       table.instanceId,
       table.platformUserId,
     ),
+    actorXor: check('platform_identities_actor_xor', sql`NOT (person_id IS NOT NULL AND agent_id IS NOT NULL)`),
   }),
 );
 
