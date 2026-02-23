@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BIN_DIR="$PROJECT_ROOT/bin"
 NATS_BINARY="$BIN_DIR/nats-server"
-NATS_VERSION="${NATS_VERSION:-v2.10.24}"
+NATS_VERSION="${NATS_VERSION:-v2.12.4}"
 
 # Detect OS and architecture
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"

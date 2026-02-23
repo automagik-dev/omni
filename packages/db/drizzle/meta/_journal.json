@@ -5,64 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1771280049988,
-      "tag": "0000_cute_white_tiger",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1771365395191,
-      "tag": "0001_gray_apocalypse",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1771393021796,
-      "tag": "0002_pairing_access_rules",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1771393021797,
-      "tag": "0003_telegram_reaction_level",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1771362759291,
-      "tag": "0004_add_guild_config_overrides",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1771367055198,
-      "tag": "0005_add_discord_presence",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1771460197600,
-      "tag": "0006_flippant_bastion",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1771606971682,
-      "tag": "0007_cultured_doctor_spectrum",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1771615809421,
-      "tag": "0008_fixed_mockingbird",
+      "when": 1771856815384,
+      "tag": "0000_closed_patriot",
       "breakpoints": true
     }
   ]

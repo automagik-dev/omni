@@ -10,6 +10,21 @@ import type { AppVariables } from '../../types';
 
 const providersRoutes = new Hono<{ Variables: AppVariables }>();
 
+const SENSITIVE_KEY_PATTERN = /private|secret|password|token|apikey|api_key/i;
+
+function maskSchemaConfig(
+  config: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!config) return config;
+  const masked = { ...config };
+  for (const key of Object.keys(masked)) {
+    if (SENSITIVE_KEY_PATTERN.test(key)) {
+      masked[key] = '[REDACTED]';
+    }
+  }
+  return masked;
+}
+
 // List query schema
 const listQuerySchema = z.object({
   active: z.coerce.boolean().optional(),
@@ -53,10 +68,11 @@ providersRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 
   const providers = await services.providers.list({ active });
 
-  // Mask API keys
+  // Mask API keys and sensitive schemaConfig fields
   const items = providers.map((p) => ({
     ...p,
     apiKey: p.apiKey ? '********' : null,
+    schemaConfig: maskSchemaConfig(p.schemaConfig),
   }));
 
   return c.json({ items });
@@ -75,6 +91,7 @@ providersRoutes.get('/:id', async (c) => {
     data: {
       ...provider,
       apiKey: provider.apiKey ? '********' : null,
+      schemaConfig: maskSchemaConfig(provider.schemaConfig),
     },
   });
 });
@@ -93,6 +110,7 @@ providersRoutes.post('/', zValidator('json', createProviderSchema), async (c) =>
       data: {
         ...provider,
         apiKey: provider.apiKey ? '********' : null,
+        schemaConfig: maskSchemaConfig(provider.schemaConfig),
       },
     },
     201,
@@ -113,6 +131,7 @@ providersRoutes.patch('/:id', zValidator('json', updateProviderSchema), async (c
     data: {
       ...provider,
       apiKey: provider.apiKey ? '********' : null,
+      schemaConfig: maskSchemaConfig(provider.schemaConfig),
     },
   });
 });

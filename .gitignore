@@ -47,9 +47,10 @@ coverage/
 # Python
 __pycache__/
 *.pyc
+# Genie workspace (lives at ../../.genie, not in repo)
+.genie/
 # Worker worktrees (genie-cli spawns these)
 omni-*/
-.genie/workers.json
 # bd worktree
 omni-soi/
 # bd worktree

@@ -1,1 +1,0 @@
-ALTER TABLE "instances" ADD COLUMN "guild_config_overrides" jsonb;
