@@ -3,6 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
+import { LinkIdentityToAgentSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppVariables } from '../../types';
@@ -93,6 +94,39 @@ agentsRoutes.delete('/:id', async (c) => {
   await services.agents.delete(id);
 
   return c.json({ success: true });
+});
+
+/**
+ * GET /agents/:id/identities - List platform identities for this agent
+ */
+agentsRoutes.get('/:id/identities', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  await services.agents.getById(id);
+
+  const identities = await services.persons.getIdentitiesForAgent(id);
+
+  return c.json({ items: identities });
+});
+
+/**
+ * POST /agents/:id/identities/link - Link a platform identity to this agent
+ */
+agentsRoutes.post('/:id/identities/link', zValidator('json', LinkIdentityToAgentSchema), async (c) => {
+  const id = c.req.param('id');
+  const data = c.req.valid('json');
+  const services = c.get('services');
+
+  await services.agents.getById(id);
+
+  const identity = await services.persons.linkIdentityToAgent(data.platformIdentityId, id, {
+    linkedBy: data.linkedBy,
+    confidence: data.confidence,
+    linkReason: data.linkReason,
+  });
+
+  return c.json({ data: identity }, 201);
 });
 
 export { agentsRoutes };

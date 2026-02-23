@@ -142,6 +142,8 @@ export interface EventMetadata {
   streamSequence?: number;
   /** Journey timing checkpoints: checkpoint name → Unix ms timestamp */
   timings?: Record<string, number>;
+  /** agents.id UUID — set when an agent processes/sends this event */
+  agentId?: string;
 }
 
 /**
