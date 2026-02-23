@@ -26,7 +26,7 @@ import { saveConfig, saveServerConfig } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
-import { getServerBundlePath } from '../server-bundle.js';
+import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
@@ -458,7 +458,8 @@ async function startServices(cfg: WizardConfig): Promise<void> {
 
   const runtimeEnv = buildApiRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], runtimeEnv);
+  const launcherPath = getServerLauncherPath();
+  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], runtimeEnv);
   if (apiCode !== 0) {
     apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
   } else {
