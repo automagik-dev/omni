@@ -51,7 +51,7 @@ jobs:
       - name: Derive version
         id: version
         run: |
-          TODAY=$(date -u +%Y%m%d)
+          TODAY=$(date -u +%y%m%d)
           EXISTING=$(git tag --list "v2.${TODAY}.*" | wc -l)
           BUILD_NUMBER=$((EXISTING + 1))
           VERSION="2.${TODAY}.${BUILD_NUMBER}"
