@@ -97,7 +97,7 @@ jobs:
         run: bunx biome check .
 
       - name: Dead code check (knip)
-        run: bunx knip@5.85.0
+        run: bunx knip
 
       - name: Test
         run: bun test --env-file=.env

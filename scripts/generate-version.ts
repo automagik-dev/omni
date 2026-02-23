@@ -26,10 +26,10 @@ function runGit(command: string): string {
 
 /**
  * Derive build number from git tags for today.
- * Counts existing v2.YYYYMMDD.* tags and returns count + 1.
+ * Counts existing v2.YYMMDD.* tags and returns count + 1.
  * Env var OMNI_BUILD_NUMBER overrides if set.
  */
-function resolveBuildNumber(yyyymmdd: string): number {
+function resolveBuildNumber(yymmdd: string): number {
   // Explicit env var override (for manual/CI use)
   const envOverride = process.env.OMNI_BUILD_NUMBER ?? process.env.BUILD_NUMBER;
   if (envOverride) {
@@ -40,8 +40,8 @@ function resolveBuildNumber(yyyymmdd: string): number {
     return parsed;
   }
 
-  // Derive from git tags: count v2.YYYYMMDD.* tags (both -dev and release)
-  const tagPattern = `v2.${yyyymmdd}.*`;
+  // Derive from git tags: count v2.YYMMDD.* tags (both -dev and release)
+  const tagPattern = `v2.${yymmdd}.*`;
   const tagOutput = runGit(`git tag --list '${tagPattern}'`);
 
   if (!tagOutput || tagOutput === 'unknown') {
@@ -80,12 +80,12 @@ function resolveBranch(): string {
 
 function main(): void {
   const date = resolveDate();
-  const yyyymmdd = date.replaceAll('-', '');
-  const buildNumber = resolveBuildNumber(yyyymmdd);
+  const yymmdd = date.replaceAll('-', '').slice(2); // YYYYMMDD → YYMMDD
+  const buildNumber = resolveBuildNumber(yymmdd);
   const commit = resolveCommit();
   const branch = resolveBranch();
 
-  const version = `2.${yyyymmdd}.${buildNumber}`;
+  const version = `2.${yymmdd}.${buildNumber}`;
 
   const artifact: VersionArtifact = {
     version,
