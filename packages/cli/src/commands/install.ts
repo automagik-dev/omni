@@ -38,7 +38,7 @@ const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
-const NATS_VERSION = 'v2.10.24';
+const NATS_VERSION = 'v2.12.4';
 
 // ============================================================================
 // TYPES
@@ -273,11 +273,12 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
 // HELPERS - SYSTEMD UNIT
 // ============================================================================
 
-/** Write a systemd unit file to /etc/systemd/system/omni-api.service */
+/** Write systemd unit files for omni-api and omni-nats */
 async function writeSystemdUnit(_cfg: WizardConfig): Promise<boolean> {
-  const unitContent = `[Unit]
+  const apiUnit = `[Unit]
 Description=Omni API Server
-After=network.target
+After=network.target omni-nats.service
+Wants=omni-nats.service
 
 [Service]
 Type=forking
@@ -291,18 +292,39 @@ PIDFile=${homedir()}/.pm2/pm2.pid
 WantedBy=multi-user.target
 `;
 
-  const unitPath = '/etc/systemd/system/omni-api.service';
+  const natsUnit = `[Unit]
+Description=Omni NATS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${NATS_BINARY_PATH}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+  const apiPath = '/etc/systemd/system/omni-api.service';
+  const natsPath = '/etc/systemd/system/omni-nats.service';
 
   try {
-    writeFileSync(unitPath, unitContent, { mode: 0o644 });
-    output.success(`Systemd unit written to ${unitPath}`);
+    writeFileSync(natsPath, natsUnit, { mode: 0o644 });
+    output.success(`Systemd unit written to ${natsPath}`);
+
+    writeFileSync(apiPath, apiUnit, { mode: 0o644 });
+    output.success(`Systemd unit written to ${apiPath}`);
+
     output.raw('\n  Enable and start with:');
-    output.raw('    sudo systemctl enable --now omni-api\n');
+    output.raw('    sudo systemctl enable --now omni-nats omni-api\n');
     return true;
   } catch {
-    output.warn(`Could not write ${unitPath} — run with sudo or write it manually`);
-    output.raw('\n  Unit file contents:');
-    output.raw(unitContent);
+    output.warn('Could not write systemd units — run with sudo or write them manually');
+    output.raw('\n  omni-nats.service:');
+    output.raw(natsUnit);
+    output.raw('  omni-api.service:');
+    output.raw(apiUnit);
     return false;
   }
 }

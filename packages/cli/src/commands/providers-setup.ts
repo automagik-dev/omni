@@ -100,6 +100,49 @@ async function promptLine(question: string, defaultValue = ''): Promise<string> 
   });
 }
 
+/** Check if a character signals end of input (Enter or EOF) */
+function isEndOfInput(c: string): boolean {
+  return c === '\n' || c === '\r' || c === '\u0004';
+}
+
+/** Check if a character is backspace */
+function isBackspace(c: string): boolean {
+  return c === '\u007F' || c === '\b';
+}
+
+/** Prompt for a secret (input not echoed to terminal) */
+async function promptSecret(question: string): Promise<string> {
+  process.stdout.write(question);
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+
+  return new Promise((resolve) => {
+    let input = '';
+    const onData = (ch: string) => {
+      const c = ch.toString();
+      if (isEndOfInput(c)) {
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(false);
+        }
+        process.stdin.pause();
+        process.stdin.removeListener('data', onData);
+        process.stdout.write('\n');
+        resolve(input.trim());
+      } else if (c === '\u0003') {
+        process.exit(1);
+      } else if (isBackspace(c)) {
+        input = input.slice(0, -1);
+      } else {
+        input += c;
+      }
+    };
+    process.stdin.on('data', onData);
+  });
+}
+
 // ============================================================================
 // HELPERS - WS PAIRING CLIENT
 // ============================================================================
@@ -137,12 +180,19 @@ function sendWsRequest(
       }
     };
 
+    const closeHandler = (ev: CloseEvent) => {
+      cleanup();
+      reject(new Error(`WebSocket closed before "${method}" response (code ${ev.code})`));
+    };
+
     const cleanup = () => {
       clearTimeout(timeout);
       ws.removeEventListener('message', handler);
+      ws.removeEventListener('close', closeHandler);
     };
 
     ws.addEventListener('message', handler);
+    ws.addEventListener('close', closeHandler);
     ws.send(JSON.stringify(frame));
   });
 }
@@ -167,12 +217,19 @@ function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 10_000): P
       resolve(frame);
     };
 
+    const closeHandler = (ev: CloseEvent) => {
+      cleanup();
+      reject(new Error(`WebSocket closed while waiting for "${eventName}" (code ${ev.code})`));
+    };
+
     const cleanup = () => {
       clearTimeout(timeout);
       ws.removeEventListener('message', handler);
+      ws.removeEventListener('close', closeHandler);
     };
 
     ws.addEventListener('message', handler);
+    ws.addEventListener('close', closeHandler);
   });
 }
 
@@ -302,7 +359,7 @@ async function pairDevice(
 /** Collect missing options via interactive prompts */
 async function collectOptions(options: Partial<SetupOpenClawOptions>): Promise<SetupOpenClawOptions> {
   const gatewayUrl = options.gatewayUrl ?? (await promptLine('Gateway WebSocket URL: '));
-  const gatewayToken = options.gatewayToken ?? (await promptLine('Gateway token: '));
+  const gatewayToken = options.gatewayToken ?? (await promptSecret('Gateway token: '));
   const agentId = options.agentId ?? (await promptLine('Default agent ID: '));
   const name = options.name ?? (await promptLine(`Provider name [openclaw-${agentId}]: `, `openclaw-${agentId}`));
 

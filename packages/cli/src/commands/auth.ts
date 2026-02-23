@@ -209,9 +209,17 @@ async function handleRotationSuccess(
   output.raw(`  API process "${processName}" restarted.`);
   output.raw('  Waiting for API to come online...');
 
-  await Bun.sleep(3000);
-
-  const valid = await validateKey(apiUrl, newKey);
+  // Retry validation with exponential backoff: 1s, 2s, 4s
+  let valid = false;
+  const backoffMs = [1000, 2000, 4000];
+  for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+    await Bun.sleep(backoffMs[attempt]);
+    valid = await validateKey(apiUrl, newKey);
+    if (valid) break;
+    if (attempt < backoffMs.length - 1) {
+      output.raw(`  Attempt ${attempt + 1} failed, retrying...`);
+    }
+  }
   updateConfig(newKey, apiUrlOverride);
 
   if (valid) {

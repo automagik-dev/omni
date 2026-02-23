@@ -8,6 +8,7 @@
 |-----------|-------|---------|
 | Bun | `bun --version` → `1.x` | `curl -fsSL https://bun.sh/install \| bash` |
 | PM2 | `pm2 --version` → `5.x+` | `bun add -g pm2` |
+| jq | `jq --version` → `1.6+` | `apt install jq` or `brew install jq` |
 
 Both must be in `$PATH`. If `which bun` or `which pm2` returns nothing, install them first.
 
@@ -283,7 +284,7 @@ omni install --non-interactive
 
 Or manually:
 ```bash
-NATS_VERSION=v2.10.24
+NATS_VERSION=v2.12.4
 curl -L "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz
 mv nats-server-*/nats-server ~/.omni/nats-server
 chmod +x ~/.omni/nats-server
