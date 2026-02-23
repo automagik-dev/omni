@@ -326,9 +326,14 @@ async function main() {
   // Register early shutdown handler so SIGINT/SIGTERM during startup still cleans up
   const earlyShutdown = async () => {
     log.info('Shutdown during startup — cleaning up');
-    await closeDb();
-    await stopEmbeddedPgserve();
-    process.exit(1);
+    try {
+      await closeDb();
+      await stopEmbeddedPgserve();
+    } catch (err) {
+      log.error('Cleanup failed during early shutdown', { error: String(err) });
+    } finally {
+      process.exit(1);
+    }
   };
   process.once('SIGINT', earlyShutdown);
   process.once('SIGTERM', earlyShutdown);
