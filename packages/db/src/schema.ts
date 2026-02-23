@@ -346,13 +346,8 @@ export const agentRoutes = pgTable(
     personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
 
     // ---- Target: which agent handles it? ----
-    agentProviderId: uuid('agent_provider_id')
-      .notNull()
-      .references(() => agentProviders.id, { onDelete: 'cascade' }),
-    agentId: varchar('agent_id', { length: 255 }).notNull(),
-    agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
-    /** Proper FK to agents table. Preferred over legacy agentId varchar + agentProviderId combo. */
-    agentFkId: uuid('agent_fk_id').references(() => agents.id, { onDelete: 'set null' }),
+    /** FK to agents table (replaces legacy agentProviderId + agentId varchar + agentType). */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Behavior overrides (NULL = inherit from instance) ----
     agentTimeout: integer('agent_timeout'),
@@ -390,7 +385,7 @@ export const agentRoutes = pgTable(
     chatIdx: index('agent_routes_chat_idx').on(table.chatId),
     personIdx: index('agent_routes_person_idx').on(table.personId),
     activeIdx: index('agent_routes_active_idx').on(table.instanceId, table.isActive),
-    agentFkIdx: index('agent_routes_agent_fk_idx').on(table.agentFkId),
+    agentIdIdx: index('agent_routes_agent_id_idx').on(table.agentId),
   }),
 );
 
@@ -2344,7 +2339,7 @@ export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
 
 export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
   agent: one(agents, {
-    fields: [agentRoutes.agentFkId],
+    fields: [agentRoutes.agentId],
     references: [agents.id],
   }),
   triggerLogs: many(triggerLogs),

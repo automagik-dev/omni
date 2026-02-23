@@ -2283,7 +2283,7 @@ async function processAgentResponse(
 
   // omni-h3q / omni-930: Look up the Agent entity UUID for this instance so that
   // sent messages can be attributed to the specific agent in the DB.
-  // Uses agentFkId directly when set (phase 2a), otherwise falls back to agentProviderId lookup.
+  // Uses agentId (UUID FK) directly when set, otherwise falls back to agentProviderId lookup.
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
   log.info('Dispatching to agent', {
@@ -2680,17 +2680,13 @@ async function resolveEffectiveInstance(
 
   if (!route) {
     // No route matched - use instance defaults.
-    // omni-930 phase 2a: Apply instance-level agentFkId entity overrides if set.
+    // omni-930 phase 3 / omni-p7r: Apply instance-level agentId entity overrides if set.
     return applyInstanceFkAndReturn(db, instance);
   }
 
   // Merge route overrides with instance defaults
   const effectiveInstance: DispatchInstance = {
     ...instance,
-    // Stamp transient dispatch fields from the route (legacy agent_routes columns)
-    agentProviderId: route.agentProviderId,
-    agentInternalId: route.agentId,
-    agentType: route.agentType as DispatchFields['agentType'],
     // Override behavior (null = inherit from instance)
     agentTimeout: route.agentTimeout ?? instance.agentTimeout,
     agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
@@ -2705,9 +2701,9 @@ async function resolveEffectiveInstance(
     agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
   };
 
-  // omni-p7r / omni-930 phase 3: Resolve agent entity overrides.
-  // Route-level agentFkId takes priority; fall back to instance-level agentId.
-  const effectiveAgentFkId = route.agentFkId ?? instance.agentId;
+  // omni-p7r phase 2: Resolve agent entity overrides.
+  // Route-level agentId takes priority; fall back to instance-level agentId.
+  const effectiveAgentFkId = route.agentId ?? instance.agentId;
   if (effectiveAgentFkId) {
     await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
   }
@@ -2718,12 +2714,10 @@ async function resolveEffectiveInstance(
     personId,
     routeId: route.id,
     routeScope: route.scope,
-    routeAgentProviderId: route.agentProviderId,
     routeAgentId: route.agentId,
     agentStreamMode: effectiveInstance.agentStreamMode,
     routeAgentStreamMode: route.agentStreamMode,
     instanceAgentStreamMode: instance.agentStreamMode,
-    routeAgentFkId: route.agentFkId,
     instanceAgentId: instance.agentId,
   });
 
