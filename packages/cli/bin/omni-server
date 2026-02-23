@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -e
 # PM2 launcher for the Omni API server bundle.
 # PM2's fork container can't require() ESM modules with top-level await,
 # so we bypass it by exec'ing bun directly.
