@@ -28,6 +28,7 @@ export interface ResolvedRoute {
   agentProviderId: string;
   agentId: string;
   agentType: 'agent' | 'team' | 'workflow';
+  agentFkId: string | null;
   agentTimeout: number | null;
   agentStreamMode: boolean | null;
   agentReplyFilter: unknown | null;
