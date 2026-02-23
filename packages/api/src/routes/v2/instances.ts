@@ -55,10 +55,7 @@ const agentReplyFilterSchema = z.object({
 const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
-  agentFkId: z.string().uuid().nullable().optional().describe('Agent FK UUID referencing agents table'),
-  agentProviderId: z.string().uuid().optional().nullable().describe('Reference to agent provider'),
-  agentId: z.string().max(255).default('default').describe('Agent ID within the provider'),
-  agentType: z.enum(['agent', 'team', 'workflow']).default('agent').describe('Agent type (agent, team, or workflow)'),
+  agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
   agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
@@ -157,9 +154,7 @@ const createInstanceSchema = z.object({
 // Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
 const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Nullable fields in DB - can be set to null
-  agentFkId: z.string().uuid().nullable().optional(),
-  agentProviderId: z.string().uuid().nullable().optional(),
-  agentId: z.string().max(255).nullable().optional(),
+  agentId: z.string().uuid().nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
   telegramBotToken: z.string().nullable().optional(),
@@ -385,12 +380,6 @@ function buildTokenPersistUpdates(
   return updates;
 }
 
-/** Default reply filter applied when an agent provider is bound but no filter is set */
-const DEFAULT_AGENT_REPLY_FILTER = {
-  mode: 'filtered' as const,
-  conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
-};
-
 /**
  * GET /instances - List all instances
  */
@@ -476,11 +465,6 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
-  // Default reply filter when binding an agent provider without explicit filter
-  if (data.agentProviderId && !data.agentReplyFilter) {
-    data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
-  }
-
   // Map generic `token` → channel-specific DB column + resolve connect token
   const connectToken = resolveChannelToken(data);
 
@@ -517,32 +501,6 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
-
-  // When clearing agentProviderId, cascade-reset all agent fields to defaults.
-  // NOT NULL DB fields can't be set to null, so reset them to their schema defaults.
-  if (data.agentProviderId === null) {
-    Object.assign(data, {
-      agentId: null,
-      agentApiUrl: null,
-      agentApiKey: null,
-      agentReplyFilter: null,
-      agentSessionStrategy: null,
-      agentGateModel: null,
-      agentGatePrompt: null,
-      // Reset NOT NULL fields to schema defaults (cannot be null)
-      agentType: 'agent',
-      agentTimeout: 60,
-      agentStreamMode: false,
-    });
-  }
-
-  // Default reply filter when binding an agent provider without explicit filter
-  if (data.agentProviderId && !data.agentReplyFilter) {
-    const existing = await services.instances.getById(id);
-    if (!existing.agentReplyFilter) {
-      data.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
-    }
-  }
 
   const instance = await services.instances.update(id, data);
 
