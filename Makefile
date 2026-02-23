@@ -374,7 +374,7 @@ cli-build:
 	bun run --cwd packages/cli build
 
 cli-build-full: ## Build CLI client + server bundles
-	cd packages/cli && bun run build && bun run build:server
+	cd packages/cli && bun run build && bun run build:server && bun run build:migrations
 
 cli-link: cli-build
 	cd packages/cli && bun link
