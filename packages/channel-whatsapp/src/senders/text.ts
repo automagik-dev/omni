@@ -68,7 +68,7 @@ export async function sendTextMessage(
         ? {
             quoted: {
               key: { id: replyToId, remoteJid: jid, fromMe: false },
-              message: {},
+              message: { conversation: '' },
             },
           }
         : undefined,
