@@ -192,6 +192,8 @@ export interface MessageSentPayload {
     mediaUrl?: string;
   };
   replyToId?: string;
+  /** agents.id UUID — set by agent-dispatcher when agent sends */
+  senderAgentId?: string;
 }
 
 export interface MessageDeliveredPayload {
