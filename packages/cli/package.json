@@ -20,7 +20,7 @@
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist",
-    "build:server": "bun build ../api/src/index.ts --outfile dist/server/index.js --target bun",
+    "build:server": "bun build src/bundled-server-entry.ts --outfile dist/server/index.js --target bun",
     "build:migrations": "cp -r ../db/drizzle dist/drizzle",
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
@@ -31,6 +31,12 @@
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
+    "@omni/api": "workspace:*",
+    "@omni/channel-discord": "workspace:*",
+    "@omni/channel-sdk": "workspace:*",
+    "@omni/channel-slack": "workspace:*",
+    "@omni/channel-telegram": "workspace:*",
+    "@omni/channel-whatsapp": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/sdk": "workspace:*",
     "@types/node": "^22.10.3",

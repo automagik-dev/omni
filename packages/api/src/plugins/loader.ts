@@ -95,11 +95,37 @@ export interface LoadPluginsResult {
  * Load and initialize all channel plugins
  */
 export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<LoadPluginsResult> {
-  const { packagesDir = getMonorepoPackagesDir(), eventBus, db } = options;
+  const { eventBus, db } = options;
 
   // Set database for persistent storage BEFORE creating plugin contexts
   setStorageDatabase(db);
 
+  // Import the singleton registry from channel-sdk
+  const { channelRegistry } = await import('@omni/channel-sdk');
+
+  // Check if channels were pre-registered (bundled npm distribution)
+  const preRegistered = channelRegistry.getAll();
+  if (preRegistered.length > 0) {
+    logger.info('Using pre-registered channel plugins', { count: preRegistered.length });
+    for (const plugin of preRegistered) {
+      try {
+        const context = createPluginContext({ pluginId: plugin.id, eventBus, db });
+        await channelRegistry.initialize(plugin.id, context);
+        logger.info(`Initialized channel: ${plugin.id}`, { name: plugin.name, version: plugin.version });
+      } catch (error) {
+        logger.error(`Failed to initialize channel: ${plugin.id}`, { error: String(error) });
+      }
+    }
+    return {
+      registry: channelRegistry,
+      loaded: preRegistered.length,
+      failed: 0,
+      pluginIds: preRegistered.map((p) => p.id),
+    };
+  }
+
+  // Filesystem discovery fallback (monorepo dev mode)
+  const packagesDir = options.packagesDir ?? getMonorepoPackagesDir();
   logger.info('Starting channel plugin discovery', { packagesDir });
 
   // Discover and register plugins
@@ -118,9 +144,6 @@ export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<L
   for (const failure of discoveryResult.failed) {
     logger.error('Failed to load plugin', { path: failure.path, error: failure.error });
   }
-
-  // Import the singleton registry from channel-sdk
-  const { channelRegistry } = await import('@omni/channel-sdk');
 
   // Initialize all registered plugins with context
   for (const plugin of discoveryResult.registered) {

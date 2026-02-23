@@ -261,6 +261,7 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
     DATABASE_URL: cfg.databaseUrl,
     OMNI_API_KEY: cfg.apiKey,
     MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
+    OMNI_PACKAGES_DIR: join(cfg.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
     PGSERVE_DATA: join(cfg.dataDir, 'pglite'),
     NATS_URL: 'nats://localhost:4222',
