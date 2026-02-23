@@ -71,6 +71,13 @@
       "when": 1771826916323,
       "tag": "0009_dark_archangel",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1771999999999,
+      "tag": "0010_actor_model_columns",
+      "breakpoints": true
     }
   ]
 }

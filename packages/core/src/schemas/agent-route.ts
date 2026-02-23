@@ -52,6 +52,7 @@ export const AgentRouteSchema = z.object({
   agentProviderId: UuidSchema,
   agentId: z.string().min(1).max(255),
   agentType: AgentTypeSchema,
+  agentFkId: UuidSchema.nullable(),
 
   // Behavior overrides (null = inherit from instance)
   agentTimeout: z.number().int().positive().nullable(),
@@ -87,6 +88,7 @@ export const CreateAgentRouteSchema = z
     agentProviderId: UuidSchema,
     agentId: z.string().min(1).max(255),
     agentType: AgentTypeSchema.default('agent'),
+    agentFkId: UuidSchema.optional(),
 
     // Optional overrides
     agentTimeout: z.number().int().positive().optional(),
@@ -118,6 +120,7 @@ export type CreateAgentRoute = z.infer<typeof CreateAgentRouteSchema>;
 export const UpdateAgentRouteSchema = z.object({
   agentId: z.string().min(1).max(255).optional(),
   agentType: AgentTypeSchema.optional(),
+  agentFkId: UuidSchema.optional().nullable(),
 
   // Optional overrides
   agentTimeout: z.number().int().positive().optional().nullable(),
