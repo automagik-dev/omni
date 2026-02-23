@@ -17,6 +17,7 @@ import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
 import { ConsumerOffsetService } from './consumer-offsets';
+import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
@@ -38,6 +39,7 @@ import { WebhookService } from './webhooks';
 export interface Services {
   agents: AgentService;
   apiKeys: ApiKeyService;
+  conversations: ConversationService;
   audit: AuditService;
   instances: InstanceService;
   persons: PersonService;
@@ -75,6 +77,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   return {
     agents: new AgentService(db, eventBus),
     apiKeys,
+    conversations: new ConversationService(db, eventBus),
     audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),

@@ -13,6 +13,7 @@ import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
 import { chatsRoutes } from './chats';
+import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
@@ -46,6 +47,7 @@ v2Routes.route('/providers', providersRoutes);
 v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);
 v2Routes.route('/metrics', metricsRoutes);
+v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
