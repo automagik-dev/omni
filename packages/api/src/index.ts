@@ -339,7 +339,13 @@ async function main() {
   process.once('SIGTERM', earlyShutdown);
 
   // Wait for database to accept connections before running migrations
-  await waitForDatabaseReady(db);
+  try {
+    await waitForDatabaseReady(db);
+  } catch (error) {
+    await closeDb();
+    await stopEmbeddedPgserve();
+    throw error;
+  }
 
   // Apply pending migrations (idempotent — already-applied are skipped)
   log.info('Running database migrations');

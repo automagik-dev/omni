@@ -389,11 +389,11 @@ function writeOpenClawConfig(configPath: string, config: Record<string, unknown>
 }
 
 /** Check if the omni plugin path is already in plugins.load.paths */
-function isPluginRegistered(config: Record<string, unknown>, marker: string): boolean {
+function isPluginRegistered(config: Record<string, unknown>, marker: string, pluginPath?: string): boolean {
   const plugins = config.plugins as Record<string, unknown> | undefined;
   const load = plugins?.load as Record<string, unknown> | undefined;
   const paths = load?.paths as string[] | undefined;
-  return paths?.some((p) => p.includes(marker)) ?? false;
+  return paths?.some((p) => p.includes(marker) || (pluginPath !== undefined && p === pluginPath)) ?? false;
 }
 
 /** Ensure nested object path exists without clobbering siblings, return the leaf */
@@ -456,7 +456,10 @@ function registerPlugin(
   if (!Array.isArray(loadSection.paths)) {
     loadSection.paths = [];
   }
-  (loadSection.paths as string[]).push(pluginPath);
+  const existingPaths = loadSection.paths as string[];
+  if (!existingPaths.includes(pluginPath)) {
+    existingPaths.push(pluginPath);
+  }
   return { config, registered: true };
 }
 
@@ -464,8 +467,8 @@ function registerPlugin(
 function setChannelAccount(config: Record<string, unknown>, accountName: string, instanceId: string): void {
   const omniConfig = loadConfig();
   const account = ensureNestedPath(config, ['channels', 'omni', 'accounts', accountName]);
-  account.apiUrl = omniConfig.apiUrl ?? 'http://localhost:8882';
-  account.apiKey = omniConfig.apiKey ?? '';
+  if (account.apiUrl === undefined) account.apiUrl = omniConfig.apiUrl ?? 'http://localhost:8882';
+  if (account.apiKey === undefined) account.apiKey = omniConfig.apiKey ?? '';
   account.instanceId = instanceId;
   account.enabled = true;
 }
@@ -495,7 +498,7 @@ function configureOpenClawJson(opts: SetupOpenClawOptions, spinner: ReturnType<t
 
   // 5a. Register plugin
   const pluginPath = resolvePluginPath(opts.pluginPath);
-  let pluginRegistered = isPluginRegistered(config, PLUGIN_MARKER);
+  let pluginRegistered = isPluginRegistered(config, PLUGIN_MARKER, pluginPath ?? undefined);
 
   if (!pluginRegistered && pluginPath) {
     const result = registerPlugin(config, pluginPath, configPath);
@@ -506,7 +509,8 @@ function configureOpenClawJson(opts: SetupOpenClawOptions, spinner: ReturnType<t
   // Enable plugin
   if (pluginRegistered) {
     const entries = ensureNestedPath(config, ['plugins', 'entries']);
-    entries.omni = { enabled: true };
+    const existing = (entries.omni ?? {}) as Record<string, unknown>;
+    entries.omni = { ...existing, enabled: true };
   }
 
   // 5c. Create channel account
