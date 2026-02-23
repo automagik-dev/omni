@@ -33,14 +33,14 @@
     {
       "idx": 4,
       "version": "7",
-      "when": 1771362759291,
+      "when": 1771393021798,
       "tag": "0004_add_guild_config_overrides",
       "breakpoints": true
     },
     {
       "idx": 5,
       "version": "7",
-      "when": 1771367055198,
+      "when": 1771393021799,
       "tag": "0005_add_discord_presence",
       "breakpoints": true
     },

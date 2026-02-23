@@ -8,7 +8,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { closeDb, createDb } from '@omni/db';
+import { applyMigrations, closeDb, createDb } from '@omni/db';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -295,6 +295,11 @@ async function main() {
   // Create database connection
   log.info('Connecting to database');
   const db = createDb({ url: databaseUrl });
+
+  // Apply pending migrations before any service starts
+  // applyMigrations() throws if Drizzle silently skipped any migration files
+  log.info('Applying database migrations');
+  await applyMigrations(db, new URL('../../db/drizzle', import.meta.url).pathname);
 
   // Connect to NATS
   const eventBus = await connectToNats(db);
