@@ -45,7 +45,7 @@ export function resolvePgserveConfig(): PgserveConfig {
 
 function isAddressInUse(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
-  return msg.includes('EADDRINUSE') || msg.includes('address already in use');
+  return msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen');
 }
 
 function buildDatabaseUrl(port: number): string {
