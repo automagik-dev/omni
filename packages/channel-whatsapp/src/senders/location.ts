@@ -46,7 +46,7 @@ export async function sendLocationMessage(
       ? {
           quoted: {
             key: { id: replyToId, remoteJid: jid, fromMe: false },
-            message: {},
+            message: { conversation: '' },
           },
         }
       : undefined,
