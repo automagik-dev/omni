@@ -12,6 +12,7 @@
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   boolean,
   check,
@@ -2395,9 +2396,11 @@ export const agentTasks = pgTable(
     error: text('error'),
 
     // ---- Subtask nesting ----
-    parentTaskId: uuid('parent_task_id').references((): ReturnType<typeof uuid> => agentTasks.id, {
-      onDelete: 'set null',
-    }),
+    parentTaskId: uuid('parent_task_id').references(
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      (): AnyPgColumn => agentTasks.id,
+      { onDelete: 'set null' },
+    ),
     subtaskCount: integer('subtask_count').notNull().default(0),
     completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
 
