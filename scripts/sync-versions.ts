@@ -68,7 +68,7 @@ function main(): void {
   }
 
   // Basic version format validation
-  if (!/^\d+\.\d+\.\d+/.test(version)) {
+  if (!/^\d+\.\d{6}\.\d+$/.test(version)) {
     console.error(`Invalid version format: ${version}`);
     console.error('Expected format: N.YYMMDD.N (e.g., 2.260215.3)');
     process.exit(1);
