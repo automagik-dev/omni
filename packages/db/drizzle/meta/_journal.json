@@ -8,6 +8,13 @@
       "when": 1771856815384,
       "tag": "0000_closed_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1771826916323,
+      "tag": "0009_dark_archangel",
+      "breakpoints": true
     }
   ]
 }

@@ -20,9 +20,10 @@ const registry = new OpenAPIRegistry();
 // Register security scheme
 registry.registerComponent('securitySchemes', 'ApiKeyAuth', securitySchemes.ApiKeyAuth);
 
-// Import schema registrations to populate the registry
 import { registerAccessSchemas } from '../schemas/openapi/access';
 import { registerRouteSchemas } from '../schemas/openapi/agent-routes';
+// Import schema registrations to populate the registry
+import { registerAgentSchemas } from '../schemas/openapi/agents';
 import { registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerCommonSchemas } from '../schemas/openapi/common';
@@ -42,6 +43,7 @@ import { registerSettingsSchemas } from '../schemas/openapi/settings';
 import { registerWebhookSchemas } from '../schemas/openapi/webhooks';
 
 // Register all schemas
+registerAgentSchemas(registry);
 registerCommonSchemas(registry);
 registerAuthSchemas(registry);
 registerHealthSchemas(registry);
