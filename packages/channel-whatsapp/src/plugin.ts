@@ -31,6 +31,7 @@ import {
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isLidJid, isUserJid, toJid } from './jid';
+import { type ReceiptTracker, createReceiptTracker, isDelivered, isRead, mapStatusCode } from './receipts';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -267,6 +268,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private decryptTrackers = new Map<string, DecryptFailureTracker>();
 
+  /**
+   * Per-instance receipt trackers for in-memory delivery status.
+   * Allows omni-ktb (resend in-flight) to query current delivery state
+   * without hitting the DB for each status check.
+   */
+  private receiptTrackers = new Map<string, ReceiptTracker>();
+
   /** Get or create a rate limit manager for an instance */
   private getRateLimitManager(instanceId: string): RateLimitManager {
     let manager = this.rateLimitManagers.get(instanceId);
@@ -407,6 +415,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Get the ReceiptTracker for an instance.
+   *
+   * Allows external callers (e.g. the resend-in-flight logic in omni-ktb) to
+   * check current in-memory delivery status for a message without a DB query.
+   *
+   * Returns undefined if no receipts have been received for this instance yet.
+   */
+  getReceiptTracker(instanceId: string): ReceiptTracker | undefined {
+    return this.receiptTrackers.get(instanceId);
   }
 
   /**
@@ -945,6 +965,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.sentMessageIds.delete(instanceId);
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
+    this.receiptTrackers.delete(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
@@ -2680,9 +2701,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle message delivered receipt
+   *
+   * Updates in-memory ReceiptTracker so callers (e.g. omni-ktb resend logic)
+   * can query delivery state without a DB round-trip, then emits
+   * message.delivered on the event bus which triggers the DB update via
+   * the message-persistence subscriber.
+   *
    * @internal
    */
   async handleMessageDelivered(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Update in-memory tracker
+    let tracker = this.receiptTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = createReceiptTracker();
+      this.receiptTrackers.set(instanceId, tracker);
+    }
+    tracker.update(externalId, 'delivered');
+
     await this.emitMessageDelivered({
       instanceId,
       externalId,
@@ -2693,9 +2728,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle message read receipt
+   *
+   * Updates in-memory ReceiptTracker then emits message.read on the event bus
+   * which triggers the DB update via the message-persistence subscriber.
+   *
    * @internal
    */
   async handleMessageRead(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Update in-memory tracker
+    let tracker = this.receiptTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = createReceiptTracker();
+      this.receiptTrackers.set(instanceId, tracker);
+    }
+    tracker.update(externalId, 'read');
+
     await this.emitMessageRead({
       instanceId,
       externalId,
@@ -3199,7 +3246,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Handle message receipt update (detailed read receipts)
+   * Handle message receipt update (message-receipt.update from Baileys)
+   *
+   * This event carries per-user read/delivery timestamps for group and 1:1 chats.
+   * The receipt object has three optional timestamp fields (in Baileys seconds):
+   *   - readTimestamp / playedTimestamp → message was read or voice note played
+   *   - receiptTimestamp → message was delivered to the recipient's device
+   *
+   * We derive the effective status via mapStatusCode so the same enum path
+   * is used as in the messages.update handler (processStatusUpdate), then
+   * delegate to handleMessageRead / handleMessageDelivered which:
+   *   1. Update the in-memory ReceiptTracker
+   *   2. Emit message.read / message.delivered on the event bus
+   *   3. Trigger the DB deliveryStatus update via message-persistence subscriber
+   *
    * @internal
    */
   async handleMessageReceiptUpdate(instanceId: string, update: unknown): Promise<void> {
@@ -3214,20 +3274,30 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const receipt = u.receipt;
     if (!receipt) return;
 
-    if (receipt.readTimestamp || receipt.playedTimestamp) {
-      await this.emitMessageRead({
-        instanceId,
-        externalId: messageExternalId,
-        chatId,
-        readAt: (receipt.readTimestamp ?? receipt.playedTimestamp ?? 0) * 1000 || Date.now(),
-      });
+    // Determine effective status from receipt timestamps, then map to our enum.
+    // readTimestamp / playedTimestamp → status code 4 (read) or 5 (played)
+    // receiptTimestamp               → status code 3 (delivered)
+    // No timestamp fields → unknown delivery, skip.
+    let statusCode: number;
+
+    if (receipt.playedTimestamp) {
+      statusCode = 5; // played (voice note)
+    } else if (receipt.readTimestamp) {
+      statusCode = 4; // read
     } else if (receipt.receiptTimestamp) {
-      await this.emitMessageDelivered({
-        instanceId,
-        externalId: messageExternalId,
-        chatId,
-        deliveredAt: receipt.receiptTimestamp * 1000,
-      });
+      statusCode = 3; // delivered
+    } else {
+      return; // nothing actionable
+    }
+
+    const mappedStatus = mapStatusCode(statusCode);
+
+    if (isRead(mappedStatus)) {
+      // Covers status codes 4 (read) and 5 (played)
+      await this.handleMessageRead(instanceId, messageExternalId, chatId);
+    } else if (isDelivered(mappedStatus)) {
+      // Covers status code 3 (delivered)
+      await this.handleMessageDelivered(instanceId, messageExternalId, chatId);
     }
   }
 

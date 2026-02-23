@@ -18,6 +18,7 @@ import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
 import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
+import { isDelivered, isRead, mapStatusCode } from '../receipts';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
 import { getMediaSize } from './media';
@@ -814,17 +815,11 @@ async function processMessage(
 }
 
 /**
- * Message status codes
- */
-const MessageStatus = {
-  SERVER_ACK: 2,
-  DELIVERY_ACK: 3,
-  READ: 4,
-  PLAYED: 5,
-} as const;
-
-/**
  * Process a message status update
+ *
+ * Uses mapStatusCode from receipts.ts to convert Baileys status codes to our
+ * delivery status enum, then delegates to plugin.handleMessageDelivered/Read
+ * which emit the corresponding events and trigger DB updates via subscribers.
  */
 async function processStatusUpdate(
   plugin: WhatsAppPlugin,
@@ -835,10 +830,12 @@ async function processStatusUpdate(
   const chatId = key.remoteJid || '';
   const externalId = key.id || '';
 
-  if (status === MessageStatus.DELIVERY_ACK) {
-    await plugin.handleMessageDelivered(instanceId, externalId, chatId);
-  } else if (status >= MessageStatus.READ) {
+  const mappedStatus = mapStatusCode(status);
+
+  if (isRead(mappedStatus)) {
     await plugin.handleMessageRead(instanceId, externalId, chatId);
+  } else if (isDelivered(mappedStatus)) {
+    await plugin.handleMessageDelivered(instanceId, externalId, chatId);
   }
 }
 
