@@ -194,7 +194,10 @@ const cmdSetup = () => {
     } else {
       // Update omni CLI to latest
       log('omni-setup', 'Updating @automagik/omni CLI...');
-      exec(bunPath, ['add', '-g', '@automagik/omni@latest'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const updateResult = exec(bunPath, ['add', '-g', '@automagik/omni@latest'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      if (updateResult.status !== 0) {
+        log('omni-setup', 'Update failed -- continuing with current version');
+      }
     }
 
     // 3. Find omni again after install/update
@@ -276,7 +279,10 @@ const cmdHealth = () => {
     const isHealthy = statusJson && statusJson.apiStatus === 'healthy';
     if (!isHealthy) {
       // Attempt to start
-      exec(omniPath, ['start'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const startResult = exec(omniPath, ['start'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      if (startResult.status !== 0) {
+        log('omni', 'start command failed -- will re-check status anyway');
+      }
 
       // Wait 3 seconds for startup
       spawnSync('sleep', ['3']);
@@ -340,7 +346,11 @@ const cmdRun = (args) => {
     process.exit(1);
   }
 
-  process.exit(result.status);
+  if (result.signal) {
+    log('omni', `Process terminated by signal: ${result.signal}`);
+    process.exit(1);
+  }
+  process.exit(result.status ?? 1);
 };
 
 // ---------------------------------------------------------------------------

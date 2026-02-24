@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/omni-runner.js\" health",
-            "timeout": 30
+            "timeout": 45
           }
         ]
       }
