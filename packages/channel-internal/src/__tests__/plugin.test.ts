@@ -196,5 +196,43 @@ describe('InternalChannelPlugin', () => {
       expect(result.timestamp).toBeGreaterThanOrEqual(before);
       expect(result.timestamp).toBeLessThanOrEqual(after);
     });
+
+    it('includes hopCount + 1 in rawPayload of re-emitted event', async () => {
+      await plugin.sendMessage('target-inst', {
+        to: 'target-inst',
+        content: { type: 'text', text: 'hop test' },
+        metadata: { sourceInstanceId: 'source-inst', chainMode: 'forward', hopCount: 2 },
+      });
+
+      const published = eventBus.calls.find((c) => c.type === 'message.received');
+      const payload = published?.payload as Record<string, unknown>;
+      expect((payload.rawPayload as Record<string, unknown>).hopCount).toBe(3);
+    });
+
+    it('drops message and returns success=false when hop limit is reached', async () => {
+      const result = await plugin.sendMessage('target-inst', {
+        to: 'target-inst',
+        content: { type: 'text', text: 'looping message' },
+        metadata: { sourceInstanceId: 'source-inst', chainMode: 'forward', hopCount: 5 },
+      });
+
+      expect(result.success).toBe(false);
+      const msgReceived = eventBus.calls.filter((c) => c.type === 'message.received');
+      expect(msgReceived).toHaveLength(0);
+    });
+
+    it('allows message at hop 4 (one below the limit)', async () => {
+      const result = await plugin.sendMessage('target-inst', {
+        to: 'target-inst',
+        content: { type: 'text', text: 'almost at limit' },
+        metadata: { sourceInstanceId: 'source-inst', chainMode: 'forward', hopCount: 4 },
+      });
+
+      expect(result.success).toBe(true);
+      const published = eventBus.calls.find((c) => c.type === 'message.received');
+      expect(published).toBeDefined();
+      const payload = published?.payload as Record<string, unknown>;
+      expect((payload.rawPayload as Record<string, unknown>).hopCount).toBe(5);
+    });
   });
 });

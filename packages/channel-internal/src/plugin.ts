@@ -13,7 +13,10 @@ import { BaseChannelPlugin, DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import type { ChannelCapabilities } from '@omni/channel-sdk';
 import type { InstanceConfig } from '@omni/channel-sdk';
 import type { OutgoingMessage, SendResult } from '@omni/channel-sdk';
-import { generateId } from '@omni/core';
+import { createLogger, generateId } from '@omni/core';
+
+const MAX_HOP_LIMIT = 5;
+const log = createLogger('channel:internal');
 
 const INTERNAL_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
@@ -62,10 +65,21 @@ export class InternalChannelPlugin extends BaseChannelPlugin {
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sourceInstanceId = (message.metadata?.sourceInstanceId as string | undefined) ?? instanceId;
+    const hopCount = (message.metadata?.hopCount as number | undefined) ?? 0;
     const text = message.content.text ?? '';
 
     if (!text) {
       return { success: true, timestamp: Date.now() };
+    }
+
+    if (hopCount >= MAX_HOP_LIMIT) {
+      log.warn('Internal channel hop limit reached — dropping message to prevent infinite loop', {
+        instanceId,
+        sourceInstanceId,
+        hopCount,
+        limit: MAX_HOP_LIMIT,
+      });
+      return { success: false, timestamp: Date.now() };
     }
 
     // instanceId = target instance; sourceInstanceId = origin instance
@@ -80,6 +94,7 @@ export class InternalChannelPlugin extends BaseChannelPlugin {
       rawPayload: {
         sourceInstanceId,
         chainMode: message.metadata?.chainMode,
+        hopCount: hopCount + 1,
       },
     });
 
