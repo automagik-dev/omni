@@ -31,8 +31,12 @@ async function probe(): Promise<boolean> {
   }
 }
 
-/** Whether the test database is reachable. Resolved at import time. */
-const DB_AVAILABLE = await probe();
+/**
+ * Whether the test database is reachable.
+ * Requires ENABLE_DB_TESTS=true to attempt connection — prevents hanging
+ * in CI/deploy environments where the DB port may not be accepting connections.
+ */
+const DB_AVAILABLE = process.env.ENABLE_DB_TESTS === 'true' ? await probe() : false;
 
 /** Get a cached database connection (only call if DB_AVAILABLE is true). */
 export function getTestDb(): Database {
