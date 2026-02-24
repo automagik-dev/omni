@@ -285,7 +285,7 @@ describe('agent-dispatcher', () => {
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
   describe('setupAgentDispatcher', () => {
-    it('subscribes to message.received, reaction.received, reaction.removed, and presence.typing', async () => {
+    it('subscribes to message.received, reaction.received, reaction.removed, presence.typing, and instance.disconnected', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
@@ -295,7 +295,7 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(5);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
@@ -303,6 +303,7 @@ describe('agent-dispatcher', () => {
       expect(subscribedTypes).toContain('reaction.received');
       expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
+      expect(subscribedTypes).toContain('instance.disconnected');
 
       cleanup();
     });
