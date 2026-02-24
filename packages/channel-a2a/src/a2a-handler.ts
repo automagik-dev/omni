@@ -10,8 +10,45 @@
 
 import { generateCorrelationId } from '@omni/core';
 import type { EventBus } from '@omni/core/events';
+import { z } from 'zod';
 import type { A2AStreamStore } from './stream-store';
 import type { A2AMessage, A2ATask, JSONRPCRequest, JSONRPCResponse, MessageSendParams } from './types';
+
+// ─── A2A Input Validation Schemas ─────────────────────────────
+
+const A2AMessagePartSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({ type: z.literal('data'), data: z.record(z.unknown()) }),
+  z.object({
+    type: z.literal('file'),
+    file: z.object({
+      name: z.string().optional(),
+      mimeType: z.string().optional(),
+      uri: z.string().optional(),
+    }),
+  }),
+]);
+
+const MessageSendParamsSchema = z.object({
+  message: z.object({
+    role: z.enum(['user', 'agent']),
+    parts: z.array(A2AMessagePartSchema),
+    messageId: z.string().optional(),
+    taskId: z.string().optional(),
+    contextId: z.string().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }),
+  configuration: z
+    .object({
+      acceptedOutputModes: z.array(z.string()).optional(),
+      historyLength: z.number().int().optional(),
+      blocking: z.boolean().optional(),
+    })
+    .optional(),
+  taskId: z.string().optional(),
+  contextId: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
 
 // ─── JSON-RPC Error Codes ─────────────────────────────────────
 
@@ -100,11 +137,11 @@ async function handleMessageSend(
   params: Record<string, unknown> | undefined,
   ctx: A2AHandlerContext,
 ): Promise<Response> {
-  if (!params?.message) {
-    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, 'Missing params.message'), 400);
+  const parseResult = MessageSendParamsSchema.safeParse(params);
+  if (!parseResult.success) {
+    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
-
-  const sendParams = params as unknown as MessageSendParams;
+  const sendParams = parseResult.data as MessageSendParams;
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
@@ -126,11 +163,11 @@ async function handleMessageStream(
   params: Record<string, unknown> | undefined,
   ctx: A2AHandlerContext,
 ): Promise<Response> {
-  if (!params?.message) {
-    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, 'Missing params.message'), 400);
+  const parseResult = MessageSendParamsSchema.safeParse(params);
+  if (!parseResult.success) {
+    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
-
-  const sendParams = params as unknown as MessageSendParams;
+  const sendParams = parseResult.data as MessageSendParams;
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
