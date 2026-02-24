@@ -76,7 +76,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -95,7 +95,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -114,7 +114,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -131,7 +131,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -151,7 +151,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -172,7 +172,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -187,7 +187,7 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
       const chunks: StreamChunk[] = [];
-      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -201,7 +201,7 @@ describe('AgUiClient', () => {
       const client = new AgUiClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         }
       }).toThrow(ProviderError);
     });
@@ -212,7 +212,7 @@ describe('AgUiClient', () => {
       const client = new AgUiClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         }
       }).toThrow(ProviderError);
     });
@@ -223,7 +223,7 @@ describe('AgUiClient', () => {
       const client = new AgUiClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         }
       }).toThrow(ProviderError);
     });
@@ -233,7 +233,7 @@ describe('AgUiClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(stream, { status: 200 }));
 
       const client = new AgUiClient(CONFIG);
-      for await (const _ of client.stream({ message: 'Hi', userId: 'u-1' })) {
+      for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         // consuming stream to trigger fetch
       }
 
@@ -254,7 +254,7 @@ describe('AgUiClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(stream, { status: 200 }));
 
       const client = new AgUiClient(CONFIG);
-      const result = await client.run({ message: 'Hi', userId: 'u-1', sessionId: 's-1' });
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent', sessionId: 's-1' });
 
       expect(result.content).toBe('Hello world!');
       expect(result.status).toBe('completed');
@@ -267,7 +267,9 @@ describe('AgUiClient', () => {
 
       const client = new AgUiClient(CONFIG);
 
-      await expect(client.run({ message: 'Hi', userId: 'u-1' })).rejects.toBeInstanceOf(ProviderError);
+      await expect(client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })).rejects.toBeInstanceOf(
+        ProviderError,
+      );
     });
 
     it('returns empty content when no delta events are emitted', async () => {
@@ -275,7 +277,7 @@ describe('AgUiClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(stream, { status: 200 }));
 
       const client = new AgUiClient(CONFIG);
-      const result = await client.run({ message: 'Hi', userId: 'u-1' });
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' });
 
       expect(result.content).toBe('');
       expect(result.status).toBe('completed');
@@ -289,7 +291,7 @@ describe('AgUiClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(stream, { status: 200 }));
 
       const client = new AgUiClient(CONFIG);
-      const result = await client.run({ message: 'Hi', userId: 'u-1' });
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' });
 
       expect(result.runId).toBe('run-xyz');
     });

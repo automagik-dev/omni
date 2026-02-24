@@ -88,7 +88,7 @@ describe('A2AClient', () => {
       );
 
       const client = new A2AClient(CONFIG);
-      const result = await client.run({ message: 'Hi', userId: 'u-1', sessionId: 'sess-1' });
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent', sessionId: 'sess-1' });
 
       expect(result.content).toBe('Hello from A2A!');
       expect(result.runId).toBe('task-123');
@@ -113,7 +113,7 @@ describe('A2AClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(rpcResponse), { status: 200 }));
 
       const client = new A2AClient(CONFIG);
-      const result = await client.run({ message: 'Fail me', userId: 'u-1' });
+      const result = await client.run({ message: 'Fail me', userId: 'u-1', agentId: 'test-agent' });
 
       expect(result.status).toBe('failed');
     });
@@ -129,7 +129,9 @@ describe('A2AClient', () => {
 
       const client = new A2AClient(CONFIG);
 
-      await expect(client.run({ message: 'Test', userId: 'u-1' })).rejects.toBeInstanceOf(ProviderError);
+      await expect(client.run({ message: 'Test', userId: 'u-1', agentId: 'test-agent' })).rejects.toBeInstanceOf(
+        ProviderError,
+      );
     });
 
     it('sends message/send JSON-RPC method', async () => {
@@ -148,7 +150,7 @@ describe('A2AClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(rpcResponse), { status: 200 }));
 
       const client = new A2AClient(CONFIG);
-      await client.run({ message: 'Hello', userId: 'u-1' });
+      await client.run({ message: 'Hello', userId: 'u-1', agentId: 'test-agent' });
 
       const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
       expect(body.method).toBe('message/send');
@@ -163,7 +165,7 @@ describe('A2AClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(rpcResponse), { status: 200 }));
 
       const client = new A2AClient(CONFIG);
-      await client.run({ message: 'Hi', userId: 'u-1', sessionId: 'my-session' });
+      await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent', sessionId: 'my-session' });
 
       const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
       expect(body.params.contextId).toBe('my-session');
@@ -177,7 +179,7 @@ describe('A2AClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(rpcResponse), { status: 200 }));
 
       const client = new A2AClient(CONFIG);
-      await client.run({ message: 'Auth test', userId: 'u-1' });
+      await client.run({ message: 'Auth test', userId: 'u-1', agentId: 'test-agent' });
 
       const headers = (mockImpl.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>;
       expect(headers.Authorization).toBe('Bearer tok-abc');
@@ -213,7 +215,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
       const chunks: StreamChunk[] = [];
 
-      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -236,7 +238,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
       const chunks: StreamChunk[] = [];
 
-      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -262,7 +264,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
       const chunks: StreamChunk[] = [];
 
-      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1' })) {
+      for await (const chunk of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         chunks.push(chunk);
       }
 
@@ -277,7 +279,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Go', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
           // should throw before yielding
         }
       }).toThrow(ProviderError);
@@ -289,7 +291,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Go', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         }
       }).toThrow(ProviderError);
     });
@@ -300,7 +302,7 @@ describe('A2AClient', () => {
       const client = new A2AClient(CONFIG);
 
       await expect(async () => {
-        for await (const _ of client.stream({ message: 'Go', userId: 'u-1' })) {
+        for await (const _ of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         }
       }).toThrow(ProviderError);
     });
@@ -316,7 +318,7 @@ describe('A2AClient', () => {
       mockImpl.mockResolvedValueOnce(new Response(stream, { status: 200 }));
 
       const client = new A2AClient(CONFIG);
-      for await (const _ of client.stream({ message: 'Go', userId: 'u-1' })) {
+      for await (const _ of client.stream({ message: 'Go', userId: 'u-1', agentId: 'test-agent' })) {
         // consuming stream to trigger fetch
       }
 
