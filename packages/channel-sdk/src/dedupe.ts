@@ -7,7 +7,7 @@
  *
  * Cache key format: `${instanceId}:${externalId}`
  *
- * DEC-4: Defaults: 5000 entries, 20-min TTL
+ * DEC-4: Defaults: 500 entries, 60-sec TTL (matches OpenClaw production config)
  * DEC-5: Key validation with fail-open policy
  * DEC-7: Drops logged at AUDIT (info) level
  * DEC-8: Per-instance only (not distributed)
@@ -77,8 +77,8 @@ interface CacheItem {
  * When the cache is full, the oldest entry is evicted (LRU).
  */
 export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
-  const maxSize = config?.maxSize ?? 5000;
-  const ttlMs = config?.ttlMs ?? 20 * 60 * 1000; // 20 minutes
+  const maxSize = config?.maxSize ?? 500;
+  const ttlMs = config?.ttlMs ?? 60 * 1000; // 60 seconds
 
   // Use a Map for LRU ordering (Map preserves insertion order)
   const cache = new Map<string, CacheItem>();

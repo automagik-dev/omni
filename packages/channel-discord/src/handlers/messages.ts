@@ -9,6 +9,7 @@
  */
 
 import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import { ChannelType, type Client, type Message, type PartialMessage } from 'discord.js';
@@ -18,8 +19,8 @@ import { type ForwardedAttachment, extractForwardedAttachments } from './forward
 
 const log = createLogger('discord:messages');
 
-/** Shared dedupe cache for all Discord instances */
-const dedupeCache = createInboundDedupeCache();
+/** Fallback dedupe cache — used when no per-instance cache is provided */
+const fallbackDedupeCache = createInboundDedupeCache();
 
 /** Download size guard — 50MB default */
 const downloadGuard = createDownloadGuard();
@@ -255,7 +256,12 @@ function applyThreadId(
 /**
  * Process a single message
  */
-async function processMessage(plugin: DiscordPlugin, instanceId: string, message: Message): Promise<void> {
+async function processMessage(
+  plugin: DiscordPlugin,
+  instanceId: string,
+  message: Message,
+  dedupeCache: DedupeCache,
+): Promise<void> {
   let content = extractContent(message);
 
   // Wire: forwarded attachment extraction from referenced messages
@@ -432,11 +438,18 @@ async function processMessageDelete(
  * @param plugin - Discord plugin instance
  * @param instanceId - Instance identifier
  */
-export function setupMessageHandlers(client: Client, plugin: DiscordPlugin, instanceId: string): void {
+export function setupMessageHandlers(
+  client: Client,
+  plugin: DiscordPlugin,
+  instanceId: string,
+  dedupeCache?: DedupeCache,
+): void {
+  const cache = dedupeCache ?? fallbackDedupeCache;
+
   // New message received
   client.on('messageCreate', async (message) => {
     if (shouldProcessMessage(message)) {
-      await processMessage(plugin, instanceId, message);
+      await processMessage(plugin, instanceId, message, cache);
     }
   });
 

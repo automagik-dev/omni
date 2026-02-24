@@ -8,9 +8,10 @@
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache, createThreadStarterCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
   HistorySyncMessage,
@@ -19,7 +20,9 @@ import type {
   PluginContext,
   SendResult,
   StreamSender,
+  ThreadStarterCache,
 } from '@omni/channel-sdk';
+import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { SLACK_CAPABILITIES } from './capabilities';
@@ -30,7 +33,7 @@ import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
-import { setupMessageHandlers } from './handlers/messages';
+import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
 import { clearTypingStatus, setTypingStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
@@ -72,6 +75,15 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
   private userNameCache = new Map<string, string | null>();
 
+  /** Per-instance inbound dedup caches (created on connect, disposed on disconnect) */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
+  /** Per-instance debounce managers (created on connect, flushed + disposed on disconnect) */
+  private debouncers = new Map<string, DebounceManager>();
+
+  /** Per-instance thread-starter caches for conversations.replies coalescing */
+  private threadCaches = new Map<string, ThreadStarterCache<HistorySyncMessage[]>>();
+
   /**
    * Last active thread per (instanceId, channelId): Map<`${instanceId}:${channelId}`, threadTs>
    * Used by sendTyping to resolve the thread context for assistant.threads.setStatus.
@@ -102,6 +114,21 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.clear();
     this.slackConfigs.clear();
     this.userNameCache.clear();
+
+    for (const debouncer of this.debouncers.values()) {
+      debouncer.flushAll();
+    }
+    this.debouncers.clear();
+
+    for (const cache of this.dedupeCaches.values()) {
+      cache.dispose();
+    }
+    this.dedupeCaches.clear();
+
+    for (const cache of this.threadCaches.values()) {
+      cache.dispose();
+    }
+    this.threadCaches.clear();
     this.activeThreads.clear();
     this.pendingAckReactions.clear();
   }
@@ -129,6 +156,16 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawOptions = (config.options ?? {}) as Record<string, unknown>;
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
+
+    // Create per-instance reliability caches
+    const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
+    const { dedupeCache, debouncer } = this.createReliabilityCaches(instanceId, debounceDelayMs);
+    this.dedupeCaches.set(instanceId, dedupeCache);
+    this.debouncers.set(instanceId, debouncer);
+
+    // Create per-instance thread-starter cache for conversations.replies coalescing
+    const threadCache = createThreadStarterCache<HistorySyncMessage[]>();
+    this.threadCaches.set(instanceId, threadCache);
 
     let connection: BoltConnection | undefined;
     try {
@@ -160,7 +197,10 @@ export class SlackPlugin extends BaseChannelPlugin {
       // Phase 2: Register all event handlers BEFORE starting
       // This is critical — Bolt.js Socket Mode starts receiving events
       // immediately after start(), so handlers must be in place first.
-      this.setupHandlers(instanceId, connection, slackConfig);
+      this.setupHandlers(instanceId, connection, slackConfig, {
+        dedupeCache,
+        debounceManager: debouncer,
+      });
 
       // Phase 3: Start Socket Mode connection (now handlers are ready)
       await startBoltConnection(connection, this.logger);
@@ -190,6 +230,8 @@ export class SlackPlugin extends BaseChannelPlugin {
       if (connection) {
         await destroyBoltConnection(connection, this.logger).catch(() => {});
       }
+      // Dispose reliability caches that were created before the failed connection
+      this.disposeInstanceCaches(instanceId);
       await this.updateInstanceStatus(instanceId, config, {
         state: 'error',
         since: new Date(),
@@ -224,6 +266,9 @@ export class SlackPlugin extends BaseChannelPlugin {
     for (const key of this.pendingAckReactions.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
     }
+
+    // Flush pending debounce windows and dispose reliability caches
+    this.disposeInstanceCaches(instanceId);
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
@@ -572,14 +617,15 @@ export class SlackPlugin extends BaseChannelPlugin {
       return { totalFetched: 0, messages: [] };
     }
 
-    const messages = await this.paginateThreadHistory(
-      connection,
-      channelId,
-      threadTs,
-      botUserId,
-      botToken,
-      options.limit ?? 200,
-    );
+    const limit = options.limit ?? 200;
+    const cacheKey = `${channelId}:${threadTs}:${limit}`;
+    const threadCache = this.threadCaches.get(instanceId);
+    const messages = threadCache
+      ? await threadCache.getOrFetch(cacheKey, () =>
+          this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit),
+        )
+      : await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
+
     return { totalFetched: messages.length, messages };
   }
 
@@ -816,9 +862,98 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Create per-instance dedup cache + debounce manager.
+   * Extracted to keep connect() below cognitive complexity threshold.
+   */
+  private createReliabilityCaches(
+    _instanceId: string,
+    debounceDelayMs: number | undefined,
+  ): { dedupeCache: DedupeCache; debouncer: DebounceManager } {
+    const dedupeCache = createInboundDedupeCache();
+    const debouncer = new DebounceManager(
+      { mode: 'fixed', delayMs: debounceDelayMs ?? 1500 },
+      (_key, messages, _from, instId) => {
+        for (const dMsg of messages) {
+          const args = dMsg.payload as unknown as SlackDebouncedArgs;
+          this.dispatchMessageFromDebounce(instId, args).catch((err) => {
+            this.logger.warn('Debounce dispatch error', { instanceId: instId, error: String(err) });
+          });
+        }
+      },
+    );
+    return { dedupeCache, debouncer };
+  }
+
+  /**
+   * Dispose all reliability and thread caches for an instance.
+   * Called on both clean disconnect and failed connect to prevent resource leaks.
+   */
+  private disposeInstanceCaches(instanceId: string): void {
+    const debouncer = this.debouncers.get(instanceId);
+    if (debouncer) {
+      debouncer.flushAll();
+      this.debouncers.delete(instanceId);
+    }
+    const dedupeCache = this.dedupeCaches.get(instanceId);
+    if (dedupeCache) {
+      dedupeCache.dispose();
+      this.dedupeCaches.delete(instanceId);
+    }
+    const threadCache = this.threadCaches.get(instanceId);
+    if (threadCache) {
+      threadCache.dispose();
+      this.threadCaches.delete(instanceId);
+    }
+  }
+
+  /**
+   * Enrich a raw Slack payload with cross-channel identity contract fields.
+   * Used by both the debounce dispatch path and the direct onMessage callback.
+   */
+  private async buildEnrichedPayload(
+    instanceId: string,
+    from: string,
+    rawPayload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const displayName = await this.resolveUserDisplayName(instanceId, from);
+    const isDm = rawPayload.isDm as boolean;
+    return {
+      ...rawPayload,
+      displayName,
+      pushName: displayName,
+      chatName: isDm ? displayName : undefined,
+      isGroup: !isDm,
+    };
+  }
+
+  /**
+   * Dispatch a single message from the debounce window to the inbound pipeline.
+   * Mirrors the onMessage callback logic without going through the Bolt handler.
+   */
+  private async dispatchMessageFromDebounce(instanceId: string, args: SlackDebouncedArgs): Promise<void> {
+    const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.rawPayload);
+
+    await this.handleMessageReceived(
+      instanceId,
+      args.externalId,
+      args.chatId,
+      args.from,
+      args.content,
+      args.replyToId,
+      enrichedPayload,
+      args.platformTimestamp,
+    );
+  }
+
+  /**
    * Set up all event handlers for an instance
    */
-  private setupHandlers(instanceId: string, connection: BoltConnection, config: SlackConfig): void {
+  private setupHandlers(
+    instanceId: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+    reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
+  ): void {
     // Message handlers — pass getter so botUserId resolves after start()
     setupMessageHandlers(
       connection.app,
@@ -847,18 +982,8 @@ export class SlackPlugin extends BaseChannelPlugin {
           // Add ack reaction on message receipt (fire-and-forget)
           this.addAckReaction(instanceId, chatId, externalId, connection, config);
 
-          // Resolve sender display name (cached after first lookup)
-          const displayName = await this.resolveUserDisplayName(instanceId, from);
-          const isDm = rawPayload.isDm as boolean;
-
           // Enrich rawPayload with cross-channel identity contract
-          const enrichedPayload: Record<string, unknown> = {
-            ...rawPayload,
-            displayName,
-            pushName: displayName,
-            chatName: isDm ? displayName : undefined,
-            isGroup: !isDm,
-          };
+          const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, rawPayload);
 
           const files = enrichedPayload.files as unknown[] | undefined;
           if (files && files.length > 0) {
@@ -908,6 +1033,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         rejectionMessage: config.dmRejectionMessage,
       },
       this.logger,
+      reliability,
     );
 
     // Reaction handlers — pass getter so botUserId resolves after start()
