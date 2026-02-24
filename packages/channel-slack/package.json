@@ -17,7 +17,8 @@
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@slack/bolt": "^4.1.0",
-    "@slack/web-api": "^7.8.0"
+    "@slack/web-api": "^7.8.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

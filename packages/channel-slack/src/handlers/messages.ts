@@ -5,6 +5,8 @@
  * - Channel messages, DMs, thread replies
  * - User mention detection
  * - Message metadata extraction
+ * - Channel allowlist/blocklist filtering
+ * - Per-channel config (requireMention, allowedUsers, tools, skills)
  * - Dedup: drops duplicate events (same channel:ts)
  * - Debounce: batches rapid messages from the same sender (file attachments bypass)
  */
@@ -14,8 +16,9 @@ import type { DedupeCache, Logger } from '@omni/channel-sdk';
 import { buildConversationKey } from '@omni/core';
 import type { DebounceManager } from '@omni/core';
 import type { App } from '@slack/bolt';
+import { resolveChannelConfig } from '../config/channel-config';
 import { type DmPolicyConfig, shouldAcceptDm } from '../dm-policy';
-import type { SlackMessageMeta } from '../types';
+import type { SlackChannelConfig, SlackMessageMeta } from '../types';
 
 export interface MessageHandlerCallbacks {
   onMessage: (
@@ -53,6 +56,19 @@ export interface SlackDebouncedArgs {
   rawPayload: Record<string, unknown>;
   platformTimestamp: number | undefined;
   meta: SlackMessageMeta;
+}
+
+/**
+ * Channel-level filtering configuration.
+ * Subset of SlackConfig used for per-channel message filtering.
+ */
+export interface ChannelFilterConfig {
+  /** Only process messages from these channel IDs (undefined = all channels) */
+  channelAllowlist?: string[];
+  /** Skip messages from these channel IDs (undefined = no blocklist) */
+  channelBlocklist?: string[];
+  /** Per-channel configuration overrides keyed by channel ID */
+  channels?: Record<string, SlackChannelConfig>;
 }
 
 /**
@@ -132,6 +148,28 @@ function slackTsToMs(ts: string | undefined): number | undefined {
   return ts ? Math.floor(Number.parseFloat(ts) * 1000) : undefined;
 }
 
+/** Check if a channel should be skipped per allowlist/blocklist config */
+function isChannelBlocked(channelId: string, filterConfig: ChannelFilterConfig | undefined): boolean {
+  if (filterConfig?.channelAllowlist && filterConfig.channelAllowlist.length > 0) {
+    return !filterConfig.channelAllowlist.includes(channelId);
+  }
+  return filterConfig?.channelBlocklist?.includes(channelId) ?? false;
+}
+
+/** Check if a message should be dropped per per-channel config */
+function isDroppedByChannelConfig(
+  channelConfig: ReturnType<typeof resolveChannelConfig>,
+  userId: string,
+  isDm: boolean,
+  isMentioningInstance: boolean,
+): boolean {
+  if (!isDm && channelConfig.requireMention && !isMentioningInstance) return true;
+  if (channelConfig.allowedUsers && channelConfig.allowedUsers.length > 0) {
+    return !channelConfig.allowedUsers.includes(userId);
+  }
+  return false;
+}
+
 /** Queue a non-file message to the debounce manager */
 function queueToDebouncer(
   debounceManager: DebounceManager,
@@ -175,10 +213,17 @@ async function processMessage(
   callbacks: MessageHandlerCallbacks,
   logger: Logger,
   reliability: ReliabilityOptions | undefined,
+  filterConfig: ChannelFilterConfig | undefined,
 ): Promise<void> {
   const userId = msg.user as string;
   const meta = extractMessageMeta(msg);
   const rawText = (msg.text as string) ?? '';
+
+  // ── Channel allowlist/blocklist filtering ──
+  if (isChannelBlocked(meta.channelId, filterConfig)) {
+    logger.debug('Message dropped: channel filtered', { channelId: meta.channelId, instanceId });
+    return;
+  }
 
   // Sanitize inbound text (rejects null bytes, oversized payloads, etc.)
   let text = rawText;
@@ -200,6 +245,13 @@ async function processMessage(
 
   const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
 
+  // ── Per-channel config filtering (requireMention, allowedUsers) ──
+  const channelConfig = resolveChannelConfig({ channels: filterConfig?.channels }, meta.channelId);
+  if (isDroppedByChannelConfig(channelConfig, userId, meta.isDm, isMentioningInstance)) {
+    logger.debug('Message dropped: per-channel filter', { channelId: meta.channelId, userId, instanceId });
+    return;
+  }
+
   logger.debug('Message received', {
     instanceId,
     channelId: meta.channelId,
@@ -209,7 +261,12 @@ async function processMessage(
     isMention: isMentioningInstance,
   });
 
-  const rawPayload = buildRawPayload(meta, msg, { isMentioningInstance });
+  // Build rawPayload with channel extra (tools/skills from per-channel config)
+  const channelExtra: Record<string, unknown> = { isMentioningInstance };
+  if (channelConfig.tools) channelExtra.tools = channelConfig.tools;
+  if (channelConfig.skills) channelExtra.skills = channelConfig.skills;
+
+  const rawPayload = buildRawPayload(meta, msg, channelExtra);
   const platformTimestamp = slackTsToMs(meta.ts);
   const replyToId = meta.isThreadReply ? meta.threadTs : undefined;
   const content: { type: 'text'; text?: string } = { type: 'text', text: text || undefined };
@@ -254,9 +311,9 @@ export function setupMessageHandlers(
   callbacks: MessageHandlerCallbacks,
   dmPolicyConfig: DmPolicyConfig,
   logger: Logger,
+  filterConfig?: ChannelFilterConfig,
   reliability?: ReliabilityOptions,
 ): void {
-  // Support both static value and getter (for lazy resolution after app.start())
   const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
 
   // Handle all messages (channels, groups, DMs, mpim)
@@ -268,7 +325,7 @@ export function setupMessageHandlers(
     const meta = extractMessageMeta(msg);
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
 
-    await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability);
+    await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability, filterConfig);
   });
 
   // NOTE: app_mention is NOT handled separately — app.message() already captures
