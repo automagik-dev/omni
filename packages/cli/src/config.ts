@@ -76,7 +76,7 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   },
   'server.port': { description: 'Server port (default: 8882)' },
   'server.databaseUrl': { description: 'PostgreSQL connection URL' },
-  'server.dataDir': { description: 'Data directory for PGlite and media storage' },
+  'server.dataDir': { description: 'Data directory for pgserve (PostgreSQL) and media storage' },
   'server.logLevel': {
     description: 'Log level',
     values: ['debug', 'info', 'warn', 'error'],
