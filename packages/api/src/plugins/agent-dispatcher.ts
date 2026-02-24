@@ -1105,8 +1105,38 @@ async function fetchChatMetadata(
 
 // ─── Per-chatId stream guard ──────────────────────────────
 
-/** TTL for stream guard entries — protects against hung/leaked streams */
+/**
+ * Hard ceiling for every streaming agent call.
+ * This is the single source of truth for "how long can an agent run?"
+ *
+ * - STREAM_TTL_MS is the wall-clock abort on the stream guard (unconditional).
+ * - Provider timeoutMs is capped at this value via resolveProviderTimeoutMs().
+ *   No DB column (instance.agentTimeout or provider.defaultTimeout) can exceed it.
+ *
+ * To allow longer tasks for all agents: change this one constant.
+ * To limit a specific provider/instance: set agent_timeout in the DB (≤ ceiling).
+ */
 const STREAM_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Resolve effective provider timeout, enforcing STREAM_TTL_MS as the ceiling.
+ *
+ * Priority: instance.agentTimeout > provider.defaultTimeout > schemaDefaultMs
+ * Result is always clamped to [0, STREAM_TTL_MS].
+ *
+ * @param schemaDefaultMs - fallback when neither DB column is set.
+ *   Use STREAM_TTL_MS for agentic providers (claude-code, agno, ag-ui, a2a).
+ *   Use a shorter value for fast-response providers (webhook: 60 s).
+ */
+function resolveProviderTimeoutMs(
+  instance: DispatchInstance,
+  provider: AgentProvider,
+  schemaDefaultMs: number = STREAM_TTL_MS,
+): number {
+  const dbMs = instance.agentTimeout ?? provider.defaultTimeout;
+  const resolved = dbMs != null ? dbMs * 1000 : schemaDefaultMs;
+  return Math.min(resolved, STREAM_TTL_MS);
+}
 
 interface ActiveStream {
   sender: StreamSender;
@@ -2569,7 +2599,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Insta
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
     defaultAgentId: (instance.agentId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
-    agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+    agentTimeoutMs: resolveProviderTimeoutMs(instance, provider),
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   };
@@ -2588,7 +2618,7 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: resolveProviderTimeoutMs(instance, provider),
   });
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -2596,7 +2626,7 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
   return new AgnoAgentProvider(provider.id, provider.name, client, {
     agentId: (instance.agentId ?? schemaConfig.agentId ?? 'default') as string,
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: resolveProviderTimeoutMs(instance, provider),
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -2634,7 +2664,7 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
     },
     createSessionStorage(db, provider.id),
     {
-      timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+      timeoutMs: resolveProviderTimeoutMs(instance, provider),
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
       streamConfig: schemaConfig.streamConfig as
@@ -2650,17 +2680,18 @@ function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Ins
 }
 
 /** Create a webhook-based agent provider */
-function createWebhookProvider(provider: AgentProvider): IAgentProvider {
+function createWebhookProvider(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
 
   return new WebhookAgentProvider(provider.id, provider.name, {
     webhookUrl: provider.baseUrl,
     apiKey: provider.apiKey ?? undefined,
     mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
-    timeoutMs: (provider.defaultTimeout ?? 30) * 1000,
+    timeoutMs: resolveProviderTimeoutMs(instance, provider, 60_000),
     retries: (schemaConfig.retries as number) ?? 1,
   });
 }
+
 
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
@@ -2680,7 +2711,7 @@ export function resolveProvider(provider: AgentProvider, instance: Instance, db:
       agentProvider = createAgnoProvider(provider, instance);
       break;
     case 'webhook':
-      agentProvider = createWebhookProvider(provider);
+      agentProvider = createWebhookProvider(provider, instance);
       break;
     case 'openclaw':
       agentProvider = createOpenClawProviderInstance(provider, instance);
