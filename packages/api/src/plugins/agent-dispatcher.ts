@@ -1363,58 +1363,26 @@ async function resolveStreamingCapabilities(
  * If content was already sent before the error, we return true to prevent a double
  * reply from the fallback path.
  */
-/**
- * Minimum inactivity guard: 2 minutes.
- * This is a dead-connection safety net only — it fires when no delta arrives
- * for this long. It should never be shorter than the longest tool-execution
- * pause a legitimate agent might produce (e.g. Claude Code running a build).
- */
-const STREAM_INACTIVITY_MS = 2 * 60 * 1000;
-
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
   sender: StreamSender,
   instanceId: string,
   chatId: string,
   traceId: string,
-  inactivityMs: number = STREAM_INACTIVITY_MS,
 ): Promise<boolean> {
   const startTime = Date.now();
   let hadError = false;
   let hadContent = false;
-  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const clearInactivityTimer = () => {
-    if (inactivityTimer) {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = null;
-    }
-  };
-
-  const resetInactivityTimer = () => {
-    clearInactivityTimer();
-    inactivityTimer = setTimeout(() => {
-      log.warn('consumeStream: inactivity timeout, aborting stream', {
-        instanceId,
-        chatId,
-        traceId,
-        inactivityMs,
-      });
-      generator.return(undefined).catch(() => {});
-      sender.abort().catch(() => {});
-    }, inactivityMs);
-  };
-
-  try {
-    resetInactivityTimer();
-    for await (const delta of generator) {
-      resetInactivityTimer();
-      if (delta.phase === 'error') hadError = true;
-      if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
-      await routeStreamDelta(sender, delta);
-    }
-  } finally {
-    clearInactivityTimer();
+  // No per-delta inactivity timer here. Dead/hung streams are already covered by:
+  //   1. registerStreamGuard's STREAM_TTL_MS wall-clock abort (10 min)
+  //   2. The provider's own timeoutMs on the HTTP connection
+  // Adding a per-delta timeout on top would kill agents (e.g. Claude Code) that
+  // legitimately pause for minutes while executing tools or running builds.
+  for await (const delta of generator) {
+    if (delta.phase === 'error') hadError = true;
+    if (delta.phase === 'content' || delta.phase === 'final') hadContent = true;
+    await routeStreamDelta(sender, delta);
   }
 
   log.info('Streaming response complete', {
@@ -1454,14 +1422,13 @@ async function runGuardedStream(
   instanceId: string,
   chatId: string,
   traceId: string,
-  inactivityMs: number = STREAM_INACTIVITY_MS,
 ): Promise<boolean> {
   try {
     const generator = provider.triggerStream(trigger);
     // Error deltas (timeout, circuit-breaker) are not exceptions — they just
     // clean up the placeholder. Return false so the caller falls back to the
     // accumulate-then-reply path and the user still gets a response.
-    return await consumeStream(generator, sender, instanceId, chatId, traceId, inactivityMs);
+    return await consumeStream(generator, sender, instanceId, chatId, traceId);
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', { instanceId, chatId, error: String(err), traceId });
     try {
@@ -1543,22 +1510,7 @@ async function dispatchViaStreamingProvider(
   // a hung stream is automatically aborted after STREAM_TTL_MS.
   registerStreamGuard(streamKey, sender, instance.id, chatId);
 
-  // Inactivity guard = agent's total allowed window (not a short hardcoded constant).
-  // This prevents killing Claude Code (or any long-running agent) during tool
-  // execution pauses that can easily exceed 30–60 s. The provider's own timeoutMs
-  // is the hard limit; this guard only fires when the generator truly hangs.
-  const effectiveInactivityMs = Math.max((instance.agentTimeout ?? 120) * 1000, STREAM_INACTIVITY_MS);
-
-  return runGuardedStream(
-    resolved.provider,
-    trigger,
-    sender,
-    streamKey,
-    instance.id,
-    chatId,
-    traceId,
-    effectiveInactivityMs,
-  );
+  return runGuardedStream(resolved.provider, trigger, sender, streamKey, instance.id, chatId, traceId);
 }
 
 /**
