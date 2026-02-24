@@ -540,7 +540,7 @@ function buildQueryOptions(
   // Build clean env: always clear CLAUDECODE to prevent the SDK from thinking
   // it's already inside a Claude Code session (happens when Omni is spawned
   // from within Claude Code, which sets CLAUDECODE=1 in its environment)
-  const env: Record<string, string> = { ...process.env as Record<string, string>, CLAUDECODE: '0' };
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), CLAUDECODE: '0' };
   if (config.apiKey) {
     env.ANTHROPIC_API_KEY = config.apiKey;
   }
