@@ -659,6 +659,12 @@ function formatProcessedMedia(
   const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
   const allowedTypes = sendMediaPathTypes ?? DEFAULT_SEND_MEDIA_PATH_TYPES;
   if (includePath && fullPath && allowedTypes.includes(contentType)) {
+    // When path is available, truncate extracted text for documents
+    // (agent can read the file directly)
+    if (contentType === 'document' && processedText.length > 500) {
+      const preview = processedText.slice(0, 500);
+      return `${icon} [${fullPath}]: ${preview}\u2026 (full content in file)`;
+    }
     return `${icon} [${fullPath}]: ${processedText}`;
   }
   return `${icon}: ${processedText}`;
@@ -1013,12 +1019,12 @@ async function prepareAgentContent(
   }
 
   const processedMediaTexts: string[] = [];
-  let mediaFiles = extractMediaFiles(messages);
+  const mediaFiles = extractMediaFiles(messages);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
     processedMediaTexts.push(...processed);
-    if (processedMediaTexts.length > 0) mediaFiles = [];
+    // Keep mediaFiles — agent gets both processed text AND file references
   }
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageEntries, messageKeyByIndex);
@@ -1233,6 +1239,11 @@ function mergeContextMessages(extra: string[] | undefined, db: string[]): string
   return extra?.length ? [...extra, ...db] : db;
 }
 
+/** Convert media files array to trigger files (undefined when empty) */
+function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined {
+  return mediaFiles.length > 0 ? mediaFiles : undefined;
+}
+
 /**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
@@ -1267,6 +1278,7 @@ async function dispatchViaStreamingProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1285,6 +1297,7 @@ async function dispatchViaStreamingProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
@@ -1489,6 +1502,7 @@ async function dispatchViaProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1507,6 +1521,7 @@ async function dispatchViaProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,

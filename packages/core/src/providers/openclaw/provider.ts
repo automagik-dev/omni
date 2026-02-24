@@ -128,6 +128,13 @@ export class OpenClawAgentProvider implements IAgentProvider {
     } else if (context.content.emoji) {
       message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
     }
+
+    // Append file references if present
+    if (context.content.files?.length) {
+      const fileRefs = context.content.files.map((f) => `\u{1F4CE} [File: ${f.path}] (${f.mimeType})`).join('\n');
+      message = message ? `${message}\n${fileRefs}` : fileRefs;
+    }
+
     if (!message) return null;
 
     if (this.config.prefixSenderName !== false && context.sender.displayName) {
