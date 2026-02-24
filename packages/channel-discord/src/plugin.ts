@@ -5,9 +5,10 @@
  * Handles connection, messaging, and lifecycle for Discord bot instances.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
   HistorySyncMessage,
@@ -344,6 +345,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Active Discord clients per instance */
   private clients = new Map<string, Client>();
 
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
   /** Plugin configuration */
   private pluginConfig: DiscordConfig = {};
 
@@ -367,6 +371,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
       await destroyClient(client);
     }
     this.clients.clear();
+    // Dispose all per-instance dedup caches
+    for (const cache of this.dedupeCaches.values()) cache.dispose();
+    this.dedupeCaches.clear();
   }
 
   /**
@@ -432,7 +439,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Setup raw event handler first (for DEBUG_PAYLOADS capture)
     setupRawEventHandler(client, instanceId);
 
-    setupMessageHandlers(client, this, instanceId);
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
+    setupMessageHandlers(client, this, instanceId, dedupeCache);
     setupReactionHandlers(client, this, instanceId);
     setupInteractionHandlers(client, this, instanceId);
     setupAllEventHandlers(client, this, instanceId);
@@ -466,6 +477,10 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Destroy client
     await destroyClient(client);
     this.clients.delete(instanceId);
+
+    // Dispose per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
 
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');

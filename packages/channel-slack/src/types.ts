@@ -3,6 +3,26 @@
  */
 
 /**
+ * Connection mode for Slack plugin
+ */
+export type SlackConnectionMode = 'socket' | 'http';
+
+/**
+ * Per-channel configuration overrides.
+ * Fields set here take precedence over instance-level defaults.
+ */
+export interface SlackChannelConfig {
+  /** Require bot mention to trigger responses (default: false) */
+  requireMention?: boolean;
+  /** Restrict to these user IDs only (undefined = all users allowed) */
+  allowedUsers?: string[];
+  /** Tool overrides for this channel (passed to agent dispatcher) */
+  tools?: string[];
+  /** Skill overrides for this channel (passed to agent dispatcher) */
+  skills?: string[];
+}
+
+/**
  * Slack instance configuration
  */
 export interface SlackConfig {
@@ -10,8 +30,16 @@ export interface SlackConfig {
   botToken?: string;
   /** App-Level Token for Socket Mode (xapp-...) */
   appToken?: string;
-  /** Signing Secret for request verification */
+  /** Signing Secret for request verification (required for HTTP mode) */
   signingSecret?: string;
+  /** Connection mode: 'socket' (default) or 'http' */
+  mode?: SlackConnectionMode;
+  /** Channel allowlist: only process messages from these channel IDs */
+  channelAllowlist?: string[];
+  /** Channel blocklist: skip messages from these channel IDs */
+  channelBlocklist?: string[];
+  /** Per-channel configuration overrides keyed by channel ID */
+  channels?: Record<string, SlackChannelConfig>;
   /** Stream mode for progressive responses */
   streamMode?: StreamMode;
   /** Stream throttle interval in ms (default: 1000) */
@@ -32,12 +60,30 @@ export interface SlackConfig {
   defaultIconEmoji?: string;
   /** Rate limit retry config */
   retryConfig?: RetryConfig;
+  /**
+   * Port for the built-in HTTP receiver (HTTP mode only).
+   * When mode is 'http', Bolt.js starts an HTTP server on this port to receive
+   * Slack event payloads. Configure your Slack app's Event Request URL to point
+   * at this port (e.g. https://your-host:<httpPort>/slack/events).
+   * Defaults to 3001.
+   */
+  httpPort?: number;
+  /**
+   * Ack reaction emoji sent on message receipt (e.g. "eyes").
+   * Set to false or omit to disable.
+   */
+  ackReaction?: string | false;
+  /**
+   * Remove the ack reaction after reply is sent. Default: true.
+   * Only applies when ackReaction is set.
+   */
+  removeAckAfterReply?: boolean;
 }
 
 /**
  * Stream mode for progressive response rendering
  */
-export const STREAM_MODES = ['replace', 'status_final', 'off'] as const;
+export const STREAM_MODES = ['replace', 'status_final', 'off', 'native'] as const;
 export type StreamMode = (typeof STREAM_MODES)[number];
 
 /**
@@ -71,9 +117,15 @@ export interface RetryConfig {
  */
 export interface SlackConnectionOptions {
   botToken: string;
-  appToken: string;
+  /** Required for Socket Mode; not used for HTTP mode */
+  appToken?: string;
+  /** Required for HTTP mode; optional for Socket Mode */
   signingSecret?: string;
   retryConfig?: RetryConfig;
+  /** Connection mode (default: 'socket') */
+  mode?: SlackConnectionMode;
+  /** Port for the built-in HTTP receiver (HTTP mode only, default: 3001) */
+  httpPort?: number;
 }
 
 /**

@@ -4,13 +4,14 @@ description: Always-on Omni router for any messaging task across WhatsApp, Teleg
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
-Omni is running. Don't install it. Check: `omni auth status`
+First, check if Omni is running: `omni auth status --json 2>/dev/null || echo "not running"`
 
-Use `--json` by default for agent consumption. Before sending, verify instance/channel status (connected/ready).
-Read the relevant SKILL.md below for the specific task before executing commands.
+If not running → load `omni-install/SKILL.md` and follow it.
+If running → use `--json` by default for agent consumption. Verify instance/channel status before sending.
 
 ## Keyword → skill routing
 
+- install, setup, fresh install, server not running, not installed → `omni-install/SKILL.md`
 - send, message, text, TTS, voice, media, image, reaction, sticker, poll, embed → `omni-send/SKILL.md`
 - search messages, read messages, star, delete message → `omni-messages/SKILL.md`
 - chats, conversations, list chats, chat history, participants, groups → `omni-chats/SKILL.md`

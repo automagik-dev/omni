@@ -39,7 +39,7 @@ function buildApiRuntimeEnv(): Record<string, string> {
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pglite'),
+    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: serverConfig.nodeEnv,
     LOG_LEVEL: serverConfig.logLevel,
@@ -69,7 +69,7 @@ async function runStart(): Promise<void> {
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const env = buildApiRuntimeEnv();
   const launcherPath = getServerLauncherPath();
-  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], env);
+  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api, '--interpreter', 'bash'], env);
   if (apiCode !== 0) {
     output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
     return;

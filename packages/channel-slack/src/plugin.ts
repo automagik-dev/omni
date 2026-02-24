@@ -8,9 +8,10 @@
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache, createThreadStarterCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
   HistorySyncMessage,
@@ -19,7 +20,9 @@ import type {
   PluginContext,
   SendResult,
   StreamSender,
+  ThreadStarterCache,
 } from '@omni/channel-sdk';
+import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { SLACK_CAPABILITIES } from './capabilities';
@@ -30,13 +33,46 @@ import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
-import { setupMessageHandlers } from './handlers/messages';
+import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
+import { clearTypingStatus, setTypingStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
+import { createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
 import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
-import type { ReplyToMode, SlackConfig, SlackInteractionPayload } from './types';
+import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
+
+/**
+ * Resolve Slack credentials from config, options, and credentials sources.
+ * Supports legacy token aliases and both connection modes.
+ */
+function resolveSlackTokens(
+  slackConfig: SlackConfig,
+  rawOptions: Record<string, unknown>,
+  rawCredentials: Record<string, unknown>,
+): { botToken: string; appToken?: string; signingSecret?: string; mode: SlackConnectionMode } {
+  const botToken =
+    slackConfig.botToken ??
+    (rawOptions.token as string | undefined) ??
+    (rawCredentials.botToken as string | undefined) ??
+    (rawCredentials.token as string | undefined);
+  const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
+  const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
+  const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
+
+  if (!botToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
+  }
+  if (mode === 'socket' && !appToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'appToken (xapp-...) is required for Socket Mode');
+  }
+  if (mode === 'http' && !signingSecret) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'signingSecret is required for HTTP mode');
+  }
+
+  return { botToken, appToken, signingSecret, mode };
+}
 
 /**
  * Slack Channel Plugin
@@ -70,6 +106,27 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
   private userNameCache = new Map<string, string | null>();
 
+  /** Per-instance inbound dedup caches (created on connect, disposed on disconnect) */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
+  /** Per-instance debounce managers (created on connect, flushed + disposed on disconnect) */
+  private debouncers = new Map<string, DebounceManager>();
+
+  /** Per-instance thread-starter caches for conversations.replies coalescing */
+  private threadCaches = new Map<string, ThreadStarterCache<HistorySyncMessage[]>>();
+
+  /**
+   * Last active thread per (instanceId, channelId): Map<`${instanceId}:${channelId}`, threadTs>
+   * Used by sendTyping to resolve the thread context for assistant.threads.setStatus.
+   */
+  private activeThreads = new Map<string, string>();
+
+  /**
+   * Pending ack reactions awaiting removal after reply.
+   * Key: `${instanceId}:${channelId}:${messageTs}`, Value: emoji name
+   */
+  private pendingAckReactions = new Map<string, string>();
+
   /**
    * Plugin-specific initialization
    */
@@ -88,10 +145,27 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.clear();
     this.slackConfigs.clear();
     this.userNameCache.clear();
+
+    for (const debouncer of this.debouncers.values()) {
+      debouncer.flushAll();
+    }
+    this.debouncers.clear();
+
+    for (const cache of this.dedupeCaches.values()) {
+      cache.dispose();
+    }
+    this.dedupeCaches.clear();
+
+    for (const cache of this.threadCaches.values()) {
+      cache.dispose();
+    }
+    this.threadCaches.clear();
+    this.activeThreads.clear();
+    this.pendingAckReactions.clear();
   }
 
   /**
-   * Connect a Slack instance via Socket Mode
+   * Connect a Slack instance
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     const existing = this.connections.get(instanceId);
@@ -103,6 +177,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
       await destroyBoltConnection(existing, this.logger);
       this.connections.delete(instanceId);
+      this.disposeInstanceCaches(instanceId);
     }
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -114,37 +189,51 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
 
+    // Create per-instance reliability caches
+    const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
+    const { dedupeCache, debouncer } = this.createReliabilityCaches(instanceId, debounceDelayMs);
+    this.dedupeCaches.set(instanceId, dedupeCache);
+    this.debouncers.set(instanceId, debouncer);
+
+    // Create per-instance thread-starter cache for conversations.replies coalescing
+    const threadCache = createThreadStarterCache<HistorySyncMessage[]>();
+    this.threadCaches.set(instanceId, threadCache);
+
     let connection: BoltConnection | undefined;
     try {
-      // Accept legacy/generic token aliases used by instance routes (`options.token`)
-      // in addition to Slack-specific fields.
-      const botToken =
-        slackConfig.botToken ??
-        (rawOptions.token as string | undefined) ??
-        (rawCredentials.botToken as string | undefined) ??
-        (rawCredentials.token as string | undefined);
-      const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
-      const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
+      const resolved = resolveSlackTokens(slackConfig, rawOptions, rawCredentials);
+      this.slackConfigs.set(instanceId, slackConfig);
 
-      if (!botToken || !appToken) {
-        throw new SlackError(
-          SlackErrorCode.INVALID_TOKEN,
-          'Both botToken (xoxb-...) and appToken (xapp-...) are required for Socket Mode',
+      // Runtime guard: warn early if both allowlist and blocklist are set.
+      // The allowlist takes precedence in isChannelBlocked(), so the blocklist
+      // would be silently ignored — warn here so misconfiguration is visible.
+      if (slackConfig.channelAllowlist?.length && slackConfig.channelBlocklist?.length) {
+        this.logger.warn(
+          'Both channelAllowlist and channelBlocklist are configured — channelAllowlist takes precedence and channelBlocklist will be ignored',
+          { instanceId },
         );
       }
 
-      this.slackConfigs.set(instanceId, slackConfig);
-
       // Phase 1: Create the Bolt.js app (NOT started yet)
       connection = createBoltApp(
-        { botToken, appToken, signingSecret, retryConfig: slackConfig.retryConfig },
+        {
+          botToken: resolved.botToken,
+          appToken: resolved.appToken,
+          signingSecret: resolved.signingSecret,
+          retryConfig: slackConfig.retryConfig,
+          mode: resolved.mode,
+          httpPort: slackConfig.httpPort,
+        },
         this.logger,
       );
 
       // Phase 2: Register all event handlers BEFORE starting
       // This is critical — Bolt.js Socket Mode starts receiving events
       // immediately after start(), so handlers must be in place first.
-      this.setupHandlers(instanceId, connection, slackConfig);
+      this.setupHandlers(instanceId, connection, slackConfig, {
+        dedupeCache,
+        debounceManager: debouncer,
+      });
 
       // Phase 3: Start Socket Mode connection (now handlers are ready)
       await startBoltConnection(connection, this.logger);
@@ -174,6 +263,8 @@ export class SlackPlugin extends BaseChannelPlugin {
       if (connection) {
         await destroyBoltConnection(connection, this.logger).catch(() => {});
       }
+      // Dispose reliability caches that were created before the failed connection
+      this.disposeInstanceCaches(instanceId);
       await this.updateInstanceStatus(instanceId, config, {
         state: 'error',
         since: new Date(),
@@ -198,10 +289,19 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.delete(instanceId);
     this.slackConfigs.delete(instanceId);
 
-    // Clear cached user names for this instance
+    // Clear cached user names, active threads, and pending ack reactions for this instance
     for (const key of this.userNameCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.userNameCache.delete(key);
     }
+    for (const key of this.activeThreads.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.activeThreads.delete(key);
+    }
+    for (const key of this.pendingAckReactions.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
+    }
+
+    // Flush pending debounce windows and dispose reliability caches
+    this.disposeInstanceCaches(instanceId);
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
@@ -222,6 +322,12 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       if (correlationId) this.captureT11(correlationId);
 
+      // Clear typing indicator after reply is delivered
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction if configured
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
@@ -237,6 +343,12 @@ export class SlackPlugin extends BaseChannelPlugin {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = error instanceof SlackError ? error.code : SlackErrorCode.SEND_FAILED;
       const retryable = error instanceof SlackError ? error.retryable : false;
+
+      // Clear typing indicator on error too
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction on error too (best effort)
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
 
       await this.emitMessageFailed({
         instanceId,
@@ -271,26 +383,91 @@ export class SlackPlugin extends BaseChannelPlugin {
     const replyToMode = slackConfig.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
 
-    return createSlackStreamSender({
-      client: connection.client,
-      channelId: chatId,
-      threadTs,
-      streamMode: resolveStreamMode(slackConfig.streamMode),
-      throttleMs: resolveStreamThrottle(slackConfig.streamThrottleMs),
-      username: slackConfig.defaultUsername,
-      iconUrl: slackConfig.defaultIconUrl,
-      iconEmoji: slackConfig.defaultIconEmoji,
-      formatMode: options?.formatMode ?? 'convert',
-      logger: this.logger,
-    });
+    const streamMode = resolveStreamMode(slackConfig.streamMode);
+    const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
+
+    const base =
+      streamMode === 'native'
+        ? createNativeStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          })
+        : createSlackStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            streamMode,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          });
+
+    // Wrap to clean up ack reactions and typing on stream completion.
+    // sendMessage handles cleanup for non-streamed replies, but streamed replies
+    // bypass sendMessage entirely — reactions accumulate indefinitely without this.
+    const cleanup = () => {
+      this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
+      this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
+    };
+
+    return {
+      onThinkingDelta: base.onThinkingDelta.bind(base),
+      onContentDelta: base.onContentDelta.bind(base),
+      async onFinal(delta) {
+        await base.onFinal(delta);
+        cleanup();
+      },
+      async onError(delta) {
+        await base.onError(delta);
+        cleanup();
+      },
+      async abort() {
+        await base.abort();
+        cleanup();
+      },
+    };
   }
 
   /**
-   * Send typing indicator
+   * Send typing indicator via assistant.threads.setStatus.
+   *
+   * Thread-only: no-op when no active thread is tracked for the channel.
+   * Failures are swallowed gracefully — typing never blocks message processing.
+   *
+   * When duration === 0, clears the typing indicator instead of setting it.
    */
-  async sendTyping(_instanceId: string, _chatId: string): Promise<void> {
-    // Slack doesn't have a direct typing indicator API for bots
-    // The typing event is only available for human users
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const connection = this.connections.get(instanceId);
+    if (!connection) return;
+
+    const threadTs = this.activeThreads.get(`${instanceId}:${chatId}`);
+    if (!threadTs) return; // Thread-only guard
+
+    if (duration === 0) {
+      await clearTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    } else {
+      await setTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    }
   }
 
   /**
@@ -473,14 +650,12 @@ export class SlackPlugin extends BaseChannelPlugin {
       return { totalFetched: 0, messages: [] };
     }
 
-    const messages = await this.paginateThreadHistory(
-      connection,
-      channelId,
-      threadTs,
-      botUserId,
-      botToken,
-      options.limit ?? 200,
-    );
+    const limit = options.limit ?? 200;
+    // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
+    // designed for thread root resolution, not full conversation history. Using it
+    // here would return stale data missing newer replies.
+    const messages = await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
+
     return { totalFetched: messages.length, messages };
   }
 
@@ -615,6 +790,97 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Add ack reaction on inbound message receipt.
+   * Fire-and-forget — reaction failures don't block message processing.
+   */
+  private addAckReaction(
+    instanceId: string,
+    channelId: string,
+    messageTs: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+  ): void {
+    const ackEmoji = config.ackReaction;
+    if (!ackEmoji) return;
+
+    const emojiName = typeof ackEmoji === 'string' ? ackEmoji.replace(/^:|:$/g, '') : null;
+    if (!emojiName) return;
+
+    // Fire-and-forget
+    connection.client.reactions.add({ channel: channelId, timestamp: messageTs, name: emojiName }).catch((err) => {
+      this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
+    });
+
+    // Track for removal if configured
+    if (config.removeAckAfterReply !== false) {
+      const key = `${instanceId}:${channelId}:${messageTs}`;
+      this.pendingAckReactions.set(key, emojiName);
+      // Auto-clean after 1 hour to prevent unbounded growth if the agent never replies
+      const timer = setTimeout(() => this.pendingAckReactions.delete(key), 3_600_000);
+      timer.unref?.();
+    }
+  }
+
+  /**
+   * Remove pending ack reaction after a reply is sent.
+   * Fire-and-forget — failure doesn't block message processing.
+   */
+  private removeAckReaction(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    replyTo: string | undefined,
+    threadId: string | undefined,
+  ): void {
+    // Try both replyTo and threadId as the acked message ts
+    for (const ts of [replyTo, threadId]) {
+      if (!ts) continue;
+      const key = `${instanceId}:${channelId}:${ts}`;
+      const emojiName = this.pendingAckReactions.get(key);
+      if (!emojiName) continue;
+
+      this.pendingAckReactions.delete(key);
+      connection.client.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
+        this.logger.warn('ack reaction: failed to remove', { channelId, ts, emoji: emojiName, error: String(err) });
+      });
+      break; // Only remove once
+    }
+  }
+
+  /**
+   * Track the last active thread for a (instanceId, channelId) pair.
+   * Used by sendTyping to call assistant.threads.setStatus on the right thread.
+   *
+   * Always sets a value — callers should pass `threadTs ?? externalId` so that
+   * typing indicators for top-level messages target the thread the bot's reply
+   * will create, rather than leaving a stale mapping from a previous message.
+   */
+  private trackActiveThread(instanceId: string, channelId: string, threadTs: string): void {
+    this.activeThreads.set(`${instanceId}:${channelId}`, threadTs);
+  }
+
+  /**
+   * Clear typing status after a reply is sent or an error occurs.
+   * Uses the provided threadTs or falls back to the tracked active thread.
+   */
+  private async clearActiveTyping(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    const resolvedThread = threadTs ?? this.activeThreads.get(`${instanceId}:${channelId}`);
+    if (!resolvedThread) return;
+
+    await clearTypingStatus({
+      client: connection.client,
+      channelId,
+      threadTs: resolvedThread,
+      logger: this.logger,
+    });
+  }
+
+  /**
    * Get the Bolt connection for an instance
    */
   private getConnection(instanceId: string): BoltConnection {
@@ -626,9 +892,108 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Create per-instance dedup cache + debounce manager.
+   * Extracted to keep connect() below cognitive complexity threshold.
+   */
+  private createReliabilityCaches(
+    _instanceId: string,
+    debounceDelayMs: number | undefined,
+  ): { dedupeCache: DedupeCache; debouncer: DebounceManager } {
+    const dedupeCache = createInboundDedupeCache();
+    const debouncer = new DebounceManager(
+      { mode: 'fixed', delayMs: debounceDelayMs ?? 1500 },
+      (_key, messages, _from, instId) => {
+        for (const dMsg of messages) {
+          const args = dMsg.payload as unknown as SlackDebouncedArgs;
+          this.dispatchMessageFromDebounce(instId, args).catch((err) => {
+            this.logger.warn('Debounce dispatch error', { instanceId: instId, error: String(err) });
+          });
+        }
+      },
+    );
+    return { dedupeCache, debouncer };
+  }
+
+  /**
+   * Dispose all reliability and thread caches for an instance.
+   * Called on both clean disconnect and failed connect to prevent resource leaks.
+   */
+  private disposeInstanceCaches(instanceId: string): void {
+    const debouncer = this.debouncers.get(instanceId);
+    if (debouncer) {
+      debouncer.flushAll();
+      this.debouncers.delete(instanceId);
+    }
+    const dedupeCache = this.dedupeCaches.get(instanceId);
+    if (dedupeCache) {
+      dedupeCache.dispose();
+      this.dedupeCaches.delete(instanceId);
+    }
+    const threadCache = this.threadCaches.get(instanceId);
+    if (threadCache) {
+      threadCache.dispose();
+      this.threadCaches.delete(instanceId);
+    }
+  }
+
+  /**
+   * Enrich a raw Slack payload with cross-channel identity contract fields.
+   * Used by both the debounce dispatch path and the direct onMessage callback.
+   */
+  private async buildEnrichedPayload(
+    instanceId: string,
+    from: string,
+    rawPayload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const displayName = await this.resolveUserDisplayName(instanceId, from);
+    const isDm = rawPayload.isDm as boolean;
+    return {
+      ...rawPayload,
+      displayName,
+      pushName: displayName,
+      chatName: isDm ? displayName : undefined,
+      isGroup: !isDm,
+    };
+  }
+
+  /**
+   * Dispatch a single message from the debounce window to the inbound pipeline.
+   * Mirrors the onMessage callback logic without going through the Bolt handler.
+   */
+  private async dispatchMessageFromDebounce(instanceId: string, args: SlackDebouncedArgs): Promise<void> {
+    // Side effects that the debounce path must mirror from onMessage
+    const threadTs = args.rawPayload.threadTs as string | undefined;
+    this.trackActiveThread(instanceId, args.chatId, threadTs ?? args.externalId);
+
+    const connection = this.connections.get(instanceId);
+    const config = this.slackConfigs.get(instanceId);
+    if (connection && config) {
+      this.addAckReaction(instanceId, args.chatId, args.externalId, connection, config);
+    }
+
+    const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.rawPayload);
+
+    await this.handleMessageReceived(
+      instanceId,
+      args.externalId,
+      args.chatId,
+      args.from,
+      args.content,
+      args.replyToId,
+      enrichedPayload,
+      args.platformTimestamp,
+    );
+  }
+
+  /**
    * Set up all event handlers for an instance
    */
-  private setupHandlers(instanceId: string, connection: BoltConnection, config: SlackConfig): void {
+  private setupHandlers(
+    instanceId: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+    reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
+  ): void {
     // Message handlers — pass getter so botUserId resolves after start()
     setupMessageHandlers(
       connection.app,
@@ -646,18 +1011,19 @@ export class SlackPlugin extends BaseChannelPlugin {
           platformTimestamp,
           _meta,
         ) => {
-          // Resolve sender display name (cached after first lookup)
-          const displayName = await this.resolveUserDisplayName(instanceId, from);
-          const isDm = rawPayload.isDm as boolean;
+          // Track active thread for typing indicator resolution.
+          // For threaded messages, use threadTs. For top-level messages, use
+          // the message's own externalId — the bot's reply will create a thread
+          // under that ts, so typing indicators must target it. This also prevents
+          // stale thread context from leaking into unrelated channel messages.
+          const threadTs = rawPayload.threadTs as string | undefined;
+          this.trackActiveThread(instanceId, chatId, threadTs ?? externalId);
+
+          // Add ack reaction on message receipt (fire-and-forget)
+          this.addAckReaction(instanceId, chatId, externalId, connection, config);
 
           // Enrich rawPayload with cross-channel identity contract
-          const enrichedPayload: Record<string, unknown> = {
-            ...rawPayload,
-            displayName,
-            pushName: displayName,
-            chatName: isDm ? displayName : undefined,
-            isGroup: !isDm,
-          };
+          const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, rawPayload);
 
           const files = enrichedPayload.files as unknown[] | undefined;
           if (files && files.length > 0) {
@@ -707,6 +1073,12 @@ export class SlackPlugin extends BaseChannelPlugin {
         rejectionMessage: config.dmRejectionMessage,
       },
       this.logger,
+      {
+        channelAllowlist: config.channelAllowlist,
+        channelBlocklist: config.channelBlocklist,
+        channels: config.channels,
+      },
+      reliability,
     );
 
     // Reaction handlers — pass getter so botUserId resolves after start()

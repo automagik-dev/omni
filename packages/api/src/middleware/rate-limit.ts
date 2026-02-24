@@ -35,6 +35,9 @@ cleanupTimer.unref();
  * Default rate limits by endpoint category
  */
 const RATE_LIMITS = {
+  messages: { windowMs: 60 * 1000, maxRequests: 60 }, // 60 per minute
+  events: { windowMs: 60 * 1000, maxRequests: 100 }, // 100 per minute
+  instances: { windowMs: 60 * 1000, maxRequests: 30 }, // 30 per minute
   general: { windowMs: 60 * 1000, maxRequests: 1000 }, // 1000 per minute
 } as const;
 

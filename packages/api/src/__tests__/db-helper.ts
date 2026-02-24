@@ -2,7 +2,7 @@
  * Test helper: skip database-dependent tests when PostgreSQL is unavailable.
  *
  * Usage:
- *   import { describeWithDb, getTestDb } from './db-helper';
+ *   import { describeWithDb, getTestDb, TEST_DATABASE_URL } from './db-helper';
  *
  *   describeWithDb('My Tests', () => {
  *     let db: Database;

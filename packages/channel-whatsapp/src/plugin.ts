@@ -5,9 +5,10 @@
  * Handles connection, messaging, and lifecycle for WhatsApp instances.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryResult,
   HistorySyncMessage,
   InstanceConfig,
@@ -255,6 +256,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Rate limit managers per instance — handles Baileys 429 backoff */
   private rateLimitManagers = new Map<string, RateLimitManager>();
+
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
 
   /**
    * Decrypt failure trackers per instance (#70).
@@ -890,8 +894,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
     );
 
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
     // Set up message handlers (pass decrypt tracker for dynamic JID blocking)
-    setupMessageHandlers(sock, this, instanceId, decryptTracker);
+    setupMessageHandlers(sock, this, instanceId, decryptTracker, dedupeCache);
 
     // Set up ALL other event handlers (calls, presence, groups, etc.)
     setupAllEventHandlers(sock, this, instanceId);
@@ -940,6 +948,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
+    // Dispose and remove per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
     // recentMessageKeys uses composite keys — clean entries for this instance
     for (const key of this.recentMessageKeys.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.recentMessageKeys.delete(key);
