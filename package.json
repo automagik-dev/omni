@@ -1,6 +1,6 @@
 {
   "name": "omni-v2",
-  "version": "2.20260220.4",
+  "version": "2.260224.4",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
@@ -26,7 +26,6 @@
     "bun-types": "^1.1.42",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
-
     "turbo": "^2.3.3",
     "typescript": "^5.7.3"
   },
