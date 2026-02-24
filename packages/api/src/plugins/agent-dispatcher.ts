@@ -24,6 +24,8 @@ import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } fr
 import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
+  A2AAgentProvider,
+  AgUiAgentProvider,
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
@@ -2631,6 +2633,52 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
   });
 }
 
+/** Create an AG-UI agent provider */
+function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+  if (!provider.apiKey) {
+    log.warn('AG-UI provider has no API key, falling back to legacy path', { providerId: provider.id });
+    return null;
+  }
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const client = createProviderClient({
+    schema: provider.schema,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  return new AgUiAgentProvider(provider.id, provider.name, client, {
+    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    enableAutoSplit: instance.enableAutoSplit ?? true,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
+/** Create an A2A agent provider */
+function createA2AProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+  if (!provider.apiKey) {
+    log.warn('A2A provider has no API key, falling back to legacy path', { providerId: provider.id });
+    return null;
+  }
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const client = createProviderClient({
+    schema: provider.schema,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  return new A2AAgentProvider(provider.id, provider.name, client, {
+    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    enableAutoSplit: instance.enableAutoSplit ?? true,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
  * Returns null if the schema is not supported for the new provider abstraction.
@@ -2660,6 +2708,12 @@ export function resolveProvider(
       break;
     case 'claude-code':
       agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
+      break;
+    case 'ag-ui':
+      agentProvider = createAgUiProviderInstance(provider, instance);
+      break;
+    case 'a2a':
+      agentProvider = createA2AProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {

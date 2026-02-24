@@ -49,6 +49,8 @@ export type { ClaudeCodeProviderOptions, SessionStorage } from './claude-code-pr
 export { WebhookAgentProvider } from './webhook-provider';
 export { OpenClawAgentProvider, OpenClawClient, createOpenClawProvider } from './openclaw';
 export type { OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
+export { AgUiAgentProvider, createAgUiProvider } from './ag-ui-provider';
+export { A2AAgentProvider, createA2AProvider } from './a2a-provider';
 
 // Factory
 export {
