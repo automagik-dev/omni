@@ -153,13 +153,13 @@ describe('ClaudeCodeClient', () => {
       expect(options.allowDangerouslySkipPermissions).toBeUndefined();
     });
 
-    it('sets env without ANTHROPIC_API_KEY when no apiKey configured', () => {
+    it('always sets CLAUDECODE=0 in env even without apiKey', () => {
       const client = new ClaudeCodeClient({ projectPath: '/test' });
       const options = getBuildOptions(client)(baseRequest);
 
       expect(options.env).toBeDefined();
+      expect(options.env.CLAUDECODE).toBe('0');
       expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
-      expect(options.env.CLAUDECODE).toBeUndefined();
     });
 
     it('passes mcpServers when configured', () => {
