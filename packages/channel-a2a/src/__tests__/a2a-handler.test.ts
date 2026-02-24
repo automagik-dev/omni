@@ -6,8 +6,23 @@
  */
 
 import { describe, expect, it, mock } from 'bun:test';
+import type { EventBus } from '@omni/core';
 import { handleA2ARequest } from '../a2a-handler';
 import { A2AStreamStore } from '../stream-store';
+
+// ─── Types ────────────────────────────────────────────────────
+
+interface JsonRpcBody {
+  id?: string | number;
+  error?: { code: number; message?: string };
+  result?: {
+    task?: {
+      id?: string;
+      contextId?: string;
+      status?: { state: string };
+    };
+  };
+}
 
 // ─── Mock EventBus ────────────────────────────────────────────
 
@@ -18,15 +33,17 @@ function createMockEventBus() {
     connect: mock(async () => {}),
     publish: mock(async (type: string, payload: unknown, metadata: unknown) => {
       calls.push({ type, payload, metadata });
-      return { seq: 1 };
+      return { id: 'mock-id', sequence: 1, stream: 'mock-stream' };
     }),
-    publishGeneric: mock(async () => ({ seq: 1 })),
+    publishGeneric: mock(async () => ({ id: 'mock-id', sequence: 1, stream: 'mock-stream' })),
     subscribe: mock(async () => ({ unsubscribe: async () => {} })),
     subscribePattern: mock(async () => ({ unsubscribe: async () => {} })),
     subscribeMany: mock(async () => ({ unsubscribe: async () => {} })),
     subscribeAll: mock(async () => ({ unsubscribe: async () => {} })),
     unsubscribe: mock(async () => {}),
     drain: mock(async () => {}),
+    close: mock(async () => {}),
+    isConnected: mock(() => true),
   };
 }
 
@@ -39,7 +56,12 @@ function makeRequest(body: unknown, method = 'POST'): Request {
 }
 
 function makeCtx(eventBus = createMockEventBus(), streamStore = new A2AStreamStore()) {
-  return { instanceId: 'inst-1', eventBus, streamStore, channelType: 'a2a' as const };
+  return {
+    instanceId: 'inst-1',
+    eventBus: eventBus as unknown as EventBus,
+    streamStore,
+    channelType: 'a2a' as const,
+  };
 }
 
 // ─── Tests ────────────────────────────────────────────────────
@@ -52,26 +74,26 @@ describe('handleA2ARequest', () => {
         body: 'not json',
       });
       const res = await handleA2ARequest(req, makeCtx());
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(400);
-      expect(body.error.code).toBe(-32700);
+      expect(body.error?.code).toBe(-32700);
     });
 
     it('returns 400 for missing jsonrpc field', async () => {
       const res = await handleA2ARequest(makeRequest({ method: 'message/send', id: 1 }), makeCtx());
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(400);
-      expect(body.error.code).toBe(-32600); // Invalid request
+      expect(body.error?.code).toBe(-32600); // Invalid request
     });
 
     it('returns 400 for missing method field', async () => {
       const res = await handleA2ARequest(makeRequest({ jsonrpc: '2.0', id: 1 }), makeCtx());
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(400);
-      expect(body.error.code).toBe(-32600);
+      expect(body.error?.code).toBe(-32600);
     });
   });
 
@@ -91,25 +113,25 @@ describe('handleA2ARequest', () => {
 
     it('returns 200 with task in submitted state', async () => {
       const res = await handleA2ARequest(makeRequest(validSend), makeCtx());
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(200);
-      expect(body.result.task.status.state).toBe('submitted');
-      expect(body.result.task.id).toBeDefined();
+      expect(body.result?.task?.status?.state).toBe('submitted');
+      expect(body.result?.task?.id).toBeDefined();
     });
 
     it('returns the same id as the request', async () => {
       const res = await handleA2ARequest(makeRequest(validSend), makeCtx());
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(body.id).toBe('req-1');
     });
 
     it('publishes a message.received event to the event bus', async () => {
-      const ctx = makeCtx();
-      await handleA2ARequest(makeRequest(validSend), ctx);
+      const bus = createMockEventBus();
+      await handleA2ARequest(makeRequest(validSend), makeCtx(bus));
 
-      const published = ctx.eventBus.calls.find((c) => c.type === 'message.received');
+      const published = bus.calls.find((c) => c.type === 'message.received');
       expect(published).toBeDefined();
       expect((published?.payload as Record<string, unknown>).content).toMatchObject({
         type: 'text',
@@ -118,10 +140,10 @@ describe('handleA2ARequest', () => {
     });
 
     it('publishes event with instanceId matching ctx.instanceId', async () => {
-      const ctx = makeCtx();
-      await handleA2ARequest(makeRequest(validSend), ctx);
+      const bus = createMockEventBus();
+      await handleA2ARequest(makeRequest(validSend), makeCtx(bus));
 
-      const published = ctx.eventBus.calls.find((c) => c.type === 'message.received');
+      const published = bus.calls.find((c) => c.type === 'message.received');
       expect((published?.metadata as Record<string, unknown>).instanceId).toBe('inst-1');
     });
 
@@ -130,10 +152,10 @@ describe('handleA2ARequest', () => {
         makeRequest({ jsonrpc: '2.0', id: 1, method: 'message/send', params: {} }),
         makeCtx(),
       );
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(400);
-      expect(body.error.code).toBe(-32602); // Invalid params
+      expect(body.error?.code).toBe(-32602); // Invalid params
     });
 
     it('uses contextId from params when provided', async () => {
@@ -143,9 +165,9 @@ describe('handleA2ARequest', () => {
         params: { ...validSend.params, contextId: 'ctx-abc' },
       };
       const res = await handleA2ARequest(makeRequest(reqWithContext), ctx);
-      const body = await res.json();
+      const body = (await res.json()) as JsonRpcBody;
 
-      expect(body.result.task.contextId).toBe('ctx-abc');
+      expect(body.result?.task?.contextId).toBe('ctx-abc');
     });
   });
 
@@ -188,10 +210,10 @@ describe('handleA2ARequest', () => {
     });
 
     it('publishes message.received event for the stream request', async () => {
-      const ctx = makeCtx();
-      await handleA2ARequest(makeRequest(validStream), ctx);
+      const bus = createMockEventBus();
+      await handleA2ARequest(makeRequest(validStream), makeCtx(bus));
 
-      const published = ctx.eventBus.calls.find((c) => c.type === 'message.received');
+      const published = bus.calls.find((c) => c.type === 'message.received');
       expect(published).toBeDefined();
     });
 
@@ -208,8 +230,8 @@ describe('handleA2ARequest', () => {
     it.each(['tasks/get', 'tasks/cancel', 'tasks/resubscribe'])('returns 501 for %s', async (method) => {
       const res = await handleA2ARequest(makeRequest({ jsonrpc: '2.0', id: 1, method }), makeCtx());
       expect(res.status).toBe(501);
-      const body = await res.json();
-      expect(body.error.code).toBe(-32601);
+      const body = (await res.json()) as JsonRpcBody;
+      expect(body.error?.code).toBe(-32601);
     });
   });
 
