@@ -308,32 +308,56 @@ export class SlackPlugin extends BaseChannelPlugin {
     const streamMode = resolveStreamMode(slackConfig.streamMode);
     const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
 
-    if (streamMode === 'native') {
-      return createNativeStreamSender({
-        client: connection.client,
-        channelId: chatId,
-        threadTs,
-        throttleMs,
-        username: slackConfig.defaultUsername,
-        iconUrl: slackConfig.defaultIconUrl,
-        iconEmoji: slackConfig.defaultIconEmoji,
-        formatMode: options?.formatMode ?? 'convert',
-        logger: this.logger,
-      });
-    }
+    const base =
+      streamMode === 'native'
+        ? createNativeStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          })
+        : createSlackStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            streamMode,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          });
 
-    return createSlackStreamSender({
-      client: connection.client,
-      channelId: chatId,
-      threadTs,
-      streamMode,
-      throttleMs,
-      username: slackConfig.defaultUsername,
-      iconUrl: slackConfig.defaultIconUrl,
-      iconEmoji: slackConfig.defaultIconEmoji,
-      formatMode: options?.formatMode ?? 'convert',
-      logger: this.logger,
-    });
+    // Wrap to clean up ack reactions and typing on stream completion.
+    // sendMessage handles cleanup for non-streamed replies, but streamed replies
+    // bypass sendMessage entirely — reactions accumulate indefinitely without this.
+    const cleanup = () => {
+      this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
+      this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
+    };
+
+    return {
+      onThinkingDelta: base.onThinkingDelta.bind(base),
+      onContentDelta: base.onContentDelta.bind(base),
+      async onFinal(delta) {
+        await base.onFinal(delta);
+        cleanup();
+      },
+      async onError(delta) {
+        await base.onError(delta);
+        cleanup();
+      },
+      async abort() {
+        await base.abort();
+        cleanup();
+      },
+    };
   }
 
   /**
@@ -341,20 +365,31 @@ export class SlackPlugin extends BaseChannelPlugin {
    *
    * Thread-only: no-op when no active thread is tracked for the channel.
    * Failures are swallowed gracefully — typing never blocks message processing.
+   *
+   * When duration === 0, clears the typing indicator instead of setting it.
    */
-  async sendTyping(instanceId: string, chatId: string): Promise<void> {
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
     const connection = this.connections.get(instanceId);
     if (!connection) return;
 
     const threadTs = this.activeThreads.get(`${instanceId}:${chatId}`);
     if (!threadTs) return; // Thread-only guard
 
-    await setTypingStatus({
-      client: connection.client,
-      channelId: chatId,
-      threadTs,
-      logger: this.logger,
-    });
+    if (duration === 0) {
+      await clearTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    } else {
+      await setTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    }
   }
 
   /**
@@ -702,7 +737,11 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     // Track for removal if configured
     if (config.removeAckAfterReply !== false) {
-      this.pendingAckReactions.set(`${instanceId}:${channelId}:${messageTs}`, emojiName);
+      const key = `${instanceId}:${channelId}:${messageTs}`;
+      this.pendingAckReactions.set(key, emojiName);
+      // Auto-clean after 1 hour to prevent unbounded growth if the agent never replies
+      const timer = setTimeout(() => this.pendingAckReactions.delete(key), 3_600_000);
+      timer.unref?.();
     }
   }
 
@@ -735,12 +774,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Track the last active thread for a (instanceId, channelId) pair.
    * Used by sendTyping to call assistant.threads.setStatus on the right thread.
+   *
+   * Always sets a value — callers should pass `threadTs ?? externalId` so that
+   * typing indicators for top-level messages target the thread the bot's reply
+   * will create, rather than leaving a stale mapping from a previous message.
    */
-  private trackActiveThread(instanceId: string, channelId: string, threadTs: string | undefined): void {
-    const key = `${instanceId}:${channelId}`;
-    if (threadTs) {
-      this.activeThreads.set(key, threadTs);
-    }
+  private trackActiveThread(instanceId: string, channelId: string, threadTs: string): void {
+    this.activeThreads.set(`${instanceId}:${channelId}`, threadTs);
   }
 
   /**
@@ -796,11 +836,13 @@ export class SlackPlugin extends BaseChannelPlugin {
           platformTimestamp,
           _meta,
         ) => {
-          // Track active thread for typing indicator resolution
+          // Track active thread for typing indicator resolution.
+          // For threaded messages, use threadTs. For top-level messages, use
+          // the message's own externalId — the bot's reply will create a thread
+          // under that ts, so typing indicators must target it. This also prevents
+          // stale thread context from leaking into unrelated channel messages.
           const threadTs = rawPayload.threadTs as string | undefined;
-          if (threadTs) {
-            this.trackActiveThread(instanceId, chatId, threadTs);
-          }
+          this.trackActiveThread(instanceId, chatId, threadTs ?? externalId);
 
           // Add ack reaction on message receipt (fire-and-forget)
           this.addAckReaction(instanceId, chatId, externalId, connection, config);
