@@ -10,7 +10,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
@@ -576,7 +576,10 @@ export async function tryDownloadMedia(
     const now = new Date();
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const ext = getExtension(result.mimeType);
-    const relativePath = join(instanceId, yearMonth, `${externalId}${ext}`);
+    // Sanitize externalId to prevent path traversal: strip directory components
+    // and replace any non-alphanumeric characters (WhatsApp IDs are hex/alphanum).
+    const safeExternalId = basename(externalId).replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const relativePath = join(instanceId, yearMonth, `${safeExternalId}${ext}`);
     const fullPath = join(MEDIA_BASE_PATH, relativePath);
 
     // Write to disk

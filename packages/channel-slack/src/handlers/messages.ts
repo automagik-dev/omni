@@ -9,6 +9,7 @@
  * - Debounce: batches rapid messages from the same sender (file attachments bypass)
  */
 
+import { sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache, Logger } from '@omni/channel-sdk';
 import { buildConversationKey } from '@omni/core';
 import type { DebounceManager } from '@omni/core';
@@ -43,7 +44,7 @@ export interface ReliabilityOptions {
 }
 
 /** Stored args for a debounced message — preserved in DebouncedMessage.payload */
-interface SlackDebouncedArgs {
+export interface SlackDebouncedArgs {
   externalId: string;
   chatId: string;
   from: string;
@@ -177,10 +178,22 @@ async function processMessage(
 ): Promise<void> {
   const userId = msg.user as string;
   const meta = extractMessageMeta(msg);
-  const text = (msg.text as string) ?? '';
+  const rawText = (msg.text as string) ?? '';
+
+  // Sanitize inbound text (rejects null bytes, oversized payloads, etc.)
+  let text = rawText;
+  if (rawText) {
+    const sanitized = sanitizeMessage(rawText, logger, { instanceId, messageId: meta.ts });
+    if (!sanitized.ok) {
+      logger.debug('message_dropped_sanitization', { instanceId, ts: meta.ts, reason: sanitized.rejected });
+      return;
+    }
+    text = sanitized.text;
+  }
 
   // ── Dedup check: drop duplicate Slack events (same channel:ts) ──
-  if (reliability?.dedupeCache?.isDuplicate(instanceId, meta.ts, 'slack', logger)) {
+  const dedupeKey = `${meta.channelId}:${meta.ts}`;
+  if (reliability?.dedupeCache?.isDuplicate(instanceId, dedupeKey, 'slack', logger)) {
     logger.debug('duplicate_slack_event_dropped', { instanceId, ts: meta.ts, channelId: meta.channelId });
     return;
   }
