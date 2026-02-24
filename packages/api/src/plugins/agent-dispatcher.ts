@@ -1658,15 +1658,18 @@ async function forwardToChainedInstance(
   instance: Instance,
   parts: string[],
   correlationId: string | undefined,
+  messages: BufferedMessage[],
 ): Promise<void> {
   if (instance.chainMode === 'off' || !instance.agentChainToInstanceId) return;
   const internalPlugin = await getPlugin('internal');
   if (!internalPlugin) return;
+  // Propagate hop count carried in rawPayload (0 for external triggers)
+  const hopCount = (messages[0]?.payload.rawPayload?.hopCount as number | undefined) ?? 0;
   for (const part of parts) {
     await internalPlugin.sendMessage(instance.agentChainToInstanceId, {
       to: instance.agentChainToInstanceId,
       content: { type: 'text', text: part },
-      metadata: { sourceInstanceId: instance.id, chainMode: instance.chainMode },
+      metadata: { sourceInstanceId: instance.id, chainMode: instance.chainMode, hopCount },
     });
   }
   if (correlationId) recordJourneyCheckpoint(correlationId, 'T10', 'internal_chain_forwarded');
@@ -1769,7 +1772,7 @@ async function dispatchViaProvider(
     recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
 
     // T10: Agent chaining — forward response to chained instance if configured
-    await forwardToChainedInstance(instance, parts, correlationId);
+    await forwardToChainedInstance(instance, parts, correlationId, messages);
   }
 
   log.info('Agent response via IAgentProvider', {
