@@ -67,6 +67,9 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Plugin-specific config per instance */
   private slackConfigs = new Map<string, SlackConfig>();
 
+  /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName> */
+  private userNameCache = new Map<string, string>();
+
   /**
    * Plugin-specific initialization
    */
@@ -84,6 +87,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
     this.connections.clear();
     this.slackConfigs.clear();
+    this.userNameCache.clear();
   }
 
   /**
@@ -193,6 +197,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     await destroyBoltConnection(connection, this.logger);
     this.connections.delete(instanceId);
     this.slackConfigs.delete(instanceId);
+
+    // Clear cached user names for this instance
+    for (const key of this.userNameCache.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.userNameCache.delete(key);
+    }
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
@@ -386,6 +395,27 @@ export class SlackPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Resolve user display name with caching.
+   * Falls back to undefined if the Slack API call fails.
+   */
+  private async resolveUserDisplayName(instanceId: string, userId: string): Promise<string | undefined> {
+    const cacheKey = `${instanceId}:${userId}`;
+    const cached = this.userNameCache.get(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const profile = await this.fetchUserProfile(instanceId, userId);
+      if (profile.displayName) {
+        this.userNameCache.set(cacheKey, profile.displayName);
+        return profile.displayName;
+      }
+    } catch {
+      // fetchUserProfile already logs the warning
+    }
+    return undefined;
+  }
 
   /**
    * Resolve thread_ts based on replyToMode config
@@ -612,7 +642,20 @@ export class SlackPlugin extends BaseChannelPlugin {
           platformTimestamp,
           _meta,
         ) => {
-          const files = rawPayload.files as unknown[] | undefined;
+          // Resolve sender display name (cached after first lookup)
+          const displayName = await this.resolveUserDisplayName(instanceId, from);
+          const isDm = rawPayload.isDm as boolean;
+
+          // Enrich rawPayload with cross-channel identity contract
+          const enrichedPayload: Record<string, unknown> = {
+            ...rawPayload,
+            displayName,
+            pushName: displayName,
+            chatName: isDm ? displayName : undefined,
+            isGroup: !isDm,
+          };
+
+          const files = enrichedPayload.files as unknown[] | undefined;
           if (files && files.length > 0) {
             await this.handleInboundFiles(
               instanceId,
@@ -621,7 +664,7 @@ export class SlackPlugin extends BaseChannelPlugin {
               from,
               content,
               replyToId,
-              rawPayload,
+              enrichedPayload,
               platformTimestamp,
             );
             if (!content.text) return;
@@ -634,7 +677,7 @@ export class SlackPlugin extends BaseChannelPlugin {
             from,
             content,
             replyToId,
-            rawPayload,
+            enrichedPayload,
             platformTimestamp,
           );
         },
