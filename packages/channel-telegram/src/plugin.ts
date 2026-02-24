@@ -9,9 +9,10 @@
  * - webhook: Webhook updates (production)
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
   InstanceConfig,
@@ -237,6 +238,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
   private configs = new Map<string, TelegramConfig>();
   /** Cleanup functions for active message handler closures (timers, buffers) */
   private cleanups = new Map<string, () => void>();
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
 
   // ────────────────────────────────────────────────────────────
   // Lifecycle
@@ -250,6 +253,9 @@ export class TelegramPlugin extends BaseChannelPlugin {
     for (const cleanup of this.cleanups.values()) cleanup();
     this.cleanups.clear();
     this.configs.clear();
+    // Dispose all per-instance dedup caches
+    for (const cache of this.dedupeCaches.values()) cache.dispose();
+    this.dedupeCaches.clear();
     this.logger.info('Telegram plugin destroyed');
   }
 
@@ -292,8 +298,12 @@ export class TelegramPlugin extends BaseChannelPlugin {
       });
     });
 
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
     // Set up handlers before starting
-    const cleanupMessages = setupMessageHandlers(bot, this, instanceId);
+    const cleanupMessages = setupMessageHandlers(bot, this, instanceId, dedupeCache);
     this.cleanups.set(instanceId, cleanupMessages);
     setupChannelPostHandlers(bot, this, instanceId);
     setupReactionHandlers(bot, this, instanceId);
@@ -356,6 +366,10 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // Cancel pending album buffers and deferred flushes before teardown
     this.cleanups.get(instanceId)?.();
     this.cleanups.delete(instanceId);
+
+    // Dispose per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
 
     destroyBot(instanceId);
     this.configs.delete(instanceId);

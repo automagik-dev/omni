@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
@@ -23,8 +24,8 @@ import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
 
-/** Shared dedupe cache for all WhatsApp instances (cache key includes instanceId) */
-const dedupeCache = createInboundDedupeCache();
+/** Fallback dedupe cache — used when no per-instance cache is provided */
+const fallbackDedupeCache = createInboundDedupeCache();
 
 /** Download size guard — 50MB default */
 const downloadGuard = createDownloadGuard();
@@ -736,7 +737,12 @@ function getPlatformTimestamp(msg: WAMessage): number {
 /**
  * Process a single message
  */
-async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
+async function processMessage(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  msg: WAMessage,
+  dedupeCache: DedupeCache,
+): Promise<void> {
   // DEBUG: Log full raw payload for development
   if (process.env.DEBUG_PAYLOADS === 'true') {
     log.debug('Raw payload', { msgId: msg.key.id, payload: msg });
@@ -867,7 +873,10 @@ export function setupMessageHandlers(
   plugin: WhatsAppPlugin,
   instanceId: string,
   decryptTracker?: DecryptFailureTracker,
+  dedupeCache?: DedupeCache,
 ): void {
+  const cache = dedupeCache ?? fallbackDedupeCache;
+
   sock.ev.on('messages.upsert', async (upsert: { messages: WAMessage[]; type: MessageUpsertType }) => {
     // Log all message types to diagnose missing messages
     log.debug('messages.upsert received', {
@@ -888,7 +897,7 @@ export function setupMessageHandlers(
     // We need both to capture all conversation activity
     for (const msg of upsert.messages) {
       if (shouldProcessMessage(plugin, instanceId, msg)) {
-        await processMessage(plugin, instanceId, msg);
+        await processMessage(plugin, instanceId, msg, cache);
       }
     }
   });

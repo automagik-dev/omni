@@ -11,6 +11,7 @@
  */
 
 import { createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike, TelegramMessageLike } from '../grammy-shim';
 import { getChatQueue, getSessionKey } from '../middleware/sequentialize';
@@ -25,8 +26,8 @@ import type { MediaGroupResult } from './media-group';
 
 const log = createLogger('telegram:messages');
 
-/** Shared dedupe cache for all Telegram instances */
-const dedupeCache = createInboundDedupeCache();
+/** Fallback dedupe cache — used when no per-instance cache is provided */
+const fallbackDedupeCache = createInboundDedupeCache();
 
 /**
  * Check if a message contains a bot mention
@@ -90,6 +91,7 @@ async function processInboundMessage(
   plugin: TelegramPlugin,
   instanceId: string,
   msg: TelegramMessageLike,
+  dedupeCache: DedupeCache,
 ): Promise<void> {
   const from = msg.from;
   if (!from || from.is_bot) return;
@@ -198,7 +200,13 @@ async function processInboundMessage(
  * - Media group buffer: album messages batched into single agent call
  * - Reaction levels: ack/minimal/extensive reactions on inbound messages
  */
-export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugin, instanceId: string): () => void {
+export function setupMessageHandlers(
+  bot: TelegramBotLike,
+  plugin: TelegramPlugin,
+  instanceId: string,
+  dedupeCache?: DedupeCache,
+): () => void {
+  const cache = dedupeCache ?? fallbackDedupeCache;
   const chatQueue = getChatQueue(instanceId);
 
   // Deferred flush signals: mediaGroupId → resolver.
@@ -376,7 +384,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
     // --- Media group buffering: batch album messages ---
     if (msg.media_group_id) {
       const dedupeKey = `${chatId}:${String(msg.message_id)}`;
-      if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'telegram', log)) {
+      if (cache.isDuplicate(instanceId, dedupeKey, 'telegram', log)) {
         return;
       }
       bufferAlbumMessage(msg, from, msg.media_group_id, chatId, threadId);
@@ -385,7 +393,7 @@ export function setupMessageHandlers(bot: TelegramBotLike, plugin: TelegramPlugi
 
     // --- Sequential queue: ensure per-chat ordering ---
     const key = getSessionKey(chatId, threadId);
-    await chatQueue.enqueue(key, () => processInboundMessage(bot, plugin, instanceId, msg));
+    await chatQueue.enqueue(key, () => processInboundMessage(bot, plugin, instanceId, msg, cache));
   });
 
   bot.on('edited_message', async (ctx) => {
