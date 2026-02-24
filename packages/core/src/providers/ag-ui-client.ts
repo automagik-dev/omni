@@ -113,14 +113,20 @@ export class AgUiClient implements IAgentClient {
     }
 
     const decoder = new TextDecoder();
+    let emittedFinal = false;
     try {
-      yield* this.readAgUiChunks(response.body as ReadableStream<Uint8Array>, decoder);
+      for await (const chunk of this.readAgUiChunks(response.body as ReadableStream<Uint8Array>, decoder)) {
+        yield chunk;
+        if (chunk.isComplete) emittedFinal = true;
+      }
     } finally {
       clearTimeout(timer);
     }
 
-    // Stream ended without RUN_FINISHED — yield a final empty chunk
-    yield { event: 'final', isComplete: true };
+    // Stream ended without a terminal event — yield a fallback final chunk
+    if (!emittedFinal) {
+      yield { event: 'final', isComplete: true };
+    }
   }
 
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
