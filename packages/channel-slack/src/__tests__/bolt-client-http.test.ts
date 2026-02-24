@@ -2,13 +2,52 @@
  * Tests for Bolt.js HTTP mode connection
  *
  * Group 2: HTTP Mode Connection
+ *
+ * Uses bun:test mock.module to replace @slack/bolt so that creating
+ * App instances does NOT trigger real auth.test() calls, which would
+ * produce unhandled rejections from fake tokens.
  */
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { createBoltApp } from './bolt-client';
+// Mock @slack/bolt before importing createBoltApp.
+// The real App constructor lazily calls auth.test() with our fake token,
+// causing unhandled rejections that poison other test files.
+mock.module('@slack/bolt', () => {
+  class MockApp {
+    client: { auth: { test: () => Promise<unknown> } };
+    constructor(_opts: Record<string, unknown>) {
+      this.client = {
+        auth: { test: () => Promise.resolve({ ok: true, user_id: 'U_MOCK', bot_id: 'B_MOCK' }) },
+      };
+    }
+    error(_handler: (err: Error) => Promise<void>) {
+      // no-op
+    }
+  }
+
+  // HTTPReceiver mock that provides a requestListener
+  class MockHTTPReceiver {
+    requestListener: (req: IncomingMessage, res: import('node:http').ServerResponse) => void;
+    constructor(_opts: Record<string, unknown>) {
+      this.requestListener = (_req, res) => {
+        res.writeHead(200);
+        res.end('ok');
+      };
+    }
+  }
+
+  return {
+    App: MockApp,
+    HTTPReceiver: MockHTTPReceiver,
+    SocketModeReceiver: class {},
+  };
+});
+
+// Import AFTER mock.module so the mock is active
+const { createBoltApp } = await import('../connection/bolt-client');
 
 // ─────────────────────────────────────────────────────────────
 // Test helpers

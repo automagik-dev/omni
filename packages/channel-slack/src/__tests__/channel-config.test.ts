@@ -6,8 +6,8 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { SlackChannelConfigSchema, SlackConfigExtensionSchema, resolveChannelConfig } from './config/channel-config';
-import type { SlackConfig } from './types';
+import { SlackChannelConfigSchema, SlackConfigExtensionSchema, resolveChannelConfig } from '../config/channel-config';
+import type { SlackConfig } from '../types';
 
 // ─────────────────────────────────────────────────────────────
 // SlackChannelConfigSchema
