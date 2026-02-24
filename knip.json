@@ -42,7 +42,8 @@
     },
     "packages/cli": {
       "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk"]
     },
     "packages/db": {
       "project": ["src/**/*.ts"]
