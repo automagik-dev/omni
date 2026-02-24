@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
-            "timeout": 120
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/omni-runner.js\" setup",
+            "timeout": 300
           }
         ]
       }
@@ -19,8 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/health-check.sh",
-            "timeout": 10
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/omni-runner.js\" health",
+            "timeout": 45
           }
         ]
       }
