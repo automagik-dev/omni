@@ -5,9 +5,16 @@
  * - Channel messages, DMs, thread replies
  * - User mention detection
  * - Message metadata extraction
+ * - Channel allowlist/blocklist filtering
+ * - Per-channel config (requireMention, allowedUsers, tools, skills)
+ * - Dedup: drops duplicate events (same channel:ts)
+ * - Debounce: batches rapid messages from the same sender (file attachments bypass)
  */
 
-import type { Logger } from '@omni/channel-sdk';
+import { sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache, Logger } from '@omni/channel-sdk';
+import { buildConversationKey } from '@omni/core';
+import type { DebounceManager } from '@omni/core';
 import type { App } from '@slack/bolt';
 import { resolveChannelConfig } from '../config/channel-config';
 import { type DmPolicyConfig, shouldAcceptDm } from '../dm-policy';
@@ -26,6 +33,29 @@ export interface MessageHandlerCallbacks {
     meta?: SlackMessageMeta,
   ) => Promise<void>;
   onDmRejected?: (instanceId: string, channelId: string, userId: string, message: string) => Promise<void>;
+}
+
+/** Optional reliability options (dedup + debounce) */
+export interface ReliabilityOptions {
+  /** Drop duplicate Slack events with the same channel:ts */
+  dedupeCache?: DedupeCache;
+  /**
+   * Batch rapid messages from the same sender within a debounce window.
+   * File attachments always bypass the debouncer and are processed immediately.
+   */
+  debounceManager?: DebounceManager;
+}
+
+/** Stored args for a debounced message — preserved in DebouncedMessage.payload */
+export interface SlackDebouncedArgs {
+  externalId: string;
+  chatId: string;
+  from: string;
+  content: { type: 'text'; text?: string };
+  replyToId: string | undefined;
+  rawPayload: Record<string, unknown>;
+  platformTimestamp: number | undefined;
+  meta: SlackMessageMeta;
 }
 
 /**
@@ -140,32 +170,82 @@ function isDroppedByChannelConfig(
   return false;
 }
 
-/** Process a single inbound message event */
-async function processMessage(
-  msg: Record<string, unknown>,
+/** Queue a non-file message to the debounce manager */
+function queueToDebouncer(
+  debounceManager: DebounceManager,
   instanceId: string,
-  getBotUserId: () => string | undefined,
+  userId: string,
+  text: string,
+  meta: SlackMessageMeta,
+  content: { type: 'text'; text?: string },
+  rawPayload: Record<string, unknown>,
+  platformTimestamp: number | undefined,
+): void {
+  const key = buildConversationKey(instanceId, userId);
+  const debouncedArgs: SlackDebouncedArgs = {
+    externalId: meta.ts,
+    chatId: meta.channelId,
+    from: userId,
+    content,
+    replyToId: meta.isThreadReply ? meta.threadTs : undefined,
+    rawPayload,
+    platformTimestamp,
+    meta,
+  };
+  debounceManager.addMessage(
+    key,
+    {
+      type: 'text',
+      text: text || undefined,
+      timestamp: platformTimestamp ?? Date.now(),
+      payload: debouncedArgs as unknown as Record<string, unknown>,
+    },
+    { id: userId },
+    instanceId,
+  );
+}
+
+/** Process a single validated inbound message */
+async function processMessage(
+  instanceId: string,
+  msg: Record<string, unknown>,
+  currentBotUserId: string | undefined,
   callbacks: MessageHandlerCallbacks,
-  dmPolicyConfig: DmPolicyConfig,
   logger: Logger,
+  reliability: ReliabilityOptions | undefined,
   filterConfig: ChannelFilterConfig | undefined,
 ): Promise<void> {
-  if (shouldSkipMessage(msg, getBotUserId())) return;
-
   const userId = msg.user as string;
   const meta = extractMessageMeta(msg);
-  const text = (msg.text as string) ?? '';
-  const currentBotUserId = getBotUserId();
+  const rawText = (msg.text as string) ?? '';
 
+  // ── Channel allowlist/blocklist filtering ──
   if (isChannelBlocked(meta.channelId, filterConfig)) {
     logger.debug('Message dropped: channel filtered', { channelId: meta.channelId, instanceId });
     return;
   }
 
-  if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
+  // Sanitize inbound text (rejects null bytes, oversized payloads, etc.)
+  let text = rawText;
+  if (rawText) {
+    const sanitized = sanitizeMessage(rawText, logger, { instanceId, messageId: meta.ts });
+    if (!sanitized.ok) {
+      logger.debug('message_dropped_sanitization', { instanceId, ts: meta.ts, reason: sanitized.rejected });
+      return;
+    }
+    text = sanitized.text;
+  }
+
+  // ── Dedup check: drop duplicate Slack events (same channel:ts) ──
+  const dedupeKey = `${meta.channelId}:${meta.ts}`;
+  if (reliability?.dedupeCache?.isDuplicate(instanceId, dedupeKey, 'slack', logger)) {
+    logger.debug('duplicate_slack_event_dropped', { instanceId, ts: meta.ts, channelId: meta.channelId });
+    return;
+  }
 
   const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
 
+  // ── Per-channel config filtering (requireMention, allowedUsers) ──
   const channelConfig = resolveChannelConfig({ channels: filterConfig?.channels }, meta.channelId);
   if (isDroppedByChannelConfig(channelConfig, userId, meta.isDm, isMentioningInstance)) {
     logger.debug('Message dropped: per-channel filter', { channelId: meta.channelId, userId, instanceId });
@@ -181,19 +261,42 @@ async function processMessage(
     isMention: isMentioningInstance,
   });
 
+  // Build rawPayload with channel extra (tools/skills from per-channel config)
   const channelExtra: Record<string, unknown> = { isMentioningInstance };
   if (channelConfig.tools) channelExtra.tools = channelConfig.tools;
   if (channelConfig.skills) channelExtra.skills = channelConfig.skills;
+
+  const rawPayload = buildRawPayload(meta, msg, channelExtra);
+  const platformTimestamp = slackTsToMs(meta.ts);
+  const replyToId = meta.isThreadReply ? meta.threadTs : undefined;
+  const content: { type: 'text'; text?: string } = { type: 'text', text: text || undefined };
+
+  // ── File attachments bypass debouncing — always dispatch immediately ──
+  const hasFiles = Boolean(msg.files && (msg.files as unknown[]).length > 0);
+
+  if (reliability?.debounceManager && !hasFiles) {
+    queueToDebouncer(
+      reliability.debounceManager,
+      instanceId,
+      userId,
+      text,
+      meta,
+      content,
+      rawPayload,
+      platformTimestamp,
+    );
+    return;
+  }
 
   await callbacks.onMessage(
     instanceId,
     meta.ts,
     meta.channelId,
     userId,
-    { type: 'text', text: text || undefined },
-    meta.isThreadReply ? meta.threadTs : undefined,
-    buildRawPayload(meta, msg, channelExtra),
-    slackTsToMs(meta.ts),
+    content,
+    replyToId,
+    rawPayload,
+    platformTimestamp,
     meta,
   );
 }
@@ -209,23 +312,25 @@ export function setupMessageHandlers(
   dmPolicyConfig: DmPolicyConfig,
   logger: Logger,
   filterConfig?: ChannelFilterConfig,
+  reliability?: ReliabilityOptions,
 ): void {
   const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
+
+  // Handle all messages (channels, groups, DMs, mpim)
+  app.message(async ({ message }) => {
+    const msg = message as unknown as Record<string, unknown>;
+    if (shouldSkipMessage(msg, resolveBotUserId())) return;
+
+    const userId = msg.user as string;
+    const meta = extractMessageMeta(msg);
+    if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
+
+    await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability, filterConfig);
+  });
 
   // NOTE: app_mention is NOT handled separately — app.message() already captures
   // messages that mention the bot, and the agent-dispatcher detects mentions via
   // the mentionsBot flag. Handling both would cause duplicate message.received events.
-  app.message(async ({ message }) => {
-    await processMessage(
-      message as unknown as Record<string, unknown>,
-      instanceId,
-      resolveBotUserId,
-      callbacks,
-      dmPolicyConfig,
-      logger,
-      filterConfig,
-    );
-  });
 
   logger.info('Message handlers registered', { instanceId });
 }
