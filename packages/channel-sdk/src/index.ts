@@ -84,6 +84,9 @@ export * from './discovery';
 export { createInboundDedupeCache, validateCacheKey } from './dedupe';
 export type { DedupeCache, DedupeConfig, DedupeStats } from './dedupe';
 
+export { createThreadStarterCache } from './thread-cache';
+export type { ThreadStarterCache, ThreadStarterCacheConfig } from './thread-cache';
+
 export { sanitizeMessage, isValidInstanceId } from './sanitize';
 export type { SanitizeOptions, SanitizeResult } from './sanitize';
 
