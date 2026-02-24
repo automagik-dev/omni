@@ -1551,6 +1551,15 @@ async function buildContextMessages(
   }
 }
 
+/** Record a journey checkpoint when tracking is active for this correlationId. */
+function recordJourneyCheckpoint(correlationId: string | undefined, stage: string, stageName: string): void {
+  if (!correlationId) return;
+  const tracker = getJourneyTracker();
+  if (tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, stage, stageName);
+  }
+}
+
 /**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
@@ -1631,6 +1640,7 @@ async function dispatchViaProvider(
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
+  const correlationId = messages[0]?.metadata.correlationId;
   const result = await provider.trigger(trigger);
 
   if (result && result.parts.length > 0) {
@@ -1748,6 +1758,7 @@ async function dispatchViaLegacy(
     files: mediaFiles.length > 0 ? mediaFiles : undefined,
   });
 
+  const correlationId = messages[0]?.metadata.correlationId;
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
