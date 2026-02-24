@@ -1,9 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pkg from '../package.json';
 
 export const CLI_VERSION_HEADER = 'x-omni-cli-version';
 export const SERVER_VERSION_HEADER = 'x-omni-server-version';
+
+/**
+ * Version embedded at build time from package.json.
+ * Falls back to filesystem reads for dev mode (unbundled).
+ */
+const EMBEDDED_VERSION: string | undefined = pkg?.version;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +67,8 @@ function readVersionFromPackage(): string {
 }
 
 function detectVersion(): string {
+  // Prefer the embedded version from the JSON import (works in compiled binaries)
+  if (EMBEDDED_VERSION && EMBEDDED_VERSION !== '0.0.0') return EMBEDDED_VERSION;
   return readVersionFromArtifact() ?? readVersionFromPackage();
 }
 

@@ -1,0 +1,29 @@
+{
+  "description": "Omni plugin hooks — auto-install CLI on setup, health check on session start",
+  "hooks": {
+    "Setup": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/health-check.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

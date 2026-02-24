@@ -8,9 +8,11 @@
  * Controlled by env vars:
  *   PGSERVE_EMBEDDED  — 'true' (default) to start in-process, 'false' to skip
  *   PGSERVE_PORT      — port for the embedded PostgreSQL proxy (default 8432)
- *   PGSERVE_DATA      — data directory path; omit or empty for memory mode
+ *   PGSERVE_DATA      — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createLogger } from '@omni/core';
 import { getDefaultDatabaseUrl } from '@omni/db';
 
@@ -34,7 +36,9 @@ export function resolvePgserveConfig(): PgserveConfig {
   const enabled = (process.env.PGSERVE_EMBEDDED ?? 'true') === 'true';
   const port = Number.parseInt(process.env.PGSERVE_PORT ?? '8432', 10);
   const raw = process.env.PGSERVE_DATA;
-  const dataDir = raw && raw.trim().length > 0 ? raw.trim() : null;
+  // Default to persistent storage inside ~/.omni/data/pgserve — never memory mode unless explicitly empty
+  const defaultDataDir = join(homedir(), '.omni', 'data', 'pgserve');
+  const dataDir = raw !== undefined && raw.trim().length === 0 ? null : raw?.trim() || defaultDataDir;
 
   return { enabled, port, dataDir };
 }

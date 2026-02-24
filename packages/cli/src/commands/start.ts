@@ -39,7 +39,7 @@ function buildApiRuntimeEnv(): Record<string, string> {
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pglite'),
+    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: serverConfig.nodeEnv,
     LOG_LEVEL: serverConfig.logLevel,

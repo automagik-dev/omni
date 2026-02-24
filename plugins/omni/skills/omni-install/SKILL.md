@@ -52,7 +52,7 @@ omni install --non-interactive
 
 This bootstraps everything with sane defaults:
 - **Port:** 8882
-- **Database:** Embedded PGlite (no external PostgreSQL needed)
+- **Database:** Embedded PostgreSQL via pgserve (no external PostgreSQL needed)
 - **Event bus:** NATS JetStream (auto-downloaded)
 - **Process manager:** PM2
 - **API key:** Auto-generated — printed once, **save it immediately**
@@ -155,9 +155,9 @@ omni instances pair <INSTANCE_ID> --phone "+5511999999999"
 | Symptom | Fix |
 |---------|-----|
 | "Server bundle not found" | `bun remove -g @automagik/omni && bun add -g @automagik/omni@latest` |
-| Health check fails after install | `pm2 logs omni-api --lines 20 --nostream` — check for port conflict or PGlite crash |
+| Health check fails after install | `pm2 logs omni-api --lines 20 --nostream` — check for port conflict or pgserve crash |
 | Port conflict | `omni install --port 9000` |
-| PGlite crash | `rm -rf ~/.omni/data/pglite && omni restart` |
+| pgserve crash | `rm -rf ~/.omni/data/pgserve && omni restart` |
 | `keyValid: no` | `pm2 env omni-api \| grep OMNI_API_KEY` → `omni config set apiKey <correct_key>` |
 | `missing scope: operator.write` | Re-run `omni providers setup openclaw ...` |
 | Stale `omni-v2-pgserve` process | `pm2 delete omni-v2-pgserve && omni restart` |
