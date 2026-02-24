@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "automagik-dev",
+  "description": "Omni v2 — Universal Event-Driven Omnichannel Platform plugins",
+  "owner": {
+    "name": "Automagik"
+  },
+  "plugins": [
+    {
+      "name": "omni",
+      "description": "Full Omni platform control — multichannel messaging, automations, events, batch ops via the omni CLI",
+      "version": "2.0.0",
+      "author": { "name": "Automagik" },
+      "source": "./plugins/omni",
+      "category": "development"
+    }
+  ]
+}

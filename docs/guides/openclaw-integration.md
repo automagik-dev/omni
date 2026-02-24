@@ -32,7 +32,7 @@ The PM2 ecosystem had `omni-v2-pgserve` as a separate managed process holding po
 
 ### 2. API key was lost after redeploy
 
-**Root cause:** Fresh install generated a new API key stored in a new pglite database (`/home/genie/data/omni`). The CLI config (`~/.omni/config.json`) still had the old key. The key is stored as a bcrypt hash — there's no way to retrieve it after generation.
+**Root cause:** Fresh install generated a new API key stored in a new pgserve database (`/home/genie/data/omni`). The CLI config (`~/.omni/config.json`) still had the old key. The key is stored as a bcrypt hash — there's no way to retrieve it after generation.
 
 **Fix:** Delete the `__primary__` row from `api_keys` table, inject `OMNI_API_KEY=<known_key>` into the PM2 environment, restart — the API re-creates the primary key using the env value.
 
