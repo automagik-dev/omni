@@ -32,7 +32,9 @@ import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './ha
 import { setupInteractionHandlers } from './handlers/interactions';
 import { setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
+import { clearTypingStatus, setTypingStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
+import { createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
 import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
 import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
@@ -102,6 +104,18 @@ export class SlackPlugin extends BaseChannelPlugin {
   private userNameCache = new Map<string, string | null>();
 
   /**
+   * Last active thread per (instanceId, channelId): Map<`${instanceId}:${channelId}`, threadTs>
+   * Used by sendTyping to resolve the thread context for assistant.threads.setStatus.
+   */
+  private activeThreads = new Map<string, string>();
+
+  /**
+   * Pending ack reactions awaiting removal after reply.
+   * Key: `${instanceId}:${channelId}:${messageTs}`, Value: emoji name
+   */
+  private pendingAckReactions = new Map<string, string>();
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -119,6 +133,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.clear();
     this.slackConfigs.clear();
     this.userNameCache.clear();
+    this.activeThreads.clear();
+    this.pendingAckReactions.clear();
   }
 
   /**
@@ -230,9 +246,15 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.delete(instanceId);
     this.slackConfigs.delete(instanceId);
 
-    // Clear cached user names for this instance
+    // Clear cached user names, active threads, and pending ack reactions for this instance
     for (const key of this.userNameCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.userNameCache.delete(key);
+    }
+    for (const key of this.activeThreads.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.activeThreads.delete(key);
+    }
+    for (const key of this.pendingAckReactions.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
     }
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
@@ -254,6 +276,12 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       if (correlationId) this.captureT11(correlationId);
 
+      // Clear typing indicator after reply is delivered
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction if configured
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
@@ -269,6 +297,12 @@ export class SlackPlugin extends BaseChannelPlugin {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = error instanceof SlackError ? error.code : SlackErrorCode.SEND_FAILED;
       const retryable = error instanceof SlackError ? error.retryable : false;
+
+      // Clear typing indicator on error too
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction on error too (best effort)
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
 
       await this.emitMessageFailed({
         instanceId,
@@ -303,26 +337,91 @@ export class SlackPlugin extends BaseChannelPlugin {
     const replyToMode = slackConfig.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
 
-    return createSlackStreamSender({
-      client: connection.client,
-      channelId: chatId,
-      threadTs,
-      streamMode: resolveStreamMode(slackConfig.streamMode),
-      throttleMs: resolveStreamThrottle(slackConfig.streamThrottleMs),
-      username: slackConfig.defaultUsername,
-      iconUrl: slackConfig.defaultIconUrl,
-      iconEmoji: slackConfig.defaultIconEmoji,
-      formatMode: options?.formatMode ?? 'convert',
-      logger: this.logger,
-    });
+    const streamMode = resolveStreamMode(slackConfig.streamMode);
+    const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
+
+    const base =
+      streamMode === 'native'
+        ? createNativeStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          })
+        : createSlackStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            streamMode,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          });
+
+    // Wrap to clean up ack reactions and typing on stream completion.
+    // sendMessage handles cleanup for non-streamed replies, but streamed replies
+    // bypass sendMessage entirely — reactions accumulate indefinitely without this.
+    const cleanup = () => {
+      this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
+      this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
+    };
+
+    return {
+      onThinkingDelta: base.onThinkingDelta.bind(base),
+      onContentDelta: base.onContentDelta.bind(base),
+      async onFinal(delta) {
+        await base.onFinal(delta);
+        cleanup();
+      },
+      async onError(delta) {
+        await base.onError(delta);
+        cleanup();
+      },
+      async abort() {
+        await base.abort();
+        cleanup();
+      },
+    };
   }
 
   /**
-   * Send typing indicator
+   * Send typing indicator via assistant.threads.setStatus.
+   *
+   * Thread-only: no-op when no active thread is tracked for the channel.
+   * Failures are swallowed gracefully — typing never blocks message processing.
+   *
+   * When duration === 0, clears the typing indicator instead of setting it.
    */
-  async sendTyping(_instanceId: string, _chatId: string): Promise<void> {
-    // Slack doesn't have a direct typing indicator API for bots
-    // The typing event is only available for human users
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const connection = this.connections.get(instanceId);
+    if (!connection) return;
+
+    const threadTs = this.activeThreads.get(`${instanceId}:${chatId}`);
+    if (!threadTs) return; // Thread-only guard
+
+    if (duration === 0) {
+      await clearTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    } else {
+      await setTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    }
   }
 
   /**
@@ -647,6 +746,97 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Add ack reaction on inbound message receipt.
+   * Fire-and-forget — reaction failures don't block message processing.
+   */
+  private addAckReaction(
+    instanceId: string,
+    channelId: string,
+    messageTs: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+  ): void {
+    const ackEmoji = config.ackReaction;
+    if (!ackEmoji) return;
+
+    const emojiName = typeof ackEmoji === 'string' ? ackEmoji.replace(/^:|:$/g, '') : null;
+    if (!emojiName) return;
+
+    // Fire-and-forget
+    connection.client.reactions.add({ channel: channelId, timestamp: messageTs, name: emojiName }).catch((err) => {
+      this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
+    });
+
+    // Track for removal if configured
+    if (config.removeAckAfterReply !== false) {
+      const key = `${instanceId}:${channelId}:${messageTs}`;
+      this.pendingAckReactions.set(key, emojiName);
+      // Auto-clean after 1 hour to prevent unbounded growth if the agent never replies
+      const timer = setTimeout(() => this.pendingAckReactions.delete(key), 3_600_000);
+      timer.unref?.();
+    }
+  }
+
+  /**
+   * Remove pending ack reaction after a reply is sent.
+   * Fire-and-forget — failure doesn't block message processing.
+   */
+  private removeAckReaction(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    replyTo: string | undefined,
+    threadId: string | undefined,
+  ): void {
+    // Try both replyTo and threadId as the acked message ts
+    for (const ts of [replyTo, threadId]) {
+      if (!ts) continue;
+      const key = `${instanceId}:${channelId}:${ts}`;
+      const emojiName = this.pendingAckReactions.get(key);
+      if (!emojiName) continue;
+
+      this.pendingAckReactions.delete(key);
+      connection.client.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
+        this.logger.warn('ack reaction: failed to remove', { channelId, ts, emoji: emojiName, error: String(err) });
+      });
+      break; // Only remove once
+    }
+  }
+
+  /**
+   * Track the last active thread for a (instanceId, channelId) pair.
+   * Used by sendTyping to call assistant.threads.setStatus on the right thread.
+   *
+   * Always sets a value — callers should pass `threadTs ?? externalId` so that
+   * typing indicators for top-level messages target the thread the bot's reply
+   * will create, rather than leaving a stale mapping from a previous message.
+   */
+  private trackActiveThread(instanceId: string, channelId: string, threadTs: string): void {
+    this.activeThreads.set(`${instanceId}:${channelId}`, threadTs);
+  }
+
+  /**
+   * Clear typing status after a reply is sent or an error occurs.
+   * Uses the provided threadTs or falls back to the tracked active thread.
+   */
+  private async clearActiveTyping(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    const resolvedThread = threadTs ?? this.activeThreads.get(`${instanceId}:${channelId}`);
+    if (!resolvedThread) return;
+
+    await clearTypingStatus({
+      client: connection.client,
+      channelId,
+      threadTs: resolvedThread,
+      logger: this.logger,
+    });
+  }
+
+  /**
    * Get the Bolt connection for an instance
    */
   private getConnection(instanceId: string): BoltConnection {
@@ -678,6 +868,17 @@ export class SlackPlugin extends BaseChannelPlugin {
           platformTimestamp,
           _meta,
         ) => {
+          // Track active thread for typing indicator resolution.
+          // For threaded messages, use threadTs. For top-level messages, use
+          // the message's own externalId — the bot's reply will create a thread
+          // under that ts, so typing indicators must target it. This also prevents
+          // stale thread context from leaking into unrelated channel messages.
+          const threadTs = rawPayload.threadTs as string | undefined;
+          this.trackActiveThread(instanceId, chatId, threadTs ?? externalId);
+
+          // Add ack reaction on message receipt (fire-and-forget)
+          this.addAckReaction(instanceId, chatId, externalId, connection, config);
+
           // Resolve sender display name (cached after first lookup)
           const displayName = await this.resolveUserDisplayName(instanceId, from);
           const isDm = rawPayload.isDm as boolean;

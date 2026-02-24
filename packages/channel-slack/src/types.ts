@@ -68,12 +68,22 @@ export interface SlackConfig {
    * Defaults to 3001.
    */
   httpPort?: number;
+  /**
+   * Ack reaction emoji sent on message receipt (e.g. "eyes").
+   * Set to false or omit to disable.
+   */
+  ackReaction?: string | false;
+  /**
+   * Remove the ack reaction after reply is sent. Default: true.
+   * Only applies when ackReaction is set.
+   */
+  removeAckAfterReply?: boolean;
 }
 
 /**
  * Stream mode for progressive response rendering
  */
-export const STREAM_MODES = ['replace', 'status_final', 'off'] as const;
+export const STREAM_MODES = ['replace', 'status_final', 'off', 'native'] as const;
 export type StreamMode = (typeof STREAM_MODES)[number];
 
 /**
