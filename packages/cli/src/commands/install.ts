@@ -263,7 +263,7 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
     MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(cfg.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(cfg.dataDir, 'pglite'),
+    PGSERVE_DATA: join(cfg.dataDir, 'pgserve'),
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: 'production',
     LOG_LEVEL: 'info',
