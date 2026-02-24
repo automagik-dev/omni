@@ -366,8 +366,11 @@ function buildWhatsAppMessageContext(
 
   const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
 
-  // Handle replies to bot messages (same phone number extraction for LID compatibility)
-  const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
+  // Handle replies to bot messages.
+  // The plugin extracts contextInfo.participant (the author of the quoted message)
+  // into rawPayload.quotedParticipant. We use the same phone-extraction logic as
+  // mentions to handle LID ↔ phone-JID format differences.
+  const quotedParticipant = rawPayload.quotedParticipant as string | undefined;
   const isReplyToBot = quotedParticipant
     ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
     : false;
