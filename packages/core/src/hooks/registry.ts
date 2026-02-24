@@ -203,9 +203,3 @@ export function getHookRegistry(): HookRegistry {
   }
   return globalRegistry;
 }
-
-/** Reset global registry — for testing only, not exported from index.ts */
-export function resetHookRegistry(): void {
-  globalRegistry?.clearAll();
-  globalRegistry = null;
-}

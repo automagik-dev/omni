@@ -2,8 +2,6 @@
  * Plugin Hook System
  *
  * Barrel exports for the hook infrastructure.
- * Note: resetHookRegistry is intentionally NOT exported here — it is
- * test-only and available by direct import from './registry'.
  */
 
 export {
