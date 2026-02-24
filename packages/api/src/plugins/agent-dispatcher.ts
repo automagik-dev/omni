@@ -418,6 +418,30 @@ async function sendTypingPresence(
   }
 }
 
+/** Mark dispatched messages as read — fire-and-forget, does not block dispatch. */
+function markDispatchedMessagesRead(
+  plugin: Awaited<ReturnType<typeof getPlugin>>,
+  instanceId: string,
+  chatId: string,
+  messages: BufferedMessage[],
+): void {
+  if (!plugin || !('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') return;
+  const markData = messages
+    .filter((m) => m.payload.externalId)
+    .map((m) => ({ externalId: m.payload.externalId as string, rawPayload: m.payload.rawPayload ?? null }));
+  if (markData.length === 0) return;
+  void plugin
+    .markAsRead?.(
+      instanceId,
+      chatId,
+      markData.map((m) => m.externalId),
+      markData,
+    )
+    .catch((err: unknown) => {
+      log.debug('Failed to mark messages as read on dispatch', { error: String(err) });
+    });
+}
+
 async function sendTextMessage(
   channel: ChannelType,
   instanceId: string,
@@ -2424,6 +2448,7 @@ async function processAgentResponse(
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
+  markDispatchedMessagesRead(plugin, instance.id, chatId, messages);
 
   // ── Per-thread lazy init ──
   // On the first trigger in a per_thread session: fetch thread history, process media,
