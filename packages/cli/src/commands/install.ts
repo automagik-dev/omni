@@ -459,7 +459,10 @@ async function startServices(cfg: WizardConfig): Promise<void> {
   const runtimeEnv = buildApiRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
   const launcherPath = getServerLauncherPath();
-  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], runtimeEnv);
+  const apiCode = await runPm2(
+    ['start', launcherPath, '--name', PM2_PROCESSES.api, '--interpreter', 'bash'],
+    runtimeEnv,
+  );
   if (apiCode !== 0) {
     apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
   } else {
