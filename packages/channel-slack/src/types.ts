@@ -3,6 +3,26 @@
  */
 
 /**
+ * Connection mode for Slack plugin
+ */
+export type SlackConnectionMode = 'socket' | 'http';
+
+/**
+ * Per-channel configuration overrides.
+ * Fields set here take precedence over instance-level defaults.
+ */
+export interface SlackChannelConfig {
+  /** Require bot mention to trigger responses (default: false) */
+  requireMention?: boolean;
+  /** Restrict to these user IDs only (undefined = all users allowed) */
+  allowedUsers?: string[];
+  /** Tool overrides for this channel (passed to agent dispatcher) */
+  tools?: string[];
+  /** Skill overrides for this channel (passed to agent dispatcher) */
+  skills?: string[];
+}
+
+/**
  * Slack instance configuration
  */
 export interface SlackConfig {
@@ -10,8 +30,16 @@ export interface SlackConfig {
   botToken?: string;
   /** App-Level Token for Socket Mode (xapp-...) */
   appToken?: string;
-  /** Signing Secret for request verification */
+  /** Signing Secret for request verification (required for HTTP mode) */
   signingSecret?: string;
+  /** Connection mode: 'socket' (default) or 'http' */
+  mode?: SlackConnectionMode;
+  /** Channel allowlist: only process messages from these channel IDs */
+  channelAllowlist?: string[];
+  /** Channel blocklist: skip messages from these channel IDs */
+  channelBlocklist?: string[];
+  /** Per-channel configuration overrides keyed by channel ID */
+  channels?: Record<string, SlackChannelConfig>;
   /** Stream mode for progressive responses */
   streamMode?: StreamMode;
   /** Stream throttle interval in ms (default: 1000) */
@@ -71,9 +99,13 @@ export interface RetryConfig {
  */
 export interface SlackConnectionOptions {
   botToken: string;
-  appToken: string;
+  /** Required for Socket Mode; not used for HTTP mode */
+  appToken?: string;
+  /** Required for HTTP mode; optional for Socket Mode */
   signingSecret?: string;
   retryConfig?: RetryConfig;
+  /** Connection mode (default: 'socket') */
+  mode?: SlackConnectionMode;
 }
 
 /**
