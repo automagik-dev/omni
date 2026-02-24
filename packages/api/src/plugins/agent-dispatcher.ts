@@ -525,24 +525,33 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
 /**
  * Convert a relative media URL (/api/v2/media/...) to a local file path.
+ * Returns null if the resolved path escapes the media base directory (path traversal).
  */
-function resolveMediaPath(mediaUrl: string): string {
+function resolveMediaPath(mediaUrl: string): string | null {
   const relativePath = mediaUrl.replace(/^\/api\/v2\/media\//, '');
-  return join(MEDIA_BASE_PATH, relativePath);
+  const fullPath = resolve(MEDIA_BASE_PATH, relativePath);
+  const basePath = resolve(MEDIA_BASE_PATH);
+  if (!fullPath.startsWith(`${basePath}/`) && fullPath !== basePath) {
+    log.warn('Path traversal attempt blocked', { mediaUrl, resolved: fullPath, basePath });
+    return null;
+  }
+  return fullPath;
 }
 
 /**
  * Extract ProviderFile entries from buffered messages that have media attachments.
+ * Respects agentSendMediaPath instance setting — returns empty if disabled.
  */
-function extractMediaFiles(messages: BufferedMessage[]): ProviderFile[] {
+function extractMediaFiles(messages: BufferedMessage[], agentSendMediaPath: boolean): ProviderFile[] {
+  if (!agentSendMediaPath) return [];
   const files: ProviderFile[] = [];
   for (const m of messages) {
     const content = m.payload.content;
     if (content?.mediaUrl && content.mimeType) {
-      files.push({
-        path: resolveMediaPath(content.mediaUrl),
-        mimeType: content.mimeType,
-      });
+      const path = resolveMediaPath(content.mediaUrl);
+      if (path) {
+        files.push({ path, mimeType: content.mimeType });
+      }
     }
   }
   return files;
@@ -1013,12 +1022,12 @@ async function prepareAgentContent(
   }
 
   const processedMediaTexts: string[] = [];
-  let mediaFiles = extractMediaFiles(messages);
+  const mediaFiles = extractMediaFiles(messages, instance.agentSendMediaPath);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
     processedMediaTexts.push(...processed);
-    if (processedMediaTexts.length > 0) mediaFiles = [];
+    // Keep mediaFiles — agent gets both processed text AND file references
   }
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageEntries, messageKeyByIndex);
@@ -1233,6 +1242,11 @@ function mergeContextMessages(extra: string[] | undefined, db: string[]): string
   return extra?.length ? [...extra, ...db] : db;
 }
 
+/** Convert media files array to trigger files (undefined when empty) */
+function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined {
+  return mediaFiles.length > 0 ? mediaFiles : undefined;
+}
+
 /**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
@@ -1267,6 +1281,7 @@ async function dispatchViaStreamingProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1285,6 +1300,7 @@ async function dispatchViaStreamingProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
@@ -1489,6 +1505,7 @@ async function dispatchViaProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1507,6 +1524,7 @@ async function dispatchViaProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
