@@ -20,7 +20,7 @@
     "packages/api": {
       "project": ["src/**/*.ts"],
       "ignore": ["src/plugins/agent-responder.ts"],
-      "ignoreDependencies": ["nats"]
+      "ignoreDependencies": ["pgserve"]
     },
     "packages/core": {
       "project": ["src/**/*.ts"]
