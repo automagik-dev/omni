@@ -177,6 +177,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
       await destroyBoltConnection(existing, this.logger);
       this.connections.delete(instanceId);
+      this.disposeInstanceCaches(instanceId);
     }
 
     await this.updateInstanceStatus(instanceId, config, {

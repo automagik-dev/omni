@@ -1285,6 +1285,7 @@ async function executeBeforeAgentStartHooks(
     senderName,
     model: instance.agentId ?? undefined,
     provider: instance.agentProviderId ?? undefined,
+    agentId: instance.agentId ?? undefined,
     triggerType,
     traceId,
     correlationId,

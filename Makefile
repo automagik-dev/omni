@@ -328,17 +328,17 @@ status:
 
 # Individual service control
 restart-api:
-	pm2 restart omni-api
+	pm2 restart omni-v2-api
 
 restart-nats:
-	pm2 restart omni-nats
+	pm2 restart omni-v2-nats
 
 restart-pgserve:
 	@echo "pgserve is embedded in the API server — restarting API..."
 	$(MAKE) restart-api
 
 logs-api:
-	pm2 logs omni-api --lines 100
+	pm2 logs omni-v2-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
