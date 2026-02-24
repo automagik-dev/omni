@@ -35,8 +35,39 @@ import { setupReactionHandlers } from './handlers/reactions';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { createSlackStreamSender } from './senders/stream';
 import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
-import type { ReplyToMode, SlackConfig, SlackInteractionPayload } from './types';
+import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
+
+/**
+ * Resolve Slack credentials from config, options, and credentials sources.
+ * Supports legacy token aliases and both connection modes.
+ */
+function resolveSlackTokens(
+  slackConfig: SlackConfig,
+  rawOptions: Record<string, unknown>,
+  rawCredentials: Record<string, unknown>,
+): { botToken: string; appToken?: string; signingSecret?: string; mode: SlackConnectionMode } {
+  const botToken =
+    slackConfig.botToken ??
+    (rawOptions.token as string | undefined) ??
+    (rawCredentials.botToken as string | undefined) ??
+    (rawCredentials.token as string | undefined);
+  const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
+  const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
+  const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
+
+  if (!botToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
+  }
+  if (mode === 'socket' && !appToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'appToken (xapp-...) is required for Socket Mode');
+  }
+  if (mode === 'http' && !signingSecret) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'signingSecret is required for HTTP mode');
+  }
+
+  return { botToken, appToken, signingSecret, mode };
+}
 
 /**
  * Slack Channel Plugin
@@ -91,7 +122,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Connect a Slack instance via Socket Mode
+   * Connect a Slack instance
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     const existing = this.connections.get(instanceId);
@@ -116,28 +147,18 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     let connection: BoltConnection | undefined;
     try {
-      // Accept legacy/generic token aliases used by instance routes (`options.token`)
-      // in addition to Slack-specific fields.
-      const botToken =
-        slackConfig.botToken ??
-        (rawOptions.token as string | undefined) ??
-        (rawCredentials.botToken as string | undefined) ??
-        (rawCredentials.token as string | undefined);
-      const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
-      const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
-
-      if (!botToken || !appToken) {
-        throw new SlackError(
-          SlackErrorCode.INVALID_TOKEN,
-          'Both botToken (xoxb-...) and appToken (xapp-...) are required for Socket Mode',
-        );
-      }
-
+      const resolved = resolveSlackTokens(slackConfig, rawOptions, rawCredentials);
       this.slackConfigs.set(instanceId, slackConfig);
 
       // Phase 1: Create the Bolt.js app (NOT started yet)
       connection = createBoltApp(
-        { botToken, appToken, signingSecret, retryConfig: slackConfig.retryConfig },
+        {
+          botToken: resolved.botToken,
+          appToken: resolved.appToken,
+          signingSecret: resolved.signingSecret,
+          retryConfig: slackConfig.retryConfig,
+          mode: resolved.mode,
+        },
         this.logger,
       );
 
