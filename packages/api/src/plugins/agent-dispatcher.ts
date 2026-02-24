@@ -108,6 +108,22 @@ interface DebounceConfig {
   groupMs: number | null;
 }
 
+/**
+ * Transient dispatch fields stamped onto an effectiveInstance copy by applyAgentFkOverrides.
+ * These are runtime-only fields derived from the Agent entity and are NOT persisted on instances.
+ */
+interface DispatchFields {
+  /** Agent provider UUID resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentProviderId?: string | null;
+  /** Agent type resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentType?: 'agent' | 'team' | 'workflow';
+  /** Provider-internal agent name resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentInternalId?: string;
+}
+
+/** Instance extended with transient dispatch fields for in-process agent resolution. */
+type DispatchInstance = Instance & DispatchFields;
+
 // ============================================================================
 // Rate Limiter
 // ============================================================================
@@ -2413,13 +2429,21 @@ async function processAgentResponse(
     reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
     ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
   };
-  const plugin = (await getPlugin(channel)) ?? null;
+  const plugin = await getPlugin(channel);
   // AckProvider: channels that support reactions can expose ack/removeAck
   // For now we pass null — channel-specific ack providers will be added
   // when channel parity wishes (D, 7, 8) implement the AckProvider interface
   const ackProvider: AckProvider | null = null;
   const messageId = firstMessage.payload.externalId ?? '';
-  const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
+  const ackHandle: AckHandle = startAck(
+    plugin ?? null,
+    ackProvider,
+    instance.id,
+    chatId,
+    messageId,
+    channel,
+    ackConfig,
+  );
 
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
@@ -2691,7 +2715,6 @@ function createWebhookProvider(provider: AgentProvider, instance: DispatchInstan
     retries: (schemaConfig.retries as number) ?? 1,
   });
 }
-
 
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
