@@ -2602,8 +2602,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       isFromMe, // Include for message-persistence to use
     };
 
-    // Extract mentionedJids from contextInfo (WhatsApp mentions)
+    // Extract contextInfo fields for reply detection and mention handling.
+    // contextInfo.participant = JID of the message being replied to's author.
+    // This is surfaced as quotedParticipant so the dispatcher can determine
+    // isReplyToBot without having to traverse the Baileys message tree.
     const contextInfo = this.getMessageContextInfo(rawMessage);
+    if (contextInfo?.participant) {
+      extendedPayload.quotedParticipant = contextInfo.participant;
+    }
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
