@@ -27,6 +27,8 @@ import {
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
+  type BeforeAgentStartContext,
+  type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
@@ -45,7 +47,9 @@ import {
   checkSessionReset,
   createLogger,
   createProviderClient,
+  executeHooks,
   generateCorrelationId,
+  getHookRegistry,
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
@@ -1247,6 +1251,79 @@ function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined 
   return mediaFiles.length > 0 ? mediaFiles : undefined;
 }
 
+// ============================================================================
+// Hook Helpers
+// ============================================================================
+
+/**
+ * Execute before_agent_start hooks and return the (possibly modified) context.
+ * Returns null on fast path (no hooks registered) or if structuredClone fails.
+ *
+ * NOTE: For v1, mutated model/provider/agentId values are logged but NOT applied
+ * back into the dispatch flow. DEC-5 (provider/agentId allowlist validation via
+ * DB lookup) is required before we can safely honour redirects.
+ * TODO: wire mutated context values back into dispatch once allowlist infra exists.
+ */
+async function executeBeforeAgentStartHooks(
+  instance: Instance,
+  chatId: string,
+  senderId: string,
+  senderName: string | undefined,
+  triggerType: AgentTriggerType,
+  traceId: string,
+  correlationId: string | undefined,
+  files: ProviderFile[] | undefined,
+): Promise<BeforeAgentStartContext | null> {
+  const registry = getHookRegistry();
+  const hookCount = registry.getHookCount(instance.id, 'before_agent_start');
+  if (hookCount === 0) return null; // fast path — zero overhead when no hooks
+
+  const context: BeforeAgentStartContext = {
+    instanceId: instance.id,
+    chatId,
+    senderId,
+    senderName,
+    model: instance.agentId ?? undefined,
+    provider: instance.agentProviderId ?? undefined,
+    triggerType,
+    traceId,
+    correlationId,
+    files: files as unknown[] | undefined,
+  };
+
+  const result = await executeHooks(instance.id, 'before_agent_start', context, {
+    timeoutMs: 2000,
+    pipelineTimeoutMs: 15_000,
+  });
+
+  return result.context;
+}
+
+/**
+ * Execute before_message_write hooks on response content.
+ * Returns the (possibly transformed) content string.
+ * Fast path: returns input content unchanged when no hooks are registered.
+ */
+async function executeBeforeMessageWriteHooks(instanceId: string, chatId: string, content: string): Promise<string> {
+  const registry = getHookRegistry();
+  const hookCount = registry.getHookCount(instanceId, 'before_message_write');
+  if (hookCount === 0) return content; // fast path — zero overhead when no hooks
+
+  const context: BeforeMessageWriteContext = {
+    instanceId,
+    chatId,
+    content,
+    direction: 'outbound' as const,
+  };
+
+  const result = await executeHooks(instanceId, 'before_message_write', context, {
+    timeoutMs: 2000,
+    pipelineTimeoutMs: 15_000,
+  });
+
+  return result.context.content;
+}
+
 /**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
@@ -1282,6 +1359,22 @@ async function dispatchViaStreamingProvider(
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
+
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    messages[0]?.metadata.correlationId,
+    triggerFiles,
+  );
+
+  // TODO: before_message_write for streaming — batch after stream completes
+  // (per-segment hooks would add latency; batch transform is the right approach)
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1507,6 +1600,19 @@ async function dispatchViaProvider(
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
 
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    messages[0]?.metadata.correlationId,
+    triggerFiles,
+  );
+
   const trigger: AgentTrigger = {
     traceId,
     type: triggerType,
@@ -1534,7 +1640,9 @@ async function dispatchViaProvider(
 
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+    const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+    // Apply before_message_write hooks to each response part before sending
+    const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
     await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
@@ -1599,6 +1707,19 @@ async function dispatchViaLegacy(
   );
   const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
 
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    messages[0]?.metadata.correlationId,
+    mediaFiles.length > 0 ? (mediaFiles as unknown as ProviderFile[]) : undefined,
+  );
+
   const result = await services.agentRunner.run({
     instance,
     chatId,
@@ -1615,7 +1736,10 @@ async function dispatchViaLegacy(
   });
 
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-  const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+  const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+
+  // Apply before_message_write hooks to each response part before sending
+  const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
