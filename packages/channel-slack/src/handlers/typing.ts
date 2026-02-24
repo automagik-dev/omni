@@ -27,8 +27,9 @@ export async function setSlackThreadStatus(params: {
   threadTs?: string;
   status: string;
   logger: Logger;
+  instanceId?: string;
 }): Promise<void> {
-  const { client, channelId, threadTs, status, logger } = params;
+  const { client, channelId, threadTs, status, logger, instanceId } = params;
 
   // Thread-only guard
   if (!threadTs) return;
@@ -59,6 +60,7 @@ export async function setSlackThreadStatus(params: {
     }
   } catch (err) {
     logger.warn('setSlackThreadStatus: failed', {
+      instanceId,
       channelId,
       threadTs,
       status,
@@ -75,6 +77,7 @@ export async function setTypingStatus(params: {
   channelId: string;
   threadTs?: string;
   logger: Logger;
+  instanceId?: string;
 }): Promise<void> {
   return setSlackThreadStatus({ ...params, status: TYPING_STATUS });
 }
@@ -87,6 +90,7 @@ export async function clearTypingStatus(params: {
   channelId: string;
   threadTs?: string;
   logger: Logger;
+  instanceId?: string;
 }): Promise<void> {
   return setSlackThreadStatus({ ...params, status: CLEAR_STATUS });
 }

@@ -65,7 +65,7 @@ help:
 	@echo "Individual Services:"
 	@echo "  make restart-api     Restart API only"
 	@echo "  make restart-nats    Restart NATS only"
-	@echo "  make restart-pgserve Restart PostgreSQL only"
+	@echo "  make restart-pgserve Restart pgserve (embedded in API)"
 	@echo "  make logs-api        View API logs"
 	@echo ""
 	@echo "CLI:"
@@ -334,7 +334,8 @@ restart-nats:
 	pm2 restart omni-nats
 
 restart-pgserve:
-	pm2 restart omni-pgserve
+	@echo "pgserve is embedded in the API server — restarting API..."
+	$(MAKE) restart-api
 
 logs-api:
 	pm2 logs omni-api --lines 100

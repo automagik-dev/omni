@@ -161,9 +161,14 @@ function commitContextUpdate<E extends HookEvent>(
   const changedFields = Object.keys(parsed.data as object).filter(
     (key) => (contextBefore as Record<string, unknown>)[key] !== (parsed.data as Record<string, unknown>)[key],
   );
-  if (changedFields.length > 0) {
-    log.info('Hook mutated context', { hookId: hook.id, hookName: hook.name, event, instanceId, changedFields });
-  }
+  log.info('Hook executed', {
+    hookId: hook.id,
+    hookName: hook.name,
+    event,
+    instanceId,
+    mutated: changedFields.length > 0,
+    changedFields: changedFields.length > 0 ? changedFields : undefined,
+  });
 
   return { committed: parsed.data as HookContextMap[E], result: baseResult };
 }
@@ -309,7 +314,7 @@ export async function executeHooks<E extends HookEvent>(
   );
 
   const totalDurationMs = performance.now() - pipelineStart;
-  log.debug('Hook pipeline complete', {
+  log.info('Hook pipeline complete', {
     event,
     instanceId,
     hookCount: hooks.length,
