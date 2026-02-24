@@ -9,8 +9,9 @@
 
 import type { Logger } from '@omni/channel-sdk';
 import type { App } from '@slack/bolt';
+import { resolveChannelConfig } from '../config/channel-config';
 import { type DmPolicyConfig, shouldAcceptDm } from '../dm-policy';
-import type { SlackMessageMeta } from '../types';
+import type { SlackChannelConfig, SlackMessageMeta } from '../types';
 
 export interface MessageHandlerCallbacks {
   onMessage: (
@@ -25,6 +26,19 @@ export interface MessageHandlerCallbacks {
     meta?: SlackMessageMeta,
   ) => Promise<void>;
   onDmRejected?: (instanceId: string, channelId: string, userId: string, message: string) => Promise<void>;
+}
+
+/**
+ * Channel-level filtering configuration.
+ * Subset of SlackConfig used for per-channel message filtering.
+ */
+export interface ChannelFilterConfig {
+  /** Only process messages from these channel IDs (undefined = all channels) */
+  channelAllowlist?: string[];
+  /** Skip messages from these channel IDs (undefined = no blocklist) */
+  channelBlocklist?: string[];
+  /** Per-channel configuration overrides keyed by channel ID */
+  channels?: Record<string, SlackChannelConfig>;
 }
 
 /**
@@ -104,6 +118,86 @@ function slackTsToMs(ts: string | undefined): number | undefined {
   return ts ? Math.floor(Number.parseFloat(ts) * 1000) : undefined;
 }
 
+/** Check if a channel should be skipped per allowlist/blocklist config */
+function isChannelBlocked(channelId: string, filterConfig: ChannelFilterConfig | undefined): boolean {
+  if (filterConfig?.channelAllowlist && filterConfig.channelAllowlist.length > 0) {
+    return !filterConfig.channelAllowlist.includes(channelId);
+  }
+  return filterConfig?.channelBlocklist?.includes(channelId) ?? false;
+}
+
+/** Check if a message should be dropped per per-channel config */
+function isDroppedByChannelConfig(
+  channelConfig: ReturnType<typeof resolveChannelConfig>,
+  userId: string,
+  isDm: boolean,
+  isMentioningInstance: boolean,
+): boolean {
+  if (!isDm && channelConfig.requireMention && !isMentioningInstance) return true;
+  if (channelConfig.allowedUsers && channelConfig.allowedUsers.length > 0) {
+    return !channelConfig.allowedUsers.includes(userId);
+  }
+  return false;
+}
+
+/** Process a single inbound message event */
+async function processMessage(
+  msg: Record<string, unknown>,
+  instanceId: string,
+  getBotUserId: () => string | undefined,
+  callbacks: MessageHandlerCallbacks,
+  dmPolicyConfig: DmPolicyConfig,
+  logger: Logger,
+  filterConfig: ChannelFilterConfig | undefined,
+): Promise<void> {
+  if (shouldSkipMessage(msg, getBotUserId())) return;
+
+  const userId = msg.user as string;
+  const meta = extractMessageMeta(msg);
+  const text = (msg.text as string) ?? '';
+  const currentBotUserId = getBotUserId();
+
+  if (isChannelBlocked(meta.channelId, filterConfig)) {
+    logger.debug('Message dropped: channel filtered', { channelId: meta.channelId, instanceId });
+    return;
+  }
+
+  if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
+
+  const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
+
+  const channelConfig = resolveChannelConfig({ channels: filterConfig?.channels }, meta.channelId);
+  if (isDroppedByChannelConfig(channelConfig, userId, meta.isDm, isMentioningInstance)) {
+    logger.debug('Message dropped: per-channel filter', { channelId: meta.channelId, userId, instanceId });
+    return;
+  }
+
+  logger.debug('Message received', {
+    instanceId,
+    channelId: meta.channelId,
+    userId,
+    isDm: meta.isDm,
+    isThread: meta.isThreadReply,
+    isMention: isMentioningInstance,
+  });
+
+  const channelExtra: Record<string, unknown> = { isMentioningInstance };
+  if (channelConfig.tools) channelExtra.tools = channelConfig.tools;
+  if (channelConfig.skills) channelExtra.skills = channelConfig.skills;
+
+  await callbacks.onMessage(
+    instanceId,
+    meta.ts,
+    meta.channelId,
+    userId,
+    { type: 'text', text: text || undefined },
+    meta.isThreadReply ? meta.threadTs : undefined,
+    buildRawPayload(meta, msg, channelExtra),
+    slackTsToMs(meta.ts),
+    meta,
+  );
+}
+
 /**
  * Set up inbound message handlers on a Bolt.js app
  */
@@ -114,50 +208,24 @@ export function setupMessageHandlers(
   callbacks: MessageHandlerCallbacks,
   dmPolicyConfig: DmPolicyConfig,
   logger: Logger,
+  filterConfig?: ChannelFilterConfig,
 ): void {
-  // Support both static value and getter (for lazy resolution after app.start())
   const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
-
-  // Handle all messages (channels, groups, DMs, mpim)
-  app.message(async ({ message }) => {
-    const msg = message as unknown as Record<string, unknown>;
-    if (shouldSkipMessage(msg, resolveBotUserId())) return;
-
-    const userId = msg.user as string;
-    const meta = extractMessageMeta(msg);
-    const text = (msg.text as string) ?? '';
-    const currentBotUserId = resolveBotUserId();
-
-    if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
-
-    // Detect @mention of the bot in message text (Slack format: <@U...>)
-    const isMentioningInstance = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
-
-    logger.debug('Message received', {
-      instanceId,
-      channelId: meta.channelId,
-      userId,
-      isDm: meta.isDm,
-      isThread: meta.isThreadReply,
-      isMention: isMentioningInstance,
-    });
-
-    await callbacks.onMessage(
-      instanceId,
-      meta.ts,
-      meta.channelId,
-      userId,
-      { type: 'text', text: text || undefined },
-      meta.isThreadReply ? meta.threadTs : undefined,
-      buildRawPayload(meta, msg, { isMentioningInstance }),
-      slackTsToMs(meta.ts),
-      meta,
-    );
-  });
 
   // NOTE: app_mention is NOT handled separately — app.message() already captures
   // messages that mention the bot, and the agent-dispatcher detects mentions via
   // the mentionsBot flag. Handling both would cause duplicate message.received events.
+  app.message(async ({ message }) => {
+    await processMessage(
+      message as unknown as Record<string, unknown>,
+      instanceId,
+      resolveBotUserId,
+      callbacks,
+      dmPolicyConfig,
+      logger,
+      filterConfig,
+    );
+  });
 
   logger.info('Message handlers registered', { instanceId });
 }

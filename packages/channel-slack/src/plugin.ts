@@ -728,6 +728,11 @@ export class SlackPlugin extends BaseChannelPlugin {
         rejectionMessage: config.dmRejectionMessage,
       },
       this.logger,
+      {
+        channelAllowlist: config.channelAllowlist,
+        channelBlocklist: config.channelBlocklist,
+        channels: config.channels,
+      },
     );
 
     // Reaction handlers — pass getter so botUserId resolves after start()
