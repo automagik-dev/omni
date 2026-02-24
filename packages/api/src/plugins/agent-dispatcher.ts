@@ -1311,7 +1311,13 @@ async function resolveStreamingCapabilities(
  * If content was already sent before the error, we return true to prevent a double
  * reply from the fallback path.
  */
-const STREAM_INACTIVITY_MS = 30_000;
+/**
+ * Minimum inactivity guard: 2 minutes.
+ * This is a dead-connection safety net only — it fires when no delta arrives
+ * for this long. It should never be shorter than the longest tool-execution
+ * pause a legitimate agent might produce (e.g. Claude Code running a build).
+ */
+const STREAM_INACTIVITY_MS = 2 * 60 * 1000;
 
 async function consumeStream(
   generator: AsyncGenerator<StreamDelta>,
@@ -1319,6 +1325,7 @@ async function consumeStream(
   instanceId: string,
   chatId: string,
   traceId: string,
+  inactivityMs: number = STREAM_INACTIVITY_MS,
 ): Promise<boolean> {
   const startTime = Date.now();
   let hadError = false;
@@ -1339,11 +1346,11 @@ async function consumeStream(
         instanceId,
         chatId,
         traceId,
-        inactivityMs: STREAM_INACTIVITY_MS,
+        inactivityMs,
       });
       generator.return(undefined).catch(() => {});
       sender.abort().catch(() => {});
-    }, STREAM_INACTIVITY_MS);
+    }, inactivityMs);
   };
 
   try {
@@ -1474,13 +1481,14 @@ async function runGuardedStream(
   instanceId: string,
   chatId: string,
   traceId: string,
+  inactivityMs: number = STREAM_INACTIVITY_MS,
 ): Promise<boolean> {
   try {
     const generator = provider.triggerStream(trigger);
     // Error deltas (timeout, circuit-breaker) are not exceptions — they just
     // clean up the placeholder. Return false so the caller falls back to the
     // accumulate-then-reply path and the user still gets a response.
-    return await consumeStream(generator, sender, instanceId, chatId, traceId);
+    return await consumeStream(generator, sender, instanceId, chatId, traceId, inactivityMs);
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', { instanceId, chatId, error: String(err), traceId });
     try {
@@ -1580,7 +1588,22 @@ async function dispatchViaStreamingProvider(
   // a hung stream is automatically aborted after STREAM_TTL_MS.
   registerStreamGuard(streamKey, sender, instance.id, chatId);
 
-  return runGuardedStream(resolved.provider, trigger, sender, streamKey, instance.id, chatId, traceId);
+  // Inactivity guard = agent's total allowed window (not a short hardcoded constant).
+  // This prevents killing Claude Code (or any long-running agent) during tool
+  // execution pauses that can easily exceed 30–60 s. The provider's own timeoutMs
+  // is the hard limit; this guard only fires when the generator truly hangs.
+  const effectiveInactivityMs = Math.max((instance.agentTimeout ?? 120) * 1000, STREAM_INACTIVITY_MS);
+
+  return runGuardedStream(
+    resolved.provider,
+    trigger,
+    sender,
+    streamKey,
+    instance.id,
+    chatId,
+    traceId,
+    effectiveInactivityMs,
+  );
 }
 
 /**
