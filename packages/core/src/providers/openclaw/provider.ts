@@ -132,7 +132,16 @@ export class OpenClawAgentProvider implements IAgentProvider {
     // Append file references if present
     if (context.content.files?.length) {
       const fileRefs = context.content.files.map((f) => `\u{1F4CE} [File: ${f.path}] (${f.mimeType})`).join('\n');
-      message = message ? `${message}\n${fileRefs}` : fileRefs;
+      // When files are attached, truncate text to stay under the message limit
+      // (the agent can read the full file directly via the file path)
+      const overhead = new TextEncoder().encode(fileRefs).length + 200; // prefix + newlines buffer
+      const textBudget = MAX_MESSAGE_BYTES - overhead;
+      if (message && new TextEncoder().encode(message).length > textBudget) {
+        const truncated = message.slice(0, Math.max(500, textBudget));
+        message = `${truncated}\u2026 (full content in attached files)\n${fileRefs}`;
+      } else {
+        message = message ? `${message}\n${fileRefs}` : fileRefs;
+      }
     }
 
     if (!message) return null;

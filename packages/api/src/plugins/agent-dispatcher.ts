@@ -525,24 +525,33 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
 /**
  * Convert a relative media URL (/api/v2/media/...) to a local file path.
+ * Returns null if the resolved path escapes the media base directory (path traversal).
  */
-function resolveMediaPath(mediaUrl: string): string {
+function resolveMediaPath(mediaUrl: string): string | null {
   const relativePath = mediaUrl.replace(/^\/api\/v2\/media\//, '');
-  return join(MEDIA_BASE_PATH, relativePath);
+  const fullPath = resolve(MEDIA_BASE_PATH, relativePath);
+  const basePath = resolve(MEDIA_BASE_PATH);
+  if (!fullPath.startsWith(`${basePath}/`) && fullPath !== basePath) {
+    log.warn('Path traversal attempt blocked', { mediaUrl, resolved: fullPath, basePath });
+    return null;
+  }
+  return fullPath;
 }
 
 /**
  * Extract ProviderFile entries from buffered messages that have media attachments.
+ * Respects agentSendMediaPath instance setting — returns empty if disabled.
  */
-function extractMediaFiles(messages: BufferedMessage[]): ProviderFile[] {
+function extractMediaFiles(messages: BufferedMessage[], agentSendMediaPath: boolean): ProviderFile[] {
+  if (!agentSendMediaPath) return [];
   const files: ProviderFile[] = [];
   for (const m of messages) {
     const content = m.payload.content;
     if (content?.mediaUrl && content.mimeType) {
-      files.push({
-        path: resolveMediaPath(content.mediaUrl),
-        mimeType: content.mimeType,
-      });
+      const path = resolveMediaPath(content.mediaUrl);
+      if (path) {
+        files.push({ path, mimeType: content.mimeType });
+      }
     }
   }
   return files;
@@ -659,12 +668,6 @@ function formatProcessedMedia(
   const icon = MEDIA_ICONS[contentType] ?? '\u{1F4CE}';
   const allowedTypes = sendMediaPathTypes ?? DEFAULT_SEND_MEDIA_PATH_TYPES;
   if (includePath && fullPath && allowedTypes.includes(contentType)) {
-    // When path is available, truncate extracted text for documents
-    // (agent can read the file directly)
-    if (contentType === 'document' && processedText.length > 500) {
-      const preview = processedText.slice(0, 500);
-      return `${icon} [${fullPath}]: ${preview}\u2026 (full content in file)`;
-    }
     return `${icon} [${fullPath}]: ${processedText}`;
   }
   return `${icon}: ${processedText}`;
@@ -1019,7 +1022,7 @@ async function prepareAgentContent(
   }
 
   const processedMediaTexts: string[] = [];
-  const mediaFiles = extractMediaFiles(messages);
+  const mediaFiles = extractMediaFiles(messages, instance.agentSendMediaPath);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
