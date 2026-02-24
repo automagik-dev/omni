@@ -51,8 +51,6 @@ export const SlackConfigExtensionSchema = z
     }
   });
 
-export type SlackConfigExtension = z.infer<typeof SlackConfigExtensionSchema>;
-
 /**
  * Resolve per-channel configuration by merging instance defaults with channel overrides.
  *
