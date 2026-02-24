@@ -8,9 +8,10 @@
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
   HistorySyncMessage,
@@ -20,6 +21,7 @@ import type {
   SendResult,
   StreamSender,
 } from '@omni/channel-sdk';
+import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { SLACK_CAPABILITIES } from './capabilities';
@@ -70,6 +72,12 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
   private userNameCache = new Map<string, string | null>();
 
+  /** Per-instance inbound dedup caches (created on connect, disposed on disconnect) */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
+  /** Per-instance debounce managers (created on connect, flushed + disposed on disconnect) */
+  private debouncers = new Map<string, DebounceManager>();
+
   /**
    * Plugin-specific initialization
    */
@@ -88,6 +96,16 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.connections.clear();
     this.slackConfigs.clear();
     this.userNameCache.clear();
+
+    for (const debouncer of this.debouncers.values()) {
+      debouncer.flushAll();
+    }
+    this.debouncers.clear();
+
+    for (const cache of this.dedupeCaches.values()) {
+      cache.dispose();
+    }
+    this.dedupeCaches.clear();
   }
 
   /**
@@ -113,6 +131,12 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawOptions = (config.options ?? {}) as Record<string, unknown>;
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
+
+    // Create per-instance reliability caches
+    const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
+    const { dedupeCache, debouncer } = this.createReliabilityCaches(instanceId, debounceDelayMs);
+    this.dedupeCaches.set(instanceId, dedupeCache);
+    this.debouncers.set(instanceId, debouncer);
 
     let connection: BoltConnection | undefined;
     try {
@@ -144,7 +168,10 @@ export class SlackPlugin extends BaseChannelPlugin {
       // Phase 2: Register all event handlers BEFORE starting
       // This is critical — Bolt.js Socket Mode starts receiving events
       // immediately after start(), so handlers must be in place first.
-      this.setupHandlers(instanceId, connection, slackConfig);
+      this.setupHandlers(instanceId, connection, slackConfig, {
+        dedupeCache,
+        debounceManager: debouncer,
+      });
 
       // Phase 3: Start Socket Mode connection (now handlers are ready)
       await startBoltConnection(connection, this.logger);
@@ -201,6 +228,18 @@ export class SlackPlugin extends BaseChannelPlugin {
     // Clear cached user names for this instance
     for (const key of this.userNameCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.userNameCache.delete(key);
+    }
+
+    // Flush pending debounce windows and dispose reliability caches
+    const debouncer = this.debouncers.get(instanceId);
+    if (debouncer) {
+      debouncer.flushAll();
+      this.debouncers.delete(instanceId);
+    }
+    const dedupeCache = this.dedupeCaches.get(instanceId);
+    if (dedupeCache) {
+      dedupeCache.dispose();
+      this.dedupeCaches.delete(instanceId);
     }
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
@@ -626,9 +665,83 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Create per-instance dedup cache + debounce manager.
+   * Extracted to keep connect() below cognitive complexity threshold.
+   */
+  private createReliabilityCaches(
+    _instanceId: string,
+    debounceDelayMs: number | undefined,
+  ): { dedupeCache: DedupeCache; debouncer: DebounceManager } {
+    const dedupeCache = createInboundDedupeCache();
+    const debouncer = new DebounceManager(
+      { mode: 'fixed', delayMs: debounceDelayMs ?? 1500 },
+      (_key, messages, _from, instId) => {
+        for (const dMsg of messages) {
+          const args = dMsg.payload as {
+            externalId: string;
+            chatId: string;
+            from: string;
+            content: { type: 'text'; text?: string };
+            replyToId: string | undefined;
+            rawPayload: Record<string, unknown>;
+            platformTimestamp: number | undefined;
+          };
+          this.dispatchMessageFromDebounce(instId, args).catch((err) => {
+            this.logger.warn('Debounce dispatch error', { instanceId: instId, error: String(err) });
+          });
+        }
+      },
+    );
+    return { dedupeCache, debouncer };
+  }
+
+  /**
+   * Dispatch a single message from the debounce window to the inbound pipeline.
+   * Mirrors the onMessage callback logic without going through the Bolt handler.
+   */
+  private async dispatchMessageFromDebounce(
+    instanceId: string,
+    args: {
+      externalId: string;
+      chatId: string;
+      from: string;
+      content: { type: 'text'; text?: string };
+      replyToId: string | undefined;
+      rawPayload: Record<string, unknown>;
+      platformTimestamp: number | undefined;
+    },
+  ): Promise<void> {
+    const displayName = await this.resolveUserDisplayName(instanceId, args.from);
+    const isDm = args.rawPayload.isDm as boolean;
+    const enrichedPayload: Record<string, unknown> = {
+      ...args.rawPayload,
+      displayName,
+      pushName: displayName,
+      chatName: isDm ? displayName : undefined,
+      isGroup: !isDm,
+    };
+
+    await this.handleMessageReceived(
+      instanceId,
+      args.externalId,
+      args.chatId,
+      args.from,
+      args.content,
+      args.replyToId,
+      enrichedPayload,
+      args.platformTimestamp,
+    );
+  }
+
+  /**
    * Set up all event handlers for an instance
    */
-  private setupHandlers(instanceId: string, connection: BoltConnection, config: SlackConfig): void {
+  private setupHandlers(
+    instanceId: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+    reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
+  ): void {
     // Message handlers — pass getter so botUserId resolves after start()
     setupMessageHandlers(
       connection.app,
@@ -707,6 +820,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         rejectionMessage: config.dmRejectionMessage,
       },
       this.logger,
+      reliability,
     );
 
     // Reaction handlers — pass getter so botUserId resolves after start()
