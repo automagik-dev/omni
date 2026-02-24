@@ -21,7 +21,7 @@ interface RateLimitEntry {
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
 // Cleanup old entries periodically
-const cleanupTimer = setInterval(() => {
+setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitStore.entries()) {
     if (entry.resetAt < now) {
@@ -29,12 +29,14 @@ const cleanupTimer = setInterval(() => {
     }
   }
 }, 60 * 1000); // Every minute
-cleanupTimer.unref();
 
 /**
  * Default rate limits by endpoint category
  */
 const RATE_LIMITS = {
+  messages: { windowMs: 60 * 1000, maxRequests: 60 }, // 60 per minute
+  events: { windowMs: 60 * 1000, maxRequests: 100 }, // 100 per minute
+  instances: { windowMs: 60 * 1000, maxRequests: 30 }, // 30 per minute
   general: { windowMs: 60 * 1000, maxRequests: 1000 }, // 1000 per minute
 } as const;
 
@@ -43,15 +45,9 @@ const RATE_LIMITS = {
  */
 function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-    // Use API key ID as identifier, then only trusted infra-provided address data.
-    // Do not trust client-supplied IP headers unless explicitly configured.
+    // Use API key ID as identifier, fall back to IP
     const apiKey = c.get('apiKey');
-    const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
-    const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
-    const remoteAddr = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
-    const rawIp = trustedProxyIp ?? remoteAddr;
-    const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
-    const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
+    const identifier = apiKey?.id ?? c.req.header('x-forwarded-for') ?? 'anonymous';
 
     const key = `ratelimit:${identifier}`;
     const now = Date.now();

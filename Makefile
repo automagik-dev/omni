@@ -3,14 +3,13 @@
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
         test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
-        db-push db-migrate db-studio db-fix-journal db-reset \
+        db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
-        restart-api restart-nats logs-api \
+        restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
         cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
-        _init-db-wait _sync-db \
-        deploy
+        _init-db-wait _sync-db
 
 # Default target
 help:
@@ -24,7 +23,7 @@ help:
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
 	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
-	@echo "  make dev-services  Start infrastructure (NATS) via PM2"
+	@echo "  make dev-services  Start infrastructure (pgserve + NATS) via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
@@ -60,13 +59,13 @@ help:
 	@echo "  make start         Start production (PM2)"
 	@echo "  make stop          Stop all services"
 	@echo "  make restart       Restart all services"
-	@echo "  make deploy        Pull + quality gate + restart (manual deploy)"
 	@echo "  make logs          View logs"
 	@echo "  make status        Check service status"
 	@echo ""
 	@echo "Individual Services:"
 	@echo "  make restart-api     Restart API only"
 	@echo "  make restart-nats    Restart NATS only"
+	@echo "  make restart-pgserve Restart PostgreSQL only"
 	@echo "  make logs-api        View API logs"
 	@echo ""
 	@echo "CLI:"
@@ -159,14 +158,14 @@ dev: dev-services _init-db-wait _build-dist
 dev-api:
 	@set -a && . ./.env && set +a && OMNI_PACKAGES_DIR=/home/cezar/dev/omni-v2/packages bun --watch packages/api/src/index.ts
 
-# Start infrastructure services via PM2 (NATS only — pgserve is embedded in the API)
+# Start infrastructure services via PM2 (pgserve + NATS only)
 # API is NOT started here — turbo dev handles it (avoids port conflicts, see GH #14)
 dev-services: ensure-nats
 	@if [ ! -f .env ]; then \
 		echo "Creating .env from .env.example..."; \
 		cp .env.example .env; \
 	fi
-	@echo "Starting infrastructure services (NATS)..."
+	@echo "Starting infrastructure services (pgserve + NATS)..."
 	@set -a && . ./.env && set +a && API_MANAGED=false pm2 start ecosystem.config.cjs || true
 	@sleep 2
 	@$(MAKE) status
@@ -214,7 +213,7 @@ format:
 	bunx biome format --write .
 
 test: _build-dist _sync-db
-	bun test --env-file=.env --timeout 10000
+	bun test --env-file=.env
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
@@ -263,9 +262,6 @@ db-migrate:
 db-studio:
 	@set -a && . ./.env && set +a && bun run --filter @omni/db db:studio
 
-db-fix-journal: ## Fix Drizzle migration journal after migration consolidation (safe, no data loss)
-	@set -a && . ./.env && set +a && bun scripts/fix-drizzle-journal.ts
-
 db-reset:
 	@echo "WARNING: This will delete all data!"
 	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
@@ -307,18 +303,8 @@ ensure-nats:
 # Production (PM2)
 # ============================================================================
 
-# Manual deploy: pull + quality gate + restart
-deploy:
-	@echo "Pulling latest from $$(git branch --show-current)..."
-	git pull --ff-only
-	bun install
-	@echo "Running quality gate (typecheck + lint + dead-code, skipping tests)..."
-	$(MAKE) typecheck lint dead-code
-	@echo "Quality gate passed. Restarting services..."
-	@bash scripts/pm2-start.sh
-
 start: ensure-nats
-	@bash scripts/pm2-start.sh
+	@set -a && . ./.env && set +a && pm2 start ecosystem.config.cjs
 
 stop:
 	-pm2 stop all 2>/dev/null || true
@@ -326,7 +312,7 @@ stop:
 	@$(MAKE) kill-ghosts
 
 restart:
-	@bash scripts/pm2-start.sh
+	pm2 restart all
 
 logs:
 	pm2 logs
@@ -337,25 +323,31 @@ status:
 	@echo "Service URLs:"
 	@echo "  API:        http://localhost:$${API_PORT:-8882}"
 	@echo "  Swagger:    http://localhost:$${API_PORT:-8882}/api/v2/docs"
-	@echo "  PostgreSQL: embedded in API (port $${PGSERVE_PORT:-8432})"
+	@echo "  PostgreSQL: localhost:$${PGSERVE_PORT:-8432}"
 	@echo "  NATS:       localhost:$${NATS_PORT:-4222}"
 
 # Individual service control
 restart-api:
-	pm2 restart omni-v2-api
+	pm2 restart omni-api
 
 restart-nats:
-	pm2 restart omni-v2-nats
+	pm2 restart omni-nats
+
+restart-pgserve:
+	pm2 restart omni-pgserve
 
 logs-api:
-	pm2 logs omni-v2-api --lines 100
+	pm2 logs omni-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
 	@echo "Cleaning up ghost processes..."
+	-pkill -f "bun run" 2>/dev/null || true
+	-pkill -f "bunx pgserve" 2>/dev/null || true
 	-pkill -f "nats-server" 2>/dev/null || true
 	-lsof -ti :3000 | xargs kill -9 2>/dev/null || true
 	-lsof -ti :4222 | xargs kill -9 2>/dev/null || true
+	-lsof -ti :8432 | xargs kill -9 2>/dev/null || true
 	@echo "Ghost cleanup complete"
 
 # ============================================================================
@@ -374,7 +366,7 @@ cli-build:
 	bun run --cwd packages/cli build
 
 cli-build-full: ## Build CLI client + server bundles
-	cd packages/cli && bun run build && bun run build:server && bun run build:migrations
+	cd packages/cli && bun run build && bun run build:server
 
 cli-link: cli-build
 	cd packages/cli && bun link
