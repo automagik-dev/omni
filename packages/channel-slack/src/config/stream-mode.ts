@@ -16,7 +16,7 @@ const DEFAULT_STREAM_THROTTLE_MS = 1000;
  * Validate a stream mode value
  */
 function isValidStreamMode(mode: string): mode is StreamMode {
-  return mode === 'replace' || mode === 'status_final' || mode === 'off';
+  return mode === 'replace' || mode === 'status_final' || mode === 'off' || mode === 'native';
 }
 
 /**
