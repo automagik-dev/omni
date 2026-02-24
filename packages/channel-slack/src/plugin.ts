@@ -8,7 +8,7 @@
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache, createThreadStarterCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
@@ -20,6 +20,7 @@ import type {
   PluginContext,
   SendResult,
   StreamSender,
+  ThreadStarterCache,
 } from '@omni/channel-sdk';
 import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
@@ -78,6 +79,9 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Per-instance debounce managers (created on connect, flushed + disposed on disconnect) */
   private debouncers = new Map<string, DebounceManager>();
 
+  /** Per-instance thread-starter caches for conversations.replies coalescing */
+  private threadCaches = new Map<string, ThreadStarterCache<HistorySyncMessage[]>>();
+
   /**
    * Plugin-specific initialization
    */
@@ -106,6 +110,11 @@ export class SlackPlugin extends BaseChannelPlugin {
       cache.dispose();
     }
     this.dedupeCaches.clear();
+
+    for (const cache of this.threadCaches.values()) {
+      cache.dispose();
+    }
+    this.threadCaches.clear();
   }
 
   /**
@@ -137,6 +146,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     const { dedupeCache, debouncer } = this.createReliabilityCaches(instanceId, debounceDelayMs);
     this.dedupeCaches.set(instanceId, dedupeCache);
     this.debouncers.set(instanceId, debouncer);
+
+    // Create per-instance thread-starter cache for conversations.replies coalescing
+    const threadCache = createThreadStarterCache<HistorySyncMessage[]>();
+    this.threadCaches.set(instanceId, threadCache);
 
     let connection: BoltConnection | undefined;
     try {
@@ -240,6 +253,12 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (dedupeCache) {
       dedupeCache.dispose();
       this.dedupeCaches.delete(instanceId);
+    }
+
+    const threadCache = this.threadCaches.get(instanceId);
+    if (threadCache) {
+      threadCache.dispose();
+      this.threadCaches.delete(instanceId);
     }
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
@@ -512,14 +531,14 @@ export class SlackPlugin extends BaseChannelPlugin {
       return { totalFetched: 0, messages: [] };
     }
 
-    const messages = await this.paginateThreadHistory(
-      connection,
-      channelId,
-      threadTs,
-      botUserId,
-      botToken,
-      options.limit ?? 200,
-    );
+    const cacheKey = `${channelId}:${threadTs}`;
+    const threadCache = this.threadCaches.get(instanceId);
+    const messages = threadCache
+      ? await threadCache.getOrFetch(cacheKey, () =>
+          this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, options.limit ?? 200),
+        )
+      : await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, options.limit ?? 200);
+
     return { totalFetched: messages.length, messages };
   }
 
