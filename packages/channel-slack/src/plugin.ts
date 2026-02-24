@@ -67,8 +67,8 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Plugin-specific config per instance */
   private slackConfigs = new Map<string, SlackConfig>();
 
-  /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName> */
-  private userNameCache = new Map<string, string>();
+  /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
+  private userNameCache = new Map<string, string | null>();
 
   /**
    * Plugin-specific initialization
@@ -398,12 +398,14 @@ export class SlackPlugin extends BaseChannelPlugin {
 
   /**
    * Resolve user display name with caching.
-   * Falls back to undefined if the Slack API call fails.
+   * Caches both successful and failed lookups to avoid repeated API calls
+   * (prevents rate-limit storms when users.info consistently fails for a user).
    */
   private async resolveUserDisplayName(instanceId: string, userId: string): Promise<string | undefined> {
     const cacheKey = `${instanceId}:${userId}`;
-    const cached = this.userNameCache.get(cacheKey);
-    if (cached) return cached;
+    if (this.userNameCache.has(cacheKey)) {
+      return this.userNameCache.get(cacheKey) ?? undefined;
+    }
 
     try {
       const profile = await this.fetchUserProfile(instanceId, userId);
@@ -414,6 +416,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     } catch {
       // fetchUserProfile already logs the warning
     }
+    // Cache the failure (null sentinel) so we don't retry on every message
+    this.userNameCache.set(cacheKey, null);
     return undefined;
   }
 
