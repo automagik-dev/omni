@@ -150,6 +150,16 @@ export class SlackPlugin extends BaseChannelPlugin {
       const resolved = resolveSlackTokens(slackConfig, rawOptions, rawCredentials);
       this.slackConfigs.set(instanceId, slackConfig);
 
+      // Runtime guard: warn early if both allowlist and blocklist are set.
+      // The allowlist takes precedence in isChannelBlocked(), so the blocklist
+      // would be silently ignored — warn here so misconfiguration is visible.
+      if (slackConfig.channelAllowlist?.length && slackConfig.channelBlocklist?.length) {
+        this.logger.warn(
+          'Both channelAllowlist and channelBlocklist are configured — channelAllowlist takes precedence and channelBlocklist will be ignored',
+          { instanceId },
+        );
+      }
+
       // Phase 1: Create the Bolt.js app (NOT started yet)
       connection = createBoltApp(
         {
@@ -158,6 +168,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           signingSecret: resolved.signingSecret,
           retryConfig: slackConfig.retryConfig,
           mode: resolved.mode,
+          httpPort: slackConfig.httpPort,
         },
         this.logger,
       );

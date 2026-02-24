@@ -60,6 +60,14 @@ export interface SlackConfig {
   defaultIconEmoji?: string;
   /** Rate limit retry config */
   retryConfig?: RetryConfig;
+  /**
+   * Port for the built-in HTTP receiver (HTTP mode only).
+   * When mode is 'http', Bolt.js starts an HTTP server on this port to receive
+   * Slack event payloads. Configure your Slack app's Event Request URL to point
+   * at this port (e.g. https://your-host:<httpPort>/slack/events).
+   * Defaults to 3001.
+   */
+  httpPort?: number;
 }
 
 /**
@@ -106,6 +114,8 @@ export interface SlackConnectionOptions {
   retryConfig?: RetryConfig;
   /** Connection mode (default: 'socket') */
   mode?: SlackConnectionMode;
+  /** Port for the built-in HTTP receiver (HTTP mode only, default: 3001) */
+  httpPort?: number;
 }
 
 /**

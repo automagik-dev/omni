@@ -34,7 +34,13 @@ export interface BoltConnection {
   /** Connection mode: 'socket' (default) or 'http' */
   mode?: 'socket' | 'http';
   /**
-   * HTTP request handler for HTTP mode.
+   * Port for HTTP receiver mode. When mode is 'http', startBoltConnection()
+   * calls app.start(httpPort) to start Bolt's built-in HTTP server.
+   * Defaults to 3001 if not provided.
+   */
+  httpPort?: number;
+  /**
+   * HTTP request handler for HTTP mode (kept for external-server integration).
    * Wraps Bolt's requestListener with a 1 MB body-limit guard.
    * Undefined for socket mode.
    */
@@ -48,8 +54,9 @@ export interface BoltConnection {
  * This is required because Bolt.js Socket Mode starts receiving events immediately
  * after start(), and any events arriving before handlers are registered will be dropped.
  *
- * For HTTP mode, creates an HTTPReceiver. The returned BoltConnection.httpHandler
- * can be registered with an external HTTP server.
+ * For HTTP mode, creates an HTTPReceiver. After calling startBoltConnection(),
+ * Bolt's built-in HTTP server starts on connection.httpPort (default 3001).
+ * The returned BoltConnection.httpHandler is also available for external-server integration.
  */
 export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
   const mode = options.mode ?? 'socket';
@@ -144,6 +151,7 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
     client: app.client,
     botToken: options.botToken,
     mode: 'http',
+    httpPort: options.httpPort,
     httpHandler,
   };
 }
@@ -151,6 +159,12 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
 /**
  * Wraps a request listener with a body-size guard.
  * Rejects requests exceeding maxBytes with HTTP 413.
+ *
+ * Guard pattern: the guard's onData handler is registered BEFORE invoking the
+ * listener, so it fires first on every chunk. When the limit is tripped:
+ *   1. Guard writes 413 (checking !res.headersSent so only one path wins)
+ *   2. Guard calls req.destroy() to stop further data and signal the listener
+ *   3. Listener errors caused by the destroyed stream are suppressed
  */
 function buildBodyLimitHandler(
   listener: (req: IncomingMessage, res: ServerResponse) => void,
@@ -158,40 +172,72 @@ function buildBodyLimitHandler(
   logger: Logger,
 ): (req: IncomingMessage, res: ServerResponse) => void {
   return (req: IncomingMessage, res: ServerResponse): void => {
-    // Fast path: reject based on Content-Length header if present
-    const contentLength = req.headers['content-length'];
-    if (contentLength && Number.parseInt(contentLength, 10) > maxBytes) {
-      logger.warn('HTTP request rejected: Content-Length exceeds limit', {
-        contentLength,
-        maxBytes,
-      });
-      res.writeHead(413, { 'Content-Type': 'text/plain' });
-      res.end('Payload Too Large');
-      return;
-    }
+    let tripped = false;
+    let disposed = false;
+    let totalBytes = 0;
 
-    // Streaming path: count bytes as they arrive
-    let bytesRead = 0;
-    let limitExceeded = false;
+    const cleanupGuard = (): void => {
+      if (disposed) return;
+      disposed = true;
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onError);
+    };
 
-    const onData = (chunk: Buffer): void => {
-      bytesRead += chunk.length;
-      if (!limitExceeded && bytesRead > maxBytes) {
-        limitExceeded = true;
-        logger.warn('HTTP request rejected: body exceeded limit', { bytesRead, maxBytes });
+    const trip = (bytesRead: number): void => {
+      if (tripped) return;
+      tripped = true;
+      cleanupGuard();
+      logger.warn('HTTP request rejected: body limit exceeded', { bytesRead, maxBytes });
+      if (!res.headersSent) {
         res.writeHead(413, { 'Content-Type': 'text/plain' });
         res.end('Payload Too Large');
+      }
+      if (!req.destroyed) {
+        // Destroy without an Error arg to avoid triggering an unhandled 'error'
+        // event on the stream (Bolt may not have an error listener registered yet).
         req.destroy();
       }
     };
 
-    req.on('data', onData);
-    req.once('end', () => req.removeListener('data', onData));
-    req.once('error', () => req.removeListener('data', onData));
+    const onData = (chunk: Buffer | string): void => {
+      if (disposed) return;
+      totalBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk as string);
+      if (totalBytes > maxBytes) {
+        trip(totalBytes);
+      }
+    };
 
-    if (!limitExceeded) {
-      listener(req, res);
+    const onEnd = cleanupGuard;
+    const onError = cleanupGuard;
+
+    // Check Content-Length synchronously — fast path before any I/O
+    const contentLength = req.headers['content-length'];
+    if (contentLength) {
+      const declared = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        logger.warn('HTTP request rejected: Content-Length exceeds limit', { contentLength, maxBytes });
+        trip(declared);
+        return; // guard tripped synchronously; do not invoke listener
+      }
     }
+
+    // Register guard listeners BEFORE invoking the listener so our onData
+    // fires first on every chunk (Node.js emits listeners in registration order).
+    req.on('data', onData);
+    req.once('end', onEnd);
+    req.once('error', onError);
+
+    // Invoke Bolt's listener concurrently with our guard.
+    // If the guard trips (destroys req), Bolt will receive a stream error —
+    // that error is expected and suppressed here since the guard already
+    // wrote the 413 response.
+    void Promise.resolve(listener(req, res)).catch((err: unknown) => {
+      if (!tripped) {
+        logger.error('HTTP listener error', { error: String(err) });
+      }
+      // If tripped, the error is a consequence of req.destroy() — suppress it.
+    });
   };
 }
 
@@ -199,8 +245,9 @@ function buildBodyLimitHandler(
  * Start a previously created Bolt.js app.
  *
  * - Socket Mode: connects via WebSocket. Call AFTER all handlers are registered.
- * - HTTP mode: resolves bot identity only. The httpHandler is already available
- *   on the BoltConnection and should be registered with an external HTTP server.
+ * - HTTP mode: starts Bolt's built-in HTTP server on connection.httpPort (default 3001).
+ *   Slack must be configured to send events to that port. The httpHandler field is also
+ *   available for external-server integration if preferred.
  */
 export async function startBoltConnection(connection: BoltConnection, logger: Logger): Promise<BoltConnection> {
   // Resolve bot identity first to avoid race conditions in Socket Mode where
@@ -224,8 +271,20 @@ export async function startBoltConnection(connection: BoltConnection, logger: Lo
   }
 
   if (connection.mode === 'http') {
-    // HTTP mode: no WebSocket to start. Events arrive via httpHandler.
-    logger.info('Bolt.js HTTP receiver ready (register httpHandler with your HTTP server)');
+    // HTTP mode: start Bolt's built-in HTTP server so inbound Slack events are received.
+    // Bolt's HTTPReceiver listens on the given port and routes requests to registered handlers.
+    const port = connection.httpPort ?? 3001;
+    try {
+      await connection.app.start(port);
+      logger.info('Bolt.js HTTP receiver started', { port });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to start Bolt.js HTTP receiver', { error: message, port });
+      throw new SlackError(
+        SlackErrorCode.CONNECTION_FAILED,
+        `Failed to start Slack HTTP listener on port ${port}: ${message}`,
+      );
+    }
     return connection;
   }
 
