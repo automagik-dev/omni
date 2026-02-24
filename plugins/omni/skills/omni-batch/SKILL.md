@@ -1,68 +1,42 @@
 ---
 name: omni-batch
 description: |
-  Run batch media processing jobs in Omni — transcribe audio, extract text from images/videos/documents, monitor job status, estimate costs, and cancel running jobs.
+  Run and monitor Omni batch jobs for media/content processing, with cost estimation and cancellation controls.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Batch
 
-Batch media processing operations using `omni batch`.
-
-## Create Batch Job
-
-### Transcription
+## Estimate first
 
 ```bash
-omni batch create --instance <id> --type transcribe \
-  --chat <chat-id> --days 30 --limit 100
+omni batch estimate --instance <id> --type time_based_batch --days 7 --content-types audio,image --json
+omni batch estimate --instance <id> --type targeted_chat_sync --chat <chatId> --limit 200 --json
 ```
 
-### Text Extraction
+## Create jobs
 
 ```bash
-omni batch create --instance <id> --type extract-text \
-  --content-types audio,image,video --days 7
+# Time-window job
+omni batch create --instance <id> --type time_based_batch --days 30 --content-types audio,video --limit 500 --json
 
-omni batch create --instance <id> --type extract-text \
-  --content-types document --chat <chat-id>
+# Chat-targeted job
+omni batch create --instance <id> --type targeted_chat_sync --chat <chatId> --limit 200 --json
+
+# Media redownload
+omni batch create --instance <id> --type media_redownload --days 14 --content-types image,document --force --json
 ```
 
-Content types: `audio`, `image`, `video`, `document`
-
-## Cost Estimation
+## Monitor and control
 
 ```bash
-omni batch estimate --instance <id> --type transcribe --days 7
+omni batch list --instance <id> --status running,failed --limit 50 --json
+omni batch status <jobId> --json
+omni batch status <jobId> --watch --interval 2000 --json
+omni batch cancel <jobId> --json
 ```
 
-Returns estimated item count, cost, and processing time.
+## Notes
 
-## Monitor Jobs
-
-```bash
-# Get job status
-omni batch status <job-id>
-
-# Auto-refresh status
-omni batch status <job-id> --watch --interval 2000
-
-# List all jobs
-omni batch list
-
-# Cancel running job
-omni batch cancel <job-id>
-```
-
-## JSON Output
-
-```bash
-omni batch list --json | jq '.[] | {id, type, status, progress}'
-omni batch status <job-id> --json
-```
-
-## Tips
-
-- Always run `estimate` before creating large batch jobs.
-- Use `--watch` to monitor long-running transcription jobs.
-- Combine `--chat` with `--days` to scope jobs to specific conversations.
+- Valid job types: `targeted_chat_sync`, `time_based_batch`, `media_redownload`.
+- Use `--no-confirm` in non-interactive scripts.

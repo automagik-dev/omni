@@ -1,86 +1,60 @@
 ---
 name: omni-messages
 description: |
-  Search, retrieve, edit, delete, star, and manage message reactions across all Omni channel instances via the omni CLI.
+  Search and manage messages with Omni CLI: get details, read receipts, edit/delete, star/unstar, and reaction removal.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Messages
 
-Search and manage messages across all Omni channel instances using `omni messages`.
+Use `omni messages` for direct message operations and `omni chats messages` for chat history browsing.
 
-## Search Messages
-
-```bash
-omni messages search "keyword" --since 7d
-omni messages search "urgent" --since 7d --json | jq '.[] | {id, content, from: .sender.displayName}'
-```
-
-### Search Filters
-
-| Filter | Description | Example |
-|--------|-------------|---------|
-| `--content` | Full-text content search | `--content "invoice"` |
-| `--type` | Message type filter | `--type text`, `--type audio` |
-| `--chat` | Filter by chat ID | `--chat <chat-id>` |
-| `--since` | Time range start | `--since 7d`, `--since 24h` |
-| `--limit` | Max results | `--limit 50` |
+## Search and inspect
 
 ```bash
-omni messages search "" --type audio --since 30d --limit 100 --json
-omni messages search "report" --chat <chat-id> --since 1w
+# Search across chats
+omni messages search "invoice" --since 7d --limit 50 --json
+omni messages search "" --type audio --since 30d --json
+omni messages search "urgent" --chat <chatId> --since 24h --json
+
+# Full message details (includes transcription/description fields)
+omni messages get <messageId> --json
 ```
 
-## Get Message
+## Read receipts
 
 ```bash
-omni messages get <message-id>
-omni messages get <message-id> --json
+# Single
+omni messages read <messageId> --instance <id> --json
+
+# Batch in a chat
+omni messages read --batch --chat <chatId> --ids id1,id2,id3 --instance <id> --json
 ```
 
-## Edit Message
+## Mutations
 
 ```bash
-omni messages edit <message-id> --text "Updated text" --instance <id>
+# Edit / delete
+omni messages edit <messageId> --chat <chatJid> --text "Updated" --instance <id> --json
+omni messages delete <messageId> --chat <chatJid> --instance <id> --json
+
+# Star / unstar
+omni messages star <messageId> --chat <chatJid> --instance <id> --json
+omni messages unstar <messageId> --chat <chatJid> --instance <id> --json
+
+# Remove a reaction
+omni messages remove-reaction <messageId> --emoji "👍" --instance <id> --json
 ```
 
-## Delete Message
+## Chat history (`omni chats messages`)
 
 ```bash
-omni messages delete <message-id> --instance <id>
+omni chats messages <chatId> --limit 100 --json
+omni chats messages <chatId> --since 7d --audio-only --json
+omni chats messages <chatId> --media-only --search "receipt" --compact --json
 ```
 
-## Star / Unstar
+## Notes
 
-```bash
-omni messages star <message-id> --instance <id>
-omni messages unstar <message-id> --instance <id>
-```
-
-## Mark as Read
-
-```bash
-omni messages mark-read <message-id> --instance <id>
-omni messages read --batch --instance <id> --ids id1,id2,id3
-```
-
-## Reactions
-
-```bash
-omni send --to <recipient> --reaction "👍" --message <msg-id> --instance <id>
-```
-
-## JSON Field Mappings
-
-When using `--json`, key fields are:
-
-- `senderDisplayName` — sender name
-- `messageType` — text, audio, image, video, sticker, reaction
-- `textContent` — text body (null for non-text)
-- `transcription` — audio transcription (if processed)
-- `mediaUrl` — media file URL
-- `platformTimestamp` — message timestamp
-
-```bash
-omni chats messages <chat-id> --json | jq '.[] | {sender: .senderDisplayName, type: .messageType, text: .textContent}'
-```
+- `--type` in search currently supports: `text,image,audio,document`.
+- For edits/deletes/stars, WhatsApp flows commonly require `--chat <chatJid>`.

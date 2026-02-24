@@ -1,89 +1,60 @@
 ---
 name: omni-automations
 description: |
-  Create and manage event-driven automations in Omni — define triggers, actions, conditions, enable/disable, test with dry-run, and view execution logs.
+  Create and operate Omni automations: CRUD, enable/disable, test/execute with event payloads, and inspect execution logs.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Automations
 
-Create and manage event-driven workflows using `omni automations`.
-
-## Create Automation
+## Create
 
 ```bash
+# call_agent action
 omni automations create \
   --name "Support Bot" \
   --trigger message.received \
   --action call_agent \
   --agent-id support-agent \
-  --response-as agentResponse
-```
-
-### With Conditions
-
-```bash
-omni automations create \
-  --name "Urgent Filter" \
-  --trigger message.received \
-  --action call_agent \
-  --agent-id urgent-handler \
+  --provider-id provider-1 \
+  --response-as agentResponse \
   --condition '[{"field":"messageType","operator":"equals","value":"text"}]' \
-  --condition-logic "and"
-```
+  --condition-logic and \
+  --priority 100 \
+  --json
 
-### Forward Action
-
-```bash
+# generic action config
 omni automations create \
-  --name "Forward to Team" \
+  --name "Forward" \
   --trigger message.received \
-  --action forward \
-  --action-config '{"targetChat":"team-chat-id"}'
+  --action webhook \
+  --action-config '{"url":"https://example.com/hook"}' \
+  --json
 ```
 
-## List Automations
+## Read and update
 
 ```bash
-omni automations list
 omni automations list --json
+omni automations list --enabled --json
+omni automations get <id> --json
+omni automations update <id> --name "New Name" --description "Updated" --priority 200 --json
 ```
 
-## Get Automation Details
+## State and execution
 
 ```bash
-omni automations get <id>
+omni automations enable <id> --json
+omni automations disable <id> --json
+
+omni automations test <id> --event '{"type":"message.received","payload":{}}' --json
+omni automations execute <id> --event '{"type":"message.received","payload":{"text":"hi"}}' --json
+
+omni automations logs <id> --limit 50 --json
+omni automations delete <id> --json
 ```
 
-## Update Automation
+## Notes
 
-```bash
-omni automations update <id> --name "New Name"
-```
-
-## Enable / Disable
-
-```bash
-omni automations enable <id>
-omni automations disable <id>
-```
-
-## Test (Dry Run)
-
-```bash
-omni automations test <id>
-omni automations test <id> --dry-run
-```
-
-## Execute Manually
-
-```bash
-omni automations execute <id>
-```
-
-## View Logs
-
-```bash
-omni automations logs <id>
-omni automations logs <id> --json
-```
+- `test` and `execute` accept `--event <json>` (there is no `--dry-run` flag).
+- Action types include: `webhook`, `send_message`, `emit_event`, `log`, `call_agent`.

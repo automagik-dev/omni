@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
         test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
-        db-push db-migrate db-studio db-reset \
+        db-push db-migrate db-studio db-fix-journal db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats logs-api \
         kill-ghosts reset sdk-generate \
@@ -243,7 +243,7 @@ test-file:
 	bun test $(F)
 
 dead-code:
-	bunx knip@5.85.0
+	bunx knip
 
 # Run all quality checks
 check: typecheck lint dead-code test
@@ -262,6 +262,9 @@ db-migrate:
 
 db-studio:
 	@set -a && . ./.env && set +a && bun run --filter @omni/db db:studio
+
+db-fix-journal: ## Fix Drizzle migration journal after migration consolidation (safe, no data loss)
+	@set -a && . ./.env && set +a && bun scripts/fix-drizzle-journal.ts
 
 db-reset:
 	@echo "WARNING: This will delete all data!"
@@ -371,7 +374,7 @@ cli-build:
 	bun run --cwd packages/cli build
 
 cli-build-full: ## Build CLI client + server bundles
-	cd packages/cli && bun run build && bun run build:server
+	cd packages/cli && bun run build && bun run build:server && bun run build:migrations
 
 cli-link: cli-build
 	cd packages/cli && bun link

@@ -1,5 +1,5 @@
 {
-  "id": "fbb3c9b5-1764-4c32-aa86-0c0d80194da9",
+  "id": "c52af14d-930a-45ae-88d5-639fb0c43da3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -23,7 +23,7 @@
         },
         "rule_type": {
           "name": "rule_type",
-          "type": "varchar(10)",
+          "type": "varchar(20)",
           "primaryKey": false,
           "notNull": true
         },
@@ -81,6 +81,12 @@
         "block_message": {
           "name": "block_message",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -168,6 +174,33 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_access_rules_pairing": {
+          "name": "idx_access_rules_pairing",
+          "columns": [
+            {
+              "expression": "instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "rule_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -488,6 +521,12 @@
         "agent_send_media_path": {
           "name": "agent_send_media_path",
           "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_send_media_path_types": {
+          "name": "agent_send_media_path_types",
+          "type": "text[]",
           "primaryKey": false,
           "notNull": false
         },
@@ -2867,6 +2906,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "guild_config_overrides": {
+          "name": "guild_config_overrides",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discord_presence": {
+          "name": "discord_presence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "slack_bot_token": {
           "name": "slack_bot_token",
           "type": "text",
@@ -2896,6 +2947,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "telegram_reaction_level": {
+          "name": "telegram_reaction_level",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'off'"
         },
         "agent_provider_id": {
           "name": "agent_provider_id",
@@ -3181,6 +3239,32 @@
           "primaryKey": false,
           "notNull": false
         },
+        "reaction_ack": {
+          "name": "reaction_ack",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'off'"
+        },
+        "reaction_ack_emoji": {
+          "name": "reaction_ack_emoji",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ack_timeout_ms": {
+          "name": "ack_timeout_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 30000
+        },
+        "session_reset": {
+          "name": "session_reset",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "process_audio": {
           "name": "process_audio",
           "type": "boolean",
@@ -3222,6 +3306,26 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
+        },
+        "agent_send_media_path_types": {
+          "name": "agent_send_media_path_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "read_receipts": {
+          "name": "read_receipts",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'on'"
+        },
+        "group_history_size": {
+          "name": "group_history_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 50
         },
         "last_message_at": {
           "name": "last_message_at",
@@ -3911,6 +4015,33 @@
           "columns": [
             {
               "expression": "reply_to_message_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "messages_reply_to_external_idx": {
+          "name": "messages_reply_to_external_idx",
+          "columns": [
+            {
+              "expression": "chat_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "reply_to_external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "is_from_me",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

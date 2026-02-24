@@ -3,7 +3,7 @@
  *
  * Services managed:
  *   1. nats      — NATS server with JetStream
- *   2. api       — Omni API (Bun + Hono) with embedded pgserve (PGlite)
+ *   2. api       — Omni API (Bun + Hono) with embedded pgserve (PostgreSQL 17)
  *
  * pgserve runs in-process inside the API server (PGSERVE_EMBEDDED=true).
  * No separate PM2 process needed for PostgreSQL.
@@ -36,7 +36,7 @@ const SHARED = {
   max_restarts: 0, // 0 = unlimited restarts (never give up)
   exp_backoff_restart_delay: 100, // exponential backoff starting at 100ms, caps at 15s
   kill_timeout: 8000, // 8s graceful shutdown before SIGKILL
-  listen_timeout: 15000, // 15s to consider app "online"
+  listen_timeout: 60000, // 60s — DB readiness probe + migrations can take 30s+
   merge_logs: true,
   // Log rotation (requires pm2-logrotate module — see setup notes below)
   log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS',

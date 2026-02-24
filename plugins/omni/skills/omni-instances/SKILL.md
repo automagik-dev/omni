@@ -1,103 +1,69 @@
 ---
 name: omni-instances
 description: |
-  Manage Omni channel instances — list, connect, disconnect, restart, QR codes, status checks, and sync operations for WhatsApp, Discord, Slack, and Telegram.
+  Operate Omni channel instances: lifecycle, QR/pairing, sync jobs, contacts/groups, profile/privacy, and history backfill via resync.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Instances
 
-Manage channel connections (WhatsApp, Discord, Slack, Telegram) via `omni instances`.
-
-## List Instances
+## Discovery and lifecycle
 
 ```bash
-omni instances list
-omni instances list --json | jq '.[] | {id, name, channelType, status}'
+omni instances list --json
+omni instances list --channel whatsapp-baileys --status connected --json
+omni instances get <id> --json
+omni instances create --name "Ops WA" --channel whatsapp-baileys --json
+omni instances update <id> --name "Ops WA Prod" --json
+omni instances delete <id> --json
+
+omni instances status <id> --json
+omni instances whoami <id> --json
+omni instances connect <id> --json
+omni instances disconnect <id> --json
+omni instances restart <id> --force-new-qr --json
+omni instances logout <id> --json
 ```
 
-## Create Instance
+## WhatsApp connect
 
 ```bash
-omni instances create --channel whatsapp --name "My WhatsApp"
+omni instances qr <id> --watch --json
+omni instances qr <id> --base64 --json
+omni instances pair <id> --phone +5511999999999 --json
 ```
 
-## QR Code (WhatsApp)
+## Sync and backfill
 
 ```bash
-omni instances qr <id>
-omni instances qr <id> --watch
-omni instances qr <id> --base64
+omni instances sync <id> --type messages --depth 30d --download-media --json
+omni instances syncs <id> --limit 20 --json
+omni instances syncs <id> <jobId> --json
+
+omni resync --instance <id> --since 2h --json
+omni resync --all --since 1h --dry-run --json
 ```
 
-## Pairing Code
+## Contacts, groups, profile
 
 ```bash
-omni instances pair <id> --phone <number>
+omni instances contacts <id> --limit 100 --search "Felipe" --json
+omni instances groups <id> --search "team" --json
+omni instances profile <id> <userId> --json
+omni instances check <id> +5511999 --json
+omni instances update-bio <id> "Available" --json
+omni instances privacy <id> --json
 ```
 
-## Connection Management
+## Moderation and group ops
 
 ```bash
-omni instances connect <id>
-omni instances disconnect <id>
-omni instances restart <id>
-omni instances logout <id>
+omni instances block <id> <contactId> --json
+omni instances unblock <id> <contactId> --json
+omni instances blocklist <id> --json
+
+omni instances group-create <id> --subject "Team" --participants +5511999 +5511888 --json
+omni instances group-invite <id> <groupJid> --json
+omni instances group-revoke-invite <id> <groupJid> --json
+omni instances group-join <id> <inviteCode> --json
 ```
-
-## Status & Info
-
-```bash
-omni instances status <id>
-omni instances whoami <id>
-```
-
-## Sync Operations
-
-```bash
-omni instances sync <id> --type messages --depth 7d
-omni instances sync <id> --type messages --depth 7d --download-media
-omni instances sync <id> --type all
-omni instances syncs <id>
-omni instances syncs <id> <job-id>
-```
-
-## Contacts & Groups
-
-```bash
-omni instances contacts <id> --limit 100
-omni instances contacts <id> --search "Name"
-omni instances groups <id>
-omni instances groups <id> --search "team"
-```
-
-## Profile & Privacy
-
-```bash
-omni instances profile <id> <user-id>
-omni instances check <id> +<phone-number>
-omni instances update-bio <id> "Available"
-omni instances privacy <id>
-```
-
-## Blocking
-
-```bash
-omni instances block <id> <contact-id>
-omni instances unblock <id> <contact-id>
-omni instances blocklist <id>
-```
-
-## Group Management
-
-```bash
-omni instances group-create <id> --name "Team Chat" --participants "+55119999,+55118888"
-omni instances group-invite <id> <group-jid>
-omni instances group-revoke-invite <id> <group-jid>
-omni instances group-join <id> <invite-code>
-```
-
-## Tips
-
-- Use smart ID resolution: prefix, name substring, or full UUID.
-- Set default instance: `omni config set defaultInstance <id>` to skip `--instance`.

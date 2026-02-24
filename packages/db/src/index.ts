@@ -10,4 +10,6 @@ export * from './schema';
 // Client exports
 export { createDb, createPostgresClient, getDb, closeDb, getDefaultDatabaseUrl } from './client';
 export type { Database, DbConfig } from './client';
-export { applyMigrations } from './migrate';
+
+// Migration exports
+export { applyMigrations, migrateDb } from './migrate';

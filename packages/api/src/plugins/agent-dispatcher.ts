@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
 import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
-import type { StreamSender } from '@omni/channel-sdk';
+import type { ChannelPlugin, StreamSender } from '@omni/channel-sdk';
 import {
   A2AAgentProvider,
   AgUiAgentProvider,
@@ -469,7 +469,7 @@ async function sendTypingPresence(
 
 /** Mark dispatched messages as read — fire-and-forget, does not block dispatch. */
 function markDispatchedMessagesRead(
-  plugin: Awaited<ReturnType<typeof getPlugin>>,
+  plugin: ChannelPlugin | null | undefined,
   instanceId: string,
   chatId: string,
   messages: BufferedMessage[],

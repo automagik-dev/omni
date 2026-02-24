@@ -1,5 +1,5 @@
 /**
- * Database migration runner
+ * Programmatic database migration runner
  *
  * Usage: bun run packages/db/src/migrate.ts
  *        or import { applyMigrations } from '@omni/db' for programmatic use.
@@ -11,6 +11,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { resolve } from 'node:path';
 import { createLogger } from '@omni/core';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -50,6 +51,15 @@ export async function applyMigrations(db: Database, migrationsFolder: string): P
   }
 
   log.info('All migrations applied', { appliedCount, fileCount });
+}
+
+/**
+ * Run all pending Drizzle migrations.
+ * Safe to call on every startup — already-applied migrations are skipped.
+ */
+export async function migrateDb(db: Database): Promise<void> {
+  const migrationsFolder = resolve(import.meta.dirname, '../drizzle');
+  await migrate(db, { migrationsFolder });
 }
 
 // Script entry point (bun run src/migrate.ts)

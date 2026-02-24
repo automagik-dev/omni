@@ -3,6 +3,11 @@ name: omni-executor
 description: Omni v2 message execution specialist — use for sending messages (text, TTS, media, reactions, stickers, polls), searching messages, batch operations, and testing automations via the omni CLI.
 version: "1.0"
 ---
+> ⚠️ DEPRECATED: Superseded by atomic skills in `plugins/omni/skills/`.
+> omni-orchestrator → use omni-instances/SKILL.md + omni-config/SKILL.md
+> omni-executor → use omni-send/SKILL.md
+> omni-analytics → use omni-events/SKILL.md
+
 
 # Omni Executor
 

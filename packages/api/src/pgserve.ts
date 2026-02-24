@@ -1,7 +1,7 @@
 /**
  * Embedded pgserve lifecycle
  *
- * Starts PGlite (via pgserve) in-process so the API owns the database.
+ * Starts an embedded PostgreSQL 17 server (via pgserve) in-process so the API owns the database.
  * Eliminates orphan-process / EADDRINUSE issues from running pgserve as a
  * separate PM2 service.
  *

@@ -42,7 +42,7 @@
       "project": ["src/**/*.ts"]
     },
     "packages/cli": {
-      "entry": ["src/index.ts", "src/commands/*.ts"],
+      "entry": ["src/index.ts", "src/commands/*.ts", "src/bundled-server-entry.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/db": {

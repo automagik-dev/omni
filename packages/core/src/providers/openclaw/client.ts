@@ -17,6 +17,7 @@
 
 import * as nodeCrypto from 'node:crypto';
 import { createLogger } from '../../logger';
+import { ED25519_PKCS8_PREFIX } from './device';
 import type {
   AgentEventPayload,
   ChatEvent,
@@ -403,10 +404,9 @@ export class OpenClawClient {
       ].join('|');
 
       // Sign with Ed25519 private key
-      // PKCS8 DER prefix for raw 32-byte Ed25519 private key (RFC 8410)
-      const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+      // Reconstruct PKCS8 DER from stored raw base64url private key (RFC 8410)
       const rawPrivKey = Buffer.from(dev.privateKey, 'base64url');
-      const pkcs8Der = Buffer.concat([PKCS8_PREFIX, rawPrivKey]);
+      const pkcs8Der = Buffer.concat([ED25519_PKCS8_PREFIX, rawPrivKey]);
       const privateKey = nodeCrypto.createPrivateKey({ key: pkcs8Der, type: 'pkcs8', format: 'der' });
       const signature = nodeCrypto.sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
 

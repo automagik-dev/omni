@@ -1,1 +1,0 @@
-ALTER TABLE "instances" ADD COLUMN "discord_presence" jsonb;

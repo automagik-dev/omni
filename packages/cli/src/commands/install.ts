@@ -26,7 +26,8 @@ import { saveConfig, saveServerConfig } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
-import { getServerBundlePath } from '../server-bundle.js';
+import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
+import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -37,7 +38,7 @@ const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
-const NATS_VERSION = 'v2.10.24';
+const NATS_VERSION = 'v2.12.4';
 
 // ============================================================================
 // TYPES
@@ -249,22 +250,6 @@ async function promptYesNo(question: string, defaultYes = true): Promise<boolean
   });
 }
 
-/** Generate a random API key: omni_sk_ + 32 hex chars */
-function generateApiKey(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  const hex = Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return `omni_sk_${hex}`;
-}
-
-/** Mask an API key for display: show first 12 chars + ... */
-function maskApiKey(key: string): string {
-  if (key.length <= 12) return key;
-  return `${key.slice(0, 12)}...`;
-}
-
 type ApiKeyPromptResult = {
   apiKey: string;
   generated: boolean;
@@ -276,6 +261,7 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
     DATABASE_URL: cfg.databaseUrl,
     OMNI_API_KEY: cfg.apiKey,
     MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
+    OMNI_PACKAGES_DIR: join(cfg.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
     PGSERVE_DATA: join(cfg.dataDir, 'pglite'),
     NATS_URL: 'nats://localhost:4222',
@@ -288,11 +274,12 @@ function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
 // HELPERS - SYSTEMD UNIT
 // ============================================================================
 
-/** Write a systemd unit file to /etc/systemd/system/omni-api.service */
+/** Write systemd unit files for omni-api and omni-nats */
 async function writeSystemdUnit(_cfg: WizardConfig): Promise<boolean> {
-  const unitContent = `[Unit]
+  const apiUnit = `[Unit]
 Description=Omni API Server
-After=network.target
+After=network.target omni-nats.service
+Wants=omni-nats.service
 
 [Service]
 Type=forking
@@ -306,18 +293,39 @@ PIDFile=${homedir()}/.pm2/pm2.pid
 WantedBy=multi-user.target
 `;
 
-  const unitPath = '/etc/systemd/system/omni-api.service';
+  const natsUnit = `[Unit]
+Description=Omni NATS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${NATS_BINARY_PATH}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+  const apiPath = '/etc/systemd/system/omni-api.service';
+  const natsPath = '/etc/systemd/system/omni-nats.service';
 
   try {
-    writeFileSync(unitPath, unitContent, { mode: 0o644 });
-    output.success(`Systemd unit written to ${unitPath}`);
+    writeFileSync(natsPath, natsUnit, { mode: 0o644 });
+    output.success(`Systemd unit written to ${natsPath}`);
+
+    writeFileSync(apiPath, apiUnit, { mode: 0o644 });
+    output.success(`Systemd unit written to ${apiPath}`);
+
     output.raw('\n  Enable and start with:');
-    output.raw('    sudo systemctl enable --now omni-api\n');
+    output.raw('    sudo systemctl enable --now omni-nats omni-api\n');
     return true;
   } catch {
-    output.warn(`Could not write ${unitPath} — run with sudo or write it manually`);
-    output.raw('\n  Unit file contents:');
-    output.raw(unitContent);
+    output.warn('Could not write systemd units — run with sudo or write them manually');
+    output.raw('\n  omni-nats.service:');
+    output.raw(natsUnit);
+    output.raw('  omni-api.service:');
+    output.raw(apiUnit);
     return false;
   }
 }
@@ -450,7 +458,8 @@ async function startServices(cfg: WizardConfig): Promise<void> {
 
   const runtimeEnv = buildApiRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
-  const apiCode = await runPm2(['start', bundlePath, '--name', PM2_PROCESSES.api, '--interpreter', 'bun'], runtimeEnv);
+  const launcherPath = getServerLauncherPath();
+  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], runtimeEnv);
   if (apiCode !== 0) {
     apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
   } else {

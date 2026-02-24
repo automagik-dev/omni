@@ -75,9 +75,9 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 15); do
-            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 2
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
 
@@ -97,7 +97,7 @@ jobs:
         run: bunx biome check .
 
       - name: Dead code check (knip)
-        run: bunx knip@5.85.0
+        run: bunx knip
 
       - name: Test
         run: bun test --env-file=.env
@@ -150,9 +150,9 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 15); do
-            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 2
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
 
