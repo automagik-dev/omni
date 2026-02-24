@@ -100,31 +100,26 @@ mock.module('@omni/core', () => {
 // ============================================================================
 
 // Mock database for tests.
-// The dispatcher's applyAgentFkOverrides calls db.select(...).from(...).where(...).limit(1)
-// to resolve agent entity overrides. We provide a chainable mock that returns a default agent row
-// matching the 'agent-uuid-1' FK used by createMockInstance.
-function createMockDb() {
-  const defaultAgentRow = {
+// The dispatcher calls db.select({...}).from(agents).where(...).limit(1) in applyAgentFkOverrides.
+// We build a chainable mock that returns an agent row matching the mock instance fixture.
+function createMockDb(agentRowOverrides: Record<string, unknown> = {}) {
+  const agentRow = {
     id: 'agent-uuid-1',
     agentProviderId: 'provider-1',
     agentType: 'assistant',
-    metadata: {},
+    metadata: { providerAgentId: 'default-agent' },
     configPath: null,
+    ...agentRowOverrides,
   };
 
-  const terminalChain = {
-    limit: mock(() => Promise.resolve([defaultAgentRow])),
-  };
-  const whereChain = {
-    where: mock(() => terminalChain),
-    limit: mock(() => Promise.resolve([defaultAgentRow])),
-  };
-  const fromChain = {
-    from: mock(() => whereChain),
+  const chain = {
+    from: mock(() => chain),
+    where: mock(() => chain),
+    limit: mock(() => Promise.resolve([agentRow])),
   };
 
   return {
-    select: mock(() => fromChain),
+    select: mock(() => chain),
   } as unknown as import('@omni/db').Database;
 }
 
@@ -324,7 +319,7 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(5);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
@@ -332,6 +327,7 @@ describe('agent-dispatcher', () => {
       expect(subscribedTypes).toContain('reaction.received');
       expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
+      expect(subscribedTypes).toContain('instance.disconnected');
 
       cleanup();
     });
