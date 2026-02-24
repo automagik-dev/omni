@@ -18,7 +18,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -80,7 +80,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -96,7 +96,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -107,7 +107,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -124,7 +124,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -140,7 +140,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -160,19 +160,25 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "bin": {
         "omni": "./bin/omni",
       },
       "dependencies": {
-        "@omni/core": "workspace:*",
-        "@omni/sdk": "workspace:*",
         "chalk": "^5.4.0",
         "commander": "^13.1.0",
         "ora": "^8.1.1",
         "qrcode-terminal": "^0.12.0",
       },
       "devDependencies": {
+        "@omni/api": "workspace:*",
+        "@omni/channel-discord": "workspace:*",
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/channel-slack": "workspace:*",
+        "@omni/channel-telegram": "workspace:*",
+        "@omni/channel-whatsapp": "workspace:*",
+        "@omni/core": "workspace:*",
+        "@omni/sdk": "workspace:*",
         "@types/node": "^22.10.3",
         "@types/qrcode-terminal": "^0.12.2",
         "typescript": "^5.7.3",
@@ -180,7 +186,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.39",
         "croner": "^9.1.0",
@@ -195,7 +201,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.4",
@@ -209,7 +215,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -227,7 +233,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.7.3",
@@ -235,7 +241,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.20260220.4",
+      "version": "2.260224.3",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
