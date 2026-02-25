@@ -7,8 +7,11 @@
  *
  * Subcommands:
  *   setup  - Install/update omni CLI, bootstrap server, write marker
- *   health - Check server health, auto-recover if unhealthy
+ *   health - Ensure omni is installed, check server health, auto-recover
  *   run    - Forward args to omni CLI (only subcommand that may exit non-zero)
+ *
+ * The health subcommand is the primary entry point — it runs on SessionStart
+ * and handles both first-time installation and ongoing health checks.
  *
  * Usage: node omni-runner.js <setup|health|run> [args...]
  */
@@ -251,15 +254,41 @@ const cmdSetup = () => {
 
 const cmdHealth = () => {
   try {
-    // 1. Find bun (needed for findOmni and omni's shebang)
+    // 1. Find bun (needed for findOmni, install, and omni's shebang)
     const bunPath = findBun();
-    if (bunPath) ensureBunInPath(bunPath);
-
-    // 2. Find omni
-    const omniPath = findOmni(bunPath);
-    if (!omniPath) {
-      log('omni', 'CLI not installed -- run: bun add -g @automagik/omni');
+    if (!bunPath) {
+      log('omni', 'bun not found -- install: curl -fsSL https://bun.sh/install | bash');
       process.exit(0);
+    }
+    ensureBunInPath(bunPath);
+
+    // 2. Find omni — if missing, auto-install (first-time setup)
+    let omniPath = findOmni(bunPath);
+    if (!omniPath) {
+      log('omni', 'CLI not found -- installing...');
+      const install = exec(bunPath, ['add', '-g', '@automagik/omni'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      if (install.status !== 0) {
+        log('omni', 'Install failed -- run manually: bun add -g @automagik/omni');
+        process.exit(0);
+      }
+      omniPath = findOmni(bunPath);
+      if (!omniPath) {
+        log('omni', 'Installed but CLI not found in PATH');
+        process.exit(0);
+      }
+
+      // First install: bootstrap server too
+      log('omni', 'Bootstrapping server...');
+      exec(omniPath, ['install', '--non-interactive'], { stdio: ['pipe', 'inherit', 'inherit'] });
+
+      // Write marker
+      const marker = {
+        pluginVersion: readPluginVersion(),
+        bunVersion: getVersion(bunPath),
+        omniVersion: getVersion(omniPath),
+        installedAt: new Date().toISOString(),
+      };
+      writeFileSync(getMarkerPath(), JSON.stringify(marker, null, 2) + '\n', 'utf-8');
     }
 
     const version = getVersion(omniPath);

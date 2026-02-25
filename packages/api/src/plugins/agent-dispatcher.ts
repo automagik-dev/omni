@@ -66,8 +66,11 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
 import { createSessionStorage } from './session-storage';
+
+export { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 
 const log = createLogger('agent-dispatcher');
 
@@ -317,44 +320,6 @@ function buildSlackMessageContext(rawPayload: Record<string, unknown>, text: str
     isReplyToBot: false, // resolved async via hasBotRepliedInThread
     text,
   };
-}
-
-/** Build message context for WhatsApp / default channels */
-function buildWhatsAppMessageContext(
-  rawPayload: Record<string, unknown>,
-  chatId: string,
-  instance: Instance,
-  text: string,
-): MessageContext {
-  const isDirectMessage =
-    !chatId.includes('@g.us') &&
-    !chatId.includes('@broadcast') &&
-    !chatId.includes('@newsletter') &&
-    !(rawPayload.isGroup as boolean);
-
-  const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
-  const ownerJid = instance.ownerIdentifier ?? '';
-
-  // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
-  // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
-  // Extract the phone number part from both formats for comparison
-  const extractPhone = (jid: string) => jid.replace(/@.*$/, '').replace(/^@/, '');
-  const ownerPhone = extractPhone(ownerJid);
-
-  const jidMatchesOwner = mentionedJids.some((jid) => {
-    const mentionPhone = extractPhone(jid);
-    return jid === ownerJid || mentionPhone === ownerPhone;
-  });
-
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
-
-  // Handle replies to bot messages (same phone number extraction for LID compatibility)
-  const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant
-    ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
-    : false;
-
-  return { isDirectMessage, mentionsBot, isReplyToBot, text };
 }
 
 /** Build message context for Discord channels */
@@ -760,8 +725,7 @@ const BOT_PREFIX = '\u{1F916} ';
  */
 function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
   if (!ownerIdentifier) return false;
-  const normalize = (jid: string) => jid.replace(/:.*/, '').replace(/@.*/, '');
-  return normalize(chatId) === normalize(ownerIdentifier);
+  return extractPhoneFromJid(chatId) === extractPhoneFromJid(ownerIdentifier);
 }
 
 // ============================================================================
@@ -2830,12 +2794,12 @@ async function resolveLidMentionBot(
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
 
-  const ownerPhone = ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+  const ownerPhone = extractPhoneFromJid(ownerIdentifier);
   for (const lidJid of lidMentions) {
     try {
       const mapping = await chatsService.findLidMapping(instanceId, lidJid);
       if (mapping) {
-        const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+        const resolvedPhone = extractPhoneFromJid(mapping);
         if (resolvedPhone === ownerPhone) {
           messageContext.mentionsBot = true;
           log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });

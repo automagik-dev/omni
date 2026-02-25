@@ -3,7 +3,7 @@
  *
  * Provides instant visual feedback across all channels when bot receives a message.
  * Adds an emoji reaction (configurable per-channel) when message received,
- * removes it after bot responds or after a hard timeout (30s).
+ * removes it after bot responds or after a hard timeout (120s).
  *
  * Features:
  * - Per-instance on/off toggle
@@ -11,7 +11,7 @@
  * - Rate limiting with separate bucket (10 acks/min)
  * - WhatsApp fallback to typing indicator when reactions unsupported
  * - Fire-and-forget (non-blocking)
- * - Auto-removal after response or 30s timeout
+ * - Auto-removal after response or 120s timeout
  */
 
 import type { ChannelPlugin } from './types/plugin';
@@ -43,7 +43,7 @@ export interface ReactionAckConfig {
     discord?: string;
     [key: string]: string | undefined;
   };
-  /** Timeout in ms before ack is auto-removed (hard cap 30s) */
+  /** Timeout in ms before ack is auto-removed (hard cap 120s) */
   ackTimeoutMs?: number;
 }
 
@@ -104,8 +104,8 @@ class AckRateLimiter {
 // Ack Orchestrator
 // ============================================================================
 
-/** Hard cap on ack timeout: 30 seconds */
-const MAX_ACK_TIMEOUT_MS = 30_000;
+/** Hard cap on ack timeout: 120 seconds */
+const MAX_ACK_TIMEOUT_MS = 120_000;
 
 /** Singleton rate limiter for all ack operations */
 const ackRateLimiter = new AckRateLimiter();
@@ -180,7 +180,7 @@ export function startAck(
     plugin.sendTyping(instanceId, chatId, timeoutMs).catch(() => {});
   }
 
-  // DEC-8: Hard timeout — remove ack after 30s regardless
+  // DEC-8: Hard timeout — remove ack after 120s regardless
   const timer = setTimeout(() => {
     if (!removed && ackProvider) {
       removed = true;

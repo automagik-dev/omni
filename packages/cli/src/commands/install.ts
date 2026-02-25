@@ -299,7 +299,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${NATS_BINARY_PATH}
+ExecStart="${NATS_BINARY_PATH}" -js -sd "${join(_cfg.dataDir, 'nats')}"
 Restart=on-failure
 RestartSec=5
 
@@ -471,7 +471,18 @@ async function startServices(cfg: WizardConfig): Promise<void> {
 
   if (existsSync(NATS_BINARY_PATH)) {
     const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
-    const natsCode = await runPm2(['start', NATS_BINARY_PATH, '--name', PM2_PROCESSES.nats]);
+    const natsDataDir = join(cfg.dataDir, 'nats');
+    mkdirSync(natsDataDir, { recursive: true });
+    const natsCode = await runPm2([
+      'start',
+      NATS_BINARY_PATH,
+      '--name',
+      PM2_PROCESSES.nats,
+      '--',
+      '-js',
+      '-sd',
+      natsDataDir,
+    ]);
     if (natsCode !== 0) {
       natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
     } else {

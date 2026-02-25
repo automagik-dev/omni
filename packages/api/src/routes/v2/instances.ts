@@ -131,6 +131,22 @@ const createInstanceSchema = z.object({
     .describe(
       'Number of context messages to include for group chats when dispatching to agent (0 = disabled, max 200)',
     ),
+  reactionAck: z
+    .enum(['on', 'off'])
+    .default('off')
+    .describe('Reaction ack mode: on to send a reaction while agent processes'),
+  reactionAckEmoji: z
+    .record(z.string())
+    .optional()
+    .nullable()
+    .describe('Per-channel emoji map for reaction ack (e.g. {"whatsapp":"\\u2705"})'),
+  ackTimeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(120_000)
+    .default(30_000)
+    .describe('Ack timeout in milliseconds (max 120000)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -155,6 +171,9 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // so PATCH only updates what is explicitly sent (not reset to defaults)
   readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
   groupHistorySize: z.number().int().min(0).max(200).optional(),
+  reactionAck: z.enum(['on', 'off']).optional(),
+  reactionAckEmoji: z.record(z.string()).nullable().optional(),
+  ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
 });
 
 /**

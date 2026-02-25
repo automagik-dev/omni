@@ -1,12 +1,14 @@
 /**
- * Tests for Slack thread reply detection and agent reply filtering.
- *
- * Covers the critical path: bot-started threads must trigger onReply,
- * not just threads where the bot replied as a participant.
+ * Tests for reply filtering and WhatsApp mention/reply normalization.
  */
 
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
+import type { Database, Instance } from '@omni/db';
+import { isSQLWrapper } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { type MessageContext, shouldAgentReply } from '../agent-runner';
+import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../message-context';
+import { MessageService } from '../messages';
 
 // ============================================================================
 // shouldAgentReply – onReply condition
@@ -65,52 +67,210 @@ describe('shouldAgentReply – Slack mention+reply config', () => {
 });
 
 // ============================================================================
-// hasBotRepliedInThread – mock DB
+// WhatsApp JID normalization (Group D)
 // ============================================================================
 
-describe('hasBotRepliedInThread', () => {
-  /**
-   * Build a minimal mock DB that resolves a single select().from().where().limit() chain.
-   * `rows` is the array the final `.limit()` call resolves to.
-   */
-  function buildMockDb(rows: Array<{ id: string }>) {
+describe('extractPhoneFromJid', () => {
+  test('extracts phone from device-suffixed JID', () => {
+    expect(extractPhoneFromJid('551151986804:4@s.whatsapp.net')).toBe('551151986804');
+  });
+
+  test('extracts phone from canonical @s.whatsapp.net JID', () => {
+    expect(extractPhoneFromJid('551151986804@s.whatsapp.net')).toBe('551151986804');
+  });
+
+  test('extracts phone from @lid JID', () => {
+    expect(extractPhoneFromJid('551151986804@lid')).toBe('551151986804');
+  });
+});
+
+describe('buildWhatsAppMessageContext with ownerIdentifier containing :N', () => {
+  const instance = {
+    ownerIdentifier: '551151986804:4@s.whatsapp.net',
+  } as unknown as Instance;
+
+  test('detects @mention when ownerIdentifier has :N and incoming mention has no suffix', () => {
+    const context = buildWhatsAppMessageContext(
+      {
+        isGroup: true,
+        mentionedJids: ['551151986804@s.whatsapp.net'],
+      },
+      '120363000000000000@g.us',
+      instance,
+      'Oi @551151986804',
+    );
+
+    expect(context.mentionsBot).toBe(true);
+    expect(context.isReplyToBot).toBe(false);
+  });
+
+  test('detects reply when ownerIdentifier has :N and quoted participant has no suffix', () => {
+    const context = buildWhatsAppMessageContext(
+      {
+        isGroup: true,
+        quotedMessage: { participant: '551151986804@s.whatsapp.net' },
+      },
+      '120363000000000000@g.us',
+      instance,
+      'resposta',
+    );
+
+    expect(context.isReplyToBot).toBe(true);
+  });
+});
+
+// ============================================================================
+// MessageService.hasBotRepliedInThread
+// ============================================================================
+
+interface ThreadProbeRow {
+  id: string;
+  chatId: string;
+  isFromMe: boolean;
+  replyToExternalId: string | null;
+  externalId: string;
+}
+
+interface QueryCapture {
+  whereSql?: string;
+  whereParams?: unknown[];
+  limitArg?: number;
+}
+
+function toWhereQuery(condition: unknown): { sql: string; params: unknown[] } {
+  if (!isSQLWrapper(condition)) {
+    throw new Error('Expected a Drizzle SQLWrapper in where()');
+  }
+
+  const query = new PgDialect().sqlToQuery(condition.getSQL());
+  return {
+    sql: query.sql.replace(/\s+/g, ' ').trim().toLowerCase(),
+    params: query.params,
+  };
+}
+
+function createHasBotRepliedDbMock(rows: ThreadProbeRow[] = [], capture?: QueryCapture) {
+  const where = (condition: unknown) => {
+    const query = toWhereQuery(condition);
+    if (capture) {
+      capture.whereSql = query.sql;
+      capture.whereParams = query.params;
+    }
+
     return {
-      select: mock(() => ({
-        from: mock(() => ({
-          where: mock(() => ({
-            limit: mock(() => Promise.resolve(rows)),
-          })),
-        })),
-      })),
-    } as unknown;
-  }
+      limit: (limitValue: number) => {
+        if (capture) capture.limitArg = limitValue;
 
-  // We import MessageService dynamically so the module-level drizzle imports resolve
-  // against bun's module resolution (they aren't invoked in the mock path).
-  async function createService(rows: Array<{ id: string }>) {
-    const { MessageService } = await import('../messages');
-    const db = buildMockDb(rows);
-    // MessageService constructor expects (db, eventBus)
-    const eventBus = { publish: mock(() => Promise.resolve()) } as never;
-    return new MessageService(db as never, eventBus);
-  }
+        const [chatId, isFromMe, threadViaReply, threadViaExternal] = query.params;
+        const result = rows
+          .filter((row) => {
+            if (row.chatId !== chatId) return false;
+            if (row.isFromMe !== isFromMe) return false;
+            return row.replyToExternalId === threadViaReply || row.externalId === threadViaExternal;
+          })
+          .slice(0, limitValue)
+          .map((row) => ({ id: row.id }));
 
-  test('returns true when bot replied in thread (replyToExternalId match)', async () => {
-    const service = await createService([{ id: 'msg-1' }]);
-    const result = await service.hasBotRepliedInThread('chat-1', '1700000000.000100');
-    expect(result).toBe(true);
+        return Promise.resolve(result);
+      },
+    };
+  };
+
+  const from = (_table: unknown) => ({ where });
+  const select = (_selection: unknown) => ({ from });
+  return { select } as unknown as Database;
+}
+
+describe('MessageService.hasBotRepliedInThread', () => {
+  test('returns true when bot replied in thread via replyToExternalId', async () => {
+    const db = createHasBotRepliedDbMock([
+      {
+        id: 'msg-1',
+        chatId: 'chat-1',
+        isFromMe: true,
+        replyToExternalId: 'thread-1',
+        externalId: 'msg-bot-1',
+      },
+    ]);
+    const service = new MessageService(db, null);
+
+    const replied = await service.hasBotRepliedInThread('chat-1', 'thread-1');
+
+    expect(replied).toBe(true);
   });
 
-  test('returns true when bot started the thread (externalId match)', async () => {
-    // Same query returns a row — the OR condition catches externalId = threadTs
-    const service = await createService([{ id: 'msg-root' }]);
-    const result = await service.hasBotRepliedInThread('chat-1', '1700000000.000200');
-    expect(result).toBe(true);
+  test('returns true when bot started thread via externalId', async () => {
+    const db = createHasBotRepliedDbMock([
+      {
+        id: 'msg-root',
+        chatId: 'chat-1',
+        isFromMe: true,
+        replyToExternalId: null,
+        externalId: 'thread-root',
+      },
+    ]);
+    const service = new MessageService(db, null);
+
+    const replied = await service.hasBotRepliedInThread('chat-1', 'thread-root');
+
+    expect(replied).toBe(true);
   });
 
-  test('returns false when bot has no participation in thread', async () => {
-    const service = await createService([]);
-    const result = await service.hasBotRepliedInThread('chat-1', '1700000000.000300');
-    expect(result).toBe(false);
+  test('returns false when rows do not satisfy chat/fromMe/thread filters', async () => {
+    const db = createHasBotRepliedDbMock([
+      {
+        id: 'wrong-chat',
+        chatId: 'chat-2',
+        isFromMe: true,
+        replyToExternalId: 'thread-1',
+        externalId: 'thread-1',
+      },
+      {
+        id: 'not-from-bot',
+        chatId: 'chat-1',
+        isFromMe: false,
+        replyToExternalId: 'thread-1',
+        externalId: 'thread-1',
+      },
+      {
+        id: 'wrong-thread',
+        chatId: 'chat-1',
+        isFromMe: true,
+        replyToExternalId: 'other-thread',
+        externalId: 'other-thread',
+      },
+    ]);
+    const service = new MessageService(db, null);
+
+    const replied = await service.hasBotRepliedInThread('chat-1', 'thread-1');
+
+    expect(replied).toBe(false);
+  });
+
+  test('builds where query with expected filters and OR branch, then applies limit(1)', async () => {
+    const capture: QueryCapture = {};
+    const db = createHasBotRepliedDbMock(
+      [
+        {
+          id: 'msg-1',
+          chatId: 'chat-99',
+          isFromMe: true,
+          replyToExternalId: 'thread-99',
+          externalId: 'thread-99',
+        },
+      ],
+      capture,
+    );
+    const service = new MessageService(db, null);
+
+    await service.hasBotRepliedInThread('chat-99', 'thread-99');
+
+    expect(capture.limitArg).toBe(1);
+    expect(capture.whereParams).toEqual(['chat-99', true, 'thread-99', 'thread-99']);
+    expect(capture.whereSql).toContain('"messages"."chat_id" =');
+    expect(capture.whereSql).toContain('"messages"."is_from_me" =');
+    expect(capture.whereSql).toContain('"messages"."reply_to_external_id" =');
+    expect(capture.whereSql).toContain('"messages"."external_id" =');
+    expect(capture.whereSql).toContain(' or ');
   });
 });
