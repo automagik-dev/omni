@@ -328,10 +328,12 @@ omni webhooks trigger --type "custom.event" --payload '{"key":"value"}'
 </details>
 
 <details>
-<summary><strong>System</strong> — status, auth, config, events, batch, logs</summary>
+<summary><strong>System</strong> — update, status, auth, config, events, batch, logs</summary>
 
 ```bash
-omni status                                    # Health check
+omni update -y                                 # Update CLI; restart only services that were already online
+omni update -y --no-restart                    # Update CLI only; skip restarts and API-port health check
+omni status                                    # Verify runtime health after update
 omni auth login --api-key <key>                # Authenticate
 omni config set defaultInstance <id>           # CLI settings
 omni events list --type "message.*" --since 2h # Event history
@@ -341,6 +343,10 @@ omni resync --instance <id>                    # History backfill
 omni logs list --level error --limit 50        # Server logs
 omni dead-letters list --limit 20              # Failed events
 ```
+
+`omni update` can exit non-zero after install only when restart runs (services were already online): in that path it checks API health on the configured API port and fails on restart or health-check errors.
+
+`omni doctor` is not available yet and is tracked as a follow-up.
 
 </details>
 
