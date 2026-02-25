@@ -23,9 +23,9 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'dev' &&
-       !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request'))
+       !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
