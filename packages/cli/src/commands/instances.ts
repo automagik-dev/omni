@@ -405,7 +405,7 @@ export function createInstancesCommand(): Command {
     .command('qr <id>')
     .description('Get QR code for WhatsApp instances')
     .option('--base64', 'Output raw base64 instead of ASCII')
-    .option('--watch', 'Auto-refresh QR until connected')
+    .option('--no-watch', 'Show QR once without auto-refreshing')
     .action(async (rawId: string, options: { base64?: boolean; watch?: boolean }) => {
       const client = getClient();
       const id = await resolveInstanceId(rawId);
