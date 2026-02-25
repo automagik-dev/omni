@@ -455,7 +455,11 @@ export function createInstancesCommand(): Command {
 
       const QR_POLL_INTERVAL_MS = 5000;
 
-      if (options.watch) {
+      // Non-interactive modes (--json, --base64) always single-shot to avoid
+      // hanging automation consumers that expect one payload then exit.
+      const shouldWatch = options.watch && !options.base64 && output.getCurrentFormat() !== 'json';
+
+      if (shouldWatch) {
         const poll = async (): Promise<void> => {
           try {
             const connected = await fetchAndShowQr(true);
