@@ -79,7 +79,7 @@ async function runStart(): Promise<void> {
   const natsPath = join(homedir(), '.omni', 'nats-server');
   if (existsSync(natsPath)) {
     output.info(`Starting ${PM2_PROCESSES.nats}...`);
-    const natsDataDir = join(homedir(), '.omni', 'data', 'nats');
+    const natsDataDir = join(serverConfig.dataDir, 'nats');
     mkdirSync(natsDataDir, { recursive: true });
     const natsCode = await runPm2(['start', natsPath, '--name', PM2_PROCESSES.nats, '--', '-js', '-sd', natsDataDir]);
     if (natsCode !== 0) {
