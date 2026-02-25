@@ -27,10 +27,37 @@ omni instances logout <id> --json
 
 ## WhatsApp connect
 
+**Pairing code is the preferred method** — works directly in the terminal with no camera needed.
+The user just types an 8-digit code into WhatsApp. Use QR only as a fallback.
+
+### Recommended workflow (pairing code)
+
 ```bash
-omni instances qr <id> --watch --json
-omni instances qr <id> --base64 --json
-omni instances pair <id> --phone +5511999999999 --json
+# 1. Create the instance
+omni instances create --name "WhatsApp" --channel whatsapp-baileys --json
+
+# 2. Start the connection (generates session, prepares for auth)
+omni instances connect <id> --json
+
+# 3. Request a pairing code (ask the user for their phone number in international format: +XXXXXXXXXXX)
+omni instances pair <id> --phone <number> --json
+# Returns an 8-digit pairing code like XXXX-XXXX
+
+# 4. Tell the user:
+#    "Enter XXXX-XXXX in WhatsApp > Settings > Linked Devices > Link with phone number"
+
+# 5. Wait ~15 seconds for WhatsApp to complete the link, then verify:
+omni instances status <id> --json
+# Expected: status "connected"
+```
+
+### Fallback: QR code
+
+If pairing code does not work, fall back to QR:
+
+```bash
+omni instances qr <id> --json
+# QR auto-refreshes by default. Use --no-watch for a single static QR.
 ```
 
 ## Sync and backfill

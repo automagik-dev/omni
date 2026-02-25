@@ -161,6 +161,7 @@ omni instances pair <INSTANCE_ID> --phone "+5511999999999"
 | `keyValid: no` | `pm2 env omni-api \| grep OMNI_API_KEY` → `omni config set apiKey <correct_key>` |
 | `missing scope: operator.write` | Re-run `omni providers setup openclaw ...` |
 | Stale `omni-v2-pgserve` process | `pm2 delete omni-v2-pgserve && omni restart` |
+| NATS no JetStream (API shows "JetStreamManager not initialized") | `pm2 delete omni-nats && pm2 start ~/.omni/nats-server --name omni-nats -- -js -sd ~/.omni/data/nats && pm2 restart omni-api` |
 
 ## Service management
 
