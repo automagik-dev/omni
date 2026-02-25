@@ -112,6 +112,21 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   }
 }
 
+/** Extract reaction ack fields from CLI options into body */
+function applyAckFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'reactionAck', opts.reactionAck);
+  if (opts.reactionAckEmoji !== undefined) {
+    try {
+      body.reactionAckEmoji = JSON.parse(opts.reactionAckEmoji as string);
+    } catch {
+      throw new Error('--reaction-ack-emoji must be valid JSON (e.g. \'{"whatsapp":"\\u2705"}\')');
+    }
+  }
+  if (opts.ackTimeout !== undefined) {
+    body.ackTimeoutMs = Number(opts.ackTimeout);
+  }
+}
+
 /** Build instance body from all CLI options */
 function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -121,6 +136,7 @@ function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknow
   applyDebounceFields(body, opts);
   applyGateFields(body, opts);
   applyMiscFields(body, opts);
+  applyAckFields(body, opts);
   return body;
 }
 
@@ -278,6 +294,10 @@ export function createInstancesCommand(): Command {
     .option('--tts-model <id>', 'ElevenLabs model ID')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
+    // Reaction ack
+    .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
+    .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
+    .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token')
@@ -731,6 +751,10 @@ export function createInstancesCommand(): Command {
     .option('--tts-model <id>', 'ElevenLabs model ID (use "null" to clear)')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
+    // Reaction ack
+    .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
+    .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
+    .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')
