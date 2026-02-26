@@ -213,8 +213,8 @@ async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, inte
 
 /**
  * Enforce registry TTL for a component interaction.
- * Unregistered components pass through for backward compatibility;
- * registered-but-expired interactions are rate-limited and suppressed.
+ * Unregistered components (legacy) always pass through for backward compatibility.
+ * Only components that were previously registered and have since expired are rate-limited.
  * Returns true if the interaction should proceed, false if suppressed.
  */
 async function enforceRegistryTTL(instanceId: string, interaction: Interaction, label: string): Promise<boolean> {
@@ -222,27 +222,37 @@ async function enforceRegistryTTL(instanceId: string, interaction: Interaction, 
   if (!messageId) return true;
 
   const registry = getComponentRegistry();
-  if (!registry.has(instanceId, messageId)) {
-    const userId = interaction.user.id;
-    if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
-      log.debug(`Suppressing expired ${label} interaction (rate limit)`, {
-        instanceId,
-        userId,
-        messageId,
-      });
-      try {
-        const ci = interaction as MessageComponentInteraction;
-        if (!ci.replied && !ci.deferred) {
-          await ci.deferUpdate();
-        }
-      } catch (_) {
-        // Ignore
-      }
-      return false;
-    }
-  } else {
+  if (registry.has(instanceId, messageId)) {
+    // Active registered component — consume and proceed
     registry.resolve(instanceId, messageId);
+    return true;
   }
+
+  // Not in registry — check if it was previously registered (expired/consumed)
+  // Legacy components that were never registered always pass through
+  if (!registry.wasRegistered(instanceId, messageId)) {
+    return true;
+  }
+
+  // Was registered but expired — apply rate limiting
+  const userId = interaction.user.id;
+  if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
+    log.debug(`Suppressing expired ${label} interaction (rate limit)`, {
+      instanceId,
+      userId,
+      messageId,
+    });
+    try {
+      const ci = interaction as MessageComponentInteraction;
+      if (!ci.replied && !ci.deferred) {
+        await ci.deferUpdate();
+      }
+    } catch (_) {
+      // Ignore
+    }
+    return false;
+  }
+
   return true;
 }
 

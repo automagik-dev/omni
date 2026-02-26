@@ -84,6 +84,9 @@ export class ComponentRegistry {
   /** Expired interaction rate limiter: key = `userId:componentKey` */
   private rateLimits = new Map<string, RateLimitEntry>();
 
+  /** Tombstones for expired/consumed keys — distinguishes "never registered" from "was registered" */
+  private tombstones = new Set<string>();
+
   /** Cumulative count of expired entries cleaned up */
   private expiredCount = 0;
 
@@ -159,6 +162,7 @@ export class ComponentRegistry {
     if (Date.now() > entry.expiresAt) {
       this.entries.delete(key);
       this.removeFromInsertionOrder(key);
+      this.tombstones.add(key);
       this.expiredCount++;
       return null;
     }
@@ -219,6 +223,7 @@ export class ComponentRegistry {
     if (Date.now() > entry.expiresAt) {
       this.entries.delete(key);
       this.removeFromInsertionOrder(key);
+      this.tombstones.add(key);
       this.expiredCount++;
       return false;
     }
@@ -267,6 +272,7 @@ export class ComponentRegistry {
       if (now > entry.expiresAt) {
         this.entries.delete(key);
         this.removeFromInsertionOrder(key);
+        this.tombstones.add(key);
         this.expiredCount++;
         cleaned++;
       }
@@ -280,7 +286,18 @@ export class ComponentRegistry {
       }
     }
 
+    // Tombstones are lightweight (Set<string>) and bounded by total registrations.
+    // They are cleared on clear()/destroy(). No aggressive purge needed.
+
     return cleaned;
+  }
+
+  /**
+   * Check if a component was previously registered (now expired or consumed).
+   * Returns false for components that were never registered (legacy/unregistered).
+   */
+  wasRegistered(instanceId: string, messageId: string): boolean {
+    return this.tombstones.has(this.makeKey(instanceId, messageId));
   }
 
   /**
@@ -290,6 +307,7 @@ export class ComponentRegistry {
     this.entries.clear();
     this.insertionOrder = [];
     this.rateLimits.clear();
+    this.tombstones.clear();
     this.expiredCount = 0;
   }
 

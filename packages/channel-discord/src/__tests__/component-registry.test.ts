@@ -343,4 +343,74 @@ describe('ComponentRegistry', () => {
       reg.destroy();
     });
   });
+
+  describe('wasRegistered (tombstones)', () => {
+    test('returns false for never-registered components', () => {
+      const reg = createRegistry();
+      expect(reg.wasRegistered('inst-1', 'msg-never')).toBe(false);
+      reg.destroy();
+    });
+
+    test('returns true after component expires via has()', () => {
+      const reg = createRegistry();
+      reg.register('inst-1', 'msg-1', [{ type: 'button' }], { ttlMs: 1 });
+
+      // Wait for TTL to expire
+      const start = Date.now();
+      while (Date.now() - start < 5) {
+        // busy wait
+      }
+
+      // has() triggers expiration + tombstone
+      expect(reg.has('inst-1', 'msg-1')).toBe(false);
+      expect(reg.wasRegistered('inst-1', 'msg-1')).toBe(true);
+      reg.destroy();
+    });
+
+    test('returns true after component expires via resolve()', () => {
+      const reg = createRegistry();
+      reg.register('inst-1', 'msg-1', [{ type: 'button' }], { ttlMs: 1 });
+
+      const start = Date.now();
+      while (Date.now() - start < 5) {
+        // busy wait
+      }
+
+      // resolve() triggers expiration + tombstone
+      expect(reg.resolve('inst-1', 'msg-1')).toBeNull();
+      expect(reg.wasRegistered('inst-1', 'msg-1')).toBe(true);
+      reg.destroy();
+    });
+
+    test('returns true after component expires via cleanup()', () => {
+      const reg = createRegistry();
+      reg.register('inst-1', 'msg-1', [{ type: 'button' }], { ttlMs: 1 });
+
+      const start = Date.now();
+      while (Date.now() - start < 10) {
+        // busy wait — ensure TTL has expired
+      }
+
+      reg.cleanup();
+      expect(reg.wasRegistered('inst-1', 'msg-1')).toBe(true);
+      reg.destroy();
+    });
+
+    test('clear() resets tombstones', () => {
+      const reg = createRegistry();
+      reg.register('inst-1', 'msg-1', [{ type: 'button' }], { ttlMs: 1 });
+
+      const start = Date.now();
+      while (Date.now() - start < 5) {
+        // busy wait
+      }
+
+      reg.has('inst-1', 'msg-1'); // expire it
+      expect(reg.wasRegistered('inst-1', 'msg-1')).toBe(true);
+
+      reg.clear();
+      expect(reg.wasRegistered('inst-1', 'msg-1')).toBe(false);
+      reg.destroy();
+    });
+  });
 });
