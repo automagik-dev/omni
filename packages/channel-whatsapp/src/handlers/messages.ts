@@ -538,12 +538,16 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
  * Download media from a message and return the API-serving URL.
  *
  * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
- * Returns:   /api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ * Returns:   {apiBaseUrl}/api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ *
+ * When apiBaseUrl is provided, returns an absolute URL (e.g. http://host:port/api/v2/media/...).
+ * This is required for downstream consumers like the media processor that use fetch().
  */
 export async function tryDownloadMedia(
   msg: WAMessage,
   instanceId: string,
   externalId: string,
+  apiBaseUrl?: string,
 ): Promise<{ mediaUrl: string; mediaLocalPath: string; mimeType: string; size: number } | null> {
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
@@ -591,8 +595,9 @@ export async function tryDownloadMedia(
 
     log.debug('Downloaded media', { externalId, path: relativePath, size: result.buffer.length });
 
+    const mediaPath = `/api/v2/media/${relativePath}`;
     return {
-      mediaUrl: `/api/v2/media/${relativePath}`,
+      mediaUrl: apiBaseUrl ? `${apiBaseUrl}${mediaPath}` : mediaPath,
       mediaLocalPath: relativePath,
       mimeType: result.mimeType,
       size: result.buffer.length,
@@ -780,7 +785,7 @@ async function processMessage(
   }
 
   // Download media if present (non-blocking on failure)
-  const mediaResult = await tryDownloadMedia(msg, instanceId, externalId);
+  const mediaResult = await tryDownloadMedia(msg, instanceId, externalId, plugin.getApiBaseUrl());
   if (mediaResult) {
     content.mediaUrl = mediaResult.mediaUrl;
     content.mediaLocalPath = mediaResult.mediaLocalPath;

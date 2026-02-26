@@ -227,6 +227,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
   >();
 
+  /** Tracks total messages fetched during initial history push (no explicit sync job) per instance */
+  private historyPushFetchCount = new Map<string, number>();
+
   /** Cached contacts from sync events per instance */
   private contactsCache = new Map<string, Map<string, SyncContact>>();
 
@@ -422,6 +425,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getMeJid(instanceId: string): string | undefined {
     return this.sockets.get(instanceId)?.user?.id;
+  }
+
+  /**
+   * Get the API base URL (e.g., "http://localhost:8881") for constructing absolute media URLs.
+   * Used by message handlers so that tryDownloadMedia() returns fetch-able URLs.
+   */
+  getApiBaseUrl(): string {
+    return this.config.apiBaseUrl;
   }
 
   /**
@@ -3321,7 +3332,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     // Download media if present (same as realtime messages)
-    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id);
+    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
       // Note: content doesn't have mediaLocalPath field, but mediaUrl is enough for storage
@@ -3428,9 +3439,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     isLatest: boolean | undefined,
     messageCount: number,
   ): void {
-    // Report progress
+    // Report progress via sync state callbacks (explicit sync jobs)
     if (syncState?.onProgress && progress !== undefined && progress !== null) {
       syncState.onProgress(syncState.totalFetched, progress);
+    }
+
+    // Track and publish history-push progress via NATS (initial connection push)
+    if (!syncState) {
+      const prevCount = this.historyPushFetchCount.get(instanceId) ?? 0;
+      const totalFetched = prevCount + messageCount;
+      this.historyPushFetchCount.set(instanceId, totalFetched);
+
+      const meta = { instanceId, channelType: this.id };
+
+      // Publish sync.progress event
+      this.eventBus
+        .publishGeneric(
+          'sync.progress' as const,
+          { instanceId, jobType: 'history-push', fetched: totalFetched, progress: progress ?? 0 },
+          meta,
+        )
+        .catch((err) => this.logger.warn('Failed to publish sync.progress for history-push', { error: String(err) }));
+
+      // Publish sync.completed when Baileys signals completion
+      if (isLatest || progress === 100) {
+        this.eventBus
+          .publishGeneric('sync.completed' as const, { instanceId, jobType: 'history-push', totalFetched }, meta)
+          .catch((err) =>
+            this.logger.warn('Failed to publish sync.completed for history-push', { error: String(err) }),
+          );
+        this.historyPushFetchCount.delete(instanceId);
+      }
     }
 
     // Check if sync is complete

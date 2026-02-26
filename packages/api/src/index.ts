@@ -34,6 +34,7 @@ import {
   setupConnectionListener,
   setupContactNamesListener,
   setupEventPersistence,
+  setupHistoryPushTracker,
   setupLidMappingListener,
   setupMediaProcessor,
   setupMessageListener,
@@ -282,6 +283,13 @@ async function setupEventBusServices(
     } catch (error) {
       log.error('Failed to set up sync worker', { error: String(error) });
     }
+  }
+
+  // History-push tracker (creates sync jobs on connect, tracks Baileys push progress)
+  try {
+    await setupHistoryPushTracker(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up history-push tracker', { error: String(error) });
   }
 }
 

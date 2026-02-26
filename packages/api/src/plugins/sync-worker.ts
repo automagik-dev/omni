@@ -848,3 +848,163 @@ async function processGroupsSync(
     updated,
   });
 }
+
+const historyPushLog = createLogger('history-push-tracker');
+
+/**
+ * Set up history-push sync tracker
+ *
+ * - Subscribes to `instance.connected` to auto-create a `history-push` sync job
+ * - Subscribes to `sync.progress` (jobType=history-push) to update sync job progress
+ * - Subscribes to `sync.completed` (jobType=history-push) to mark sync job completed
+ */
+export async function setupHistoryPushTracker(eventBus: EventBus, services: Services): Promise<void> {
+  try {
+    // 1. Create history-push sync job when an instance connects
+    await eventBus.subscribe(
+      'instance.connected',
+      async (event) => {
+        const { instanceId, channelType } = event.payload;
+
+        try {
+          // Create a running history-push sync job
+          const job = await services.syncJobs.create({
+            instanceId,
+            channelType,
+            type: 'history-push',
+          });
+
+          // Immediately start the job (set status to running)
+          await services.syncJobs.start(job.id);
+
+          historyPushLog.info('Created history-push sync job', {
+            jobId: job.id,
+            instanceId,
+            channel: channelType,
+          });
+        } catch (error) {
+          historyPushLog.error('Failed to create history-push sync job', {
+            instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-creator',
+        startFrom: 'new',
+      },
+    );
+
+    // 2. Update history-push sync job progress from WhatsApp plugin events
+    await eventBus.subscribePattern(
+      'sync.progress.>',
+      async (event) => {
+        const payload = event.payload as {
+          instanceId?: string;
+          jobType?: string;
+          fetched?: number;
+          progress?: number;
+        };
+
+        // Only handle history-push progress events (from WhatsApp plugin)
+        if (payload.jobType !== 'history-push' || !payload.instanceId) return;
+
+        try {
+          // Find the active history-push job for this instance
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
+
+          if (!historyPushJob) {
+            historyPushLog.debug('No active history-push job found for progress update', {
+              instanceId: payload.instanceId,
+            });
+            return;
+          }
+
+          await services.syncJobs.updateProgress(historyPushJob.id, {
+            fetched: payload.fetched ?? 0,
+            stored: 0,
+            duplicates: 0,
+            mediaDownloaded: 0,
+            totalEstimated: payload.progress ? Math.round((payload.fetched ?? 0) / (payload.progress / 100)) : 0,
+          });
+
+          historyPushLog.debug('Updated history-push progress', {
+            jobId: historyPushJob.id,
+            instanceId: payload.instanceId,
+            fetched: payload.fetched,
+            progress: payload.progress,
+          });
+        } catch (error) {
+          historyPushLog.warn('Failed to update history-push progress', {
+            instanceId: payload.instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-tracker',
+        startFrom: 'new',
+      },
+    );
+
+    // 3. Complete history-push sync job when WhatsApp signals completion
+    await eventBus.subscribePattern(
+      'sync.completed.>',
+      async (event) => {
+        const payload = event.payload as {
+          instanceId?: string;
+          jobType?: string;
+          totalFetched?: number;
+        };
+
+        // Only handle history-push completed events (from WhatsApp plugin)
+        if (payload.jobType !== 'history-push' || !payload.instanceId) return;
+
+        try {
+          // Find the active history-push job for this instance
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
+
+          if (!historyPushJob) {
+            historyPushLog.debug('No active history-push job found for completion', {
+              instanceId: payload.instanceId,
+            });
+            return;
+          }
+
+          // Update final progress
+          await services.syncJobs.updateProgress(historyPushJob.id, {
+            fetched: payload.totalFetched ?? 0,
+            stored: 0,
+            duplicates: 0,
+            mediaDownloaded: 0,
+          });
+
+          // Mark completed
+          await services.syncJobs.complete(historyPushJob.id);
+
+          historyPushLog.info('History-push sync completed', {
+            jobId: historyPushJob.id,
+            instanceId: payload.instanceId,
+            totalFetched: payload.totalFetched,
+          });
+        } catch (error) {
+          historyPushLog.warn('Failed to complete history-push sync job', {
+            instanceId: payload.instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-completer',
+        startFrom: 'new',
+      },
+    );
+
+    historyPushLog.info('History-push tracker initialized');
+  } catch (error) {
+    historyPushLog.error('Failed to set up history-push tracker', { error: String(error) });
+    throw error;
+  }
+}

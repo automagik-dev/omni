@@ -5,6 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -1097,6 +1098,30 @@ instancesRoutes.put(
   },
 );
 
+/** Validate chatJids + history-push guard for message sync. Returns error tuple [message, status] or null. */
+async function validateMessageSyncPreconditions(
+  services: { syncJobs: { hasActiveJob: (id: string, type: SyncJobType) => Promise<boolean> } },
+  instanceId: string,
+  channel: string,
+  type: string,
+  chatJids?: string[],
+): Promise<{ error: string | { code: string; message: string }; status: 400 | 409 } | null> {
+  if (chatJids?.length && !channel.startsWith('whatsapp')) {
+    return {
+      error: { code: 'VALIDATION_ERROR', message: 'chatJids is only supported for WhatsApp instances' },
+      status: 400,
+    };
+  }
+  if ((type === 'messages' || chatJids?.length) && (await services.syncJobs.hasActiveJob(instanceId, 'history-push'))) {
+    return {
+      error:
+        'Cannot start manual sync while history push sync is in progress. Wait for the push sync to complete or check progress with GET /instances/:id/sync.',
+      status: 409,
+    };
+  }
+  return null;
+}
+
 /**
  * POST /instances/:id/sync - Request a sync operation
  *
@@ -1159,13 +1184,9 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     });
   }
 
-  // chatJids is only supported for WhatsApp instances
-  if (chatJids?.length && !instance.channel.startsWith('whatsapp')) {
-    return c.json(
-      { error: { code: 'VALIDATION_ERROR', message: 'chatJids is only supported for WhatsApp instances' } },
-      400,
-    );
-  }
+  // Validate chatJids support + history-push guard
+  const preconditionError = await validateMessageSyncPreconditions(services, id, instance.channel, type, chatJids);
+  if (preconditionError) return c.json({ error: preconditionError.error }, preconditionError.status);
 
   // For other sync types, check for existing active job
   const hasActiveJob = await services.syncJobs.hasActiveJob(id, type);
@@ -2301,6 +2322,10 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
   if (!channelRegistry || !eventBus) {
     return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Channel registry or event bus not available' } }, 503);
   }
+
+  // Guard: block resync while a history-push job is active
+  const guardError = await validateMessageSyncPreconditions(services, id, instance.channel, 'messages');
+  if (guardError) return c.json({ error: guardError.error }, guardError.status);
 
   const sinceDate = parseSince(since);
   const untilDate = until ? new Date(until) : new Date();
