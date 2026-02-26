@@ -177,6 +177,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
       await destroyBoltConnection(existing, this.logger);
       this.connections.delete(instanceId);
+      this.disposeInstanceCaches(instanceId);
     }
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -650,13 +651,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     const limit = options.limit ?? 200;
-    const cacheKey = `${channelId}:${threadTs}:${limit}`;
-    const threadCache = this.threadCaches.get(instanceId);
-    const messages = threadCache
-      ? await threadCache.getOrFetch(cacheKey, () =>
-          this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit),
-        )
-      : await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
+    // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
+    // designed for thread root resolution, not full conversation history. Using it
+    // here would return stale data missing newer replies.
+    const messages = await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
 
     return { totalFetched: messages.length, messages };
   }
@@ -963,6 +961,16 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Mirrors the onMessage callback logic without going through the Bolt handler.
    */
   private async dispatchMessageFromDebounce(instanceId: string, args: SlackDebouncedArgs): Promise<void> {
+    // Side effects that the debounce path must mirror from onMessage
+    const threadTs = args.rawPayload.threadTs as string | undefined;
+    this.trackActiveThread(instanceId, args.chatId, threadTs ?? args.externalId);
+
+    const connection = this.connections.get(instanceId);
+    const config = this.slackConfigs.get(instanceId);
+    if (connection && config) {
+      this.addAckReaction(instanceId, args.chatId, args.externalId, connection, config);
+    }
+
     const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.rawPayload);
 
     await this.handleMessageReceived(

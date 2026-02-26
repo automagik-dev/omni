@@ -5,8 +5,8 @@
  * Handles socket configuration, lifecycle, and common operations.
  */
 
-import type { AuthenticationState, GroupMetadata, WASocket } from '@whiskeysockets/baileys';
-import { Browsers, fetchLatestBaileysVersion, default as makeWASocket } from '@whiskeysockets/baileys';
+import type { AuthenticationState, GroupMetadata, WASocket } from 'baileys';
+import { Browsers, fetchLatestBaileysVersion, default as makeWASocket } from 'baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';
 
@@ -165,6 +165,9 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     browser: mergedConfig.browser,
     generateHighQualityLinkPreview: mergedConfig.generateHighQualityLinkPreview,
     syncFullHistory: mergedConfig.syncFullHistory,
+    // Baileys ad5ea81 changed the default to filter out FULL syncs.
+    // Override to preserve rc.9 behavior and receive all history sync types.
+    shouldSyncHistoryMessage: () => true,
     connectTimeoutMs: mergedConfig.connectTimeoutMs,
     defaultQueryTimeoutMs: mergedConfig.defaultQueryTimeoutMs,
     keepAliveIntervalMs: mergedConfig.keepAliveIntervalMs,

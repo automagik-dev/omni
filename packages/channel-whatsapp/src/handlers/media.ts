@@ -6,7 +6,7 @@
  * - Emit media.received events with local paths
  */
 
-import type { WAMessage } from '@whiskeysockets/baileys';
+import type { WAMessage } from 'baileys';
 
 /**
  * Get media size from message if available

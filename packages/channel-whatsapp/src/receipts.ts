@@ -5,7 +5,7 @@
  * Supports per-instance read receipt modes: 'on' | 'off' | 'exclude-self'.
  */
 
-import type { WAMessageKey, WASocket } from '@whiskeysockets/baileys';
+import type { WAMessageKey, WASocket } from 'baileys';
 
 /**
  * Read receipt mode per-instance.

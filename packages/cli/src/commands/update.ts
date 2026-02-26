@@ -5,13 +5,16 @@
  *
  * Self-update from npm: checks latest @automagik/omni version, prompts the
  * user (unless --yes), installs with `bun add -g`, and restarts PM2 services
- * if they were running.
+ * only if they were already running. When that restart path runs, update
+ * checks API health on the configured API port; if restart or health checks
+ * fail, exits non-zero and points operators to `omni status`.
  */
 
 import { createInterface } from 'node:readline';
 import { Command } from 'commander';
 import ora from 'ora';
-import { DEFAULT_API_PORT, waitForHealth } from '../health.js';
+import { loadServerConfig } from '../config.js';
+import { waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
 import { VERSION } from '../version.js';
@@ -25,6 +28,8 @@ interface UpdateOptions {
   yes?: boolean;
   restart?: boolean;
 }
+
+type Pm2ProcessName = (typeof PM2_PROCESSES)[keyof typeof PM2_PROCESSES];
 
 /** Fetch the latest published version from the npm registry via bunx. */
 async function fetchLatestVersion(): Promise<string | null> {
@@ -48,8 +53,8 @@ async function fetchLatestVersion(): Promise<string | null> {
   }
 }
 
-/** Check whether any of the tracked PM2 processes are online. */
-function arePm2ServicesRunning(): boolean {
+/** Return tracked PM2 process names that are currently online. */
+function getRunningPm2Services(): Pm2ProcessName[] {
   try {
     const result = Bun.spawnSync({
       cmd: ['pm2', 'jlist'],
@@ -58,20 +63,25 @@ function arePm2ServicesRunning(): boolean {
     });
 
     if (result.exitCode !== 0) {
-      return false;
+      return [];
     }
 
     const raw = new TextDecoder().decode(result.stdout).trim();
-    if (!raw || raw === '[]') return false;
+    if (!raw || raw === '[]') return [];
 
-    const pm2Names = Object.values(PM2_PROCESSES);
+    const pm2Names = new Set<Pm2ProcessName>(Object.values(PM2_PROCESSES));
     const list = JSON.parse(raw) as Array<{ name?: string; pm2_env?: { status?: string } }>;
-    return list.some(
-      (proc) => pm2Names.includes(proc.name as (typeof pm2Names)[number]) && proc.pm2_env?.status === 'online',
-    );
+    const running = new Set<Pm2ProcessName>();
+    for (const proc of list) {
+      const name = proc.name as Pm2ProcessName | undefined;
+      if (name && pm2Names.has(name) && proc.pm2_env?.status === 'online') {
+        running.add(name);
+      }
+    }
+    return [...running];
   } catch {
     // pm2 not installed or parse error — skip restart
-    return false;
+    return [];
   }
 }
 
@@ -89,16 +99,41 @@ async function installLatest(): Promise<boolean> {
   return exitCode === 0;
 }
 
-/** Restart PM2 processes, ignoring errors. */
-async function restartPm2Services(): Promise<void> {
-  for (const name of Object.values(PM2_PROCESSES)) {
+/** Restart provided PM2 processes. Returns true when all restarts succeed. */
+async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boolean> {
+  let allSucceeded = true;
+  for (const name of processNames) {
     const proc = Bun.spawn({
       cmd: ['pm2', 'restart', name],
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    await proc.exited;
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      allSucceeded = false;
+    }
   }
+  return allSucceeded;
+}
+
+/** Restart selected services and verify API health; exits non-zero on partial failure. */
+async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], latest: string): Promise<void> {
+  const apiPort = loadServerConfig().port;
+  const restartSpinner = ora('Restarting services...').start();
+  const restartSucceeded = await restartPm2Services(servicesToRestart);
+  restartSpinner.stop();
+
+  const healthy = await waitForHealth(apiPort, UPDATE_HEALTH_TIMEOUT_MS);
+  if (restartSucceeded && healthy) {
+    output.success('Services restarted successfully.');
+    return;
+  }
+
+  const failures: string[] = [];
+  if (!restartSucceeded) failures.push('one or more service restarts failed');
+  if (!healthy) failures.push(`health check failed on port ${apiPort}`);
+  output.warn(`omni CLI updated to v${latest}, but ${failures.join(' and ')}. Run \`omni status\`.`);
+  process.exit(1);
 }
 
 /** Prompt the user for y/n confirmation. Returns true if user confirms. */
@@ -146,7 +181,7 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     }
   }
 
-  const servicesWereRunning = options.restart !== false && arePm2ServicesRunning();
+  const servicesToRestart = options.restart !== false ? getRunningPm2Services() : [];
 
   const installSpinner = ora(`Updating ${PACKAGE_NAME}...`).start();
   const installed = await installLatest();
@@ -157,17 +192,8 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     process.exit(1);
   }
 
-  if (servicesWereRunning) {
-    const restartSpinner = ora('Restarting services...').start();
-    await restartPm2Services();
-    restartSpinner.stop();
-
-    const healthy = await waitForHealth(DEFAULT_API_PORT, UPDATE_HEALTH_TIMEOUT_MS);
-    if (healthy) {
-      output.success('Services restarted successfully.');
-    } else {
-      output.warn('Services may still be starting up. Run `omni status` to verify.');
-    }
+  if (servicesToRestart.length > 0) {
+    await restartServicesAndVerify(servicesToRestart, latest);
   }
 
   output.success(`omni updated to v${latest}`);
@@ -175,8 +201,20 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
 
 export function createUpdateCommand(): Command {
   return new Command('update')
-    .description(`Update ${PACKAGE_NAME} to the latest version`)
+    .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
-    .option('--no-restart', 'Skip service restart even if services are running')
+    .option('--no-restart', 'Update CLI only; skip service restarts and API health check on configured API port')
+    .addHelpText(
+      'after',
+      `
+Behavior:
+  - Installs the latest CLI package first.
+  - Restarts tracked Omni services only when they were online before the update.
+  - When that restart path runs, update checks API health on the configured API port.
+  - Use --no-restart to skip restart and API health-check steps.
+  - Exits non-zero if install succeeds but restart or API health check fails in that restart path.
+  - Verify runtime health after update with: omni status
+`,
+    )
     .action(runUpdate);
 }

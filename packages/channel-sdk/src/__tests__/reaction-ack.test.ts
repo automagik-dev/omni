@@ -6,7 +6,7 @@
  * - AckRateLimiter: separate rate limit bucket
  * - Config handling: 'off' mode, missing config, per-channel emoji
  * - WhatsApp fallback to typing indicator
- * - DEC-8: Hard timeout at 30s
+ * - DEC-8: Hard timeout at 120s
  * - DEC-9: Rate limiting at 10 acks/min
  */
 
@@ -245,8 +245,8 @@ describe('Reaction Acknowledgment System', () => {
       expect(provider.removeAckCalls.length).toBe(1);
     });
 
-    it('should cap timeout at 30s (MAX_ACK_TIMEOUT_MS)', () => {
-      expect(MAX_ACK_TIMEOUT_MS).toBe(30_000);
+    it('should cap timeout at 120s (MAX_ACK_TIMEOUT_MS)', () => {
+      expect(MAX_ACK_TIMEOUT_MS).toBe(120_000);
     });
 
     it('should not remove twice (timeout after manual remove)', async () => {

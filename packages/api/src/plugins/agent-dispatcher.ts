@@ -66,8 +66,11 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
 import { createSessionStorage } from './session-storage';
+
+export { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 
 const log = createLogger('agent-dispatcher');
 
@@ -317,44 +320,6 @@ function buildSlackMessageContext(rawPayload: Record<string, unknown>, text: str
     isReplyToBot: false, // resolved async via hasBotRepliedInThread
     text,
   };
-}
-
-/** Build message context for WhatsApp / default channels */
-function buildWhatsAppMessageContext(
-  rawPayload: Record<string, unknown>,
-  chatId: string,
-  instance: Instance,
-  text: string,
-): MessageContext {
-  const isDirectMessage =
-    !chatId.includes('@g.us') &&
-    !chatId.includes('@broadcast') &&
-    !chatId.includes('@newsletter') &&
-    !(rawPayload.isGroup as boolean);
-
-  const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
-  const ownerJid = instance.ownerIdentifier ?? '';
-
-  // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
-  // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
-  // Extract the phone number part from both formats for comparison
-  const extractPhone = (jid: string) => jid.replace(/@.*$/, '').replace(/^@/, '');
-  const ownerPhone = extractPhone(ownerJid);
-
-  const jidMatchesOwner = mentionedJids.some((jid) => {
-    const mentionPhone = extractPhone(jid);
-    return jid === ownerJid || mentionPhone === ownerPhone;
-  });
-
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
-
-  // Handle replies to bot messages (same phone number extraction for LID compatibility)
-  const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
-  const isReplyToBot = quotedParticipant
-    ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
-    : false;
-
-  return { isDirectMessage, mentionsBot, isReplyToBot, text };
 }
 
 /** Build message context for Discord channels */
@@ -760,8 +725,7 @@ const BOT_PREFIX = '\u{1F916} ';
  */
 function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
   if (!ownerIdentifier) return false;
-  const normalize = (jid: string) => jid.replace(/:.*/, '').replace(/@.*/, '');
-  return normalize(chatId) === normalize(ownerIdentifier);
+  return extractPhoneFromJid(chatId) === extractPhoneFromJid(ownerIdentifier);
 }
 
 // ============================================================================
@@ -1285,6 +1249,7 @@ async function executeBeforeAgentStartHooks(
     senderName,
     model: instance.agentId ?? undefined,
     provider: instance.agentProviderId ?? undefined,
+    agentId: instance.agentId ?? undefined,
     triggerType,
     traceId,
     correlationId,
@@ -2557,9 +2522,16 @@ async function getAgentProvider(services: Services, instance: Instance, db: Data
 async function resolveEffectiveInstance(
   services: Services,
   instance: Instance,
-  chatId: string,
+  chatId: string | undefined,
   personId?: string,
 ): Promise<{ instance: Instance; routeId: string | null }> {
+  // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
+  // and return instance defaults. This is the safe path for LID-only chats.
+  if (!chatId) {
+    log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
+    return { instance, routeId: null };
+  }
+
   // Resolve route (chat > user > null)
   const route = await services.routeResolver.resolve(instance.id, chatId, personId);
 
@@ -2622,7 +2594,7 @@ async function processReactionTrigger(
 
   // Look up internal chat UUID for route resolution
   const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
-  const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+  const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
@@ -2635,7 +2607,7 @@ async function processReactionTrigger(
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
     chatId: externalChatId,
-    routeChatId: internalChatId,
+    routeChatId: internalChatId ?? 'none',
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
@@ -2829,12 +2801,12 @@ async function resolveLidMentionBot(
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
 
-  const ownerPhone = ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+  const ownerPhone = extractPhoneFromJid(ownerIdentifier);
   for (const lidJid of lidMentions) {
     try {
       const mapping = await chatsService.findLidMapping(instanceId, lidJid);
       if (mapping) {
-        const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+        const resolvedPhone = extractPhoneFromJid(mapping);
         if (resolvedPhone === ownerPhone) {
           messageContext.mentionsBot = true;
           log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
@@ -3276,7 +3248,7 @@ export async function setupAgentDispatcher(
 
     // Look up internal chat UUID for route resolution
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-    const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+    const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(
       services,

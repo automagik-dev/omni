@@ -193,8 +193,9 @@ async function runPipelineLoop<E extends HookEvent>(
   let currentContext = initialContext;
   let pipelineTimedOut = false;
 
+  let pipelineTimer: ReturnType<typeof setTimeout> | undefined;
   const pipelineDeadline = new Promise<void>((resolve) => {
-    setTimeout(() => {
+    pipelineTimer = setTimeout(() => {
       pipelineTimedOut = true;
       resolve();
     }, pipelineTimeoutMs);
@@ -249,6 +250,9 @@ async function runPipelineLoop<E extends HookEvent>(
       results.push(result);
     }
   }
+
+  // Clean up pipeline timer to prevent dangling timers under high throughput
+  if (pipelineTimer) clearTimeout(pipelineTimer);
 
   return { results, finalContext: currentContext };
 }
