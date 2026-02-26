@@ -58,6 +58,9 @@ export * from './metrics';
 // Automations
 export * from './automations';
 
+// Sessions
+export * from './sessions/reset';
+
 // Providers
 export * from './providers';
 
@@ -66,3 +69,6 @@ export * from './cache';
 
 // Tracing
 export * from './tracing';
+
+// Hooks
+export * from './hooks';

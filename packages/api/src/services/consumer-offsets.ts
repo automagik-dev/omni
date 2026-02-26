@@ -12,15 +12,6 @@ import { eq, sql } from 'drizzle-orm';
 
 const log = createLogger('consumer-offsets');
 
-export interface ConsumerLag {
-  consumerName: string;
-  streamName: string;
-  lastSequence: number;
-  streamMessages: number;
-  lag: number;
-  updatedAt: Date;
-}
-
 export class ConsumerOffsetService {
   constructor(private db: Database) {}
 

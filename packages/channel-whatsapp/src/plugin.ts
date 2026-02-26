@@ -5,9 +5,12 @@
  * Handles connection, messaging, and lifecycle for WhatsApp instances.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -15,38 +18,29 @@ import type {
   StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
+import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import { setupAllEventHandlers } from './handlers/all-events';
-import { resetConnectionState, seedAuthenticated, setupConnectionHandlers } from './handlers/connection';
+import {
+  cancelPendingReconnect,
+  resetConnectionState,
+  seedAuthenticated,
+  setupConnectionHandlers,
+} from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isUserJid, toJid } from './jid';
+import { fromJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
+import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
+import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
-/**
- * Message from history sync
- */
-export interface HistorySyncMessage {
-  externalId: string;
-  chatId: string;
-  from: string;
-  timestamp: Date;
-  content: {
-    type: string;
-    text?: string;
-    mediaUrl?: string;
-    mimeType?: string;
-    caption?: string;
-  };
-  isFromMe: boolean;
-  rawPayload: unknown;
-}
+// Re-export for external consumers that previously imported from this module
+export type { HistorySyncMessage, FetchHistoryResult };
 
 /**
  * Anchor point for fetching older messages in a chat
@@ -65,7 +59,8 @@ export interface MessageAnchor {
 }
 
 /**
- * Options for fetchHistory method
+ * WhatsApp-specific options for fetchHistory method
+ * Extends the base FetchHistoryOptions with WhatsApp-specific anchors
  */
 export interface FetchHistoryOptions {
   /** Fetch messages since this date */
@@ -84,14 +79,6 @@ export interface FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
-}
-
-/**
- * Result of fetchHistory operation
- */
-export interface FetchHistoryResult {
-  totalFetched: number;
-  messages: HistorySyncMessage[];
 }
 
 /**
@@ -180,6 +167,10 @@ export interface WhatsAppConnectionOptions {
   generateHighQualityLinkPreview?: boolean;
   /** Mark online when connecting (default: true) */
   markOnlineOnConnect?: boolean;
+  /** Enable LID-first identity resolution (default: true).
+   *  When false, falls back to legacy phone-based resolution (resolveToPhoneJidLegacy).
+   *  Per-instance rollback flag — DEC-8. */
+  lidFirstEnabled?: boolean;
 }
 
 /**
@@ -239,7 +230,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached contacts from sync events per instance */
   private contactsCache = new Map<string, Map<string, SyncContact>>();
 
-  /** Cached group metadata (subject/name) per instance */
+  /**
+   * Full GroupMetadata cache per instance — keyed by group JID.
+   * Passed to Baileys via `cachedGroupMetadata` so it can encrypt group
+   * messages without a network round-trip inside the buffer/transaction.
+   * Entries have a 5-minute TTL.
+   */
+  private static readonly GROUP_CACHE_TTL_MS = 5 * 60 * 1000;
+  private groupMetadataCache = new Map<string, Map<string, { metadata: GroupMetadata; cachedAt: number }>>();
+
+  /** Legacy light cache for display names — derived from groupMetadataCache */
   private groupsCache = new Map<string, Map<string, { subject: string; desc?: string }>>();
 
   /** Last outgoing action timestamp per instance — for humanized delay */
@@ -253,6 +253,29 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private sentMessageIds = new Map<string, Set<string>>();
   private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
+
+  /** Rate limit managers per instance — handles Baileys 429 backoff */
+  private rateLimitManagers = new Map<string, RateLimitManager>();
+
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
+  /**
+   * Decrypt failure trackers per instance (#70).
+   * Tracks JIDs with repeated decrypt failures and temporarily blocks them
+   * via shouldIgnoreJid to prevent transaction mutex starvation.
+   */
+  private decryptTrackers = new Map<string, DecryptFailureTracker>();
+
+  /** Get or create a rate limit manager for an instance */
+  private getRateLimitManager(instanceId: string): RateLimitManager {
+    let manager = this.rateLimitManagers.get(instanceId);
+    if (!manager) {
+      manager = createRateLimitManager(instanceId, this.logger);
+      this.rateLimitManagers.set(instanceId, manager);
+    }
+    return manager;
+  }
 
   /**
    * Enforce a randomized delay between outgoing actions to avoid
@@ -321,6 +344,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Cached chat display names per instance (for DMs from chats.upsert) */
   private chatNamesCache = new Map<string, Map<string, string>>();
 
+  /** Last-known unread count per JID per instance — sourced from chats.upsert/chats.update */
+  private chatUnreadCache = new Map<string, Map<string, number>>();
+
   /**
    * Get all chat JIDs known to Baileys for an instance.
    * Sourced from chats.upsert events (fires on every connection).
@@ -331,11 +357,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Re-emit all cached unread counts for an instance.
+   * Call this periodically (e.g. every hour) to keep DB in sync with Baileys state.
+   * Counts are sourced from the most recent chats.upsert/chats.update events.
+   */
+  refreshUnreadCounts(instanceId: string): void {
+    const cache = this.chatUnreadCache.get(instanceId);
+    if (!cache || cache.size === 0) return;
+    for (const [chatId, unreadCount] of cache) {
+      this.emitChatUnreadUpdate(instanceId, chatId, unreadCount);
+    }
+    this.logger.debug('Refreshed unread counts from cache', { instanceId, count: cache.size });
+  }
+
+  /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
+  private lidFirstEnabledMap = new Map<string, boolean>();
+
+  /**
    * LID → phone JID mapping cache per instance.
    * Maps @lid JIDs to their canonical @s.whatsapp.net equivalents.
    * Populated from contacts.upsert (c.lid + c.id) and lid-mapping.update events.
    */
   private lidMappingCache = new Map<string, Map<string, string>>();
+
+  /**
+   * Short-lived cache of recent message keys (externalId → { participant, fromMe }).
+   * Populated on message receipt, used by markAsRead as fallback when DB hasn't
+   * persisted the message yet (race condition with auto-read automations).
+   * Key format: `${instanceId}:${externalId}`
+   */
+  private recentMessageKeys = new Map<string, { participant?: string; fromMe: boolean }>();
+  private static readonly MESSAGE_KEY_CACHE_TTL_MS = 60_000; // 1 minute
 
   /**
    * Store a LID → phone JID mapping for an instance
@@ -355,6 +407,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Check if LID-first identity resolution is enabled for an instance.
+   * When false, falls back to legacy phone-based resolution (DEC-8 rollback).
+   */
+  isLidFirstEnabled(instanceId: string): boolean {
+    return this.lidFirstEnabledMap.get(instanceId) ?? true;
   }
 
   /**
@@ -708,6 +768,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     if (config.options?.forceNewQr === true) {
       const existingSocket = this.sockets.get(instanceId);
       if (existingSocket) {
+        existingSocket.ev.removeAllListeners('connection.update');
         await closeSocket(existingSocket, false);
         this.sockets.delete(instanceId);
       }
@@ -733,10 +794,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Create a new Baileys connection using socket wrapper
    */
   private async createConnection(instanceId: string, config: InstanceConfig): Promise<void> {
+    // Cancel any pending reconnect timers to prevent duplicate sockets
+    cancelPendingReconnect(instanceId);
+
     // Close existing socket if any (critical: prevents duplicate connections)
     const existingSocket = this.sockets.get(instanceId);
     if (existingSocket) {
       this.logger.info('Closing existing socket before reconnect', { instanceId });
+      // Remove event listeners BEFORE closing to prevent the close event
+      // from triggering another reconnect via the old handler
+      existingSocket.ev.removeAllListeners('connection.update');
       await closeSocket(existingSocket, false);
       this.sockets.delete(instanceId);
     }
@@ -755,6 +822,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Merge socket options: defaults <- plugin config <- instance options
     const instanceOptions = (config.options?.whatsapp || {}) as WhatsAppConnectionOptions;
+
+    // Store per-instance LID-first flag (DEC-8 rollback)
+    this.lidFirstEnabledMap.set(instanceId, instanceOptions.lidFirstEnabled ?? true);
+
     const socketOptions: Partial<SocketConfig> = {
       // Plugin-level defaults
       ...this.pluginConfig,
@@ -768,10 +839,26 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       connectTimeoutMs: socketOptions.connectTimeoutMs ?? DEFAULT_SOCKET_CONFIG.connectTimeoutMs,
     });
 
+    // Create or get the decrypt failure tracker for this instance (#70)
+    let decryptTracker = this.decryptTrackers.get(instanceId);
+    if (!decryptTracker) {
+      decryptTracker = new DecryptFailureTracker();
+      this.decryptTrackers.set(instanceId, decryptTracker);
+    }
+
     // Create Baileys socket using wrapper
     const sock = await createSocket({
       auth: state,
       ...socketOptions,
+      // Provide cached group metadata so Baileys skips the network fetch
+      // inside keys.transaction during message encryption. Without this,
+      // the fetch holds ev.buffer() open and triggers the 30s auto-flush
+      // that corrupts socket state. See #70.
+      cachedGroupMetadata: (jid: string) => this.getCachedGroupMetadata(instanceId, jid),
+      // Dynamic JID ignore for broken sessions (#70):
+      // Blocks JIDs with repeated decrypt failures to prevent transaction
+      // mutex starvation from retry storms.
+      shouldIgnoreJid: decryptTracker.shouldIgnore,
     });
 
     // Save credentials on update
@@ -798,6 +885,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         // IMPORTANT: Close the old socket to release resources and event listeners
         const oldSocket = this.sockets.get(instanceId);
         if (oldSocket) {
+          oldSocket.ev.removeAllListeners('connection.update');
           await closeSocket(oldSocket, false);
           this.sockets.delete(instanceId);
         }
@@ -806,8 +894,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
     );
 
-    // Set up message handlers
-    setupMessageHandlers(sock, this, instanceId);
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
+    // Set up message handlers (pass decrypt tracker for dynamic JID blocking)
+    setupMessageHandlers(sock, this, instanceId, decryptTracker, dedupeCache);
 
     // Set up ALL other event handlers (calls, presence, groups, etc.)
     setupAllEventHandlers(sock, this, instanceId);
@@ -830,12 +922,39 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
     resetConnectionState(instanceId);
 
+    // Remove event listeners before closing to prevent ghost reconnects
+    sock.ev.removeAllListeners('connection.update');
+
     // Close socket WITHOUT logging out (preserves session for reconnect)
     await closeSocket(sock, false);
     this.sockets.delete(instanceId);
 
+    this.clearInstanceCaches(instanceId);
+
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /** Clear all per-instance caches to prevent memory leaks on reconnect cycles */
+  private clearInstanceCaches(instanceId: string): void {
+    this.groupMetadataCache.delete(instanceId);
+    this.groupsCache.delete(instanceId);
+    this.contactsCache.delete(instanceId);
+    this.chatNamesCache.delete(instanceId);
+    this.chatUnreadCache.delete(instanceId);
+    this.sentMessageIds.delete(instanceId);
+    this.rateLimitManagers.delete(instanceId);
+    this.decryptTrackers.delete(instanceId);
+    this.lidFirstEnabledMap.delete(instanceId);
+    this.lidMappingCache.delete(instanceId);
+    this.lastActionTime.delete(instanceId);
+    // Dispose and remove per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
+    // recentMessageKeys uses composite keys — clean entries for this instance
+    for (const key of this.recentMessageKeys.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.recentMessageKeys.delete(key);
+    }
   }
 
   /**
@@ -915,11 +1034,98 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Apply pre-send processing: humanized delay, typing simulation, audio conversion, markdown formatting
+   */
+  private async preprocessOutgoing(
+    instanceId: string,
+    jid: string,
+    message: OutgoingMessage,
+  ): Promise<OutgoingMessage> {
+    await this.humanDelay(instanceId);
+
+    // Simulate typing for text/caption messages
+    const textContent = message.content.text || message.content.caption || '';
+    if (textContent.length > 0) {
+      await this.simulateTyping(instanceId, jid, textContent);
+    }
+
+    // Handle audio conversion for voice notes (PTT)
+    let processed = message;
+    if (message.content.type === 'audio' && message.metadata?.ptt === true) {
+      processed = await this.processAudioForVoiceNote(message);
+    }
+
+    // Apply markdown→WhatsApp format conversion for text messages
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    if (processed.content.type === 'text' && formatMode !== 'passthrough' && processed.content.text) {
+      const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+      const converted = markdownToWhatsApp(processed.content.text);
+      processed = { ...processed, content: { ...processed.content, text: converted } };
+    }
+
+    return processed;
+  }
+
+  /**
+   * Wait for rate limit backoff if active
+   */
+  private async waitForRateLimitBackoff(instanceId: string): Promise<RateLimitManager> {
+    const rateLimiter = this.getRateLimitManager(instanceId);
+    const remainingBackoff = rateLimiter.getRemainingBackoff();
+    if (remainingBackoff > 0) {
+      this.logger.debug('Waiting for rate limit backoff', { instanceId, remainingBackoff });
+      await new Promise<void>((r) => setTimeout(r, remainingBackoff));
+    }
+    return rateLimiter;
+  }
+
+  /**
+   * Resolve the send target JID.
+   *
+   * LID-first: when sending to a phone number, try to resolve to LID via
+   * Baileys signalRepository.lidMapping.getLIDForPN. Falls back gracefully
+   * to phone JID if no LID mapping exists or the API is unavailable.
+   */
+  private async resolveSendTarget(sock: WASocket, instanceId: string, to: string): Promise<string> {
+    const phoneJid = toJid(to);
+
+    // If already a LID or not a user JID, passthrough
+    if (!isUserJid(phoneJid)) return phoneJid;
+
+    // DEC-8: skip LID resolution when lidFirstEnabled is disabled (rollback)
+    if (!this.isLidFirstEnabled(instanceId)) return phoneJid;
+
+    // Try LID resolution via Baileys signal repository
+    try {
+      const lidJid = await sock.signalRepository.lidMapping.getLIDForPN(phoneJid);
+      if (lidJid) {
+        this.logger.debug('lid_resolution', { phone: phoneJid, resolvedLid: lidJid, instanceId });
+        // Cache the phone↔LID mapping so the outbound echo (which arrives before DB persistence)
+        // can resolve the LID back to the existing phone chat without creating a duplicate.
+        this.storeLidMapping(instanceId, lidJid, phoneJid);
+        return lidJid;
+      }
+    } catch (error) {
+      // LID resolution failure is expected when contact hasn't synced yet — fallback to phone is correct.
+      // Use debug level to avoid production log noise for this routine fallback path.
+      this.logger.debug('lid_send_fallback', {
+        originalTarget: to,
+        attemptedPhone: phoneJid,
+        error: String(error),
+        instanceId,
+      });
+    }
+
+    return phoneJid;
+  }
+
+  /**
    * Send a message through WhatsApp
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
-    const jid = toJid(message.to);
+    const jid = await this.resolveSendTarget(sock, instanceId, message.to);
+    const rateLimiter = await this.waitForRateLimitBackoff(instanceId);
 
     try {
       // ── Reaction dispatch (separate path — not a normal message) ──
@@ -927,28 +1133,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         return this.dispatchReaction(instanceId, sock, jid, message);
       }
 
-      // Humanized delay — prevent anti-bot detection
-      await this.humanDelay(instanceId);
-
-      // Simulate typing for text/caption messages
-      const textContent = message.content.text || message.content.caption || '';
-      if (textContent.length > 0) {
-        await this.simulateTyping(instanceId, jid, textContent);
-      }
-
-      // Handle audio conversion for voice notes (PTT)
-      let processedMessage = message;
-      if (message.content.type === 'audio' && message.metadata?.ptt === true) {
-        processedMessage = await this.processAudioForVoiceNote(message);
-      }
-
-      // Apply markdown→WhatsApp format conversion for text messages
-      const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      if (processedMessage.content.type === 'text' && formatMode !== 'passthrough' && processedMessage.content.text) {
-        const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
-        const converted = markdownToWhatsApp(processedMessage.content.text);
-        processedMessage = { ...processedMessage, content: { ...processedMessage.content, text: converted } };
-      }
+      const processedMessage = await this.preprocessOutgoing(instanceId, jid, message);
 
       // Build message content based on type
       const content = this.buildContent(processedMessage);
@@ -956,9 +1141,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       this.logger.debug('Sending message', { jid, content: summarizeContent(content), hasQuoted: !!quotedOptions });
 
+      // Pre-warm Baileys device + session caches OUTSIDE keys.transaction (#70).
+      // Without this, relayMessage acquires a real mutex (meId) and then makes
+      // network calls (getUSyncDevices, assertSessions) that hold it for 15-45s,
+      // blocking ALL other sends. Pre-warming populates the caches so the
+      // transaction finds cached data and releases the mutex in milliseconds.
+      if (jid.endsWith('@g.us')) {
+        await this.prewarmGroupCaches(instanceId, sock, jid);
+      }
+
       // Journey timing: T10 before platform call, T11 after
       const correlationId = message.metadata?.correlationId as string | undefined;
       correlationId && this.captureT10(correlationId);
+
       const result = await sock.sendMessage(jid, content, quotedOptions as never);
       correlationId && this.captureT11(correlationId);
 
@@ -982,12 +1177,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         replyToId: message.replyTo,
       });
 
+      // Reset rate limit state on successful send
+      rateLimiter.reset();
+
       return {
         success: true,
         messageId: externalId,
         timestamp: Date.now(),
       };
     } catch (error) {
+      // ── Rate limit detection ──
+      if (isRateLimitError(error)) {
+        rateLimiter.handleRateLimit(error, 0);
+      }
+
       const waError = mapBaileysError(error);
 
       await this.emitMessageFailed({
@@ -995,14 +1198,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         chatId: jid,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
       });
 
       return {
         success: false,
         error: waError.message,
         errorCode: waError.code,
-        retryable: waError.retryable,
+        retryable: waError.retryable || isRateLimitError(error),
         timestamp: Date.now(),
       };
     }
@@ -1177,13 +1380,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
-    // Read per-instance throttle from config
+    // Read per-instance stream config
     const instanceEntry = this.instances.get(instanceId);
-    const throttleMs = (instanceEntry?.config?.options?.streamThrottleMs as number) ?? undefined;
+    const streamOpts = instanceEntry?.config?.options ?? {};
+
+    // Pre-warm group caches before streaming starts (#70)
+    if (jid.endsWith('@g.us')) {
+      this.prewarmGroupCaches(instanceId, sock, jid).catch(() => {});
+    }
 
     return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
-      throttleMs,
       formatMode: options?.formatMode,
+      editMode: (streamOpts.streamEditMode as boolean) ?? false,
+      throttleMs: (streamOpts.streamThrottleMs as number) ?? undefined,
     });
   }
 
@@ -1207,30 +1416,109 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }, duration);
   }
 
+  /** Resolve a message key for read receipts, with cache fallback and LID mapping */
+  private resolveMessageKey(
+    instanceId: string,
+    id: string,
+    jid: string,
+    isGroup: boolean,
+    dataByExternalId: Map<string, unknown>,
+    lidCache: Map<string, string> | undefined,
+  ): { remoteJid: string; id: string; fromMe: boolean; participant?: string } {
+    const raw = dataByExternalId.get(id) as { key?: { participant?: string; fromMe?: boolean } } | null | undefined;
+    let fromMe = raw?.key?.fromMe ?? false;
+    let participant = raw?.key?.participant;
+
+    // Fallback: if rawPayload not in DB yet, check in-memory cache (race with auto-read)
+    if (!participant && isGroup) {
+      const cached = this.recentMessageKeys.get(`${instanceId}:${id}`);
+      if (cached) {
+        participant = cached.participant;
+        fromMe = cached.fromMe;
+      }
+    }
+
+    // Resolve LID participant to phone JID if mapping exists
+    if (participant && isLidJid(participant) && lidCache) {
+      participant = lidCache.get(participant) ?? participant;
+    }
+
+    return {
+      remoteJid: jid,
+      id,
+      fromMe,
+      ...(isGroup && participant ? { participant } : {}),
+    };
+  }
+
   /**
    * Mark messages as read
+   *
+   * Respects per-instance read receipt mode when provided.
    *
    * @param instanceId - Instance ID
    * @param chatId - Chat ID (JID or phone number)
    * @param messageIds - Array of message IDs, or ['all'] to mark entire chat as read
+   * @param messageData - Optional per-message data for group key construction
+   * @param readReceiptMode - Optional read receipt mode ('on' | 'off' | 'exclude-self')
    */
-  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    // Check read receipt config
+    if (readReceiptMode === 'off') return;
+    if (readReceiptMode === 'exclude-self') {
+      const ownerJid = this.instances.get(instanceId)?.status?.metadata?.ownerIdentifier;
+      if (ownerJid) {
+        const normalize = (jid: string) => (jid.split('@')[0] ?? jid).split(':')[0] ?? jid;
+        const chatBase = normalize(chatId);
+        const ownerBase = normalize(ownerJid);
+        // DM with yourself — skip entirely
+        if (chatBase === ownerBase) return;
+      }
+    }
+
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
     // Handle 'all' marker - marks entire chat as read
     if (messageIds.length === 1 && messageIds[0] === 'all') {
-      await this.markChatAsRead(instanceId, chatId);
+      await this.markChatAsRead(instanceId, chatId, readReceiptMode);
       return;
     }
 
-    const keys = messageIds.map((id) => ({
-      remoteJid: jid,
-      id,
-      fromMe: false,
-    }));
+    const isGroup = jid.endsWith('@g.us');
 
-    await sock.readMessages(keys);
+    // Build a lookup from messageData for group key construction
+    const dataByExternalId = new Map((messageData ?? []).map((m) => [m.externalId, m.rawPayload]));
+
+    const lidCache = isGroup ? this.getLidMappingCache(instanceId) : undefined;
+    let missingParticipants = 0;
+
+    const keys = messageIds.map((id) => {
+      const resolved = this.resolveMessageKey(instanceId, id, jid, isGroup, dataByExternalId, lidCache);
+      if (isGroup && !resolved.participant) missingParticipants++;
+      return resolved;
+    });
+
+    if (missingParticipants > 0) {
+      this.logger.warn('Group read receipt missing participant for some messages', {
+        instanceId,
+        chatId: jid,
+        total: messageIds.length,
+        missingParticipants,
+      });
+    }
+
+    // In exclude-self mode, skip read receipts for self-authored messages
+    const filteredKeys = readReceiptMode === 'exclude-self' ? keys.filter((k) => !k.fromMe) : keys;
+    if (filteredKeys.length === 0) return;
+
+    await sock.readMessages(filteredKeys);
   }
 
   /**
@@ -1240,12 +1528,26 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    *
    * @param instanceId - Instance ID
    * @param chatId - Chat ID (JID or phone number)
+   * @param readReceiptMode - Optional per-instance receipt mode; skips sending if 'off' or 'exclude-self' for own chat
    */
-  async markChatAsRead(instanceId: string, chatId: string): Promise<void> {
+  async markChatAsRead(
+    instanceId: string,
+    chatId: string,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    // Respect per-instance read receipt mode
+    if (readReceiptMode === 'off') return;
+    if (readReceiptMode === 'exclude-self') {
+      const ownerJid = this.instances.get(instanceId)?.status?.metadata?.ownerIdentifier;
+      if (ownerJid) {
+        const normalize = (jid: string) => (jid.split('@')[0] ?? jid).split(':')[0] ?? jid;
+        if (normalize(chatId) === normalize(ownerJid)) return;
+      }
+    }
+
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
-    // Send presence update and read all messages
     await sock.sendPresenceUpdate('available', jid);
     await sock.readMessages([{ remoteJid: jid, id: 'all', fromMe: false }]);
   }
@@ -1271,9 +1573,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
-    await sock.sendMessage(jid, {
-      delete: { remoteJid: jid, id: messageId, fromMe },
-    });
+    await sock.sendMessage(jid, { delete: { remoteJid: jid, id: messageId, fromMe } });
     this.logger.info('Message deleted for everyone', { instanceId, chatId, messageId, fromMe });
   }
 
@@ -1922,6 +2222,164 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       profilePicUrl,
       ownerIdentifier,
     });
+
+    // Prefetch group metadata in background — populates cachedGroupMetadata
+    // so the first send to each group doesn't block inside the buffer.
+    this.prefetchGroupMetadata(instanceId, sock).catch((err) => {
+      this.logger.warn('Failed to prefetch group metadata', { instanceId, error: String(err) });
+    });
+  }
+
+  /**
+   * Prefetch metadata for all known groups on this instance.
+   * Runs in background after connection to warm the cachedGroupMetadata cache.
+   */
+  private async prefetchGroupMetadata(instanceId: string, sock: WASocket): Promise<void> {
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      let count = 0;
+      for (const [jid, metadata] of Object.entries(groups)) {
+        this.setGroupMetadataCache(instanceId, jid, metadata);
+        // Also update the display-name cache
+        let nameCache = this.groupsCache.get(instanceId);
+        if (!nameCache) {
+          nameCache = new Map();
+          this.groupsCache.set(instanceId, nameCache);
+        }
+        nameCache.set(jid, { subject: metadata.subject, desc: metadata.desc });
+        count++;
+      }
+      this.logger.info('Prefetched group metadata', { instanceId, groups: count });
+
+      // Pre-warm device + session caches for all group participants (#70).
+      // This prevents the first send to any group from holding the
+      // keys.transaction mutex while fetching devices/sessions over the network.
+      await this.prewarmAllGroupCaches(instanceId, sock, groups);
+    } catch (err) {
+      this.logger.warn('groupFetchAllParticipating failed', { instanceId, error: String(err) });
+    }
+  }
+
+  /**
+   * Pre-warm Baileys' internal device and session caches for a single group.
+   *
+   * Baileys' `relayMessage` wraps sends in `keys.transaction(work, meId)` which
+   * acquires a real mutex. Inside that transaction, `getUSyncDevices` and
+   * `assertSessions` make network queries that can take 15-45s, blocking ALL
+   * other sends on the same mutex.
+   *
+   * By calling these functions OUTSIDE the transaction, their results are cached
+   * in Baileys' `userDevicesCache` and `peerSessionsCache`. The subsequent
+   * `relayMessage` call finds cached data and the mutex is held for milliseconds.
+   */
+  private async prewarmGroupCaches(instanceId: string, sock: WASocket, groupJid: string): Promise<void> {
+    try {
+      const t0 = Date.now();
+      let metadata = await this.getCachedGroupMetadata(instanceId, groupJid);
+
+      // Cache miss or expired — fetch fresh metadata NOW (outside the transaction).
+      // Without this, relayMessage falls back to groupMetadata(jid) INSIDE
+      // keys.transaction, holding the meId mutex during a network round-trip.
+      if (!metadata?.participants?.length) {
+        const fresh = await sock.groupMetadata(groupJid);
+        if (fresh?.participants?.length) {
+          this.setGroupMetadataCache(instanceId, groupJid, fresh);
+          metadata = fresh;
+        }
+      }
+
+      if (!metadata?.participants?.length) return;
+
+      const participantJids = metadata.participants.map((p) => p.id);
+
+      // 1. Pre-warm device cache — populates userDevicesCache
+      const t1 = Date.now();
+      const devices = await sock.getUSyncDevices(participantJids, true, false);
+      const t2 = Date.now();
+
+      // 2. Pre-warm session cache — populates peerSessionsCache
+      const deviceJids = devices.map((d) => d.jid).filter(Boolean);
+      if (deviceJids.length) {
+        await sock.assertSessions(deviceJids, false);
+      }
+      const t3 = Date.now();
+
+      this.logger.debug('Pre-warmed group caches', {
+        instanceId,
+        group: groupJid,
+        participants: participantJids.length,
+        devices: deviceJids.length,
+        getDevicesMs: t2 - t1,
+        assertSessionsMs: t3 - t2,
+        totalMs: t3 - t0,
+      });
+    } catch (err) {
+      // Best-effort — if pre-warm fails, relayMessage will fetch inside
+      // the transaction (slower but still works)
+      this.logger.debug('Group cache pre-warm failed (non-fatal)', {
+        instanceId,
+        group: groupJid,
+        error: String(err),
+      });
+    }
+  }
+
+  /**
+   * Pre-warm device and session caches for ALL groups after connection.
+   * Runs in background during prefetchGroupMetadata.
+   */
+  private async prewarmAllGroupCaches(
+    instanceId: string,
+    sock: WASocket,
+    groups: Record<string, GroupMetadata>,
+  ): Promise<void> {
+    try {
+      // Collect ALL unique participant JIDs across all groups
+      const allParticipantJids = new Set<string>();
+      for (const metadata of Object.values(groups)) {
+        for (const p of metadata.participants) {
+          allParticipantJids.add(p.id);
+        }
+      }
+
+      if (allParticipantJids.size === 0) return;
+
+      const jids = [...allParticipantJids];
+      const configuredDeviceBatchSize = Number.parseInt(process.env.WHATSAPP_PREWARM_DEVICE_BATCH_SIZE ?? '500', 10);
+      const deviceBatchSize =
+        Number.isFinite(configuredDeviceBatchSize) && configuredDeviceBatchSize > 0 ? configuredDeviceBatchSize : 500;
+      const configuredSessionBatchSize = Number.parseInt(process.env.WHATSAPP_PREWARM_SESSION_BATCH_SIZE ?? '500', 10);
+      const sessionBatchSize =
+        Number.isFinite(configuredSessionBatchSize) && configuredSessionBatchSize > 0
+          ? configuredSessionBatchSize
+          : 500;
+
+      // 1. Pre-warm device cache in bounded batches to avoid large single requests.
+      const devices: Awaited<ReturnType<WASocket['getUSyncDevices']>> = [];
+      for (let i = 0; i < jids.length; i += deviceBatchSize) {
+        const batch = jids.slice(i, i + deviceBatchSize);
+        const batchDevices = await sock.getUSyncDevices(batch, true, false);
+        devices.push(...batchDevices);
+      }
+
+      // 2. Pre-warm session cache for all device JIDs (also in batches).
+      const deviceJids = devices.map((d) => d.jid).filter((jid): jid is string => Boolean(jid));
+      for (let i = 0; i < deviceJids.length; i += sessionBatchSize) {
+        const batch = deviceJids.slice(i, i + sessionBatchSize);
+        await sock.assertSessions(batch, false);
+      }
+
+      this.logger.info('Pre-warmed device/session caches for all groups', {
+        instanceId,
+        participants: jids.length,
+        devices: deviceJids.length,
+      });
+    } catch (err) {
+      this.logger.warn('Bulk group cache pre-warm failed (non-fatal)', {
+        instanceId,
+        error: String(err),
+      });
+    }
   }
 
   /**
@@ -1932,9 +2390,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Close and cleanup socket to prevent memory leaks
     const sock = this.sockets.get(instanceId);
     if (sock) {
+      sock.ev.removeAllListeners('connection.update');
       await closeSocket(sock, false);
       this.sockets.delete(instanceId);
     }
+    this.groupMetadataCache.delete(instanceId);
 
     const config = this.instances.get(instanceId)?.config;
     if (config) {
@@ -2029,11 +2489,22 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
 
+    // Cache message key for markAsRead fallback (race condition with auto-read)
+    if (externalId && rawMessage.key) {
+      const cacheKey = `${instanceId}:${externalId}`;
+      this.recentMessageKeys.set(cacheKey, {
+        participant: rawMessage.key.participant ?? undefined,
+        fromMe: rawMessage.key.fromMe === true,
+      });
+      // Auto-expire after TTL
+      setTimeout(() => this.recentMessageKeys.delete(cacheKey), WhatsAppPlugin.MESSAGE_KEY_CACHE_TTL_MS);
+    }
+
     // Cache sender's pushName for mention resolution (WAMessage.pushName field)
     const senderPushName = (rawMessage as { pushName?: string }).pushName;
     if (senderPushName && from) {
-      // Normalize sender JID to @s.whatsapp.net format for cache consistency
-      // from might be: "555197285829", "555197285829:73", or "555197285829@s.whatsapp.net"
+      // LID-first: accept any JID format for cache keying (including @lid)
+      // from might be: "555197285829", "555197285829:73", "555197285829@s.whatsapp.net", or "100000001@lid"
       const normalizedFrom = from.includes('@') ? from : `${from.split(':')[0]}@s.whatsapp.net`;
 
       // Cache the sender's name so it's available when they're mentioned
@@ -2323,15 +2794,22 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle presence update (typing, online/offline)
    * @internal
    */
-  handlePresenceUpdate(
-    _instanceId: string,
-    _chatId: string,
-    _userId: string,
-    _presence: string,
-    _lastSeen?: number,
-  ): void {
-    // TODO: Emit presence event
-    // presence can be: 'available', 'unavailable', 'composing', 'recording', 'paused'
+  handlePresenceUpdate(instanceId: string, chatId: string, userId: string, presence: string, lastSeen?: number): void {
+    const meta = { instanceId, channelType: this.id, source: `channel:${this.id}` };
+
+    if (presence === 'composing' || presence === 'recording') {
+      this.eventBus
+        .publish('presence.typing', { chatId, from: userId, timestamp: Date.now() }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.typing', { error: String(err) }));
+    } else if (presence === 'available') {
+      this.eventBus
+        .publish('presence.online', { userId, lastSeen }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.online', { error: String(err) }));
+    } else if (presence === 'unavailable') {
+      this.eventBus
+        .publish('presence.offline', { userId, lastSeen: lastSeen ?? Date.now() }, meta)
+        .catch((err) => this.logger.warn('Failed to publish presence.offline', { error: String(err) }));
+    }
   }
 
   /**
@@ -2346,6 +2824,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const chat of chats) {
       const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!c.id) continue;
@@ -2354,8 +2838,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const name = c.displayName || c.name;
       cache.set(c.id, name ?? c.id);
 
-      // Sync unread count from WhatsApp
+      // Sync unread count from WhatsApp and cache for periodic refresh
       if (c.unreadCount !== undefined) {
+        unreadCache.set(c.id, c.unreadCount);
         this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
       }
     }
@@ -2379,6 +2864,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.chatNamesCache.set(instanceId, cache);
     }
 
+    let unreadCache = this.chatUnreadCache.get(instanceId);
+    if (!unreadCache) {
+      unreadCache = new Map();
+      this.chatUnreadCache.set(instanceId, unreadCache);
+    }
+
     for (const update of updates) {
       const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
       if (!u.id) continue;
@@ -2391,6 +2882,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
       if (u.unreadCount !== undefined) {
+        unreadCache.set(u.id, u.unreadCount);
         this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
       }
     }
@@ -2419,11 +2911,56 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Extract LID↔phone mappings from a contact and store bidirectionally
+   */
+  private extractContactLidMapping(
+    instanceId: string,
+    contactId: string,
+    lid: string | undefined,
+    phoneNumber: string | undefined,
+  ): void {
+    // Case 1: id=phone@s.whatsapp.net + lid=Y → store Y@lid → phone
+    if (lid && isUserJid(contactId)) {
+      const lidJid = lid.endsWith('@lid') ? lid : `${lid}@lid`;
+      this.storeLidMapping(instanceId, lidJid, contactId);
+    }
+    // Case 2: id=LID@lid + phoneNumber=X → store LID@lid → X@s.whatsapp.net
+    if (contactId.endsWith('@lid') && phoneNumber) {
+      const phoneJid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber.replace(/\D/g, '')}@s.whatsapp.net`;
+      this.storeLidMapping(instanceId, contactId, phoneJid);
+    }
+  }
+
+  /**
+   * Build a SyncContact from raw Baileys contact data
+   */
+  private buildSyncContact(c: {
+    id: string;
+    phoneNumber?: string;
+    name?: string;
+    notify?: string;
+    verifiedName?: string;
+    imgUrl?: string | null;
+    status?: string;
+    lid?: string;
+  }): SyncContact {
+    const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
+    return {
+      platformUserId: c.id,
+      name: c.name || c.notify || c.verifiedName || undefined,
+      phone,
+      profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
+      isGroup: c.id.endsWith('@g.us'),
+      isBusiness: !!c.verifiedName,
+      metadata: { lid: c.lid, status: c.status, notify: c.notify, verifiedName: c.verifiedName },
+    };
+  }
+
+  /**
    * Handle contacts upsert (new contacts)
    * @internal
    */
   handleContactsUpsert(instanceId: string, contacts: unknown[]): void {
-    // Get or create contacts cache for this instance
     let cache = this.contactsCache.get(instanceId);
     if (!cache) {
       cache = new Map();
@@ -2442,42 +2979,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         status?: string;
       };
 
-      // Skip group JIDs (they're handled separately)
-      const isGroup = c.id.endsWith('@g.us');
-
-      // Extract phone number from JID if not provided
-      const phone = c.phoneNumber || (c.id.includes('@s.whatsapp.net') ? `+${c.id.split('@')[0]}` : undefined);
-
-      const syncContact: SyncContact = {
-        platformUserId: c.id,
-        name: c.name || c.notify || c.verifiedName || undefined,
-        phone,
-        profilePicUrl: c.imgUrl && c.imgUrl !== 'changed' ? c.imgUrl : undefined,
-        isGroup,
-        isBusiness: !!c.verifiedName,
-        metadata: {
-          lid: c.lid,
-          status: c.status,
-          notify: c.notify,
-          verifiedName: c.verifiedName,
-        },
-      };
-
+      const syncContact = this.buildSyncContact(c);
       cache.set(c.id, syncContact);
 
       this.logger.debug('Cached contact from contacts.upsert', {
         instanceId,
         id: c.id,
         name: syncContact.name,
-        phone,
+        phone: syncContact.phone,
         hasLid: !!c.lid,
       });
 
-      // Extract LID mapping: if contact has a LID and a phone-based ID, store the mapping
-      if (c.lid && isUserJid(c.id)) {
-        const lidJid = c.lid.endsWith('@lid') ? c.lid : `${c.lid}@lid`;
-        this.storeLidMapping(instanceId, lidJid, c.id);
-      }
+      this.extractContactLidMapping(instanceId, c.id, c.lid, c.phoneNumber);
     }
 
     this.logger.debug('Contacts upserted', { instanceId, count: contacts.length, cacheSize: cache.size });
@@ -2583,9 +3096,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const group of groups) {
-      const g = group as { id?: string; subject?: string; desc?: string };
+      const g = group as GroupMetadata;
       if (g.id && g.subject) {
         cache.set(g.id, { subject: g.subject, desc: g.desc });
+        // Also populate full metadata cache if it has participants
+        if (g.participants?.length) {
+          this.setGroupMetadataCache(instanceId, g.id, g);
+        }
         this.logger.debug('Cached group metadata', { instanceId, groupId: g.id, subject: g.subject });
       }
     }
@@ -2612,15 +3129,65 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       } else if (u.subject) {
         cache.set(u.id, { subject: u.subject, desc: u.desc });
       }
+
+      // Invalidate full metadata cache — subject/desc changed, participants may have too
+      this.invalidateGroupMetadataCache(instanceId, u.id);
     }
   }
 
   /**
    * Handle group participants update (join/leave/promote/demote)
+   * Invalidates cached group metadata so next send fetches fresh participants.
    * @internal
    */
-  handleGroupParticipantsUpdate(_instanceId: string, _update: unknown): void {
-    // TODO: Emit group-participants.update event
+  handleGroupParticipantsUpdate(instanceId: string, update: unknown): void {
+    const u = update as { id?: string; action?: string; participants?: { id: string }[] };
+    if (u?.id) {
+      this.invalidateGroupMetadataCache(instanceId, u.id);
+      this.logger.debug('Invalidated group metadata cache (participants changed)', {
+        instanceId,
+        groupId: u.id,
+        action: u.action,
+      });
+    }
+  }
+
+  // ─── Group metadata cache helpers (for cachedGroupMetadata callback) ───
+
+  /** Store full GroupMetadata in the per-instance cache */
+  private setGroupMetadataCache(instanceId: string, jid: string, metadata: GroupMetadata): void {
+    let cache = this.groupMetadataCache.get(instanceId);
+    if (!cache) {
+      cache = new Map();
+      this.groupMetadataCache.set(instanceId, cache);
+    }
+    cache.set(jid, { metadata, cachedAt: Date.now() });
+  }
+
+  /** Invalidate a single group's metadata (e.g., after participant change) */
+  private invalidateGroupMetadataCache(instanceId: string, jid: string): void {
+    this.groupMetadataCache.get(instanceId)?.delete(jid);
+  }
+
+  /**
+   * Callback passed to `makeWASocket({ cachedGroupMetadata })`.
+   *
+   * Returns cached GroupMetadata if fresh (< TTL), otherwise undefined
+   * so Baileys fetches it. When Baileys fetches inside the buffer, the
+   * result is automatically available for subsequent calls.
+   */
+  private async getCachedGroupMetadata(instanceId: string, jid: string): Promise<GroupMetadata | undefined> {
+    const entry = this.groupMetadataCache.get(instanceId)?.get(jid);
+    if (!entry) return undefined;
+
+    const age = Date.now() - entry.cachedAt;
+    if (age > WhatsAppPlugin.GROUP_CACHE_TTL_MS) {
+      // Expired — remove and let Baileys fetch fresh
+      this.groupMetadataCache.get(instanceId)?.delete(jid);
+      return undefined;
+    }
+
+    return entry.metadata;
   }
 
   /**
@@ -2810,6 +3377,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           mimeType: content.mimeType,
         },
         rawPayload,
+        isHistorySync: true,
       });
     }
   }

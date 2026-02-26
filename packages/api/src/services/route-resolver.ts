@@ -15,6 +15,9 @@ import { LRUCache } from 'lru-cache';
 
 const log = createLogger('route-resolver');
 
+/** UUID v1-v5 format validator (defense-in-depth against non-UUID chatIds like LID JIDs) */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Sentinel value for negative caching (no route found)
 const NO_ROUTE = Symbol('NO_ROUTE');
 type CacheValue = ResolvedRoute | typeof NO_ROUTE;
@@ -80,6 +83,19 @@ export class RouteResolver {
    * Returns null if no route matches (use instance default).
    */
   async resolve(instanceId: string, chatId: string, personId?: string): Promise<ResolvedRoute | null> {
+    // Defense-in-depth: reject non-UUID chatIds before they reach SQL.
+    // External IDs (e.g. WhatsApp LID JIDs like "12345:90@lid", phone JIDs like
+    // "5511999@s.whatsapp.net") must NEVER be passed to UUID columns — PostgreSQL
+    // would throw "invalid input syntax for type uuid".
+    if (!UUID_RE.test(chatId)) {
+      log.debug('Skipping chat route resolution — chatId is not a valid UUID', {
+        instanceId,
+        chatId,
+        personId,
+      });
+      return null;
+    }
+
     const cacheKey = this.getCacheKey(instanceId, chatId, personId);
     const cached = this.cache.get(cacheKey);
 

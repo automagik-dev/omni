@@ -20,6 +20,7 @@ import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
+import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
 import { createJourneyCommand } from './commands/journey.js';
 import { createKeysCommand } from './commands/keys.js';
@@ -30,10 +31,13 @@ import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
+import { createStopCommand } from './commands/stop.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
@@ -166,6 +170,30 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Update CLI to latest version',
+  },
+  {
+    create: createStartCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Start Omni services (API + NATS)',
+  },
+  {
+    create: createStopCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Stop Omni services',
+  },
+  {
+    create: createRestartCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Restart Omni services',
+  },
+  {
+    create: createInstallCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
   },
   {
     create: createMediaCommand,

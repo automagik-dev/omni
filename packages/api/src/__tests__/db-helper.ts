@@ -15,7 +15,7 @@ import { describe } from 'bun:test';
 import { type Database, createDb } from '@omni/db';
 import { sql } from 'drizzle-orm';
 
-export const TEST_DATABASE_URL =
+const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
 
 let _db: Database | null = null;
@@ -31,8 +31,12 @@ async function probe(): Promise<boolean> {
   }
 }
 
-/** Whether the test database is reachable. Resolved at import time. */
-export const DB_AVAILABLE = await probe();
+/**
+ * Whether the test database is reachable.
+ * Requires ENABLE_DB_TESTS=true to attempt connection — prevents hanging
+ * in CI/deploy environments where the DB port may not be accepting connections.
+ */
+const DB_AVAILABLE = process.env.ENABLE_DB_TESTS === 'true' ? await probe() : false;
 
 /** Get a cached database connection (only call if DB_AVAILABLE is true). */
 export function getTestDb(): Database {

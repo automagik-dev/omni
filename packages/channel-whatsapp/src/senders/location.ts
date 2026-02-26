@@ -2,7 +2,7 @@
  * Location message sender
  */
 
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, WASocket } from 'baileys';
 
 /**
  * Location data

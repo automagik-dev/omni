@@ -1,0 +1,17 @@
+{
+  "description": "Omni plugin hooks — auto-install CLI + health check on session start",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/omni-runner.js\" health",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

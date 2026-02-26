@@ -5,16 +5,22 @@
  * Handles connection, messaging, and lifecycle for Discord bot instances.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
+  FetchHistoryOptions,
+  FetchHistoryResult,
+  HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
+import type { GuildConfigOverride } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { Client, Message, TextBasedChannel } from 'discord.js';
+import { ActivityType } from 'discord.js';
+import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
 import type { InteractionAuthConfig } from './auth/interaction-auth';
@@ -30,6 +36,7 @@ import {
   setupReactionHandlers,
 } from './handlers';
 import { sendMediaBuffer, sendMediaMessage } from './senders/media';
+import { mediaDedup } from './senders/media-dedup';
 import { addReaction, removeReaction } from './senders/reaction';
 import { deleteMessage as deleteTextMessage, editTextMessage, sendTextMessage } from './senders/text';
 import type {
@@ -150,32 +157,66 @@ async function sendTextContent(client: Client, channelId: string, message: Outgo
   return messageIds[0] ?? '';
 }
 
+/** Sentinel returned by sendMediaContent when dedup suppresses the send. */
+const DEDUP_SKIPPED = '__dedup_skipped__';
+
 /**
  * Send media content (image, audio, video, document)
+ * Includes media deduplication check to prevent duplicate sends within TTL window.
+ *
+ * Returns DEDUP_SKIPPED (not an empty string) when the send was suppressed to
+ * allow callers to distinguish dedup skips from genuine empty message IDs.
  */
-async function sendMediaContent(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+async function sendMediaContent(
+  client: Client,
+  channelId: string,
+  message: OutgoingMessage,
+  instanceId: string,
+): Promise<string> {
   const content = message.content;
   const base64 = message.metadata?.base64 as string | undefined;
+  // Scope dedup by instance + channel so identical media going to different
+  // destinations is not incorrectly collapsed.
+  const dedupScope = `${instanceId}:${channelId}`;
 
   if (base64) {
     const buffer = Buffer.from(base64, 'base64');
+
+    // Wire: media dedup — skip sending if this exact media was sent recently
+    if (mediaDedup.isDuplicate(buffer, dedupScope)) {
+      return DEDUP_SKIPPED;
+    }
+
     const filename = content.filename || `media-${Date.now()}.${content.type === 'image' ? 'png' : 'bin'}`;
-    return sendMediaBuffer(client, channelId, buffer, {
+    const bufferResult = await sendMediaBuffer(client, channelId, buffer, {
       filename,
       caption: content.text || content.caption,
       replyToId: message.replyTo,
     });
+    // Mark sent only after the API call succeeds to avoid poisoning the cache
+    // on transient failures (which would prevent legitimate retries).
+    mediaDedup.markSent(buffer, dedupScope);
+    return bufferResult;
   }
 
   if (!content.mediaUrl) {
     throw new DiscordError(ErrorCode.SEND_FAILED, 'Media URL or base64 required');
   }
 
-  return sendMediaMessage(client, channelId, content.mediaUrl, {
+  // Wire: media dedup for URL-based media — hash the URL as a content proxy
+  const urlBuffer = Buffer.from(content.mediaUrl);
+  if (mediaDedup.isDuplicate(urlBuffer, dedupScope)) {
+    return DEDUP_SKIPPED;
+  }
+
+  const urlResult = await sendMediaMessage(client, channelId, content.mediaUrl, {
     caption: content.text || content.caption,
     filename: content.filename,
     replyToId: message.replyTo,
   });
+  // Mark sent only after the API call succeeds.
+  mediaDedup.markSent(urlBuffer, dedupScope);
+  return urlResult;
 }
 
 /**
@@ -209,50 +250,9 @@ async function sendPollContent(client: Client, channelId: string, message: Outgo
 // Types
 // ============================================================================
 
-/**
- * Message from history sync
- */
-export interface HistorySyncMessage {
-  externalId: string;
-  chatId: string;
-  from: string;
-  timestamp: Date;
-  content: {
-    type: string;
-    text?: string;
-    mediaUrl?: string;
-    mimeType?: string;
-    caption?: string;
-  };
-  isFromMe: boolean;
-  rawPayload: unknown;
-}
-
-/**
- * Options for fetchHistory method
- */
-export interface FetchHistoryOptions {
-  /** Channel ID to fetch messages from (required for Discord) */
-  channelId: string;
-  /** Fetch messages since this date */
-  since?: Date;
-  /** Fetch messages until this date (default: now) */
-  until?: Date;
-  /** Maximum number of messages to fetch (default: 100, max: 1000) */
-  limit?: number;
-  /** Callback for progress updates */
-  onProgress?: (fetched: number, total?: number) => void;
-  /** Callback for each message synced */
-  onMessage?: (message: HistorySyncMessage) => void;
-}
-
-/**
- * Result of fetchHistory operation
- */
-export interface FetchHistoryResult {
-  totalFetched: number;
-  messages: HistorySyncMessage[];
-}
+// HistorySyncMessage, FetchHistoryOptions, FetchHistoryResult imported from @omni/channel-sdk
+// Re-export for external consumers
+export type { HistorySyncMessage, FetchHistoryOptions, FetchHistoryResult };
 
 /**
  * Contact from sync (guild member)
@@ -347,11 +347,17 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Active Discord clients per instance */
   private clients = new Map<string, Client>();
 
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
   /** Plugin configuration */
   private pluginConfig: DiscordConfig = {};
 
   /** Per-instance interaction auth configs */
   private instanceAuthConfigs = new Map<string, InteractionAuthConfig>();
+
+  /** Per-instance guild config overrides cache: instanceId → (guildId → config) */
+  private guildConfigCache = new Map<string, Record<string, GuildConfigOverride>>();
 
   /**
    * Plugin-specific initialization
@@ -370,6 +376,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
       await destroyClient(client);
     }
     this.clients.clear();
+    // Dispose all per-instance dedup caches
+    for (const cache of this.dedupeCaches.values()) cache.dispose();
+    this.dedupeCaches.clear();
   }
 
   /**
@@ -442,7 +451,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Setup raw event handler first (for DEBUG_PAYLOADS capture)
     setupRawEventHandler(client, instanceId);
 
-    setupMessageHandlers(client, this, instanceId);
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
+    setupMessageHandlers(client, this, instanceId, dedupeCache);
     setupReactionHandlers(client, this, instanceId);
     setupInteractionHandlers(client, this, instanceId);
     setupAllEventHandlers(client, this, instanceId);
@@ -478,6 +491,10 @@ export class DiscordPlugin extends BaseChannelPlugin {
     this.clients.delete(instanceId);
     this.instanceAuthConfigs.delete(instanceId);
 
+    // Dispose per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
+
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
@@ -507,7 +524,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
 
-      const messageId = await this.dispatchMessageByType(client, channelId, message);
+      const messageId = await this.dispatchMessageByType(client, channelId, message, instanceId);
+
+      // Dedup-skipped sends must not emit message.sent — doing so would produce
+      // phantom events with externalId: '' that corrupt downstream persistence.
+      if (messageId === DEDUP_SKIPPED) {
+        return { success: true, messageId: '', timestamp: Date.now() };
+      }
 
       // Journey timing: T11 (platformDeliveredAt) after Discord API responds
       if (correlationId) this.captureT11(correlationId);
@@ -544,7 +567,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /**
    * Dispatch message to appropriate handler based on content type
    */
-  private async dispatchMessageByType(client: Client, channelId: string, message: OutgoingMessage): Promise<string> {
+  private async dispatchMessageByType(
+    client: Client,
+    channelId: string,
+    message: OutgoingMessage,
+    instanceId: string,
+  ): Promise<string> {
     switch (message.content.type) {
       case 'text':
         return sendTextContent(client, channelId, message);
@@ -552,7 +580,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
       case 'audio':
       case 'video':
       case 'document':
-        return sendMediaContent(client, channelId, message);
+        return sendMediaContent(client, channelId, message, instanceId);
       case 'reaction':
         return sendReactionContent(client, channelId, message);
       case 'poll':
@@ -604,6 +632,122 @@ export class DiscordPlugin extends BaseChannelPlugin {
   async removeReaction(instanceId: string, channelId: string, messageId: string, emoji: string): Promise<void> {
     const client = this.getClient(instanceId);
     await removeReaction(client, channelId, messageId, emoji);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // ChannelPlugin: react / unreact (per_thread media processing feedback)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Add a reaction emoji to a Discord message (per_thread media processing feedback).
+   * Graceful skip on permission errors (bot may lack ADD_REACTIONS in this channel).
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const client = this.getClient(instanceId);
+    try {
+      await addReaction(client, chatId, messageId, emoji);
+    } catch (err) {
+      this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Remove a reaction emoji from a Discord message.
+   * Graceful skip on permission errors.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const client = this.getClient(instanceId);
+    try {
+      await removeReaction(client, chatId, messageId, emoji);
+    } catch (err) {
+      this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Set bot presence (status + activity) for a Discord instance.
+   * Can be called at runtime without reconnecting.
+   */
+  async setPresence(
+    instanceId: string,
+    presence: {
+      status?: 'online' | 'dnd' | 'idle' | 'invisible';
+      activityText?: string;
+      activityType?: 'Playing' | 'Streaming' | 'Listening' | 'Watching' | 'Custom' | 'Competing';
+    },
+  ): Promise<void> {
+    const client = this.getClient(instanceId);
+
+    const activityTypeMap: Record<string, ActivityType> = {
+      Playing: ActivityType.Playing,
+      Streaming: ActivityType.Streaming,
+      Listening: ActivityType.Listening,
+      Watching: ActivityType.Watching,
+      Custom: ActivityType.Custom,
+      Competing: ActivityType.Competing,
+    };
+
+    const activities = presence.activityText
+      ? [
+          {
+            name: presence.activityText,
+            type: activityTypeMap[presence.activityType ?? 'Playing'] ?? ActivityType.Playing,
+          },
+        ]
+      : [];
+
+    client.user?.setPresence({
+      status: (presence.status ?? 'online') as PresenceStatusData,
+      activities,
+    });
+
+    this.logger.info('Bot presence updated', { instanceId, presence });
+  }
+
+  /**
+   * Set guild config overrides for an instance.
+   * Called by API routes when guild config is created/updated.
+   */
+  setGuildConfig(instanceId: string, guildId: string, config: GuildConfigOverride): void {
+    let overrides = this.guildConfigCache.get(instanceId);
+    if (!overrides) {
+      overrides = {};
+      this.guildConfigCache.set(instanceId, overrides);
+    }
+    overrides[guildId] = config;
+    this.logger.debug('Guild config updated in plugin cache', { instanceId, guildId });
+  }
+
+  /**
+   * Remove guild config overrides for an instance (reset to defaults).
+   * Called by API routes when guild config is deleted.
+   */
+  removeGuildConfig(instanceId: string, guildId: string): void {
+    const overrides = this.guildConfigCache.get(instanceId);
+    if (overrides) {
+      delete overrides[guildId];
+      this.logger.debug('Guild config removed from plugin cache', { instanceId, guildId });
+    }
+  }
+
+  /**
+   * Get resolved guild config for a specific guild.
+   * Returns the guild-specific overrides, or undefined if no overrides exist.
+   */
+  getGuildConfig(instanceId: string, guildId: string): GuildConfigOverride | undefined {
+    return this.guildConfigCache.get(instanceId)?.[guildId];
+  }
+
+  /**
+   * Load guild config overrides from instance data into plugin cache.
+   * Called during connection setup.
+   */
+  loadGuildConfigs(instanceId: string, overrides: Record<string, GuildConfigOverride>): void {
+    this.guildConfigCache.set(instanceId, { ...overrides });
+    this.logger.debug('Guild configs loaded into plugin cache', {
+      instanceId,
+      guildCount: Object.keys(overrides).length,
+    });
   }
 
   /**
@@ -871,6 +1015,23 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * Handles pagination and filtering by date range
    * @internal
    */
+  /** Process a single batch of messages, applying date filters. Returns false to stop iteration. */
+  private processBatch(
+    batch: Map<string, Message> & { last: () => Message | undefined; size: number },
+    options: FetchHistoryOptions,
+    messages: HistorySyncMessage[],
+    botId: string | undefined,
+  ): boolean {
+    for (const msg of batch.values()) {
+      if (options.since && msg.createdAt < options.since) return false; // reached oldest — stop
+      if (options.until && msg.createdAt > options.until) continue; // too new — skip
+      const historyMsg = this.convertToHistoryMessage(msg, options.channelId ?? '', botId);
+      messages.push(historyMsg);
+      options.onMessage?.(historyMsg);
+    }
+    return true;
+  }
+
   private async fetchMessageBatches(
     channel: TextBasedChannel,
     options: FetchHistoryOptions,
@@ -887,27 +1048,18 @@ export class DiscordPlugin extends BaseChannelPlugin {
 
       if (batch.size === 0) break;
 
-      for (const msg of batch.values()) {
-        // Apply date filters
-        if (options.since && msg.createdAt < options.since) {
-          remaining = 0; // Stop fetching, reached oldest message
-          break;
-        }
-        if (options.until && msg.createdAt > options.until) {
-          continue; // Skip messages newer than until date
-        }
-
-        const historyMsg = this.convertToHistoryMessage(msg, options.channelId, botId);
-        messages.push(historyMsg);
-        options.onMessage?.(historyMsg);
-      }
+      const shouldContinue = this.processBatch(
+        batch as unknown as Map<string, Message> & { last: () => Message | undefined; size: number },
+        options,
+        messages,
+        botId,
+      );
 
       remaining -= batch.size;
       before = batch.last()?.id;
       options.onProgress?.(messages.length);
 
-      // If batch returned less than requested, we've reached the end
-      if (batch.size < batchSize) break;
+      if (!shouldContinue || batch.size < batchSize) break;
     }
 
     return messages;
@@ -1064,6 +1216,18 @@ export class DiscordPlugin extends BaseChannelPlugin {
         state: 'connected',
         since: new Date(),
       });
+
+      // Set initial presence from config if available
+      const presenceConfig = config.options?.presence as
+        | { status?: string; activityText?: string; activityType?: string }
+        | undefined;
+      if (presenceConfig) {
+        try {
+          await this.setPresence(instanceId, presenceConfig as Parameters<typeof this.setPresence>[1]);
+        } catch (error) {
+          this.logger.warn('Failed to set initial presence', { instanceId, error: String(error) });
+        }
+      }
     }
 
     await this.emitInstanceConnected(instanceId, {

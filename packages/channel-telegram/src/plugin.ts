@@ -9,19 +9,24 @@
  * - webhook: Webhook updates (production)
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
+  FetchHistoryOptions,
+  FetchHistoryResult,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
   SendResult,
   StreamSender,
 } from '@omni/channel-sdk';
+import type { StreamDelta } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
 import { TELEGRAM_CAPABILITIES } from './capabilities';
 import { createBot, destroyBot, getBot } from './client';
+import { isStreamingEnabled } from './config/stream-mode';
 import type { TelegramBotLike } from './grammy-shim';
 import {
   setupChannelPostHandlers,
@@ -29,6 +34,8 @@ import {
   setupMessageHandlers,
   setupReactionHandlers,
 } from './handlers';
+import { removeChatQueue } from './middleware/sequentialize';
+import { removeAckReaction, setAckReaction } from './reactions/levels';
 import {
   sendAudio,
   sendContact,
@@ -44,6 +51,7 @@ import {
 import { setReaction } from './senders/reaction';
 import { TelegramStreamSender } from './senders/stream';
 import type { TelegramConfig } from './types';
+import { splitMessage } from './utils/formatting';
 
 // ============================================================================
 // Helpers
@@ -93,6 +101,24 @@ async function dispatchMedia(
   }
 }
 
+/** Dispatch text content — handles optional inline buttons and chat-type scope. */
+async function dispatchTextContent(
+  bot: TelegramBotLike,
+  chatId: string,
+  content: OutgoingMessage['content'],
+  replyParam: number | undefined,
+  formatMode: 'convert' | 'passthrough',
+  baseOptions: { message_thread_id?: number } | undefined,
+  chatType: string | undefined,
+): Promise<number | null> {
+  if (content.buttons?.length) {
+    // Pass chatType only for button scope filtering inside sendInlineButtons
+    const buttonOptions = { ...(baseOptions ?? {}), ...(chatType ? { chatType } : {}) };
+    return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, buttonOptions);
+  }
+  return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, baseOptions);
+}
+
 /**
  * Dispatch outgoing content to the appropriate Telegram sender method.
  * Returns the sent message ID, or null for reaction-type messages.
@@ -104,26 +130,23 @@ async function dispatchContent(
   replyParam?: number,
   threadId?: string,
   formatMode: 'convert' | 'passthrough' = 'convert',
+  chatType?: string,
 ): Promise<number | null> {
   const threadOptions = threadId ? { message_thread_id: Number(threadId) } : undefined;
+  // baseOptions carries only valid Telegram API parameters (e.g. message_thread_id)
+  const baseOptions = threadOptions ? { ...threadOptions } : undefined;
 
-  if (content.type === 'text') {
-    // If buttons are present, send a single message with InlineKeyboard.
-    if (content.buttons?.length) {
-      return sendInlineButtons(bot, chatId, content.text ?? '', content.buttons, replyParam, formatMode, threadOptions);
-    }
-    return sendTextMessage(bot, chatId, content.text ?? '', replyParam, formatMode, threadOptions);
-  }
+  if (content.type === 'text')
+    return dispatchTextContent(bot, chatId, content, replyParam, formatMode, baseOptions, chatType);
   if (content.type === 'poll') {
-    if (!content.poll) {
-      return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode, threadOptions);
-    }
-    return sendPoll(bot, chatId, content.poll, replyParam, threadOptions);
+    if (!content.poll)
+      return sendTextMessage(bot, chatId, content.text ?? '[Poll]', replyParam, formatMode, baseOptions);
+    return sendPoll(bot, chatId, content.poll, replyParam, baseOptions);
   }
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
   if (content.type === 'contact') return dispatchContact(bot, chatId, content, replyParam);
   if (content.type === 'location') return dispatchLocation(bot, chatId, content, replyParam);
-  return dispatchMedia(bot, chatId, content, replyParam, threadOptions);
+  return dispatchMedia(bot, chatId, content, replyParam, baseOptions);
 }
 
 /**
@@ -159,6 +182,49 @@ async function dispatchLocation(
 }
 
 // ============================================================================
+// NonStreamingSender — sends single final message when stream mode is 'off'
+// ============================================================================
+
+class NonStreamingSender implements StreamSender {
+  constructor(
+    private readonly bot: TelegramBotLike,
+    private readonly chatId: string,
+    private readonly replyToMessageId?: number,
+  ) {}
+
+  async onThinkingDelta(_delta: StreamDelta & { phase: 'thinking' }): Promise<void> {
+    // No-op: don't show thinking in non-streaming mode
+  }
+
+  async onContentDelta(_delta: StreamDelta & { phase: 'content' }): Promise<void> {
+    // No-op: wait for final
+  }
+
+  async onFinal(delta: StreamDelta & { phase: 'final' }): Promise<void> {
+    const text = delta.content;
+    if (!text) return;
+
+    const chunks = splitMessage(text, 4096);
+    let isFirst = true;
+    for (const chunk of chunks) {
+      if (!chunk) continue;
+      await this.bot.api.sendMessage(this.chatId, chunk, {
+        ...(isFirst && this.replyToMessageId ? { reply_parameters: { message_id: this.replyToMessageId } } : {}),
+      });
+      isFirst = false;
+    }
+  }
+
+  async onError(_delta: StreamDelta & { phase: 'error' }): Promise<void> {
+    // Nothing to clean up — no messages were sent
+  }
+
+  async abort(): Promise<void> {
+    // Nothing to abort — no messages were sent
+  }
+}
+
+// ============================================================================
 // Plugin Class
 // ============================================================================
 
@@ -170,6 +236,10 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
   /** Active bot instances mapped by instanceId */
   private configs = new Map<string, TelegramConfig>();
+  /** Cleanup functions for active message handler closures (timers, buffers) */
+  private cleanups = new Map<string, () => void>();
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
 
   // ────────────────────────────────────────────────────────────
   // Lifecycle
@@ -180,7 +250,12 @@ export class TelegramPlugin extends BaseChannelPlugin {
   }
 
   protected override async onDestroy(): Promise<void> {
+    for (const cleanup of this.cleanups.values()) cleanup();
+    this.cleanups.clear();
     this.configs.clear();
+    // Dispose all per-instance dedup caches
+    for (const cache of this.dedupeCaches.values()) cache.dispose();
+    this.dedupeCaches.clear();
     this.logger.info('Telegram plugin destroyed');
   }
 
@@ -223,8 +298,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
       });
     });
 
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
     // Set up handlers before starting
-    setupMessageHandlers(bot, this, instanceId);
+    const cleanupMessages = setupMessageHandlers(bot, this, instanceId, dedupeCache);
+    this.cleanups.set(instanceId, cleanupMessages);
     setupChannelPostHandlers(bot, this, instanceId);
     setupReactionHandlers(bot, this, instanceId);
     setupInteractiveHandlers(bot, this, instanceId);
@@ -283,8 +363,17 @@ export class TelegramPlugin extends BaseChannelPlugin {
   async disconnect(instanceId: string): Promise<void> {
     this.logger.info('Disconnecting Telegram instance', { instanceId });
 
+    // Cancel pending album buffers and deferred flushes before teardown
+    this.cleanups.get(instanceId)?.();
+    this.cleanups.delete(instanceId);
+
+    // Dispose per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
+
     destroyBot(instanceId);
     this.configs.delete(instanceId);
+    removeChatQueue(instanceId);
 
     this.instances.setInstance(instanceId, {} as InstanceConfig, {
       state: 'disconnected',
@@ -322,7 +411,9 @@ export class TelegramPlugin extends BaseChannelPlugin {
       if (correlationId) this.captureT10(correlationId);
 
       const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-      const messageId = await dispatchContent(bot, chatId, content, replyParam, message.threadId, formatMode);
+      // Pass chatType for button scoping: buttons with scope 'dm'/'group' are filtered at send time
+      const chatType = message.metadata?.chatType as string | undefined;
+      const messageId = await dispatchContent(bot, chatId, content, replyParam, message.threadId, formatMode, chatType);
 
       // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
       if (correlationId) this.captureT11(correlationId);
@@ -384,6 +475,15 @@ export class TelegramPlugin extends BaseChannelPlugin {
     if (!bot) {
       throw new Error(`No bot for instance ${instanceId}`);
     }
+
+    // Stream mode toggle: when 'off', return a no-op stream sender that
+    // collects content and sends a single final message (no edit flicker).
+    const instance = this.instances.get(instanceId);
+    const streamMode = instance?.config?.options?.streamMode as string | undefined;
+    if (!isStreamingEnabled(streamMode as 'on' | 'off' | undefined)) {
+      return new NonStreamingSender(bot, chatId, replyToMessageId ? Number(replyToMessageId) : undefined);
+    }
+
     // Note: Telegram stream sender doesn't apply markdown→HTML conversion in onFinal
     // (it uses raw text or HTML-escaped text for thinking blocks). Format mode is
     // accepted for interface parity but not yet applied here.
@@ -730,6 +830,62 @@ export class TelegramPlugin extends BaseChannelPlugin {
    */
   getGrammyBot(instanceId: string): TelegramBotLike | undefined {
     return getBot(instanceId);
+  }
+
+  /**
+   * Get the instance state (config + status) for reading per-instance settings.
+   * Used by handlers to access options like reactionLevel, streamMode, etc.
+   * @internal
+   */
+  getInstanceState(instanceId: string) {
+    return this.instances.get(instanceId);
+  }
+
+  /**
+   * Fetch message history for a Telegram chat/topic.
+   *
+   * Note: Telegram Bot API does not provide a getChatHistory endpoint.
+   * Per-thread sessions will be initialized without historical context;
+   * only new messages (after the bot is triggered) accumulate in the session.
+   */
+  async fetchHistory(_instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    this.logger?.info('fetchHistory: Telegram Bot API does not support retroactive history retrieval', {
+      channelId: options.channelId,
+      threadId: options.threadId,
+    });
+    return { totalFetched: 0, messages: [] };
+  }
+
+  /**
+   * Add an emoji reaction to a message (used for per_thread processing feedback).
+   * Graceful skip if the bot lacks permissions.
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const bot = getBot(instanceId);
+    if (!bot) return;
+    const msgId = Number.parseInt(messageId, 10);
+    if (Number.isNaN(msgId)) return;
+    await setAckReaction(bot, chatId, msgId, emoji);
+  }
+
+  /**
+   * Remove an emoji reaction from a message (used for per_thread processing feedback).
+   * Graceful skip if the bot lacks permissions.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, _emoji: string): Promise<void> {
+    const bot = getBot(instanceId);
+    if (!bot) return;
+    const msgId = Number.parseInt(messageId, 10);
+    if (Number.isNaN(msgId)) return;
+    await removeAckReaction(bot, chatId, msgId);
+  }
+
+  /**
+   * Get the configured webhook secret for a connected instance.
+   * Returns undefined if no secret was configured or the instance is not connected.
+   */
+  getWebhookSecret(instanceId: string): string | undefined {
+    return this.configs.get(instanceId)?.webhookSecret;
   }
 
   private isRetryableError(error: unknown): boolean {

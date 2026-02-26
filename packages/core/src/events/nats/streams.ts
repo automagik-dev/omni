@@ -20,6 +20,7 @@ export const STREAM_NAMES = {
   IDENTITY: 'IDENTITY',
   MEDIA: 'MEDIA',
   ACCESS: 'ACCESS',
+  SESSION: 'SESSION',
   CUSTOM: 'CUSTOM',
   SYSTEM: 'SYSTEM',
 } as const;
@@ -83,6 +84,14 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
     retention: RetentionPolicy.Limits,
     description: 'Access control events (allowed, denied)',
   },
+  [STREAM_NAMES.SESSION]: {
+    name: STREAM_NAMES.SESSION,
+    subjects: ['session.>'],
+    max_age: daysToNs(7),
+    storage: StorageType.File,
+    retention: RetentionPolicy.Limits,
+    description: 'Session lifecycle events (reset)',
+  },
   [STREAM_NAMES.CUSTOM]: {
     name: STREAM_NAMES.CUSTOM,
     subjects: ['custom.>'],
@@ -114,6 +123,7 @@ export function getStreamForEventType(eventType: string): StreamName {
     identity: STREAM_NAMES.IDENTITY,
     media: STREAM_NAMES.MEDIA,
     access: STREAM_NAMES.ACCESS,
+    session: STREAM_NAMES.SESSION,
     custom: STREAM_NAMES.CUSTOM,
     system: STREAM_NAMES.SYSTEM,
     sync: STREAM_NAMES.SYSTEM,

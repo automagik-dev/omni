@@ -13,7 +13,6 @@ import {
   deleteConfigValue,
   getConfigValue,
   isValidConfigKey,
-  loadConfig,
   setConfigValue,
 } from '../config.js';
 import * as output from '../output.js';
@@ -61,10 +60,8 @@ export function createConfigCommand(): Command {
     .command('list')
     .description('List all configuration values')
     .action(() => {
-      const cfg = loadConfig();
-
       const items = Object.entries(CONFIG_KEYS).map(([key, meta]) => {
-        let value = cfg[key as ConfigKey] ?? '-';
+        let value: string = getConfigValue(key as ConfigKey) ?? '-';
 
         // Mask API key for security (show first 12 chars and last 4)
         if (key === 'apiKey' && typeof value === 'string' && value !== '-') {

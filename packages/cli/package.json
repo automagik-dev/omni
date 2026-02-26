@@ -1,6 +1,6 @@
 {
-  "name": "@omni/cli",
-  "version": "2.20260217.4",
+  "name": "@automagik/omni",
+  "version": "2.260226.1",
   "description": "LLM-optimized CLI for Omni v2",
   "type": "module",
   "bin": {
@@ -8,24 +8,37 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist", "bin"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "build:server": "bun build src/bundled-server-entry.ts --outfile dist/server/index.js --target bun",
+    "build:migrations": "cp -r ../db/drizzle dist/drizzle",
+    "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
   "dependencies": {
-    "@omni/core": "workspace:*",
-    "@omni/sdk": "workspace:*",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
     "ora": "^8.1.1",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
+    "@omni/api": "workspace:*",
+    "@omni/channel-discord": "workspace:*",
+    "@omni/channel-sdk": "workspace:*",
+    "@omni/channel-slack": "workspace:*",
+    "@omni/channel-telegram": "workspace:*",
+    "@omni/channel-whatsapp": "workspace:*",
+    "@omni/core": "workspace:*",
+    "@omni/sdk": "workspace:*",
     "@types/node": "^22.10.3",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.7.3"

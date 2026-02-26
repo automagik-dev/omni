@@ -9,7 +9,7 @@ import type { PluginStorage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { pluginStorage } from '@omni/db';
-import { and, eq, gt, isNull, like, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
 
 const log = createLogger('api:storage');
 
@@ -18,7 +18,7 @@ const log = createLogger('api:storage');
  *
  * Uses PostgreSQL for persistence across API restarts.
  */
-export class DatabasePluginStorage implements PluginStorage {
+class DatabasePluginStorage implements PluginStorage {
   private readonly prefix: string;
 
   constructor(
@@ -35,6 +35,7 @@ export class DatabasePluginStorage implements PluginStorage {
   async get<T>(key: string): Promise<T | null> {
     const fullKey = this.getFullKey(key);
 
+    const t0 = Date.now();
     const result = await this.db
       .select()
       .from(pluginStorage)
@@ -46,6 +47,15 @@ export class DatabasePluginStorage implements PluginStorage {
         ),
       )
       .limit(1);
+
+    const elapsed = Date.now() - t0;
+    if (elapsed > 500) {
+      log.warn('Slow storage.get', {
+        pluginId: this.pluginId,
+        key: fullKey.slice(-80),
+        elapsedMs: elapsed,
+      });
+    }
 
     const row = result[0];
     if (!row) return null;
@@ -147,8 +157,8 @@ export class DatabasePluginStorage implements PluginStorage {
       .where(
         and(
           eq(pluginStorage.pluginId, this.pluginId),
-          gt(sql`${pluginStorage.expiresAt}`, sql`NULL`),
-          sql`${pluginStorage.expiresAt} < NOW()`,
+          isNotNull(pluginStorage.expiresAt),
+          lt(pluginStorage.expiresAt, sql`NOW()`),
         ),
       )
       .returning({ id: pluginStorage.id });
@@ -160,7 +170,7 @@ export class DatabasePluginStorage implements PluginStorage {
 /**
  * In-memory storage fallback (for testing or when DB is unavailable)
  */
-export class InMemoryPluginStorage implements PluginStorage {
+class InMemoryPluginStorage implements PluginStorage {
   private data = new Map<string, { value: unknown; expiresAt?: number }>();
   private readonly prefix: string;
 
@@ -230,12 +240,18 @@ export class InMemoryPluginStorage implements PluginStorage {
  * Storage factory - creates appropriate storage based on available resources
  */
 let globalDb: Database | null = null;
+const storageInstances = new Map<string, PluginStorage>();
 
 export function setStorageDatabase(db: Database): void {
   globalDb = db;
-}
 
-const storageInstances = new Map<string, PluginStorage>();
+  // Upgrade previously-created in-memory stores once DB becomes available.
+  for (const [pluginId, storage] of storageInstances.entries()) {
+    if (storage instanceof InMemoryPluginStorage) {
+      storageInstances.set(pluginId, new DatabasePluginStorage(db, pluginId));
+    }
+  }
+}
 
 /**
  * Get or create storage for a plugin

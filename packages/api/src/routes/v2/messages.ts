@@ -46,6 +46,7 @@ import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
 import type { ApiKeyData, AppVariables } from '../../types';
 
+const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
@@ -67,21 +68,34 @@ function isUUID(value: string): boolean {
 }
 
 /**
- * Resolve recipient - handles both Omni person IDs and platform IDs
+ * Resolve recipient - handles Omni person IDs, Omni chat IDs, and platform IDs (WA JID etc.)
+ *
+ * Resolution order for UUIDs:
+ * 1. Try as person ID → returns platformUserId for the channel
+ * 2. Try as chat ID → returns chat.externalId (the platform JID/channel ID)
+ * 3. Throw if UUID but not found in either table
  */
 async function resolveRecipient(to: string, channelType: string, services: Services): Promise<string> {
   if (!isUUID(to)) return to;
 
-  const identity = await services.persons.getIdentityForChannel(to, channelType);
-  if (!identity) {
-    throw new OmniError({
-      code: ERROR_CODES.RECIPIENT_NOT_ON_CHANNEL,
-      message: `Person ${to} has no identity on ${channelType}`,
-      context: { personId: to, channelType },
-      recoverable: false,
-    });
+  // Try as person ID first
+  const identity = await services.persons.getIdentityForChannel(to, channelType).catch(() => null);
+  if (identity) return identity.platformUserId;
+
+  // Try as chat ID — use getById which throws NotFoundError on miss
+  try {
+    const chat = await services.chats.getById(to);
+    return chat.externalId;
+  } catch {
+    // Not a chat UUID either — throw informative error
   }
-  return identity.platformUserId;
+
+  throw new OmniError({
+    code: ERROR_CODES.RECIPIENT_NOT_ON_CHANNEL,
+    message: `"${to}" is a UUID but not a known person or chat on ${channelType}. Pass a platform ID (e.g. WA JID) directly, or an Omni person/chat UUID.`,
+    context: { to, channelType },
+    recoverable: false,
+  });
 }
 
 /**
@@ -159,7 +173,7 @@ async function getReplyContext(
   chatExternalId: string,
   replyToId: string,
 ): Promise<{ replyToFromMe?: boolean; replyToRawPayload?: Record<string, unknown>; replyToText?: string }> {
-  const chat = await services.chats.getByExternalId(instanceId, chatExternalId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, chatExternalId);
   if (!chat) return {};
 
   const originalMessage = await services.messages.getByExternalId(chat.id, replyToId);
@@ -381,6 +395,10 @@ const sendMediaSchema = z.object({
   base64: z.string().optional().describe('Base64 encoded media'),
   filename: z.string().optional().describe('Filename for documents'),
   caption: z.string().optional().describe('Caption for media'),
+  mimeType: z
+    .string()
+    .optional()
+    .describe('MIME type of the media (e.g. image/gif enables GIF playback for video type)'),
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
 });
 
@@ -801,8 +819,45 @@ messagesRoutes.patch(
 /**
  * POST /messages/send - Send text message
  */
-messagesRoutes.post('/send', zValidator('json', sendTextSchema), async (c) => {
-  const { instanceId, to, text, replyTo, mentions } = c.req.valid('json');
+messagesRoutes.post('/send', async (c) => {
+  // Parse raw body first to detect media fields before schema validation strips them
+  let rawBody: Record<string, unknown>;
+  try {
+    rawBody = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: { code: 'INVALID_JSON', message: 'Request body must be valid JSON' } }, 400);
+  }
+
+  // Detect media fields sent to the wrong endpoint
+  const mediaFieldIndicators = ['base64', 'url', 'filename', 'voiceNote', 'mediaUrl'];
+  const mediaTypeValues = ['image', 'video', 'audio', 'document'];
+  const hasMediaField = mediaFieldIndicators.some((f) => f in rawBody);
+  const hasMediaType = 'type' in rawBody && mediaTypeValues.includes(rawBody.type as string);
+
+  if (hasMediaField || hasMediaType) {
+    return c.json(
+      {
+        error: {
+          code: 'WRONG_ENDPOINT',
+          message: 'Media payloads must use POST /api/v2/messages/send/media — this endpoint only sends plain text.',
+          hint: {
+            endpoint: 'POST /api/v2/messages/send/media',
+            requiredFields: ['instanceId', 'to', 'type (image|video|audio|document)', 'url or base64'],
+            optionalFields: ['caption', 'filename', 'voiceNote'],
+          },
+        },
+      },
+      422,
+    );
+  }
+
+  // Validate as text schema
+  const parsed = sendTextSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
+  }
+
+  const { instanceId, to, text, replyTo, mentions } = parsed.data;
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
@@ -923,6 +978,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       mediaUrl: data.url,
       caption: data.caption,
       filename: data.filename,
+      mimeType: data.mimeType,
     } as OutgoingContent,
     metadata: {
       base64: data.base64,
@@ -1020,18 +1076,16 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Validate that the target message exists (prevent sending reactions to invalid messages).
+  // Soft-validate that the target message exists.
   // `messageId` here is the channel/external message id (not the DB UUID).
-  const chat = await services.chats.getByExternalId(instanceId, resolvedTo);
+  // This is a best-effort check — if the message isn't in the DB yet
+  // (e.g. new Slack channel, history not synced), we still send the
+  // reaction and let the channel plugin handle it directly.
+  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (!target) {
-      throw new OmniError({
-        code: ERROR_CODES.NOT_FOUND,
-        message: `Target message not found: ${messageId}`,
-        context: { messageId, resourceType: 'Message' },
-        recoverable: false,
-      });
+      log.warn('Target message not found in DB, sending reaction anyway', { messageId, chatId: chat.id });
     }
   }
 
@@ -1522,7 +1576,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
 
   // Fetch the original message from our DB to get rawPayload
   // Chat externalId is the platform chat ID (e.g., WhatsApp JID)
-  const chat = await services.chats.getByExternalId(instanceId, fromChatId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, fromChatId);
   if (!chat) {
     throw new OmniError({
       code: ERROR_CODES.NOT_FOUND,
@@ -1732,10 +1786,23 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
     });
   }
 
-  // Call plugin with external message ID
+  // Pass message data so the plugin can build channel-specific keys (e.g., group participant)
+  const messageData = [{ externalId: message.externalId, rawPayload: message.rawPayload ?? null }];
+
+  // Respect per-instance read receipt mode
+  const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
+
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, chat.externalId, [message.externalId]);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        readReceiptMode?: 'on' | 'off' | 'exclude-self',
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, chat.externalId, [message.externalId], messageData, readReceiptMode);
 
   return c.json({
     success: true,
@@ -1778,6 +1845,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   // chatId can be either external chat ID or internal UUID
   // Try to resolve as UUID first, fall back to external ID
   let externalChatId = chatId;
+  let internalChatId: string | undefined;
   const UUID_REGEX_LOCAL = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (UUID_REGEX_LOCAL.test(chatId)) {
     const chat = await services.chats.getById(chatId);
@@ -1790,11 +1858,34 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
       });
     }
     externalChatId = chat.externalId;
+    internalChatId = chat.id;
   }
 
+  // Fetch message data so the plugin can build channel-specific keys (e.g., group participant)
+  if (!internalChatId) {
+    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+    if (chat) internalChatId = chat.id;
+  }
+  let messageData: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }> | undefined;
+  if (internalChatId) {
+    const msgs = await services.messages.getByExternalIds(internalChatId, messageIds);
+    messageData = msgs.map((m) => ({ externalId: m.externalId, rawPayload: m.rawPayload ?? null }));
+  }
+
+  // Respect per-instance read receipt mode
+  const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
+
   await (
-    plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-  ).markAsRead(instanceId, externalChatId, messageIds);
+    plugin as {
+      markAsRead: (
+        instanceId: string,
+        chatId: string,
+        messageIds: string[],
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        readReceiptMode?: 'on' | 'off' | 'exclude-self',
+      ) => Promise<void>;
+    }
+  ).markAsRead(instanceId, externalChatId, messageIds, messageData, readReceiptMode);
 
   return c.json({
     success: true,
@@ -1965,7 +2056,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
   let replyToFromMe: boolean | undefined;
   let replyToRawPayload: Record<string, unknown> | undefined;
   if (data.replyTo) {
-    const chat = await services.chats.getByExternalId(data.instanceId, resolvedTo);
+    const chat = await services.chats.findByExternalIdSmart(data.instanceId, resolvedTo);
     if (chat) {
       const originalMessage = await services.messages.getByExternalId(chat.id, data.replyTo);
       if (originalMessage) {

@@ -73,6 +73,46 @@ function isInternalWhatsAppJid(chatId: string): boolean {
 }
 
 /**
+ * Resolve the effective chat name for a message based on chat type and direction.
+ *
+ * For DMs:
+ * - Inbound (!isFromMe): chatName > pushName (sender's display name)
+ * - Outbound (isFromMe): chatName > recipientName > verifiedBizName
+ *   (pushName is the bot's own name, not the contact's — so we skip it for outbound)
+ *
+ * For groups/channels: always chatName (group subject)
+ *
+ * Exported for unit testing. See also: packages/db/scripts/backfill-chat-names.ts
+ * for fixing existing null-named DMs created before this fix.
+ */
+export function resolveEffectiveChatName(params: {
+  chatType: string;
+  isFromMe: boolean;
+  chatName: string | undefined;
+  pushName: string | undefined;
+  rawPayload: Record<string, unknown> | undefined;
+}): string | undefined {
+  const { chatType, isFromMe, chatName, pushName, rawPayload } = params;
+
+  if (chatType === 'dm') {
+    if (!isFromMe) {
+      // Inbound: chatName > pushName (sender's display name)
+      return chatName || pushName;
+    }
+    // Outbound: chatName > recipientName > verifiedBizName
+    // pushName is our own name here — not the contact's — so skip it
+    return (
+      chatName ||
+      truncate(rawPayload?.recipientName as string | undefined, 255) ||
+      truncate(rawPayload?.verifiedBizName as string | undefined, 255)
+    );
+  }
+
+  // Groups and channels: always use chatName (group subject / channel name)
+  return chatName;
+}
+
+/**
  * Map content type to message type
  */
 function mapContentType(contentType: string | undefined): MessageType {
@@ -218,7 +258,12 @@ async function processSenderIdentity(
 
   const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
-  const phoneNumber = extractPhoneFromSender(platformUserId, channel);
+  // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
+  // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
+  // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
+  // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
+  const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
+  const phoneNumber = isLidAddressed ? undefined : extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
@@ -290,13 +335,60 @@ function shouldUpdateChatName(current: string | null | undefined, incoming: stri
 }
 
 /**
+ * Persist LID↔phone mapping for a chat and set canonicalId if not already present.
+ * Handles both legacy (phone-canonical with LID in rawPayload) and LID-first modes.
+ */
+async function persistLidMappings(
+  services: Services,
+  chat: { id: string; canonicalId?: string | null },
+  chatExternalId: string,
+  instanceId: string,
+  rawPayload: Record<string, unknown> | undefined,
+): Promise<void> {
+  // Legacy path: phone-form chat, LID came from rawPayload.originalLidJid (pre-LID-first messages)
+  const originalLidJid = rawPayload?.originalLidJid as string | undefined;
+  if (originalLidJid && chatExternalId.endsWith('@s.whatsapp.net')) {
+    services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
+      log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
+    });
+    if (!chat.canonicalId) {
+      await services.chats.update(chat.id, { canonicalId: chatExternalId });
+      chat.canonicalId = chatExternalId;
+    }
+  }
+
+  // LID-first path: chatExternalId is @lid canonical — persist mapping from resolvedPhoneJid.
+  // Without this, phone-based lookups after restart miss the chat and create duplicate threads.
+  const resolvedPhoneJid = rawPayload?.resolvedPhoneJid as string | undefined;
+  if (chatExternalId.endsWith('@lid') && resolvedPhoneJid) {
+    services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid).catch((err) => {
+      log.debug('Failed to persist LID↔phone mapping for LID-canonical chat (non-critical)', { error: String(err) });
+    });
+    if (!chat.canonicalId) {
+      try {
+        await services.chats.update(chat.id, { canonicalId: resolvedPhoneJid });
+        chat.canonicalId = resolvedPhoneJid;
+      } catch (err) {
+        // Non-critical: unique constraint means a pre-migration phone chat already owns this canonicalId.
+        // The upsertLidMapping call above handles cross-chat reconciliation independently.
+        log.debug('canonicalId backfill skipped — already claimed by another chat', {
+          chatId: chat.id,
+          resolvedPhoneJid,
+          error: String(err),
+        });
+      }
+    }
+  }
+}
+
+/**
  * Post-process a chat after findOrCreate: populate canonicalId, persist LID mappings,
  * and fix stale names (raw JIDs).
  */
 async function postProcessChat(
   services: Services,
   chat: { id: string; canonicalId?: string | null; name?: string | null },
-  chatCreated: boolean,
+  _chatCreated: boolean,
   chatExternalId: string,
   chatType: ChatType,
   pushName: string | undefined,
@@ -311,27 +403,24 @@ async function postProcessChat(
     chat.canonicalId = chatExternalId;
   }
 
-  // Persist LID→phone mapping if the message was resolved from a LID
-  // Also set canonicalId on the chat so LID chats point to their phone JID
-  const originalLidJid = rawPayload?.originalLidJid as string | undefined;
-  if (originalLidJid && chatExternalId.endsWith('@s.whatsapp.net')) {
-    services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
-      log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
-    });
-    if (!chat.canonicalId) {
-      await services.chats.update(chat.id, { canonicalId: chatExternalId });
-      chat.canonicalId = chatExternalId;
-    }
-  }
+  await persistLidMappings(services, chat, chatExternalId, instanceId, rawPayload);
 
   // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
-  // For DMs: only update from incoming messages (not sent by us) to prevent flip-flopping
-  if (!chatCreated) {
-    const chatName = rawPayload?.chatName as string | undefined;
-    const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
-    if (effectiveName && shouldUpdateChatName(chat.name, effectiveName)) {
-      await services.chats.update(chat.id, { name: effectiveName });
-      chat.name = effectiveName;
+  // For outbound DMs: also resolve from rawPayload (recipientName, verifiedBizName)
+  // Note: we process both new and existing chats — new chats may have been created
+  // without a name if effectiveName was not available at findOrCreate time.
+  {
+    const chatNameLocal = rawPayload?.chatName as string | undefined;
+    const effectiveNameLocal = resolveEffectiveChatName({
+      chatType,
+      isFromMe,
+      chatName: chatNameLocal,
+      pushName,
+      rawPayload,
+    });
+    if (effectiveNameLocal && shouldUpdateChatName(chat.name, effectiveNameLocal)) {
+      await services.chats.update(chat.id, { name: effectiveNameLocal });
+      chat.name = effectiveNameLocal;
     }
   }
 }
@@ -416,6 +505,52 @@ function maybeUpdateRecency(
 }
 
 /**
+ * Find or create the chat for an inbound message.
+ *
+ * For LID-canonical messages (@lid chatExternalId with resolvedPhoneJid in rawPayload):
+ * probes for a pre-existing phone chat BEFORE calling findOrCreate. Without this,
+ * findOrCreate creates a new @lid chat (LID mapping not yet written at that point),
+ * and even after upsertLidMapping the split is permanent — direct externalId matches
+ * win over mapping fallback in findByExternalIdSmart, so phone lookups keep routing
+ * to the old phone chat forever.
+ */
+async function resolveOrCreateChat(
+  services: Services,
+  instanceId: string,
+  chatExternalId: string,
+  chatType: ChatType,
+  channel: ChannelType,
+  effectiveName: string | undefined,
+  canonicalId: string | undefined,
+  rawPayload: Record<string, unknown> | undefined,
+): ReturnType<typeof services.chats.findOrCreate> {
+  const resolvedPhoneJid = rawPayload?.resolvedPhoneJid as string | undefined;
+  if (chatExternalId.endsWith('@lid') && resolvedPhoneJid) {
+    return services.chats.findByExternalIdSmart(instanceId, resolvedPhoneJid).then((phoneChat) => {
+      if (phoneChat) {
+        // Persist mapping so subsequent LID lookups also route to this phone chat
+        services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid).catch((err) => {
+          log.debug('Failed to persist LID mapping during chat pre-check (non-critical)', { error: String(err) });
+        });
+        return { chat: phoneChat, created: false };
+      }
+      return services.chats.findOrCreate(instanceId, chatExternalId, {
+        chatType,
+        channel,
+        name: effectiveName,
+        canonicalId,
+      });
+    });
+  }
+  return services.chats.findOrCreate(instanceId, chatExternalId, {
+    chatType,
+    channel,
+    name: effectiveName,
+    canonicalId,
+  });
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -436,22 +571,26 @@ async function handleMessageReceived(
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
   const isFromMe = rawPayload?.isFromMe === true;
 
-  // For DMs: only use pushName if message is FROM the other person (not sent by us)
-  // This prevents the chat name from flip-flopping between sender names
-  // For groups: always use chatName (group subject)
+  // Resolve the chat name based on direction and chat type.
+  // For outbound DMs, we look at rawPayload fields (recipientName, verifiedBizName)
+  // since pushName is our own name, not the contact's.
   const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
-  const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
+  const effectiveName = resolveEffectiveChatName({ chatType, isFromMe, chatName, pushName, rawPayload });
 
   // Determine canonicalId upfront for phone-based chats
   const canonicalId = chatExternalId.endsWith('@s.whatsapp.net') ? chatExternalId : undefined;
 
-  const { chat, created: chatCreated } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
+  const { chat, created: chatCreated } = await resolveOrCreateChat(
+    services,
+    metadata.instanceId,
+    chatExternalId,
     chatType,
     channel,
-    name: effectiveName,
-    canonicalId, // Set during creation to leverage unique constraint
-  });
+    effectiveName,
+    canonicalId,
+    rawPayload,
+  );
 
   // Post-process chat: canonicalId, LID mapping, name updates
   await postProcessChat(

@@ -42,13 +42,15 @@ coverage/
 # Misc
 *.bak
 *.tmp
+*.db
 
 # Python
 __pycache__/
 *.pyc
+# Genie workspace (lives at ../../.genie, not in repo)
+.genie/
 # Worker worktrees (genie-cli spawns these)
 omni-*/
-.genie/workers.json
 # bd worktree
 omni-soi/
 # bd worktree
@@ -69,6 +71,9 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
+
+# Claude Code local settings
+.claude/settings.local.json
 
 # Beads state is local-only (keep outside repo)
 .beads/

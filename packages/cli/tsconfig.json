@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
@@ -16,5 +17,5 @@
     "types": ["bun-types", "node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/bundled-server-entry.ts"]
 }

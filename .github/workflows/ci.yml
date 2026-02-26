@@ -13,7 +13,7 @@ concurrency:
 jobs:
   secrets-scan:
     name: Secrets Scan (GitGuardian)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
@@ -31,7 +31,7 @@ jobs:
 
   quality-gate:
     name: Quality Gate (typecheck + lint + test)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
 
     steps:
@@ -75,9 +75,9 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 15); do
-            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 2
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
 
@@ -96,6 +96,9 @@ jobs:
       - name: Lint
         run: bunx biome check .
 
+      - name: Dead code check (knip)
+        run: bunx knip
+
       - name: Test
         run: bun test --env-file=.env
         env:
@@ -103,7 +106,7 @@ jobs:
 
   smoke-test:
     name: Smoke Test (Fresh Environment)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
 
     steps:
@@ -147,9 +150,9 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 15); do
-            (cd packages/db && bunx drizzle-kit push --force) >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 2
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
 
@@ -160,6 +163,7 @@ jobs:
         run: bun packages/api/src/index.ts &
         env:
           OMNI_PACKAGES_DIR: ${{ github.workspace }}/packages
+          PGSERVE_EMBEDDED: 'false'
 
       - name: Wait for API
         run: |

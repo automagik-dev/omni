@@ -6,9 +6,9 @@
  */
 
 import { createLogger } from '../logger';
-import type { ClaudeCodeClient, ClaudeCodeConfig } from './claude-code-client';
+import type { ClaudeCodeClient, ClaudeCodeConfig, ClaudeCodeStreamConfig } from './claude-code-client';
 import { createClaudeCodeClient } from './claude-code-client';
-import type { AgentTrigger, AgentTriggerResult, IAgentProvider, ProviderRequest } from './types';
+import type { AgentTrigger, AgentTriggerResult, IAgentProvider, ProviderRequest, StreamDelta } from './types';
 
 /**
  * Session storage adapter interface - allows core to be database-agnostic
@@ -30,6 +30,8 @@ export interface ClaudeCodeProviderOptions {
   prefixSenderName?: boolean;
   /** Session TTL in ms (default: Infinity = never expire) - sessions older than this are discarded */
   sessionTtlMs?: number;
+  /** Streaming configuration — controls what's visible in streamed responses */
+  streamConfig?: ClaudeCodeStreamConfig;
 }
 
 const MAX_CONTEXT_MESSAGES = 20;
@@ -47,6 +49,13 @@ function boundContextMessages(contextMessages: string[]): string[] {
   }
 
   return bounded;
+}
+
+/** Prepared request data shared between trigger() and triggerStream(). */
+interface PreparedRequest {
+  message: string;
+  resolvedSessionId: string | undefined;
+  internalSessionKey: string;
 }
 
 export class ClaudeCodeAgentProvider implements IAgentProvider {
@@ -75,10 +84,11 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     return true;
   }
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Provider orchestration requires multiple content type checks
-  async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
-    const startTime = Date.now();
-
+  /**
+   * Extract and format the message text from trigger content.
+   * Returns empty string if there's no sendable content.
+   */
+  private buildMessage(context: AgentTrigger): string {
     let message = '';
     if (context.content.text) {
       message = context.content.text;
@@ -86,13 +96,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
     }
 
-    if (!message) {
-      log.debug('No content to send to Claude Code', { traceId: context.traceId });
-      return {
-        parts: [],
-        metadata: { runId: '', providerId: this.id, durationMs: Date.now() - startTime },
-      };
-    }
+    if (!message) return '';
 
     if (this.options.prefixSenderName !== false && context.sender.displayName) {
       message = `[${context.sender.displayName}]: ${message}`;
@@ -110,50 +114,105 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       message = `${contextBlock}${message}`;
     }
 
-    // Resolve session: map internal session key → Claude Code session UUID
-    // Check TTL and discard expired sessions
-    const internalSessionKey = context.sessionId;
-    let resolvedSessionId: string | undefined;
+    return message;
+  }
 
-    log.debug('Session lookup', {
-      internalKey: internalSessionKey,
-      instanceId: context.source.instanceId,
-    });
+  /**
+   * Resolve the Claude Code session UUID for an internal session key.
+   * Checks TTL and discards expired sessions.
+   */
+  private async resolveSession(instanceId: string, internalSessionKey: string): Promise<string | undefined> {
+    if (!internalSessionKey || !instanceId) return undefined;
 
-    if (internalSessionKey && context.source.instanceId) {
-      // Query storage for existing session
-      const existingSession = await this.sessionStorage.getSession(context.source.instanceId, internalSessionKey);
+    log.debug('Session lookup', { internalKey: internalSessionKey, instanceId });
 
-      if (existingSession) {
-        resolvedSessionId = existingSession.sessionId;
-        const age = Date.now() - existingSession.lastUsedAt.getTime();
-
-        // Check if session has expired based on TTL
-        if (this.sessionTtlMs < Number.POSITIVE_INFINITY && age >= this.sessionTtlMs) {
-          log.debug('Session expired', {
-            internalKey: internalSessionKey,
-            age: `${Math.round(age / 1000)}s`,
-            ttl: `${Math.round(this.sessionTtlMs / 1000)}s`,
-          });
-          // Delete expired session
-          await this.sessionStorage.deleteSession(context.source.instanceId, internalSessionKey);
-          resolvedSessionId = undefined;
-        } else {
-          log.debug('Resuming session from DB', {
-            internalKey: internalSessionKey,
-            claudeSessionId: resolvedSessionId,
-            age: `${Math.round(age / 1000)}s`,
-          });
-        }
-      } else {
-        log.debug('No session found in DB', { internalKey: internalSessionKey });
-      }
+    const existing = await this.sessionStorage.getSession(instanceId, internalSessionKey);
+    if (!existing) {
+      log.debug('No session found in DB', { internalKey: internalSessionKey });
+      return undefined;
     }
+
+    const age = Date.now() - existing.lastUsedAt.getTime();
+
+    // Check if session has expired based on TTL
+    if (this.sessionTtlMs < Number.POSITIVE_INFINITY && age >= this.sessionTtlMs) {
+      log.debug('Session expired', {
+        internalKey: internalSessionKey,
+        age: `${Math.round(age / 1000)}s`,
+        ttl: `${Math.round(this.sessionTtlMs / 1000)}s`,
+      });
+      await this.sessionStorage.deleteSession(instanceId, internalSessionKey);
+      return undefined;
+    }
+
+    log.debug('Resuming session from DB', {
+      internalKey: internalSessionKey,
+      claudeSessionId: existing.sessionId,
+      age: `${Math.round(age / 1000)}s`,
+    });
+    return existing.sessionId;
+  }
+
+  /**
+   * Prepare the message and resolve the session for a trigger.
+   * Shared between trigger() and triggerStream() to avoid duplication.
+   *
+   * Returns null if there's no content to send (caller should return empty result).
+   */
+  private async prepareRequest(context: AgentTrigger): Promise<PreparedRequest | null> {
+    const message = this.buildMessage(context);
+    if (!message) return null;
+
+    const internalSessionKey = context.sessionId;
+    const resolvedSessionId = await this.resolveSession(context.source.instanceId, internalSessionKey);
 
     log.debug('Session resolution', {
       internalKey: internalSessionKey,
       resolvedUuid: resolvedSessionId ?? '(new session)',
     });
+
+    return { message, resolvedSessionId, internalSessionKey };
+  }
+
+  /**
+   * Persist the session UUID returned by Claude Code for future continuity.
+   */
+  private async persistSession(instanceId: string, internalSessionKey: string, claudeSessionId: string): Promise<void> {
+    if (!internalSessionKey || !claudeSessionId || !instanceId) {
+      log.warn('Session not stored', {
+        hasInternalKey: !!internalSessionKey,
+        hasResponseSessionId: !!claudeSessionId,
+        hasInstanceId: !!instanceId,
+        internalKey: internalSessionKey,
+        responseSessionId: claudeSessionId,
+      });
+      return;
+    }
+
+    const expiresAt = this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(Date.now() + this.sessionTtlMs) : null;
+
+    await this.sessionStorage.upsertSession(instanceId, internalSessionKey, claudeSessionId, expiresAt);
+
+    log.debug('Session stored in DB', {
+      internalKey: internalSessionKey,
+      claudeSessionId,
+      expiresAt: expiresAt?.toISOString() ?? 'never',
+    });
+  }
+
+  async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
+    const startTime = Date.now();
+
+    const prepared = await this.prepareRequest(context);
+    if (!prepared) {
+      log.debug('No content to send to Claude Code', { traceId: context.traceId });
+      return {
+        parts: [],
+        metadata: { runId: '', providerId: this.id, durationMs: Date.now() - startTime },
+      };
+    }
+
+    const { message, resolvedSessionId, internalSessionKey } = prepared;
 
     const request: ProviderRequest = {
       message,
@@ -172,30 +231,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     const response = await this.client.run(request);
 
     // Store session UUID for future continuity
-    if (internalSessionKey && response.sessionId && context.source.instanceId) {
-      const expiresAt = this.sessionTtlMs < Number.POSITIVE_INFINITY ? new Date(Date.now() + this.sessionTtlMs) : null;
-
-      await this.sessionStorage.upsertSession(
-        context.source.instanceId,
-        internalSessionKey,
-        response.sessionId,
-        expiresAt,
-      );
-
-      log.debug('Session stored in DB', {
-        internalKey: internalSessionKey,
-        claudeSessionId: response.sessionId,
-        expiresAt: expiresAt?.toISOString() ?? 'never',
-      });
-    } else {
-      log.warn('Session not stored', {
-        hasInternalKey: !!internalSessionKey,
-        hasResponseSessionId: !!response.sessionId,
-        hasInstanceId: !!context.source.instanceId,
-        internalKey: internalSessionKey,
-        responseSessionId: response.sessionId,
-      });
-    }
+    await this.persistSession(context.source.instanceId, internalSessionKey, response.sessionId);
 
     const parts =
       this.options.enableAutoSplit !== false
@@ -227,7 +263,83 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     };
   }
 
+  /**
+   * Stream a Claude Code agent response as cumulative StreamDelta values.
+   *
+   * Uses ClaudeCodeClient.streamRun() to iterate SDK messages with
+   * includePartialMessages enabled. After the stream completes, persists
+   * the session for future continuity.
+   */
+  async *triggerStream(context: AgentTrigger): AsyncGenerator<StreamDelta> {
+    const prepared = await this.prepareRequest(context);
+    if (!prepared) {
+      log.debug('No content to send to Claude Code (stream)', { traceId: context.traceId });
+      return;
+    }
+
+    const { message, resolvedSessionId, internalSessionKey } = prepared;
+
+    const request: ProviderRequest = {
+      message,
+      agentId: 'claude-code',
+      stream: true,
+      sessionId: resolvedSessionId,
+      userId: context.sender.personId ?? context.sender.platformUserId,
+      timeoutMs: this.options.timeoutMs ?? 120_000,
+    };
+
+    log.info('Triggering Claude Code agent (stream)', {
+      triggerType: context.type,
+      traceId: context.traceId,
+    });
+
+    const streamConfig = this.options.streamConfig;
+    const result = this.client.streamRun(request, streamConfig);
+
+    try {
+      for await (const delta of result.stream) {
+        yield delta;
+      }
+    } finally {
+      // Persist session after stream completes (success or error)
+      const claudeSessionId = result.getSessionId();
+      if (claudeSessionId) {
+        await this.persistSession(context.source.instanceId, internalSessionKey, claudeSessionId);
+      }
+
+      const streamMetrics = result.getMetrics();
+      if (streamMetrics) {
+        log.info('Claude Code agent stream completed', {
+          traceId: context.traceId,
+          sessionId: claudeSessionId,
+          durationMs: streamMetrics.durationMs,
+          costUsd: streamMetrics.costUsd,
+          inputTokens: streamMetrics.inputTokens,
+          outputTokens: streamMetrics.outputTokens,
+        });
+      }
+    }
+  }
+
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
     return this.client.checkHealth();
+  }
+
+  /** Clear persisted Claude session mapping for a strategy-computed session key. */
+  async resetSession(sessionKey: string, _chatId?: string, instanceId?: string): Promise<void> {
+    if (!instanceId) {
+      log.warn('Claude session reset skipped: missing instanceId', {
+        providerId: this.id,
+        sessionKey,
+      });
+      throw new Error('instanceId is required to reset Claude Code session');
+    }
+
+    await this.sessionStorage.deleteSession(instanceId, sessionKey);
+    log.info('Claude session reset', {
+      providerId: this.id,
+      instanceId,
+      sessionKey,
+    });
   }
 }

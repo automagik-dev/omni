@@ -26,7 +26,15 @@ export { loadToken, saveToken, clearToken, hasToken } from './auth';
 export { createClient, destroyClient, isClientReady, getBotUser } from './client';
 export { DiscordError, ErrorCode, mapDiscordError, isRetryable } from './utils/errors';
 export { isValidSnowflake, snowflakeToDate, snowflakeToTimestamp, compareSnowflakes } from './utils/snowflake';
-export { chunkMessage, chunkCodeBlock, truncate, needsChunking, MAX_MESSAGE_LENGTH } from './utils/chunking';
+export {
+  chunkMessage,
+  chunkMessageWithLines,
+  chunkCodeBlock,
+  truncate,
+  needsChunking,
+  MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_LINES,
+} from './utils/chunking';
 
 // Handlers
 export {

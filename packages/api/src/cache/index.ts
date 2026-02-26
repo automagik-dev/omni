@@ -1,9 +1,8 @@
 /**
  * Cache module for Omni API
  *
- * Provides pluggable caching with an in-memory default implementation.
- * For multi-instance deployments, swap MemoryCache for RedisCache.
+ * Exports cache keys, TTL values, and API-key cache helpers.
+ * For multi-instance deployments, use a Redis-backed cache implementation.
  */
 
-export { MemoryCache, getCache, resetCache } from './memory-cache';
-export { CacheKeys, CacheTTL, apiKeyCache, responseCache, type CachedApiKey } from './cache-keys';
+export { CacheKeys, CacheTTL, apiKeyCache, type CachedApiKey } from './cache-keys';

@@ -71,6 +71,11 @@ export interface TelegramMessageLike {
   reply_to_message?: { message_id: number };
   forward_origin?: unknown;
   message_thread_id?: number;
+  /** True if the message is sent to a forum topic (Telegram supergroup with topics enabled) */
+  is_topic_message?: boolean;
+
+  /** Present when the message belongs to a media group (album) */
+  media_group_id?: string;
 }
 
 export interface TelegramBotLike {

@@ -22,7 +22,11 @@ export const ProviderSchema = z.object({
       description:
         'Schema-specific configuration. Shape depends on schema type:\n' +
         '- **agno**: `{ agentId, teamId?, timeout? }`\n' +
-        '- **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`\n' +
+        '- **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`\n' +
+        '  - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`\n' +
+        '  - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key\n' +
+        '  - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key\n' +
+        '  - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing\n' +
         '- **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
         '  - `apiKey` in schemaConfig overrides the provider-level apiKey\n' +
         '- **webhook**: `{ mode?, retries? }`',
@@ -57,7 +61,12 @@ export const CreateProviderSchema = z.object({
       description:
         'Schema-specific configuration. Required fields vary by schema:\n' +
         '- **agno**: `{ agentId }` (required)\n' +
-        '- **openclaw**: `{ defaultAgentId }` (required)\n' +
+        '- **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:\n' +
+        '  - `agentTimeoutMs?`, `origin?`\n' +
+        '  - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`\n' +
+        '  - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key\n' +
+        '  - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key\n' +
+        '  - `deviceToken?`: gateway-issued device token for `operator.write` scope\n' +
         '- **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md\n' +
         '  - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`\n' +
         '- **webhook**: optional `{ mode, retries }`',

@@ -4,7 +4,7 @@
  * Sync all package.json versions to a single unified version.
  *
  * Usage: bun scripts/sync-versions.ts <version>
- * Example: bun scripts/sync-versions.ts 2.20260215.3
+ * Example: bun scripts/sync-versions.ts 2.260215.3
  *
  * Updates root package.json + all packages/* and apps/* package.json files.
  * Excludes: packages/audio-decode-shim (vendored fork with its own version).
@@ -63,14 +63,14 @@ function main(): void {
 
   if (!version) {
     console.error('Usage: bun scripts/sync-versions.ts <version>');
-    console.error('Example: bun scripts/sync-versions.ts 2.20260215.3');
+    console.error('Example: bun scripts/sync-versions.ts 2.260215.3');
     process.exit(1);
   }
 
   // Basic version format validation
-  if (!/^\d+\.\d+\.\d+/.test(version)) {
+  if (!/^\d+\.\d{6}\.\d+$/.test(version)) {
     console.error(`Invalid version format: ${version}`);
-    console.error('Expected format: N.YYYYMMDD.N (e.g., 2.20260215.3)');
+    console.error('Expected format: N.YYMMDD.N (e.g., 2.260215.3)');
     process.exit(1);
   }
 

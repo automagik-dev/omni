@@ -43,12 +43,13 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
-// import { gzipMiddleware } from './middleware/compression'; // Disabled - see note below
+
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { defaultTimeoutMiddleware } from './middleware/timeout';
 import { versionHeadersMiddleware } from './middleware/version-headers';
+import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
@@ -80,7 +81,13 @@ export function createApp(
   app.use('*', timing());
 
   // Request safety: timeout and body size limits
-  app.use('*', defaultTimeoutMiddleware);
+  // Promise.race timeout is only safe for reads (GETs) — abandoning a read
+  // result is harmless. For writes, the handler keeps running after timeout,
+  // orphaning mutexes and corrupting state (see #72 / #70).
+  app.use('*', async (c, next) => {
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
+    return defaultTimeoutMiddleware(c, next);
+  });
   app.use('*', defaultBodyLimitMiddleware);
 
   // HTTP logging
@@ -119,6 +126,50 @@ export function createApp(
 
   // OpenAPI spec and Swagger UI (no auth required)
   app.route('/api/v2', openapiRoutes);
+
+  // Public Telegram webhook endpoint — auth-exempt, verified by X-Telegram-Bot-Api-Secret-Token.
+  // Must be mounted before protectedApp so Telegram's servers (which send no x-api-key) can reach it.
+  app.post('/api/v2/instances/:id/telegram/webhook', async (c) => {
+    const id = c.req.param('id');
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('telegram');
+    if (!plugin) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Telegram plugin not loaded' } }, 503);
+    }
+
+    const telegramPlugin = plugin as unknown as {
+      getGrammyBot: (instanceId: string) => { handleUpdate: (update: unknown) => Promise<void> } | undefined;
+      getWebhookSecret: (instanceId: string) => string | undefined;
+    };
+
+    const webhookSecret = telegramPlugin.getWebhookSecret(id);
+
+    let authPassed = false;
+    await createWebhookAuthMiddleware({ webhookSecret })(c, async () => {
+      authPassed = true;
+    });
+    if (!authPassed) return c.res;
+
+    const bot = telegramPlugin.getGrammyBot(id);
+    if (!bot) {
+      return c.json({ error: { code: 'NOT_CONNECTED', message: `Bot not connected for instance ${id}` } }, 404);
+    }
+
+    let update: unknown;
+    try {
+      update = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }, 400);
+    }
+
+    await bot.handleUpdate(update);
+    return c.json({ ok: true });
+  });
 
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();

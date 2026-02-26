@@ -4,27 +4,11 @@
  * Exports everything needed for loading and managing channel plugins.
  */
 
-// Context creation
-export { createPluginContext, type CreatePluginContextOptions } from './context';
-
 // Plugin loader
-export {
-  loadChannelPlugins,
-  getPlugin,
-  getAllPlugins,
-  autoReconnectInstances,
-  type LoadPluginsOptions,
-  type LoadPluginsResult,
-} from './loader';
-
-// Logger
-export { createLogger } from './logger';
-
-// Storage
-export { getPluginStorage, setStorageDatabase, DatabasePluginStorage, InMemoryPluginStorage } from './storage';
+export { loadChannelPlugins } from './loader';
 
 // QR code storage
-export { storeQrCode, getQrCode, clearQrCode, setupQrCodeListener } from './qr-store';
+export { setupQrCodeListener } from './qr-store';
 
 // Event listeners (connection, messages)
 export {
@@ -45,7 +29,7 @@ export { setupMessagePersistence } from './message-persistence';
 export { setupMediaProcessor } from './media-processor';
 
 // Agent dispatcher (evolved from agent-responder — multi-event, multi-provider)
-export { setupAgentDispatcher, setupAgentResponder, type DispatcherCleanup } from './agent-dispatcher';
+export { setupAgentResponder } from './agent-dispatcher';
 
 // Sync worker (processes sync jobs)
 export { setupSyncWorker } from './sync-worker';
@@ -54,4 +38,4 @@ export { setupSyncWorker } from './sync-worker';
 export { setupSessionCleaner } from './session-cleaner';
 
 // Instance monitoring and robustness
-export { InstanceMonitor, reconnectWithPool, type MonitorConfig } from './instance-monitor';
+export { InstanceMonitor, reconnectWithPool } from './instance-monitor';

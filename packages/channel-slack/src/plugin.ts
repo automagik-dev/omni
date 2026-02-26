@@ -1,0 +1,1386 @@
+/**
+ * Slack Channel Plugin using Bolt.js with Socket Mode
+ *
+ * Main plugin class that extends BaseChannelPlugin from channel-sdk.
+ * Handles connection, messaging, streaming, interactions, and file handling.
+ */
+
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BaseChannelPlugin, createInboundDedupeCache, createThreadStarterCache } from '@omni/channel-sdk';
+import type {
+  ChannelCapabilities,
+  DedupeCache,
+  FetchHistoryOptions,
+  FetchHistoryResult,
+  HistorySyncMessage,
+  InstanceConfig,
+  OutgoingMessage,
+  PluginContext,
+  SendResult,
+  StreamSender,
+  ThreadStarterCache,
+} from '@omni/channel-sdk';
+import { DebounceManager } from '@omni/core';
+import type { ChannelType, ContentType } from '@omni/core/types';
+
+import { SLACK_CAPABILITIES } from './capabilities';
+import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
+import type { BoltConnection } from './connection/bolt-client';
+import { checkBoltHealth, createBoltApp, destroyBoltConnection, startBoltConnection } from './connection/bolt-client';
+import type { CommandPayload } from './handlers/commands';
+import { setupCommandHandlers } from './handlers/commands';
+import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
+import { setupInteractionHandlers } from './handlers/interactions';
+import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
+import { setupReactionHandlers } from './handlers/reactions';
+import { clearTypingStatus, setTypingStatus } from './handlers/typing';
+import { uploadFile, uploadFileFromUrl } from './senders/media';
+import { createNativeStreamSender } from './senders/native-stream';
+import { createSlackStreamSender } from './senders/stream';
+import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
+import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
+import { SlackError, SlackErrorCode } from './types';
+
+/**
+ * Resolve Slack credentials from config, options, and credentials sources.
+ * Supports legacy token aliases and both connection modes.
+ */
+function resolveSlackTokens(
+  slackConfig: SlackConfig,
+  rawOptions: Record<string, unknown>,
+  rawCredentials: Record<string, unknown>,
+): { botToken: string; appToken?: string; signingSecret?: string; mode: SlackConnectionMode } {
+  const botToken =
+    slackConfig.botToken ??
+    (rawOptions.token as string | undefined) ??
+    (rawCredentials.botToken as string | undefined) ??
+    (rawCredentials.token as string | undefined);
+  const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
+  const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
+  const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
+
+  if (!botToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
+  }
+  if (mode === 'socket' && !appToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'appToken (xapp-...) is required for Socket Mode');
+  }
+  if (mode === 'http' && !signingSecret) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'signingSecret is required for HTTP mode');
+  }
+
+  return { botToken, appToken, signingSecret, mode };
+}
+
+/**
+ * Slack Channel Plugin
+ *
+ * Extends BaseChannelPlugin to provide Slack messaging via Bolt.js Socket Mode.
+ *
+ * Features:
+ * - Socket Mode connection (no webhook URL needed)
+ * - Text messaging with mrkdwn formatting
+ * - Streaming draft messages (replace, status_final, off)
+ * - Thread support
+ * - Interactive components (Block Kit)
+ * - Slash commands
+ * - File uploads/downloads
+ * - Reactions, pins
+ * - DM policy enforcement
+ * - Identity customization
+ */
+export class SlackPlugin extends BaseChannelPlugin {
+  readonly id: ChannelType = 'slack';
+  readonly name = 'Slack (Bolt.js)';
+  readonly version = '1.0.0';
+  readonly capabilities: ChannelCapabilities = SLACK_CAPABILITIES;
+
+  /** Active Bolt.js connections per instance */
+  private connections = new Map<string, BoltConnection>();
+
+  /** Plugin-specific config per instance */
+  private slackConfigs = new Map<string, SlackConfig>();
+
+  /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
+  private userNameCache = new Map<string, string | null>();
+
+  /** Per-instance inbound dedup caches (created on connect, disposed on disconnect) */
+  private dedupeCaches = new Map<string, DedupeCache>();
+
+  /** Per-instance debounce managers (created on connect, flushed + disposed on disconnect) */
+  private debouncers = new Map<string, DebounceManager>();
+
+  /** Per-instance thread-starter caches for conversations.replies coalescing */
+  private threadCaches = new Map<string, ThreadStarterCache<HistorySyncMessage[]>>();
+
+  /**
+   * Last active thread per (instanceId, channelId): Map<`${instanceId}:${channelId}`, threadTs>
+   * Used by sendTyping to resolve the thread context for assistant.threads.setStatus.
+   */
+  private activeThreads = new Map<string, string>();
+
+  /**
+   * Pending ack reactions awaiting removal after reply.
+   * Key: `${instanceId}:${channelId}:${messageTs}`, Value: emoji name
+   */
+  private pendingAckReactions = new Map<string, string>();
+
+  /**
+   * Plugin-specific initialization
+   */
+  protected override async onInitialize(_context: PluginContext): Promise<void> {
+    // No additional initialization needed
+  }
+
+  /**
+   * Plugin-specific cleanup
+   */
+  protected override async onDestroy(): Promise<void> {
+    for (const [instanceId, connection] of this.connections) {
+      this.logger.info('Destroying Slack connection', { instanceId });
+      await destroyBoltConnection(connection, this.logger);
+    }
+    this.connections.clear();
+    this.slackConfigs.clear();
+    this.userNameCache.clear();
+
+    for (const debouncer of this.debouncers.values()) {
+      debouncer.flushAll();
+    }
+    this.debouncers.clear();
+
+    for (const cache of this.dedupeCaches.values()) {
+      cache.dispose();
+    }
+    this.dedupeCaches.clear();
+
+    for (const cache of this.threadCaches.values()) {
+      cache.dispose();
+    }
+    this.threadCaches.clear();
+    this.activeThreads.clear();
+    this.pendingAckReactions.clear();
+  }
+
+  /**
+   * Connect a Slack instance
+   */
+  async connect(instanceId: string, config: InstanceConfig): Promise<void> {
+    const existing = this.connections.get(instanceId);
+    if (existing) {
+      const isHealthy = await checkBoltHealth(existing);
+      if (isHealthy) {
+        this.logger.warn('Instance already connected', { instanceId });
+        return;
+      }
+      await destroyBoltConnection(existing, this.logger);
+      this.connections.delete(instanceId);
+      this.disposeInstanceCaches(instanceId);
+    }
+
+    await this.updateInstanceStatus(instanceId, config, {
+      state: 'connecting',
+      since: new Date(),
+    });
+
+    const rawOptions = (config.options ?? {}) as Record<string, unknown>;
+    const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
+    const slackConfig = rawOptions as SlackConfig;
+
+    // Create per-instance reliability caches
+    const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
+    const { dedupeCache, debouncer } = this.createReliabilityCaches(instanceId, debounceDelayMs);
+    this.dedupeCaches.set(instanceId, dedupeCache);
+    this.debouncers.set(instanceId, debouncer);
+
+    // Create per-instance thread-starter cache for conversations.replies coalescing
+    const threadCache = createThreadStarterCache<HistorySyncMessage[]>();
+    this.threadCaches.set(instanceId, threadCache);
+
+    let connection: BoltConnection | undefined;
+    try {
+      const resolved = resolveSlackTokens(slackConfig, rawOptions, rawCredentials);
+      this.slackConfigs.set(instanceId, slackConfig);
+
+      // Runtime guard: warn early if both allowlist and blocklist are set.
+      // The allowlist takes precedence in isChannelBlocked(), so the blocklist
+      // would be silently ignored — warn here so misconfiguration is visible.
+      if (slackConfig.channelAllowlist?.length && slackConfig.channelBlocklist?.length) {
+        this.logger.warn(
+          'Both channelAllowlist and channelBlocklist are configured — channelAllowlist takes precedence and channelBlocklist will be ignored',
+          { instanceId },
+        );
+      }
+
+      // Phase 1: Create the Bolt.js app (NOT started yet)
+      connection = createBoltApp(
+        {
+          botToken: resolved.botToken,
+          appToken: resolved.appToken,
+          signingSecret: resolved.signingSecret,
+          retryConfig: slackConfig.retryConfig,
+          mode: resolved.mode,
+          httpPort: slackConfig.httpPort,
+        },
+        this.logger,
+      );
+
+      // Phase 2: Register all event handlers BEFORE starting
+      // This is critical — Bolt.js Socket Mode starts receiving events
+      // immediately after start(), so handlers must be in place first.
+      this.setupHandlers(instanceId, connection, slackConfig, {
+        dedupeCache,
+        debounceManager: debouncer,
+      });
+
+      // Phase 3: Start Socket Mode connection (now handlers are ready)
+      await startBoltConnection(connection, this.logger);
+
+      this.connections.set(instanceId, connection);
+
+      await this.updateInstanceStatus(instanceId, config, {
+        state: 'connected',
+        since: new Date(),
+        metadata: {
+          profileName: connection.botName,
+          ownerIdentifier: connection.botUserId,
+        },
+      });
+
+      await this.emitInstanceConnected(instanceId, {
+        profileName: connection.botName,
+        ownerIdentifier: connection.botUserId,
+      });
+
+      this.logger.info('Slack instance connected', {
+        instanceId,
+        botName: connection.botName,
+        teamName: connection.teamName,
+      });
+    } catch (error) {
+      if (connection) {
+        await destroyBoltConnection(connection, this.logger).catch(() => {});
+      }
+      // Dispose reliability caches that were created before the failed connection
+      this.disposeInstanceCaches(instanceId);
+      await this.updateInstanceStatus(instanceId, config, {
+        state: 'error',
+        since: new Date(),
+        error: {
+          code: SlackErrorCode.CONNECTION_FAILED,
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        },
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Disconnect a Slack instance
+   */
+  async disconnect(instanceId: string): Promise<void> {
+    const connection = this.connections.get(instanceId);
+    if (!connection) return;
+
+    await destroyBoltConnection(connection, this.logger);
+    this.connections.delete(instanceId);
+    this.slackConfigs.delete(instanceId);
+
+    // Clear cached user names, active threads, and pending ack reactions for this instance
+    for (const key of this.userNameCache.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.userNameCache.delete(key);
+    }
+    for (const key of this.activeThreads.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.activeThreads.delete(key);
+    }
+    for (const key of this.pendingAckReactions.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
+    }
+
+    // Flush pending debounce windows and dispose reliability caches
+    this.disposeInstanceCaches(instanceId);
+
+    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /**
+   * Send a message through Slack
+   */
+  async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
+    const connection = this.getConnection(instanceId);
+    const slackConfig = this.slackConfigs.get(instanceId) ?? {};
+    const channelId = message.to;
+
+    try {
+      const correlationId = message.metadata?.correlationId as string | undefined;
+      if (correlationId) this.captureT10(correlationId);
+
+      const messageId = await this.dispatchMessageByType(connection, channelId, message, slackConfig);
+
+      if (correlationId) this.captureT11(correlationId);
+
+      // Clear typing indicator after reply is delivered
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction if configured
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+
+      await this.emitMessageSent({
+        instanceId,
+        externalId: messageId,
+        chatId: channelId,
+        threadId: message.threadId,
+        to: message.to,
+        content: { type: message.content.type, text: message.content.text },
+        replyToId: message.replyTo,
+      });
+
+      return { success: true, messageId, timestamp: Date.now() };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorCode = error instanceof SlackError ? error.code : SlackErrorCode.SEND_FAILED;
+      const retryable = error instanceof SlackError ? error.retryable : false;
+
+      // Clear typing indicator on error too
+      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+
+      // Remove ack reaction on error too (best effort)
+      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+
+      await this.emitMessageFailed({
+        instanceId,
+        chatId: channelId,
+        error: errorMessage,
+        errorCode,
+        retryable,
+      });
+
+      return {
+        success: false,
+        error: errorMessage,
+        errorCode,
+        retryable,
+        timestamp: Date.now(),
+      };
+    }
+  }
+
+  /**
+   * Create a stream sender for progressive message rendering
+   */
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    _chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
+  ): StreamSender {
+    const connection = this.getConnection(instanceId);
+    const slackConfig = this.slackConfigs.get(instanceId) ?? {};
+    const replyToMode = slackConfig.replyToMode ?? 'all';
+    const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
+
+    const streamMode = resolveStreamMode(slackConfig.streamMode);
+    const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
+
+    const base =
+      streamMode === 'native'
+        ? createNativeStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          })
+        : createSlackStreamSender({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            streamMode,
+            throttleMs,
+            username: slackConfig.defaultUsername,
+            iconUrl: slackConfig.defaultIconUrl,
+            iconEmoji: slackConfig.defaultIconEmoji,
+            formatMode: options?.formatMode ?? 'convert',
+            logger: this.logger,
+          });
+
+    // Wrap to clean up ack reactions and typing on stream completion.
+    // sendMessage handles cleanup for non-streamed replies, but streamed replies
+    // bypass sendMessage entirely — reactions accumulate indefinitely without this.
+    const cleanup = () => {
+      this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
+      this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
+    };
+
+    return {
+      onThinkingDelta: base.onThinkingDelta.bind(base),
+      onContentDelta: base.onContentDelta.bind(base),
+      async onFinal(delta) {
+        await base.onFinal(delta);
+        cleanup();
+      },
+      async onError(delta) {
+        await base.onError(delta);
+        cleanup();
+      },
+      async abort() {
+        await base.abort();
+        cleanup();
+      },
+    };
+  }
+
+  /**
+   * Send typing indicator via assistant.threads.setStatus.
+   *
+   * Thread-only: no-op when no active thread is tracked for the channel.
+   * Failures are swallowed gracefully — typing never blocks message processing.
+   *
+   * When duration === 0, clears the typing indicator instead of setting it.
+   */
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const connection = this.connections.get(instanceId);
+    if (!connection) return;
+
+    const threadTs = this.activeThreads.get(`${instanceId}:${chatId}`);
+    if (!threadTs) return; // Thread-only guard
+
+    if (duration === 0) {
+      await clearTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    } else {
+      await setTypingStatus({
+        client: connection.client,
+        channelId: chatId,
+        threadTs,
+        logger: this.logger,
+      });
+    }
+  }
+
+  /**
+   * Edit a message
+   */
+  async editMessage(instanceId: string, channelId: string, messageTs: string, newText: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    await editSlackMessage(connection.client, channelId, messageTs, newText, 'convert', this.logger);
+  }
+
+  /**
+   * Delete a message
+   */
+  async deleteMessage(instanceId: string, channelId: string, messageTs: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    await deleteSlackMessage(connection.client, channelId, messageTs, this.logger);
+  }
+
+  /**
+   * Add a reaction to a message
+   */
+  async addReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const { addReaction } = await import('./tools');
+    await addReaction(connection.client, channelId, messageTs, emoji, this.logger);
+  }
+
+  /**
+   * Remove a reaction from a message
+   */
+  async removeReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const { removeReaction } = await import('./tools');
+    await removeReaction(connection.client, channelId, messageTs, emoji, this.logger);
+  }
+
+  /**
+   * Get bot profile
+   */
+  async getProfile(instanceId: string): Promise<{
+    name?: string;
+    avatarUrl?: string;
+    bio?: string;
+    ownerIdentifier?: string;
+    platformMetadata: Record<string, unknown>;
+  }> {
+    const connection = this.getConnection(instanceId);
+
+    return {
+      name: connection.botName,
+      avatarUrl: undefined,
+      bio: undefined,
+      ownerIdentifier: connection.botUserId,
+      platformMetadata: {
+        botUserId: connection.botUserId,
+        teamId: connection.teamId,
+        teamName: connection.teamName,
+      },
+    };
+  }
+
+  /**
+   * Fetch user profile
+   */
+  async fetchUserProfile(
+    instanceId: string,
+    userId: string,
+  ): Promise<{
+    displayName?: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+    platformData?: Record<string, unknown>;
+  }> {
+    const connection = this.getConnection(instanceId);
+
+    try {
+      const result = await connection.client.users.info({ user: userId });
+      const user = result.user as Record<string, unknown> | undefined;
+      if (!user) return {};
+
+      const profile = user.profile as Record<string, unknown> | undefined;
+      return {
+        displayName: (profile?.display_name as string) || (profile?.real_name as string) || (user.name as string),
+        avatarUrl: profile?.image_192 as string | undefined,
+        bio: profile?.status_text as string | undefined,
+        phone: profile?.phone as string | undefined,
+        platformData: {
+          username: user.name,
+          realName: profile?.real_name,
+          isBot: user.is_bot,
+          isAdmin: user.is_admin,
+          timezone: user.tz,
+        },
+      };
+    } catch (error) {
+      this.logger.warn('Failed to fetch user profile', { userId, error: String(error) });
+      return {};
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private helpers
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Resolve user display name with caching.
+   * Caches both successful and failed lookups to avoid repeated API calls
+   * (prevents rate-limit storms when users.info consistently fails for a user).
+   */
+  private async resolveUserDisplayName(instanceId: string, userId: string): Promise<string | undefined> {
+    const cacheKey = `${instanceId}:${userId}`;
+    if (this.userNameCache.has(cacheKey)) {
+      return this.userNameCache.get(cacheKey) ?? undefined;
+    }
+
+    try {
+      const profile = await this.fetchUserProfile(instanceId, userId);
+      if (profile.displayName) {
+        this.userNameCache.set(cacheKey, profile.displayName);
+        return profile.displayName;
+      }
+    } catch {
+      // fetchUserProfile already logs the warning
+    }
+    // Cache the failure (null sentinel) so we don't retry on every message
+    this.userNameCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  /**
+   * Resolve thread_ts based on replyToMode config
+   *
+   * - 'off': Only thread if already in a thread context (threadId set)
+   * - 'first': Thread when replyTo is available (first reply creates thread)
+   * - 'all': Always use available thread context (replyTo or threadId)
+   */
+  private resolveThreadTs(
+    replyToMode: ReplyToMode,
+    replyTo: string | undefined,
+    threadId: string | undefined,
+  ): string | undefined {
+    switch (replyToMode) {
+      case 'all':
+      case 'first':
+        return replyTo ?? threadId;
+      default:
+        // 'off' or unrecognized: only thread if already in a thread context
+        return threadId;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Thread History & Reactions (per_thread collaboration sessions)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Map unicode emoji to Slack reaction names */
+  private static readonly EMOJI_TO_SLACK: Record<string, string> = {
+    '👀': 'eyes',
+    '🎧': 'headphones',
+    '✅': 'white_check_mark',
+    '❌': 'x',
+  };
+
+  /**
+   * Fetch message history for a Slack thread (conversations.replies).
+   * Supports per_thread collaboration session lazy init.
+   */
+  async fetchHistory(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    const connection = this.getConnection(instanceId);
+    const channelId = options.channelId ?? options.threadId;
+    const threadTs = options.threadId;
+
+    if (!channelId || !threadTs) return { totalFetched: 0, messages: [] };
+
+    const botUserId = connection.botUserId;
+    const botToken = (this.slackConfigs.get(instanceId) as Record<string, unknown>)?.botToken as string | undefined;
+    if (!botToken) {
+      this.logger.warn('fetchHistory: no botToken for instance', { instanceId });
+      return { totalFetched: 0, messages: [] };
+    }
+
+    const limit = options.limit ?? 200;
+    // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
+    // designed for thread root resolution, not full conversation history. Using it
+    // here would return stale data missing newer replies.
+    const messages = await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
+
+    return { totalFetched: messages.length, messages };
+  }
+
+  /** Paginate through conversations.replies and collect HistorySyncMessages. */
+  private async paginateThreadHistory(
+    connection: BoltConnection,
+    channelId: string,
+    threadTs: string,
+    botUserId: string | undefined,
+    botToken: string,
+    maxMessages: number,
+  ): Promise<HistorySyncMessage[]> {
+    const messages: HistorySyncMessage[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await connection.client.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: Math.min(200, maxMessages - messages.length),
+        cursor,
+      });
+
+      for (const msg of (response.messages ?? []) as Record<string, unknown>[]) {
+        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken);
+        if (result) messages.push(result);
+        if (messages.length >= maxMessages) break;
+      }
+
+      cursor = response.response_metadata?.next_cursor ?? undefined;
+    } while (cursor && messages.length < maxMessages);
+
+    return messages;
+  }
+
+  /** Download a Slack private file to a temp path and return its MIME type + local path. */
+  private async downloadSlackMediaToTemp(
+    file: Record<string, unknown>,
+    botToken: string,
+    ts: string,
+  ): Promise<{ mimeType: string; localPath: string | undefined }> {
+    const mimeType = (file.mimetype as string) ?? 'application/octet-stream';
+    const urlPrivate = (file.url_private_download as string | undefined) ?? (file.url_private as string | undefined);
+
+    if (!urlPrivate) return { mimeType, localPath: undefined };
+
+    try {
+      const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
+      const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
+      const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+      await writeFile(tmpPath, buffer);
+      return { mimeType, localPath: tmpPath };
+    } catch (err) {
+      this.logger.debug('fetchHistory: file download failed', { error: String(err), ts });
+      return { mimeType, localPath: undefined };
+    }
+  }
+
+  /** Convert a raw Slack message to HistorySyncMessage, or null to skip (bot/own message). */
+  private async buildHistorySyncMessage(
+    msg: Record<string, unknown>,
+    channelId: string,
+    botUserId: string | undefined,
+    botToken: string,
+  ): Promise<HistorySyncMessage | null> {
+    const userId = msg.user as string | undefined;
+    if (msg.bot_id || (botUserId && userId === botUserId) || !userId) return null;
+
+    const ts = msg.ts as string;
+    const text = (msg.text as string | undefined) ?? '';
+    const files = msg.files as Record<string, unknown>[] | undefined;
+    const timestamp = new Date(Number.parseFloat(ts) * 1000);
+
+    if (files && files.length > 0) {
+      const { mimeType, localPath } = await this.downloadSlackMediaToTemp(
+        files[0] as Record<string, unknown>,
+        botToken,
+        ts,
+      );
+      return {
+        externalId: ts,
+        chatId: channelId,
+        from: userId,
+        timestamp,
+        content: {
+          type: getContentTypeFromMime(mimeType),
+          text: text || undefined,
+          mimeType,
+          localPath,
+          caption: text || undefined,
+        },
+        isFromMe: false,
+        rawPayload: msg,
+      };
+    }
+
+    return {
+      externalId: ts,
+      chatId: channelId,
+      from: userId,
+      timestamp,
+      content: { type: 'text', text: text || undefined },
+      isFromMe: false,
+      rawPayload: msg,
+    };
+  }
+
+  /**
+   * Add a reaction emoji to a Slack message (per_thread media processing feedback).
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    try {
+      await connection.client.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
+    } catch (err) {
+      this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Remove a reaction emoji from a Slack message.
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    try {
+      await connection.client.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
+    } catch (err) {
+      this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
+    }
+  }
+
+  /**
+   * Add ack reaction on inbound message receipt.
+   * Fire-and-forget — reaction failures don't block message processing.
+   */
+  private addAckReaction(
+    instanceId: string,
+    channelId: string,
+    messageTs: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+  ): void {
+    const ackEmoji = config.ackReaction;
+    if (!ackEmoji) return;
+
+    const emojiName = typeof ackEmoji === 'string' ? ackEmoji.replace(/^:|:$/g, '') : null;
+    if (!emojiName) return;
+
+    // Fire-and-forget
+    connection.client.reactions.add({ channel: channelId, timestamp: messageTs, name: emojiName }).catch((err) => {
+      this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
+    });
+
+    // Track for removal if configured
+    if (config.removeAckAfterReply !== false) {
+      const key = `${instanceId}:${channelId}:${messageTs}`;
+      this.pendingAckReactions.set(key, emojiName);
+      // Auto-clean after 1 hour to prevent unbounded growth if the agent never replies
+      const timer = setTimeout(() => this.pendingAckReactions.delete(key), 3_600_000);
+      timer.unref?.();
+    }
+  }
+
+  /**
+   * Remove pending ack reaction after a reply is sent.
+   * Fire-and-forget — failure doesn't block message processing.
+   */
+  private removeAckReaction(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    replyTo: string | undefined,
+    threadId: string | undefined,
+  ): void {
+    // Try both replyTo and threadId as the acked message ts
+    for (const ts of [replyTo, threadId]) {
+      if (!ts) continue;
+      const key = `${instanceId}:${channelId}:${ts}`;
+      const emojiName = this.pendingAckReactions.get(key);
+      if (!emojiName) continue;
+
+      this.pendingAckReactions.delete(key);
+      connection.client.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
+        this.logger.warn('ack reaction: failed to remove', { channelId, ts, emoji: emojiName, error: String(err) });
+      });
+      break; // Only remove once
+    }
+  }
+
+  /**
+   * Track the last active thread for a (instanceId, channelId) pair.
+   * Used by sendTyping to call assistant.threads.setStatus on the right thread.
+   *
+   * Always sets a value — callers should pass `threadTs ?? externalId` so that
+   * typing indicators for top-level messages target the thread the bot's reply
+   * will create, rather than leaving a stale mapping from a previous message.
+   */
+  private trackActiveThread(instanceId: string, channelId: string, threadTs: string): void {
+    this.activeThreads.set(`${instanceId}:${channelId}`, threadTs);
+  }
+
+  /**
+   * Clear typing status after a reply is sent or an error occurs.
+   * Uses the provided threadTs or falls back to the tracked active thread.
+   */
+  private async clearActiveTyping(
+    instanceId: string,
+    channelId: string,
+    connection: BoltConnection,
+    threadTs: string | undefined,
+  ): Promise<void> {
+    const resolvedThread = threadTs ?? this.activeThreads.get(`${instanceId}:${channelId}`);
+    if (!resolvedThread) return;
+
+    await clearTypingStatus({
+      client: connection.client,
+      channelId,
+      threadTs: resolvedThread,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Get the Bolt connection for an instance
+   */
+  private getConnection(instanceId: string): BoltConnection {
+    const connection = this.connections.get(instanceId);
+    if (!connection) {
+      throw new SlackError(SlackErrorCode.NOT_CONNECTED, `Instance ${instanceId} not connected`);
+    }
+    return connection;
+  }
+
+  /**
+   * Create per-instance dedup cache + debounce manager.
+   * Extracted to keep connect() below cognitive complexity threshold.
+   */
+  private createReliabilityCaches(
+    _instanceId: string,
+    debounceDelayMs: number | undefined,
+  ): { dedupeCache: DedupeCache; debouncer: DebounceManager } {
+    const dedupeCache = createInboundDedupeCache();
+    const debouncer = new DebounceManager(
+      { mode: 'fixed', delayMs: debounceDelayMs ?? 1500 },
+      (_key, messages, _from, instId) => {
+        for (const dMsg of messages) {
+          const args = dMsg.payload as unknown as SlackDebouncedArgs;
+          this.dispatchMessageFromDebounce(instId, args).catch((err) => {
+            this.logger.warn('Debounce dispatch error', { instanceId: instId, error: String(err) });
+          });
+        }
+      },
+    );
+    return { dedupeCache, debouncer };
+  }
+
+  /**
+   * Dispose all reliability and thread caches for an instance.
+   * Called on both clean disconnect and failed connect to prevent resource leaks.
+   */
+  private disposeInstanceCaches(instanceId: string): void {
+    const debouncer = this.debouncers.get(instanceId);
+    if (debouncer) {
+      debouncer.flushAll();
+      this.debouncers.delete(instanceId);
+    }
+    const dedupeCache = this.dedupeCaches.get(instanceId);
+    if (dedupeCache) {
+      dedupeCache.dispose();
+      this.dedupeCaches.delete(instanceId);
+    }
+    const threadCache = this.threadCaches.get(instanceId);
+    if (threadCache) {
+      threadCache.dispose();
+      this.threadCaches.delete(instanceId);
+    }
+  }
+
+  /**
+   * Enrich a raw Slack payload with cross-channel identity contract fields.
+   * Used by both the debounce dispatch path and the direct onMessage callback.
+   */
+  private async buildEnrichedPayload(
+    instanceId: string,
+    from: string,
+    rawPayload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const displayName = await this.resolveUserDisplayName(instanceId, from);
+    const isDm = rawPayload.isDm as boolean;
+    return {
+      ...rawPayload,
+      displayName,
+      pushName: displayName,
+      chatName: isDm ? displayName : undefined,
+      isGroup: !isDm,
+    };
+  }
+
+  /**
+   * Dispatch a single message from the debounce window to the inbound pipeline.
+   * Mirrors the onMessage callback logic without going through the Bolt handler.
+   */
+  private async dispatchMessageFromDebounce(instanceId: string, args: SlackDebouncedArgs): Promise<void> {
+    // Side effects that the debounce path must mirror from onMessage
+    const threadTs = args.rawPayload.threadTs as string | undefined;
+    this.trackActiveThread(instanceId, args.chatId, threadTs ?? args.externalId);
+
+    const connection = this.connections.get(instanceId);
+    const config = this.slackConfigs.get(instanceId);
+    if (connection && config) {
+      this.addAckReaction(instanceId, args.chatId, args.externalId, connection, config);
+    }
+
+    const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.rawPayload);
+
+    await this.handleMessageReceived(
+      instanceId,
+      args.externalId,
+      args.chatId,
+      args.from,
+      args.content,
+      args.replyToId,
+      enrichedPayload,
+      args.platformTimestamp,
+    );
+  }
+
+  /**
+   * Set up all event handlers for an instance
+   */
+  private setupHandlers(
+    instanceId: string,
+    connection: BoltConnection,
+    config: SlackConfig,
+    reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
+  ): void {
+    // Message handlers — pass getter so botUserId resolves after start()
+    setupMessageHandlers(
+      connection.app,
+      instanceId,
+      () => connection.botUserId,
+      {
+        onMessage: async (
+          _instId,
+          externalId,
+          chatId,
+          from,
+          content,
+          replyToId,
+          rawPayload,
+          platformTimestamp,
+          _meta,
+        ) => {
+          // Track active thread for typing indicator resolution.
+          // For threaded messages, use threadTs. For top-level messages, use
+          // the message's own externalId — the bot's reply will create a thread
+          // under that ts, so typing indicators must target it. This also prevents
+          // stale thread context from leaking into unrelated channel messages.
+          const threadTs = rawPayload.threadTs as string | undefined;
+          this.trackActiveThread(instanceId, chatId, threadTs ?? externalId);
+
+          // Add ack reaction on message receipt (fire-and-forget)
+          this.addAckReaction(instanceId, chatId, externalId, connection, config);
+
+          // Enrich rawPayload with cross-channel identity contract
+          const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, rawPayload);
+
+          const files = enrichedPayload.files as unknown[] | undefined;
+          if (files && files.length > 0) {
+            await this.handleInboundFiles(
+              instanceId,
+              externalId,
+              chatId,
+              from,
+              content,
+              replyToId,
+              enrichedPayload,
+              platformTimestamp,
+            );
+            if (!content.text) return;
+          }
+
+          await this.handleMessageReceived(
+            instanceId,
+            externalId,
+            chatId,
+            from,
+            content,
+            replyToId,
+            enrichedPayload,
+            platformTimestamp,
+          );
+        },
+        onDmRejected: async (_instId, channelId, _userId, message) => {
+          try {
+            await sendTextMessage(
+              connection.client,
+              {
+                channelId,
+                text: message,
+                formatMode: 'passthrough',
+              },
+              this.logger,
+            );
+          } catch (err) {
+            this.logger.warn('Failed to send DM rejection', { error: String(err) });
+          }
+        },
+      },
+      {
+        policy: config.dmPolicy ?? 'open',
+        allowlist: config.dmAllowlist,
+        rejectionMessage: config.dmRejectionMessage,
+      },
+      this.logger,
+      {
+        channelAllowlist: config.channelAllowlist,
+        channelBlocklist: config.channelBlocklist,
+        channels: config.channels,
+      },
+      reliability,
+    );
+
+    // Reaction handlers — pass getter so botUserId resolves after start()
+    setupReactionHandlers(
+      connection.app,
+      instanceId,
+      () => connection.botUserId,
+      {
+        onReaction: async (instId, messageId, chatId, userId, emoji, action) => {
+          await this.handleReactionReceived(instId, messageId, chatId, userId, emoji, action);
+        },
+      },
+      this.logger,
+    );
+
+    // Interaction handlers
+    setupInteractionHandlers(
+      connection.app,
+      instanceId,
+      {
+        onInteraction: async (_instId, payload) => {
+          await this.handleInteraction(payload);
+        },
+      },
+      this.logger,
+    );
+
+    // Command handlers (if any commands are configured)
+    const commands = (config as Record<string, unknown>).slashCommands as string[] | undefined;
+    if (commands && commands.length > 0) {
+      setupCommandHandlers(
+        connection.app,
+        instanceId,
+        commands,
+        {
+          onCommand: async (payload) => {
+            await this.handleCommand(payload);
+            return undefined;
+          },
+        },
+        this.logger,
+      );
+    }
+  }
+
+  /**
+   * Dispatch outgoing message by content type
+   */
+  private async dispatchMessageByType(
+    connection: BoltConnection,
+    channelId: string,
+    message: OutgoingMessage,
+    config: SlackConfig,
+  ): Promise<string> {
+    switch (message.content.type) {
+      case 'text':
+        return this.sendTextContent(connection, channelId, message, config);
+      case 'image':
+      case 'audio':
+      case 'video':
+      case 'document':
+        return this.sendMediaContent(connection, channelId, message, config);
+      case 'reaction':
+        return this.sendReactionContent(connection, channelId, message);
+      default:
+        throw new SlackError(SlackErrorCode.SEND_FAILED, `Unsupported content type: ${message.content.type}`);
+    }
+  }
+
+  /** Send text content */
+  private async sendTextContent(
+    connection: BoltConnection,
+    channelId: string,
+    message: OutgoingMessage,
+    config: SlackConfig,
+  ): Promise<string> {
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    const replyToMode = config.replyToMode ?? 'all';
+    const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+
+    return sendTextMessage(
+      connection.client,
+      {
+        channelId,
+        text: message.content.text ?? '',
+        threadTs,
+        username: config.defaultUsername,
+        iconUrl: config.defaultIconUrl,
+        iconEmoji: config.defaultIconEmoji,
+        formatMode,
+        ephemeral: message.metadata?.ephemeral === true,
+        ephemeralUserId: message.metadata?.ephemeralUserId as string | undefined,
+      },
+      this.logger,
+    );
+  }
+
+  /** Send media content (image, audio, video, document) */
+  private async sendMediaContent(
+    connection: BoltConnection,
+    channelId: string,
+    message: OutgoingMessage,
+    config: SlackConfig,
+  ): Promise<string> {
+    const replyToMode = config.replyToMode ?? 'all';
+    const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+
+    if (message.metadata?.base64) {
+      const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
+      const filename = message.content.filename || `file-${Date.now()}`;
+      return uploadFile(
+        connection.client,
+        {
+          channelId,
+          content: buffer,
+          filename,
+          threadTs,
+          initialComment: message.content.text || message.content.caption,
+        },
+        this.logger,
+      );
+    }
+
+    if (!message.content.mediaUrl) {
+      throw new SlackError(SlackErrorCode.SEND_FAILED, 'Media URL or base64 required');
+    }
+
+    return uploadFileFromUrl(
+      connection.client,
+      {
+        channelId,
+        url: message.content.mediaUrl,
+        filename: message.content.filename || `file-${Date.now()}`,
+        threadTs,
+        initialComment: message.content.text || message.content.caption,
+      },
+      this.logger,
+    );
+  }
+
+  /** Send reaction to a message */
+  private async sendReactionContent(
+    connection: BoltConnection,
+    channelId: string,
+    message: OutgoingMessage,
+  ): Promise<string> {
+    const emoji = message.content.emoji;
+    const targetTs = message.content.targetMessageId ?? message.replyTo;
+    if (!emoji || !targetTs) {
+      throw new SlackError(SlackErrorCode.SEND_FAILED, 'Reaction requires emoji and target message');
+    }
+    const { addReaction } = await import('./tools');
+    await addReaction(connection.client, channelId, targetTs, emoji, this.logger);
+    return targetTs;
+  }
+
+  /**
+   * Emit inbound Slack file attachments.
+   *
+   * Slack `url_private*` links require bot-token auth.  Rather than downloading
+   * the entire file here (which would copy large files entirely into heap memory
+   * before base64-encoding them into a data: URI), we pass the private URL as
+   * `mediaUrl` and include `_slackAuth.botToken` in `rawPayload`.  The
+   * media-processor plugin reads that field and forwards it as an Authorization
+   * header when it calls `storeFromUrl`, so the download happens exactly once
+   * and never needs to be base64-encoded.
+   */
+  private async handleInboundFiles(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    from: string,
+    content: { text?: string },
+    replyToId: string | undefined,
+    rawPayload: Record<string, unknown>,
+    platformTimestamp: number | undefined,
+  ): Promise<void> {
+    const files = rawPayload.files as unknown[] | undefined;
+    if (!files || files.length === 0) return;
+
+    const fileInfos = extractFileInfo(files);
+    for (const fileInfo of fileInfos) {
+      const contentType = getContentTypeFromMime(fileInfo.mimeType);
+      const mediaUrl = fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate;
+
+      await this.handleMessageReceived(
+        instanceId,
+        `${externalId}-file-${fileInfo.id}`,
+        chatId,
+        from,
+        { type: contentType as ContentType, text: content.text, mediaUrl, mimeType: fileInfo.mimeType },
+        replyToId,
+        // botToken is NOT included here — media-processor fetches it from the
+        // instances table by instanceId so credentials never enter the event/DB
+        { ...rawPayload, fileInfo },
+        platformTimestamp,
+      );
+    }
+  }
+
+  /**
+   * Handle incoming message (delegate to base class)
+   */
+  private async handleMessageReceived(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    from: string,
+    content: {
+      type: ContentType;
+      text?: string;
+      mediaUrl?: string;
+      mimeType?: string;
+    },
+    replyToId: string | undefined,
+    rawPayload: Record<string, unknown>,
+    platformTimestamp?: number,
+  ): Promise<void> {
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+
+    const correlationId = await this.emitMessageReceived({
+      instanceId,
+      externalId,
+      chatId,
+      from,
+      content,
+      replyToId,
+      rawPayload,
+      timings,
+    });
+
+    if (timings) {
+      this.captureT2(correlationId, timings);
+    }
+  }
+
+  /**
+   * Handle incoming reaction
+   */
+  private async handleReactionReceived(
+    instanceId: string,
+    messageId: string,
+    chatId: string,
+    userId: string,
+    emoji: string,
+    action: 'add' | 'remove',
+  ): Promise<void> {
+    if (action === 'add') {
+      await this.emitReactionReceived({
+        instanceId,
+        messageId,
+        chatId,
+        from: userId,
+        emoji,
+        isCustomEmoji: false,
+      });
+    } else {
+      await this.emitReactionRemoved({
+        instanceId,
+        messageId,
+        chatId,
+        from: userId,
+        emoji,
+        isCustomEmoji: false,
+      });
+    }
+  }
+
+  /**
+   * Handle interaction (button, select, modal)
+   */
+  private async handleInteraction(payload: SlackInteractionPayload): Promise<void> {
+    this.logger.debug('Interaction handled', {
+      type: payload.type,
+      actionId: payload.actionId,
+      userId: payload.userId,
+    });
+    // Custom events would be published here for downstream processing
+  }
+
+  /**
+   * Handle slash command — emit as inbound message.received so downstream
+   * agents can process the command text just like any other message.
+   */
+  private async handleCommand(payload: CommandPayload): Promise<void> {
+    this.logger.debug('Command received', {
+      command: payload.command,
+      userId: payload.userId,
+      channelId: payload.channelId,
+    });
+
+    // Combine command + args into a single text string (e.g. "/remind 5min meeting")
+    const text = payload.text ? `${payload.command} ${payload.text}` : payload.command;
+
+    await this.handleMessageReceived(
+      payload.instanceId,
+      payload.triggerId,
+      payload.channelId,
+      payload.userId,
+      { type: 'text', text },
+      undefined,
+      { command: payload.command, responseUrl: payload.responseUrl },
+    );
+  }
+}

@@ -66,11 +66,12 @@ export interface AgentReplyFilter {
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
+ * - per_thread: Isolated session per thread/topic (lazy init, collaborative)
  */
-export const agentSessionStrategies = ['per_user', 'per_chat'] as const;
+export const agentSessionStrategies = ['per_user', 'per_chat', 'per_thread'] as const;
 export type AgentSessionStrategy = (typeof agentSessionStrategies)[number];
 
-export const ruleTypes = ['allow', 'deny'] as const;
+export const ruleTypes = ['allow', 'deny', 'pending_pairing'] as const;
 export type RuleType = (typeof ruleTypes)[number];
 
 export const accessModes = ['disabled', 'blocklist', 'allowlist'] as const;
@@ -312,6 +313,7 @@ export const agentRoutes = pgTable(
     agentPrefixSenderName: boolean('agent_prefix_sender_name'),
     agentWaitForMedia: boolean('agent_wait_for_media'),
     agentSendMediaPath: boolean('agent_send_media_path'),
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
     agentGateEnabled: boolean('agent_gate_enabled'),
     agentGateModel: varchar('agent_gate_model', { length: 120 }),
     agentGatePrompt: text('agent_gate_prompt'),
@@ -532,6 +534,14 @@ export const instances = pgTable(
     discordSlashCommandsEnabled: boolean('discord_slash_commands_enabled').default(true),
     discordWebhookUrl: text('discord_webhook_url'),
     discordPermissions: integer('discord_permissions'),
+    /** Per-guild configuration overrides: Record<guildId, GuildConfigOverride> */
+    guildConfigOverrides: jsonb('guild_config_overrides').$type<Record<string, unknown>>(),
+    /** Persisted bot presence: survives reconnects by being passed as options.presence on connect */
+    discordPresence: jsonb('discord_presence').$type<{
+      status?: 'online' | 'dnd' | 'idle' | 'invisible';
+      activityText?: string;
+      activityType?: 'Playing' | 'Streaming' | 'Listening' | 'Watching' | 'Custom' | 'Competing';
+    }>(),
 
     // ---- Slack Configuration ----
     slackBotToken: text('slack_bot_token'),
@@ -541,6 +551,8 @@ export const instances = pgTable(
 
     // ---- Telegram Configuration ----
     telegramBotToken: text('telegram_bot_token'),
+    /** Telegram reaction level: off (default), ack, minimal, extensive */
+    telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
     // ---- Agent Provider Reference ----
     agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
@@ -630,6 +642,23 @@ export const instances = pgTable(
     ttsVoiceId: text('tts_voice_id'), // ElevenLabs voice ID override
     ttsModelId: text('tts_model_id'), // ElevenLabs model override
 
+    // ---- Reaction Acknowledgment ----
+    /** Toggle reaction ack: 'off' (default) | 'on' */
+    reactionAck: varchar('reaction_ack', { length: 10 }).notNull().default('off').$type<'off' | 'on'>(),
+    /** Per-channel emoji overrides for ack reactions */
+    reactionAckEmoji: jsonb('reaction_ack_emoji').$type<Record<string, string>>(),
+    /** Timeout in ms before ack is auto-removed (hard cap 30s) */
+    ackTimeoutMs: integer('ack_timeout_ms').notNull().default(30000),
+
+    // ---- Session Reset ----
+    /** Session reset strategies: per chat-type configuration */
+    sessionReset: jsonb('session_reset').$type<{
+      default?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      dm?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      group?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+      thread?: { mode: 'none' } | { mode: 'daily'; hour?: number } | { mode: 'idle'; minutes?: number };
+    }>(),
+
     // ---- Media Processing ----
     processAudio: boolean('process_audio').notNull().default(true),
     processImages: boolean('process_images').notNull().default(true),
@@ -641,6 +670,19 @@ export const instances = pgTable(
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
     /** Include the full file path in formatted text sent to agent */
     agentSendMediaPath: boolean('agent_send_media_path').notNull().default(true),
+    /** Content types that receive the file path (e.g. image, video, document). Null = default (all except audio) */
+    agentSendMediaPathTypes: text('agent_send_media_path_types').array(),
+
+    // ---- WhatsApp Read Receipts ----
+    /** Per-instance read receipt mode: 'on' (default), 'off', or 'exclude-self' */
+    readReceipts: varchar('read_receipts', { length: 20 })
+      .notNull()
+      .default('on')
+      .$type<'on' | 'off' | 'exclude-self'>(),
+
+    // ---- Group History Context ----
+    /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
+    groupHistorySize: integer('group_history_size').notNull().default(50),
 
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */
@@ -1025,6 +1067,11 @@ export const messages = pgTable(
     statusIdx: index('messages_status_idx').on(table.status),
     platformTimestampIdx: index('messages_platform_timestamp_idx').on(table.platformTimestamp),
     replyToIdx: index('messages_reply_to_idx').on(table.replyToMessageId),
+    replyToExternalIdx: index('messages_reply_to_external_idx').on(
+      table.chatId,
+      table.replyToExternalId,
+      table.isFromMe,
+    ),
     hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
     originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
   }),
@@ -1126,7 +1173,7 @@ export const accessRules = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
-    ruleType: varchar('rule_type', { length: 10 }).notNull().$type<RuleType>(),
+    ruleType: varchar('rule_type', { length: 20 }).notNull().$type<RuleType>(),
 
     // ---- Matching Criteria ----
     phonePattern: varchar('phone_pattern', { length: 50 }), // E.164 with optional wildcard
@@ -1143,6 +1190,9 @@ export const accessRules = pgTable(
     action: varchar('action', { length: 20 }).notNull().default('block'), // 'block' | 'allow' | 'silent_block'
     blockMessage: text('block_message'),
 
+    // ---- Pairing metadata (for pending_pairing rules) ----
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -1152,6 +1202,7 @@ export const accessRules = pgTable(
     phoneIdx: index('access_rules_phone_idx').on(table.phonePattern),
     ruleTypeIdx: index('access_rules_type_idx').on(table.ruleType),
     uniqueRule: uniqueIndex('access_rules_unique_idx').on(table.instanceId, table.phonePattern, table.ruleType),
+    pairingIdx: index('idx_access_rules_pairing').on(table.instanceId, table.ruleType, table.expiresAt),
   }),
 );
 

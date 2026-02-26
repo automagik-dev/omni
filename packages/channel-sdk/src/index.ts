@@ -50,24 +50,48 @@
 export * from './types';
 
 // ─────────────────────────────────────────────────────────────
+// History Sync
+// ─────────────────────────────────────────────────────────────
+
+export * from './history';
+
+// ─────────────────────────────────────────────────────────────
 // Base implementations
 // ─────────────────────────────────────────────────────────────
 
 export * from './base';
 
 // ─────────────────────────────────────────────────────────────
-// Helpers
+// Helpers (internal — not re-exported; consumed by BaseChannelPlugin only)
 // ─────────────────────────────────────────────────────────────
 
-export * from './helpers/events';
-export * from './helpers/typing';
-export * from './helpers/message';
+// ─────────────────────────────────────────────────────────────
+// Reaction Acknowledgment
+// ─────────────────────────────────────────────────────────────
+
+export * from './reaction-ack';
 
 // ─────────────────────────────────────────────────────────────
 // Discovery
 // ─────────────────────────────────────────────────────────────
 
 export * from './discovery';
+
+// ─────────────────────────────────────────────────────────────
+// Reliability utilities
+// ─────────────────────────────────────────────────────────────
+
+export { createInboundDedupeCache, validateCacheKey } from './dedupe';
+export type { DedupeCache, DedupeConfig, DedupeStats } from './dedupe';
+
+export { createThreadStarterCache } from './thread-cache';
+export type { ThreadStarterCache, ThreadStarterCacheConfig } from './thread-cache';
+
+export { sanitizeMessage, isValidInstanceId } from './sanitize';
+export type { SanitizeOptions, SanitizeResult } from './sanitize';
+
+export { createDownloadGuard, DownloadTooLargeError } from './download-guard';
+export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from './download-guard';
 
 // Explicit streaming type export for package root access
 export type { StreamSender } from './types/streaming';

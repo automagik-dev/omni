@@ -73,12 +73,13 @@ async function clearAgentSession(
   const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
   const sessionId = computeSessionId(sessionStrategy, from, chatId);
 
-  // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, etc.)
+  // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, Claude, etc.)
   // Pass chatId so providers that build their own key format (e.g. OpenClaw)
   // can reconstruct the correct session key instead of using the generic sessionId.
+  // Pass instanceId for providers that persist session state scoped by instance.
   const agentProvider = resolveProvider(providerRecord, instance, db);
   if (agentProvider?.resetSession) {
-    await agentProvider.resetSession(sessionId, chatId);
+    await agentProvider.resetSession(sessionId, chatId, instanceId);
     return { sessionId, sessionStrategy };
   }
 

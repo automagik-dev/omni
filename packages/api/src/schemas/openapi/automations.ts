@@ -61,7 +61,7 @@ const CallAgentActionSchema = z.object({
     agentId: z.string().min(1).openapi({ description: 'Agent ID (required or template)' }),
     agentType: z.enum(['agent', 'team', 'workflow']).optional().openapi({ description: 'Agent type' }),
     sessionStrategy: z
-      .enum(['per_user', 'per_chat'])
+      .enum(['per_user', 'per_chat', 'per_thread'])
       .optional()
       .openapi({ description: 'Session strategy for agent memory' }),
     prefixSenderName: z.boolean().optional().openapi({ description: 'Prefix messages with sender name' }),

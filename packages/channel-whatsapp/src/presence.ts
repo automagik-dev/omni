@@ -4,7 +4,7 @@
  * Handles online/offline status and presence updates.
  */
 
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from 'baileys';
 
 /**
  * Presence types supported by WhatsApp

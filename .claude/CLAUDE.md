@@ -70,6 +70,31 @@ throw new OmniError({
 });
 ```
 
+## Database Schema Changes
+
+**The API auto-migrates on startup.** Schema changes use Drizzle migrations, not push.
+
+```bash
+# 1. Edit schema
+vim packages/db/src/schema.ts
+
+# 2. Generate migration
+cd packages/db && bunx drizzle-kit generate
+
+# 3. Commit migration + schema together
+git add packages/db/drizzle/ packages/db/src/schema.ts
+```
+
+**CRITICAL: `drizzle-kit push` and `migrateDb()` are incompatible.**
+Push creates tables without journal entries. The API's auto-migrate then crashes
+with "relation already exists". Never use push in CI or production.
+
+**Never:**
+- Delete deployed migration files
+- Hand-edit migration SQL (hash must match)
+- Squash migrations without a journal fix script
+- Use `drizzle-kit push` in CI (use `pg_isready` for readiness)
+
 ## Refactoring Guidelines
 
 When Biome reports `noExcessiveCognitiveComplexity` or suggests extracting helpers:

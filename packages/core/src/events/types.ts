@@ -39,6 +39,7 @@ export const CORE_EVENT_TYPES = [
   // Access control
   'access.allowed',
   'access.denied',
+  'access.pairing_requested',
   // Presence
   'presence.typing',
   'presence.online',
@@ -52,6 +53,8 @@ export const CORE_EVENT_TYPES = [
   // Reaction lifecycle
   'reaction.received',
   'reaction.removed',
+  // Session lifecycle
+  'session.reset',
   // Batch job operations
   'batch-job.created',
   'batch-job.started',
@@ -128,6 +131,13 @@ export interface EventMetadata {
   platformIdentityId?: string;
   traceId?: string;
   source?: string;
+  /**
+   * How the message entered the system.
+   * - 'realtime': a live message received from the platform
+   * - 'history-sync': a historical message replayed on reconnect (e.g. Baileys messaging-history.set)
+   * Consumers (e.g. bots) should skip 'history-sync' messages to avoid replaying old messages.
+   */
+  ingestMode?: 'realtime' | 'history-sync';
   /** NATS stream sequence number (set by subscription handler, not by publisher) */
   streamSequence?: number;
   /** Journey timing checkpoints: checkpoint name → Unix ms timestamp */
@@ -346,6 +356,14 @@ export interface AccessDeniedPayload {
   action: 'block' | 'silent_block';
 }
 
+export interface AccessPairingRequestedPayload {
+  instanceId: string;
+  platformUserId: string;
+  pairingCode: string;
+  requestId: string;
+  expiresAt: number;
+}
+
 /**
  * Sync event payloads
  */
@@ -519,6 +537,16 @@ export interface ReactionRemovedPayload {
   isCustomEmoji?: boolean;
 }
 
+// ─── Session Events ────────────────────────────────────────
+export interface SessionResetPayload {
+  /** Instance that the session belongs to */
+  instanceId: string;
+  /** Session ID that was reset */
+  sessionId: string;
+  /** When the reset occurred */
+  timestamp: number;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -542,6 +570,7 @@ export interface EventPayloadMap {
   'instance.qr_code': InstanceQrCodePayload;
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
+  'access.pairing_requested': AccessPairingRequestedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;
@@ -549,6 +578,7 @@ export interface EventPayloadMap {
   'profile.synced': ProfileSyncedPayload;
   'reaction.received': ReactionReceivedPayload;
   'reaction.removed': ReactionRemovedPayload;
+  'session.reset': SessionResetPayload;
   'presence.typing': PresenceTypingPayload;
   'presence.online': PresenceOnlinePayload;
   'presence.offline': PresenceOfflinePayload;

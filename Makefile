@@ -2,12 +2,12 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check \
+        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
         kill-ghosts reset sdk-generate \
-        cli cli-build cli-link \
+        cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
         _init-db-wait _sync-db
 
@@ -27,12 +27,13 @@ help:
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check         Run all quality checks (typecheck + lint + test)"
+	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + test)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
 	@echo "  make lint-fix      Fix auto-fixable lint issues"
 	@echo "  make lint-api      Lint API package only"
 	@echo "  make format        Format code with Biome"
+	@echo "  make dead-code     Run knip dead code detection"
 	@echo "  make test          Run all tests"
 	@echo "  make test-watch    Run tests in watch mode"
 	@echo "  make test-api      Run API package tests only"
@@ -64,13 +65,14 @@ help:
 	@echo "Individual Services:"
 	@echo "  make restart-api     Restart API only"
 	@echo "  make restart-nats    Restart NATS only"
-	@echo "  make restart-pgserve Restart PostgreSQL only"
+	@echo "  make restart-pgserve Restart pgserve (embedded in API)"
 	@echo "  make logs-api        View API logs"
 	@echo ""
 	@echo "CLI:"
-	@echo "  make cli ARGS=\"...\"  Run CLI from source"
-	@echo "  make cli-build       Build CLI package"
-	@echo "  make cli-link        Build + link globally (omni command)"
+	@echo "  make cli ARGS=\"...\"      Run CLI from source"
+	@echo "  make cli-build           Build CLI package"
+	@echo "  make cli-build-full      Build CLI client + server bundles"
+	@echo "  make cli-link            Build + link globally (omni command)"
 	@echo ""
 	@echo "SDK:"
 	@echo "  make sdk-generate    Generate SDK from OpenAPI spec"
@@ -239,8 +241,11 @@ test-file:
 	@if [ -z "$(F)" ]; then echo "Usage: make test-file F=<path-to-test-file>"; exit 1; fi
 	bun test $(F)
 
+dead-code:
+	bunx knip
+
 # Run all quality checks
-check: typecheck lint test
+check: typecheck lint dead-code test
 	@echo ""
 	@echo "All checks passed!"
 
@@ -249,13 +254,13 @@ check: typecheck lint test
 # ============================================================================
 
 db-push:
-	cd packages/db && bunx drizzle-kit push --force
+	@set -a && . ./.env && set +a && cd packages/db && bunx drizzle-kit push --force
 
 db-migrate:
-	bun run --filter @omni/db db:migrate
+	@set -a && . ./.env && set +a && bun run --filter @omni/db db:migrate
 
 db-studio:
-	bun run --filter @omni/db db:studio
+	@set -a && . ./.env && set +a && bun run --filter @omni/db db:studio
 
 db-reset:
 	@echo "WARNING: This will delete all data!"
@@ -323,16 +328,17 @@ status:
 
 # Individual service control
 restart-api:
-	pm2 restart omni-api
+	pm2 restart omni-v2-api
 
 restart-nats:
-	pm2 restart omni-nats
+	pm2 restart omni-v2-nats
 
 restart-pgserve:
-	pm2 restart omni-pgserve
+	@echo "pgserve is embedded in the API server — restarting API..."
+	$(MAKE) restart-api
 
 logs-api:
-	pm2 logs omni-api --lines 100
+	pm2 logs omni-v2-api --lines 100
 
 # Kill ghost processes that might block ports
 kill-ghosts:
@@ -359,6 +365,9 @@ cli:
 
 cli-build:
 	bun run --cwd packages/cli build
+
+cli-build-full: ## Build CLI client + server bundles
+	cd packages/cli && bun run build && bun run build:server
 
 cli-link: cli-build
 	cd packages/cli && bun link

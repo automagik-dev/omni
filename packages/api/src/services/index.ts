@@ -96,27 +96,6 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   };
 }
 
-// Re-export service classes
-export { ApiKeyService, type ValidatedApiKey, type CreateApiKeyOptions, type CreateApiKeyResult } from './api-keys';
-export { AuditService } from './audit';
-export { InstanceService } from './instances';
-export { PersonService } from './persons';
-export { EventService } from './events';
-export { SettingsService } from './settings';
+// Re-export service classes used externally
 export { AccessService } from './access';
-export { ProviderService } from './providers';
-export { RouteService } from './routes';
-export { RouteResolver } from './route-resolver';
-export { DeadLetterService } from './dead-letters';
-export { PayloadStoreService } from './payload-store';
-export { EventOpsService } from './event-ops';
-export { WebhookService } from './webhooks';
-export { AutomationService } from './automations';
-export { ChatService } from './chats';
-export { MessageService } from './messages';
-export { SyncJobService } from './sync-jobs';
-export { BatchJobService } from './batch-jobs';
 export { AgentRunnerService } from './agent-runner';
-export { ConsumerOffsetService } from './consumer-offsets';
-export { TTSService } from './tts';
-export type { TTSOptions, TTSResult, TTSVoice, TTSSettingsReader } from './tts';

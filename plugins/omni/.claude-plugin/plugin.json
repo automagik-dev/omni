@@ -1,0 +1,6 @@
+{
+  "name": "omni",
+  "version": "2.0.0",
+  "description": "Full Omni platform control — multichannel messaging, automations, events, batch ops via the omni CLI",
+  "author": { "name": "Automagik" }
+}

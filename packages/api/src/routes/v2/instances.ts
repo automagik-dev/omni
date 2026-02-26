@@ -3,13 +3,14 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import type { ChannelPlugin } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, createLogger } from '@omni/core';
+import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
+import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
+import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
@@ -60,7 +61,7 @@ const createInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
-    .enum(['per_user', 'per_chat'])
+    .enum(['per_user', 'per_chat', 'per_thread'])
     .default('per_chat')
     .describe('Session strategy for agent memory'),
   agentPrefixSenderName: z.boolean().default(true).describe('Prefix messages with sender name'),
@@ -76,6 +77,11 @@ const createInstanceSchema = z.object({
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
+  agentSendMediaPathTypes: z
+    .array(z.string())
+    .optional()
+    .nullable()
+    .describe('Content types that receive file path (e.g. image, video, document). Default: all except audio'),
   messageDebounceMode: z
     .enum(['disabled', 'fixed', 'randomized'])
     .default('randomized')
@@ -111,9 +117,42 @@ const createInstanceSchema = z.object({
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
+  slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
+  readReceipts: z
+    .enum(['on', 'off', 'exclude-self'])
+    .default('on')
+    .describe('Read receipt mode: on (default), off, or exclude-self (skip receipts for the instance own number)'),
+  groupHistorySize: z
+    .number()
+    .int()
+    .min(0)
+    .max(200)
+    .default(50)
+    .describe(
+      'Number of context messages to include for group chats when dispatching to agent (0 = disabled, max 200)',
+    ),
+  reactionAck: z
+    .enum(['on', 'off'])
+    .default('off')
+    .describe('Reaction ack mode: on to send a reaction while agent processes'),
+  reactionAckEmoji: z
+    .record(z.string())
+    .optional()
+    .nullable()
+    .describe('Per-channel emoji map for reaction ack (e.g. {"whatsapp":"\\u2705"})'),
+  ackTimeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(120_000)
+    .default(30_000)
+    .describe('Ack timeout in milliseconds (max 120000)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
+// NOTE: .partial() on fields with .default() still fires the default for omitted keys,
+// so we must explicitly override fields that have defaults to strip the default value.
+// Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
 const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Nullable fields in DB - can be set to null
   agentProviderId: z.string().uuid().nullable().optional(),
@@ -127,6 +166,14 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
+
+  // Override fields with .default() to strip the default — omitted keys must stay undefined
+  // so PATCH only updates what is explicitly sent (not reset to defaults)
+  readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+  groupHistorySize: z.number().int().min(0).max(200).optional(),
+  reactionAck: z.enum(['on', 'off']).optional(),
+  reactionAckEmoji: z.record(z.string()).nullable().optional(),
+  ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
 });
 
 /**
@@ -167,6 +214,58 @@ function persistedTokenForChannel(instance: {
   }
 }
 
+/** Sensitive fields that must never be returned in API responses */
+const SENSITIVE_INSTANCE_FIELDS = [
+  'telegramBotToken',
+  'discordBotToken',
+  'slackBotToken',
+  'slackAppToken',
+  'slackSigningSecret',
+] as const;
+
+/** Strip secret tokens from an instance before returning it in API responses */
+function sanitizeInstance<T extends Record<string, unknown>>(
+  instance: T,
+): Omit<T, (typeof SENSITIVE_INSTANCE_FIELDS)[number]> {
+  const sanitized = { ...instance };
+  for (const field of SENSITIVE_INSTANCE_FIELDS) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
+
+/** Apply Slack-specific config from profileMetadata */
+function applySlackProfileMetadata(
+  opts: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (!metadata) return;
+  if (metadata.replyToMode) opts.replyToMode = metadata.replyToMode;
+  if (metadata.streamMode) opts.streamMode = metadata.streamMode;
+  if (metadata.dmPolicy) opts.dmPolicy = metadata.dmPolicy;
+  if (metadata.dmAllowlist) opts.dmAllowlist = metadata.dmAllowlist;
+}
+
+/** Apply Slack tokens and config to connection options */
+function applySlackConnectOptions(
+  opts: Record<string, unknown>,
+  instance: {
+    slackBotToken?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
+  },
+  overrides?: { slackBotToken?: string | null; slackAppToken?: string | null; slackSigningSecret?: string | null },
+): void {
+  const botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
+  if (botToken) opts.botToken = botToken;
+  const appToken = overrides?.slackAppToken ?? instance.slackAppToken;
+  if (appToken) opts.appToken = appToken;
+  const signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
+  if (signingSecret) opts.signingSecret = signingSecret;
+  applySlackProfileMetadata(opts, instance.profileMetadata);
+}
+
 /**
  * Map channel type to its token DB column name.
  * Returns undefined for channels that don't store tokens.
@@ -182,6 +281,105 @@ function channelTokenField(channel: string): string | undefined {
     default:
       return undefined;
   }
+}
+
+type InstanceConnectionOptionsInput = {
+  channel: string;
+  forceNewQr: boolean;
+  token?: string;
+  telegramReactionLevel?: string | null;
+  slackAppToken?: string | null;
+  slackSigningSecret?: string | null;
+  whatsapp?: { syncFullHistory?: boolean };
+};
+
+function applyChannelSpecificConnectionOptions(
+  options: Record<string, unknown>,
+  input: InstanceConnectionOptionsInput,
+): void {
+  if (input.channel === 'telegram') {
+    options.telegramReactionLevel = input.telegramReactionLevel;
+    return;
+  }
+
+  if (input.channel === 'slack') {
+    if (input.token) options.botToken = input.token;
+    if (input.slackAppToken) options.appToken = input.slackAppToken;
+    if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+  }
+}
+
+function buildInstanceConnectionOptions(input: InstanceConnectionOptionsInput): Record<string, unknown> {
+  const options: Record<string, unknown> = { forceNewQr: input.forceNewQr };
+  if (input.token) {
+    options.token = input.token;
+  }
+  applyChannelSpecificConnectionOptions(options, input);
+  if (input.whatsapp) {
+    options.whatsapp = input.whatsapp;
+  }
+  return options;
+}
+
+function getPluginFromRegistry(
+  channelRegistry: ChannelRegistry | null | undefined,
+  channel: string,
+): ChannelPlugin | undefined {
+  return channelRegistry?.get(channel as Parameters<ChannelRegistry['get']>[0]);
+}
+
+async function connectInstanceWithPlugin(
+  plugin: ChannelPlugin,
+  instanceId: string,
+  options: Record<string, unknown>,
+): Promise<string | undefined> {
+  try {
+    await plugin.connect(instanceId, {
+      instanceId,
+      credentials: {},
+      options,
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown error';
+  }
+}
+
+async function triggerCreateConnection(
+  channelRegistry: ChannelRegistry | null | undefined,
+  channel: string,
+  instanceId: string,
+  options: Record<string, unknown>,
+): Promise<void> {
+  const plugin = getPluginFromRegistry(channelRegistry, channel);
+  if (!plugin) {
+    log.warn('No plugin found for channel', { channel });
+    return;
+  }
+
+  const errorMessage = await connectInstanceWithPlugin(plugin, instanceId, options);
+  if (errorMessage) {
+    log.error('Failed to connect instance', { instanceId, error: errorMessage });
+    return;
+  }
+
+  log.info('Triggered connection', { instanceId, channel });
+}
+
+/** Build DB update payload to persist tokens provided in a connect request */
+function buildTokenPersistUpdates(
+  channel: string,
+  body: { token?: string; slackBotToken?: string; slackAppToken?: string; slackSigningSecret?: string },
+): Record<string, string> {
+  const updates: Record<string, string> = {};
+  const tokenField = body.token ? channelTokenField(channel) : undefined;
+  if (tokenField && body.token) updates[tokenField] = body.token;
+  if (channel === 'slack') {
+    if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
+    if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
+    if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
+  }
+  return updates;
 }
 
 /** Default reply filter applied when an agent provider is bound but no filter is set */
@@ -201,7 +399,8 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const result = await services.instances.list({ channel, status, limit, cursor });
 
   // Filter by API key's allowed instanceIds
-  const items = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const filtered = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
+  const items = filtered.map(sanitizeInstance);
 
   return c.json({
     items,
@@ -263,7 +462,7 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**
@@ -285,34 +484,27 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   // Create the database record first
   const instance = await services.instances.create(data);
 
-  // Build connection options
-  const connectionOptions: Record<string, unknown> = { forceNewQr: true };
-  if (connectToken) {
-    connectionOptions.token = connectToken;
+  const connectionOptions = buildInstanceConnectionOptions({
+    channel: data.channel,
+    forceNewQr: true,
+    token: connectToken,
+    telegramReactionLevel: instance.telegramReactionLevel,
+    slackAppToken: instance.slackAppToken,
+    slackSigningSecret: instance.slackSigningSecret,
+  });
+
+  // Wire: load guild config overrides into plugin before connection
+  const createPlugin = getPluginFromRegistry(channelRegistry, data.channel);
+  if (createPlugin && 'loadGuildConfigs' in createPlugin && instance.guildConfigOverrides) {
+    (createPlugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+      instance.id,
+      instance.guildConfigOverrides as Record<string, unknown>,
+    );
   }
 
-  // Get the channel plugin and trigger connection
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(data.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        // Trigger plugin connection
-        await plugin.connect(instance.id, {
-          instanceId: instance.id,
-          credentials: {},
-          options: connectionOptions,
-        });
-        log.info('Triggered connection', { instanceId: instance.id, channel: data.channel });
-      } catch (error) {
-        log.error('Failed to connect instance', { instanceId: instance.id, error: String(error) });
-        // Don't fail the request - instance is created, connection can be retried
-      }
-    } else {
-      log.warn('No plugin found for channel', { channel: data.channel });
-    }
-  }
+  await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
-  return c.json({ data: instance }, 201);
+  return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
 /**
@@ -322,6 +514,24 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // When clearing agentProviderId, cascade-reset all agent fields to defaults.
+  // NOT NULL DB fields can't be set to null, so reset them to their schema defaults.
+  if (data.agentProviderId === null) {
+    Object.assign(data, {
+      agentId: null,
+      agentApiUrl: null,
+      agentApiKey: null,
+      agentReplyFilter: null,
+      agentSessionStrategy: null,
+      agentGateModel: null,
+      agentGatePrompt: null,
+      // Reset NOT NULL fields to schema defaults (cannot be null)
+      agentType: 'agent',
+      agentTimeout: 60,
+      agentStreamMode: false,
+    });
+  }
 
   // Default reply filter when binding an agent provider without explicit filter
   if (data.agentProviderId && !data.agentReplyFilter) {
@@ -338,7 +548,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     await accessCache.clear();
   }
 
-  return c.json({ data: instance });
+  return c.json({ data: sanitizeInstance(instance) });
 });
 
 /**
@@ -350,21 +560,29 @@ instancesRoutes.delete('/:id', instanceAccess, async (c) => {
   const channelRegistry = c.get('channelRegistry');
 
   const instance = await services.instances.getById(id);
+  const plugin = channelRegistry?.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
 
-  // Disconnect via channel plugin first
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        await plugin.disconnect(id);
-      } catch (error) {
-        log.error('Failed to disconnect instance before delete', { instanceId: id, error: String(error) });
-        // Continue with deletion anyway
-      }
+  // Disconnect runtime connection first (non-destructive)
+  if (plugin) {
+    try {
+      await plugin.disconnect(id);
+    } catch (error) {
+      log.error('Failed to disconnect instance before delete', { instanceId: id, error: String(error) });
+      // Continue with deletion anyway
     }
   }
 
+  // Delete instance row first; only clear credentials after this succeeds.
   await services.instances.delete(id);
+
+  // Best-effort credential cleanup after successful delete.
+  if (plugin && 'logout' in plugin && typeof (plugin as { logout?: unknown }).logout === 'function') {
+    try {
+      await (plugin as { logout: (id: string) => Promise<void> }).logout(id);
+    } catch (error) {
+      log.error('Failed to clear channel auth after delete', { instanceId: id, error: String(error) });
+    }
+  }
 
   return c.json({ success: true });
 });
@@ -514,8 +732,17 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 
 // Connect instance schema
 const connectInstanceSchema = z.object({
-  token: z.string().optional().describe('Bot token for Discord instances'),
+  token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
+  slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
+  slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
+  slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+  whatsapp: z
+    .object({
+      syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
+    })
+    .optional()
+    .describe('WhatsApp-specific connection options'),
 });
 
 /**
@@ -541,19 +768,23 @@ instancesRoutes.post(
 
     const instance = await services.instances.getById(id);
 
-    // Build connection options
-    const connectionOptions: Record<string, unknown> = { forceNewQr };
     const connectToken = body.token ?? persistedTokenForChannel(instance);
-    if (connectToken) {
-      connectionOptions.token = connectToken;
-    }
+    const connectionOptions = buildInstanceConnectionOptions({
+      channel: instance.channel,
+      forceNewQr,
+      token: connectToken,
+      telegramReactionLevel: instance.telegramReactionLevel,
+      slackAppToken: body.slackAppToken ?? instance.slackAppToken,
+      slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
+      whatsapp: body.whatsapp,
+    });
 
     // Trigger connection via channel plugin
     if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    const plugin = getPluginFromRegistry(channelRegistry, instance.channel);
     if (!plugin) {
       return c.json(
         { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
@@ -561,29 +792,36 @@ instancesRoutes.post(
       );
     }
 
-    try {
-      await plugin.connect(id, {
-        instanceId: id,
-        credentials: {},
-        options: connectionOptions,
-      });
-    } catch (error) {
+    // Wire: load guild config overrides into plugin before connection
+    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+        id,
+        instance.guildConfigOverrides as Record<string, unknown>,
+      );
+    }
+
+    // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
+    if (instance.discordPresence) {
+      connectionOptions.presence = instance.discordPresence;
+    }
+
+    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
+    if (errorMessage) {
       return c.json(
         {
           error: {
             code: 'CONNECTION_FAILED',
-            message: `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            message: `Failed to connect: ${errorMessage}`,
           },
         },
         500,
       );
     }
 
-    // Update database — persist token if a new one was provided
-    const tokenField = body.token ? channelTokenField(instance.channel) : undefined;
+    // Update database — persist tokens if new ones were provided
     const updated = await services.instances.update(id, {
       isActive: true,
-      ...(tokenField ? { [tokenField]: body.token } : {}),
+      ...buildTokenPersistUpdates(instance.channel, body),
     });
 
     return c.json({
@@ -637,42 +875,42 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
-  const instance = await services.instances.getById(id);
-
-  // Restart via channel plugin: disconnect then connect
-  if (channelRegistry) {
-    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-    if (plugin) {
-      try {
-        // Disconnect first
-        await plugin.disconnect(id);
-        // Then reconnect
-        await plugin.connect(id, {
-          instanceId: id,
-          credentials: {},
-          options: {
-            forceNewQr,
-          },
-        });
-      } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: 'RESTART_FAILED',
-              message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          },
-          500,
-        );
-      }
-    } else {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } },
-        400,
-      );
-    }
-  } else {
+  if (!channelRegistry) {
     return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const instance = await services.instances.getById(id);
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  try {
+    await plugin.disconnect(id);
+    const restartOptions: Record<string, unknown> = { forceNewQr };
+    const restartToken = persistedTokenForChannel(instance);
+    if (restartToken) restartOptions.token = restartToken;
+    if (instance.channel === 'telegram') {
+      restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
+    } else if (instance.channel === 'slack') {
+      if (restartToken) restartOptions.botToken = restartToken;
+      if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
+    }
+    if (instance.channel === 'slack') {
+      applySlackConnectOptions(restartOptions, instance);
+    }
+    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+  } catch (error) {
+    return c.json(
+      {
+        error: {
+          code: 'RESTART_FAILED',
+          message: `Failed to restart: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        },
+      },
+      500,
+    );
   }
 
   return c.json({
@@ -734,6 +972,11 @@ const syncRequestSchema = z.object({
   depth: z.enum(['7d', '30d', '90d', '1y', 'all']).optional().describe('Sync depth for message history'),
   channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
   downloadMedia: z.boolean().optional().describe('Download and store media files'),
+  chatJids: z
+    .array(z.string().min(1).max(128))
+    .max(50)
+    .optional()
+    .describe('Specific chat JIDs for per-chat active sync (WhatsApp only). Omit for passive sync.'),
 });
 
 /** Type for profile sync response */
@@ -866,7 +1109,7 @@ instancesRoutes.put(
  */
 instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequestSchema), async (c) => {
   const id = c.req.param('id');
-  const { type, depth, channelId, downloadMedia } = c.req.valid('json');
+  const { type, depth, channelId, downloadMedia, chatJids } = c.req.valid('json');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
@@ -916,6 +1159,14 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     });
   }
 
+  // chatJids is only supported for WhatsApp instances
+  if (chatJids?.length && !instance.channel.startsWith('whatsapp')) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'chatJids is only supported for WhatsApp instances' } },
+      400,
+    );
+  }
+
   // For other sync types, check for existing active job
   const hasActiveJob = await services.syncJobs.hasActiveJob(id, type);
   if (hasActiveJob) {
@@ -927,7 +1178,12 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     instanceId: id,
     channelType: instance.channel,
     type,
-    config: { depth: depth ?? '7d', channelId, downloadMedia: downloadMedia ?? instance.downloadMediaOnSync },
+    config: {
+      depth: depth ?? '7d',
+      channelId,
+      downloadMedia: downloadMedia ?? instance.downloadMediaOnSync,
+      ...(chatJids?.length ? { chatJids } : {}),
+    },
   });
 
   return c.json(
@@ -2085,5 +2341,355 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
     return c.json({ error: { code: 'RESYNC_FAILED', message } }, 500);
   }
 });
+
+// ============================================================================
+// Access Control: Pairing Requests
+// ============================================================================
+
+/**
+ * GET /instances/:id/pairing-requests - List pending pairing requests
+ */
+instancesRoutes.get('/:id/pairing-requests', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const requests = await services.access.listPendingPairingRequests(id);
+
+  return c.json({
+    items: requests.map((r) => ({
+      id: r.id,
+      instanceId: r.instanceId,
+      platformUserId: r.platformUserId,
+      pairingCode: r.pairingCode,
+      expiresAt: r.expiresAt.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+    })),
+  });
+});
+
+// Pairing action schema
+const pairingActionSchema = z.object({
+  action: z.enum(['approve', 'deny']).describe('Action: approve or deny the pairing request'),
+  reason: z.string().optional().describe('Reason for denial (optional)'),
+});
+
+/**
+ * POST /instances/:id/pairing-requests/:requestId/action - Approve or deny a pairing request
+ */
+instancesRoutes.post(
+  '/:id/pairing-requests/:requestId/action',
+  instanceAccess,
+  zValidator('json', pairingActionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const requestId = c.req.param('requestId');
+    const { action, reason } = c.req.valid('json');
+    const services = c.get('services');
+
+    try {
+      if (action === 'approve') {
+        const rule = await services.access.approvePairingRequest(requestId, id);
+        return c.json({
+          data: {
+            action: 'approve',
+            ruleId: rule.id,
+            message: `User ${rule.platformUserId} approved and added to allowlist`,
+          },
+        });
+      }
+
+      await services.access.denyPairingRequest(requestId, id, reason);
+      return c.json({
+        data: {
+          action: 'deny',
+          reason: reason ?? 'Denied by administrator',
+          message: 'Pairing request denied and deleted',
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (error instanceof NotFoundError) {
+        return c.json({ error: { code: 'NOT_FOUND', message } }, 404);
+      }
+      if (error instanceof PairingRequestExpiredError || error instanceof PairingRequestConsumedError) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message } }, 400);
+      }
+      return c.json({ error: { code: 'ACTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+// ============================================================================
+// GUILD CONFIG ENDPOINTS (Discord per-server overrides)
+// ============================================================================
+
+const guildConfigOverrideSchema = z.object({
+  agentReplyFilter: z
+    .object({
+      mode: z.enum(['all', 'filtered']).optional(),
+      conditions: z
+        .object({
+          onDm: z.boolean().optional(),
+          onMention: z.boolean().optional(),
+          onReply: z.boolean().optional(),
+          onNameMatch: z.boolean().optional(),
+          namePatterns: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  toolPolicies: z.record(z.string(), z.enum(['allow', 'deny'])).optional(),
+  reactions: z
+    .object({
+      enabled: z.boolean().optional(),
+      allowedEmojis: z.array(z.string()).optional(),
+    })
+    .optional(),
+  maxLines: z.number().int().min(0).optional(),
+  presence: z
+    .object({
+      status: z.enum(['online', 'dnd', 'idle', 'invisible']).optional(),
+      activityText: z.string().max(128).optional(),
+      activityType: z.enum(['Playing', 'Streaming', 'Listening', 'Watching', 'Custom', 'Competing']).optional(),
+    })
+    .optional(),
+});
+
+/** In-memory guild config cache with write-through invalidation */
+const guildConfigCache = new Map<string, { data: Record<string, unknown>; expiresAt: number }>();
+const GUILD_CONFIG_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(instanceId: string, guildId: string): string {
+  return `${instanceId}:${guildId}`;
+}
+
+function invalidateGuildCache(instanceId: string, guildId: string): void {
+  guildConfigCache.delete(getCacheKey(instanceId, guildId));
+}
+
+/**
+ * GET /instances/:id/guilds - List all guilds with their config overrides
+ */
+instancesRoutes.get('/:id/guilds', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const instance = await services.instances.getById(id);
+  const overrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+
+  const guilds = Object.entries(overrides).map(([guildId, config]) => ({
+    guildId,
+    config,
+  }));
+
+  return c.json({ items: guilds });
+});
+
+/**
+ * GET /instances/:id/guilds/:guildId/config - Get resolved config for guild
+ */
+instancesRoutes.get('/:id/guilds/:guildId/config', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const guildId = c.req.param('guildId');
+  const services = c.get('services');
+
+  // Check cache
+  const cacheKey = getCacheKey(id, guildId);
+  const cached = guildConfigCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return c.json({ data: { guildId, config: cached.data, cached: true } });
+  }
+
+  const instance = await services.instances.getById(id);
+  const overrides = (instance.guildConfigOverrides as Record<string, Record<string, unknown>>) ?? {};
+
+  // Build resolved config: instance-level defaults layered under guild-specific overrides.
+  // Without merging defaults, callers that use this as source-of-truth for a PUT can
+  // inadvertently clear inherited instance settings (e.g. agentReplyFilter).
+  const instanceDefaults: Record<string, unknown> = {};
+  if (instance.agentReplyFilter) instanceDefaults.agentReplyFilter = instance.agentReplyFilter;
+  if (instance.discordPresence) instanceDefaults.presence = instance.discordPresence;
+
+  const guildConfig = { ...instanceDefaults, ...(overrides[guildId] ?? {}) };
+
+  // Cache the result
+  guildConfigCache.set(cacheKey, { data: guildConfig, expiresAt: Date.now() + GUILD_CONFIG_TTL });
+
+  return c.json({ data: { guildId, config: guildConfig, cached: false } });
+});
+
+/**
+ * PUT /instances/:id/guilds/:guildId/config - Set guild config overrides
+ */
+instancesRoutes.put(
+  '/:id/guilds/:guildId/config',
+  instanceAccess,
+  zValidator('json', guildConfigOverrideSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const guildId = c.req.param('guildId');
+    const newConfig = c.req.valid('json');
+    const services = c.get('services');
+    const apiKey = c.get('apiKey');
+
+    const instance = await services.instances.getById(id);
+    const existingOverrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+    const oldConfig = existingOverrides[guildId] ?? {};
+    const action = existingOverrides[guildId] ? 'update' : 'create';
+
+    // Atomic jsonb_set — avoids read-modify-write race where concurrent requests
+    // for different guild IDs both read the same snapshot and one clobbers the other.
+    await services.instances.setGuildConfigOverride(id, guildId, newConfig);
+
+    // Write-through cache invalidation
+    invalidateGuildCache(id, guildId);
+
+    // Wire: push guild config to channel plugin for runtime consumption
+    const channelRegistry = c.get('channelRegistry');
+    if (channelRegistry) {
+      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+      if (plugin && 'setGuildConfig' in plugin) {
+        (plugin as { setGuildConfig: (iId: string, gId: string, cfg: unknown) => void }).setGuildConfig(
+          id,
+          guildId,
+          newConfig,
+        );
+      }
+    }
+
+    // Audit log
+    log.info('Guild config updated', {
+      instanceId: id,
+      guildId,
+      apiKeyId: apiKey?.id,
+      action,
+      diff: { old: oldConfig, new: newConfig },
+    });
+
+    return c.json({ data: { guildId, config: newConfig, action } });
+  },
+);
+
+/**
+ * DELETE /instances/:id/guilds/:guildId/config - Reset guild to instance defaults
+ */
+instancesRoutes.delete('/:id/guilds/:guildId/config', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const guildId = c.req.param('guildId');
+  const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  const instance = await services.instances.getById(id);
+  const existingOverrides = (instance.guildConfigOverrides as Record<string, unknown>) ?? {};
+  const oldConfig = existingOverrides[guildId];
+
+  if (!oldConfig) {
+    return c.json({ data: { guildId, message: 'No overrides to remove' } });
+  }
+
+  // Atomic JSONB key removal — avoids read-modify-write race.
+  await services.instances.deleteGuildConfigOverride(id, guildId);
+
+  // Write-through cache invalidation
+  invalidateGuildCache(id, guildId);
+
+  // Wire: remove guild config from channel plugin cache
+  const channelRegistry = c.get('channelRegistry');
+  if (channelRegistry) {
+    const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+    if (plugin && 'removeGuildConfig' in plugin) {
+      (plugin as { removeGuildConfig: (iId: string, gId: string) => void }).removeGuildConfig(id, guildId);
+    }
+  }
+
+  // Audit log
+  log.info('Guild config deleted', {
+    instanceId: id,
+    guildId,
+    apiKeyId: apiKey?.id,
+    action: 'delete',
+    diff: { old: oldConfig, new: null },
+  });
+
+  return c.json({ data: { guildId, message: 'Guild config reset to instance defaults' } });
+});
+
+/**
+ * GET /instances/:id/guilds/:guildId/audit - Query guild config audit log
+ * NOTE: Audit entries are currently logged via structured logs (log.info).
+ * A dedicated audit table can be added when persistent audit querying is needed.
+ */
+instancesRoutes.get('/:id/guilds/:guildId/audit', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  // Verify instance exists
+  await services.instances.getById(id);
+
+  // Audit events are stored in structured logs for now
+  return c.json({ items: [], meta: { hasMore: false, note: 'Audit log stored in structured logs' } });
+});
+
+// ============================================================================
+// BOT PRESENCE ENDPOINT (Discord)
+// ============================================================================
+
+const presenceSchema = z.object({
+  status: z.enum(['online', 'dnd', 'idle', 'invisible']).default('online'),
+  activityText: z.string().max(128).optional(),
+  activityType: z.enum(['Playing', 'Streaming', 'Listening', 'Watching', 'Custom', 'Competing']).default('Playing'),
+});
+
+/**
+ * PUT /instances/:id/presence - Set bot presence (Discord only)
+ */
+instancesRoutes.put('/:id/presence', instanceAccess, zValidator('json', presenceSchema), async (c) => {
+  const id = c.req.param('id');
+  const presenceData = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (instance.channel !== 'discord') {
+    return c.json(
+      { error: { code: 'INVALID_OPERATION', message: 'Presence is only available for Discord instances' } },
+      400,
+    );
+  }
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get('discord');
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Discord plugin not loaded' } }, 400);
+  }
+
+  // Call setPresence on the plugin
+  if (!('setPresence' in plugin) || typeof plugin.setPresence !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support setPresence' } }, 400);
+  }
+
+  try {
+    await (plugin as { setPresence: (instanceId: string, presence: typeof presenceData) => Promise<void> }).setPresence(
+      id,
+      presenceData,
+    );
+
+    // Persist so reconnect flows can re-apply presence via options.presence.
+    await services.instances.update(id, { discordPresence: presenceData });
+
+    return c.json({ success: true, data: { instanceId: id, presence: presenceData } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'PRESENCE_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// Telegram Webhook Ingress
+// ============================================================================
 
 export { instancesRoutes };

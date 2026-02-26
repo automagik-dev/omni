@@ -283,45 +283,56 @@ function hasKnownChatJids(plugin: unknown): plugin is { getKnownChatJids: (id: s
   );
 }
 
-function discoverAnchorsFromPlugin(
+async function discoverAnchorsFromPlugin(
   jobId: string,
   instanceId: string,
   plugin: unknown,
   dbAnchors: WAnchor[],
-): WAnchor[] {
-  if (!hasKnownChatJids(plugin)) return [];
+  services: Services,
+): Promise<WAnchor[]> {
+  const anchoredJids = new Set(dbAnchors.map((a) => a.chatJid));
 
-  const dbJids = new Set(dbAnchors.map((a) => a.chatJid));
-  const knownJids = plugin.getKnownChatJids(instanceId);
+  // Query DB for all known chat external IDs (survives restarts)
+  const dbExternalIds = await services.chats.getAllExternalIds(instanceId);
+
+  // Merge with Baileys volatile cache (newly connected chats not yet in DB)
+  const baileysJids = hasKnownChatJids(plugin) ? plugin.getKnownChatJids(instanceId) : [];
+  const allJids = new Set([...dbExternalIds, ...baileysJids]);
 
   const discovered: WAnchor[] = [];
-  for (const jid of knownJids) {
-    if (dbJids.has(jid)) continue;
+  for (const jid of allJids) {
+    if (anchoredJids.has(jid)) continue;
     if (jid.includes('@newsletter') || jid.includes('@broadcast')) continue;
     discovered.push({ chatJid: jid, messageKey: { remoteJid: jid, id: '', fromMe: false }, timestamp: Date.now() });
   }
 
   if (discovered.length > 0) {
-    log.info('Discovered chats from Baileys not in DB', { jobId, discoveredCount: discovered.length });
+    log.info('Discovered chats from DB + Baileys not in anchors', {
+      jobId,
+      discoveredCount: discovered.length,
+      fromDb: dbExternalIds.length,
+      fromBaileys: baileysJids.length,
+    });
   }
 
   return discovered;
 }
 
-function resolveWhatsAppAnchors(
+async function resolveWhatsAppAnchors(
   jobId: string,
   instanceId: string,
   config: SyncJobConfig,
   plugin: unknown,
   dbAnchors: WAnchor[],
-): WAnchor[] {
-  // Explicit chatJids take priority
+  services: Services,
+): Promise<WAnchor[]> {
+  // Explicit chatJids take priority (per-chat active sync)
   if (config.chatJids?.length) {
     return buildAnchorsForExplicitChatJids(jobId, config.chatJids, dbAnchors);
   }
 
   // Default: use DB anchors + discover chats known to Baileys but not in DB.
-  return [...dbAnchors, ...discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors)];
+  return [...dbAnchors, ...(await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services))];
 }
 
 /**
@@ -361,13 +372,19 @@ async function processMessageSync(
     since: since?.toISOString(),
   });
 
-  // Build anchors for WhatsApp to enable active history fetching
+  // Build anchors for WhatsApp history fetching
+  // Passive-first: default sync uses NO anchors (WhatsApp controls pace via messaging-history.set)
+  // Active: only used when explicit chatJids are provided (per-chat sync)
   let anchors: WAnchor[] = [];
 
-  if (channelType === 'whatsapp-baileys') {
+  if (channelType === 'whatsapp-baileys' && config.chatJids?.length) {
+    // Per-chat active sync: build anchors for the specific requested chats only
     const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
-    anchors = resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors);
-    log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length });
+    anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services);
+    log.info('WhatsApp per-chat active sync', { jobId, anchorCount: anchors.length, chatJids: config.chatJids });
+  } else if (channelType === 'whatsapp-baileys') {
+    // Default passive sync: no anchors, WhatsApp pushes history via messaging-history.set
+    log.info('WhatsApp passive sync (no active fetching)', { jobId, instanceId });
   }
 
   const fetchOptions: Record<string, unknown> = {

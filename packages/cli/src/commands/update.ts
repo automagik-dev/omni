@@ -1,137 +1,220 @@
 /**
  * Update Command
  *
- * omni update [--dev] [--force]
+ * omni update [--yes] [--no-restart]
+ *
+ * Self-update from npm: checks latest @automagik/omni version, prompts the
+ * user (unless --yes), installs with `bun add -g`, and restarts PM2 services
+ * only if they were already running. When that restart path runs, update
+ * checks API health on the configured API port; if restart or health checks
+ * fail, exits non-zero and points operators to `omni status`.
  */
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { Command } from 'commander';
+import ora from 'ora';
+import { loadServerConfig } from '../config.js';
+import { waitForHealth } from '../health.js';
 import * as output from '../output.js';
+import { PM2_PROCESSES } from '../pm2.js';
+import { VERSION } from '../version.js';
+
+const PACKAGE_NAME = '@automagik/omni';
+
+/** update uses a shorter timeout — services should restart quickly */
+const UPDATE_HEALTH_TIMEOUT_MS = 10_000;
 
 interface UpdateOptions {
-  dev?: boolean;
-  force?: boolean;
+  yes?: boolean;
+  restart?: boolean;
 }
 
-const INSTALL_DIR = join(process.env.HOME ?? '', '.omni');
-const BIN_PATH = join(INSTALL_DIR, 'bin', 'omni');
-const BACKUP_PATH = join(INSTALL_DIR, 'bin', 'omni.bak');
+type Pm2ProcessName = (typeof PM2_PROCESSES)[keyof typeof PM2_PROCESSES];
 
-/** Read installed omni binary version from ~/.omni/bin/omni */
-async function getInstalledVersion(): Promise<string | null> {
-  if (!existsSync(BIN_PATH)) {
+/** Fetch the latest published version from the npm registry via bunx. */
+async function fetchLatestVersion(): Promise<string | null> {
+  try {
+    const proc = Bun.spawn({
+      cmd: ['bunx', 'npm', 'view', PACKAGE_NAME, 'version'],
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+
+    if (exitCode !== 0) {
+      return null;
+    }
+
+    const text = stdout.trim();
+    return text.length > 0 ? text : null;
+  } catch {
     return null;
   }
+}
 
+/** Return tracked PM2 process names that are currently online. */
+function getRunningPm2Services(): Pm2ProcessName[] {
+  try {
+    const result = Bun.spawnSync({
+      cmd: ['pm2', 'jlist'],
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    if (result.exitCode !== 0) {
+      return [];
+    }
+
+    const raw = new TextDecoder().decode(result.stdout).trim();
+    if (!raw || raw === '[]') return [];
+
+    const pm2Names = new Set<Pm2ProcessName>(Object.values(PM2_PROCESSES));
+    const list = JSON.parse(raw) as Array<{ name?: string; pm2_env?: { status?: string } }>;
+    const running = new Set<Pm2ProcessName>();
+    for (const proc of list) {
+      const name = proc.name as Pm2ProcessName | undefined;
+      if (name && pm2Names.has(name) && proc.pm2_env?.status === 'online') {
+        running.add(name);
+      }
+    }
+    return [...running];
+  } catch {
+    // pm2 not installed or parse error — skip restart
+    return [];
+  }
+}
+
+/** Run `bun add -g @automagik/omni@latest`. Returns true on success. */
+async function installLatest(): Promise<boolean> {
   const proc = Bun.spawn({
-    cmd: [BIN_PATH, '--version'],
-    stdout: 'pipe',
-    stderr: 'pipe',
+    cmd: ['bun', 'add', '-g', `${PACKAGE_NAME}@latest`],
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env: process.env,
   });
 
-  const stdout = await new Response(proc.stdout).text();
-  await proc.exited;
-
-  const version = stdout.trim();
-  return version.length > 0 ? version : null;
+  const exitCode = await proc.exited;
+  return exitCode === 0;
 }
 
-/** Backup current binary before running installer */
-function backupCurrentBinary(): boolean {
-  if (!existsSync(BIN_PATH)) {
-    return false;
-  }
-
-  mkdirSync(dirname(BACKUP_PATH), { recursive: true });
-  copyFileSync(BIN_PATH, BACKUP_PATH);
-  return true;
-}
-
-/** Download installer script from GitHub raw */
-async function fetchInstallerScript(branch: 'main' | 'dev'): Promise<string> {
-  const url = `https://raw.githubusercontent.com/automagik-dev/omni/${branch}/install-client.sh`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch installer script (${response.status})`);
-  }
-
-  const script = await response.text();
-  if (!script.includes('Omni v2') || !script.includes('install-client.sh')) {
-    throw new Error('Fetched installer script looks invalid');
-  }
-
-  return script;
-}
-
-/** Execute installer via bash */
-async function runInstaller(scriptContent: string, args: string[]): Promise<void> {
-  const tempDir = mkdtempSync(join(tmpdir(), 'omni-update-'));
-  const scriptPath = join(tempDir, 'install-client.sh');
-
-  try {
-    writeFileSync(scriptPath, scriptContent, 'utf-8');
-    chmodSync(scriptPath, 0o700);
-
+/** Restart provided PM2 processes. Returns true when all restarts succeed. */
+async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boolean> {
+  let allSucceeded = true;
+  for (const name of processNames) {
     const proc = Bun.spawn({
-      cmd: ['bash', scriptPath, ...args],
-      stdin: 'inherit',
-      stdout: 'inherit',
-      stderr: 'inherit',
-      env: process.env,
+      cmd: ['pm2', 'restart', name],
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
-
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-      throw new Error(`Installer failed with exit code ${exitCode}`);
+      allSucceeded = false;
     }
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
   }
+  return allSucceeded;
 }
 
-async function runUpdate(options: UpdateOptions): Promise<void> {
-  const { loadConfig, saveConfig } = await import('../config.js');
-  const config = loadConfig();
-  const branch: 'main' | 'dev' = options.dev ? 'dev' : (config.updateChannel ?? 'main');
-  const installerArgs: string[] = [];
-  if (branch === 'dev') installerArgs.push('--dev');
-  if (options.force) installerArgs.push('--force');
+/** Restart selected services and verify API health; exits non-zero on partial failure. */
+async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], latest: string): Promise<void> {
+  const apiPort = loadServerConfig().port;
+  const restartSpinner = ora('Restarting services...').start();
+  const restartSucceeded = await restartPm2Services(servicesToRestart);
+  restartSpinner.stop();
 
-  // Persist chosen track
-  if (config.updateChannel !== branch) {
-    saveConfig({ ...config, updateChannel: branch });
-  }
-
-  const currentVersion = await getInstalledVersion();
-  output.info(`Current version: ${currentVersion ?? 'not installed'}`);
-
-  const backupCreated = backupCurrentBinary();
-  output.info(backupCreated ? `Backup created: ${BACKUP_PATH}` : 'No existing binary to back up');
-
-  output.info(`Updating from ${branch}...`);
-
-  try {
-    const script = await fetchInstallerScript(branch);
-    await runInstaller(script, installerArgs);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    output.error(`Update failed: ${message}`, {
-      recovery: backupCreated ? `cp ${BACKUP_PATH} ${BIN_PATH}` : null,
-    });
+  const healthy = await waitForHealth(apiPort, UPDATE_HEALTH_TIMEOUT_MS);
+  if (restartSucceeded && healthy) {
+    output.success('Services restarted successfully.');
     return;
   }
 
-  const newVersion = await getInstalledVersion();
-  output.success('Update complete', { previousVersion: currentVersion, newVersion, branch });
+  const failures: string[] = [];
+  if (!restartSucceeded) failures.push('one or more service restarts failed');
+  if (!healthy) failures.push(`health check failed on port ${apiPort}`);
+  output.warn(`omni CLI updated to v${latest}, but ${failures.join(' and ')}. Run \`omni status\`.`);
+  process.exit(1);
+}
+
+/** Prompt the user for y/n confirmation. Returns true if user confirms. */
+async function promptConfirm(question: string): Promise<boolean> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      resolve(trimmed === '' || trimmed === 'y' || trimmed === 'yes');
+    });
+  });
+}
+
+async function runUpdate(options: UpdateOptions): Promise<void> {
+  // Check latest version from npm
+  const versionSpinner = ora(`Checking latest version of ${PACKAGE_NAME}...`).start();
+  const latest = await fetchLatestVersion();
+  versionSpinner.stop();
+
+  if (latest === null) {
+    output.warn('Could not reach npm registry. Check your network connection and try again.');
+    process.exit(1);
+  }
+
+  // Strip any git hash suffix (e.g. "2.20260218.18+abc1234" → "2.20260218.18") for comparison
+  const currentClean = VERSION.split('+')[0];
+
+  if (currentClean === latest) {
+    output.success(`Already up to date (v${latest})`);
+    process.exit(0);
+  }
+
+  output.info(`Update available: v${currentClean} → v${latest}`);
+
+  if (!options.yes) {
+    const confirmed = await promptConfirm(`Update from v${currentClean} to v${latest}? [Y/n] `);
+    if (!confirmed) {
+      output.info('Update cancelled.');
+      process.exit(0);
+    }
+  }
+
+  const servicesToRestart = options.restart !== false ? getRunningPm2Services() : [];
+
+  const installSpinner = ora(`Updating ${PACKAGE_NAME}...`).start();
+  const installed = await installLatest();
+  installSpinner.stop();
+
+  if (!installed) {
+    output.warn(`Installation failed. Your current version (v${currentClean}) is still intact.`);
+    process.exit(1);
+  }
+
+  if (servicesToRestart.length > 0) {
+    await restartServicesAndVerify(servicesToRestart, latest);
+  }
+
+  output.success(`omni updated to v${latest}`);
 }
 
 export function createUpdateCommand(): Command {
   return new Command('update')
-    .description('Update Omni CLI using the official installer')
-    .option('--dev', 'Update from dev branch')
-    .option('--force', 'Force overwrite existing installation')
+    .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
+    .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
+    .option('--no-restart', 'Update CLI only; skip service restarts and API health check on configured API port')
+    .addHelpText(
+      'after',
+      `
+Behavior:
+  - Installs the latest CLI package first.
+  - Restarts tracked Omni services only when they were online before the update.
+  - When that restart path runs, update checks API health on the configured API port.
+  - Use --no-restart to skip restart and API health-check steps.
+  - Exits non-zero if install succeeds but restart or API health check fails in that restart path.
+  - Verify runtime health after update with: omni status
+`,
+    )
     .action(runUpdate);
 }

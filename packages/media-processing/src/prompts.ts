@@ -10,17 +10,20 @@
 // ============================================================================
 
 /** Default prompt for image description (Gemini Vision / OpenAI fallback) */
-export const IMAGE_DESCRIPTION_PROMPT = `Analyze this image and provide a detailed description that would help someone who cannot see it understand what's in it.
+export const IMAGE_DESCRIPTION_PROMPT = `You are an image analyst for a chat assistant. Your description is the only way the assistant will know what is in this image — accuracy and completeness are critical.
 
-Include:
-1. Main subject(s) and their appearance
-2. Setting/environment
-3. Any text visible in the image
-4. Notable details, colors, or objects
-5. The overall mood or context
+First, identify the content type. Then describe accordingly:
 
-Be concise but thorough. If there's text in the image, transcribe it exactly.
-Respond in the same language as any text in the image, or in Portuguese if no text is present.`;
+Screenshot/UI: Extract ALL visible text verbatim. Identify the application, OS, or website. Describe errors, warnings, highlighted elements, or anything the user likely wants to discuss.
+Photo: Describe subjects, setting, actions, and notable details. If people are present, describe their appearance, expressions, and what they are doing.
+Document/receipt/form/note: Transcribe all text exactly as written. Preserve structure, headers, line items, amounts.
+Code/terminal/logs: Extract all visible code or output verbatim. Note the language, any errors or stack traces, highlighted lines.
+Diagram/chart/graph: Explain what it represents. Extract all labels, axes, values, and trends.
+Meme/social media/conversation screenshot: Transcribe all text. Describe the visual layout and any images within.
+Food/recipe/product: Identify it. List ingredients, nutritional info, or other key details if visible.
+Map/location: Describe the area shown, any pins, routes, or labels.
+
+Extract ALL visible text — partial transcription is worse than none. If text is blurry or cut off, note that explicitly.`;
 
 // ============================================================================
 // Video Description

@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [dev]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,12 +18,15 @@ concurrency:
 jobs:
   auto-version:
     name: Auto Version
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'dev' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
+       contains(github.event.workflow_run.head_commit.message, '/dev') &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
 
     steps:
@@ -50,7 +53,7 @@ jobs:
       - name: Derive version
         id: version
         run: |
-          TODAY=$(date -u +%Y%m%d)
+          TODAY=$(date -u +%y%m%d)
           EXISTING=$(git tag --list "v2.${TODAY}.*" | wc -l)
           BUILD_NUMBER=$((EXISTING + 1))
           VERSION="2.${TODAY}.${BUILD_NUMBER}"

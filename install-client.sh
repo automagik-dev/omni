@@ -53,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --no-color) shift ;;  # already handled above
     --help|-h)
       printf "Usage: install-client.sh [--dev] [--force] [--no-color]\n"
+      printf "  Installs @automagik/omni from npm if available; source build otherwise\n"
       printf "  --dev     Install from dev branch\n"
       printf "  --force   Overwrite existing installation\n"
       exit 0
@@ -73,7 +74,7 @@ cat << 'EOF'
   \___/|_|  |_|_|\_|___|
 EOF
 printf "${NC}"
-printf "  ${DIM}CLI Client Installer — branch: ${BRANCH}${NC}\n\n"
+printf "  ${DIM}CLI Client Installer — prefers @automagik/omni from npm, falls back to source${NC}\n\n"
 
 # ============================================================================
 # Check existing installation
@@ -116,6 +117,29 @@ else
     fail "Failed to install bun. Install manually: https://bun.sh"
   fi
 fi
+
+# ============================================================================
+# NPM fast path — try @automagik/omni before sparse-clone
+# ============================================================================
+
+step "Installing @automagik/omni"
+info "Trying npm package (fast path)..."
+if [[ "${SKIP_NPM:-}" != "1" ]] && bun add -g @automagik/omni 2>/dev/null && has_cmd omni; then
+  INSTALLED_VERSION=$(omni --version 2>/dev/null || echo "unknown")
+  ok "@automagik/omni ${INSTALLED_VERSION} installed"
+
+  # PATH check (reuse existing logic)
+  if ! echo "$PATH" | grep -q "$(bun pm bin -g 2>/dev/null || echo '__none__')"; then
+    warn "Bun global bin may not be in PATH. Run: export PATH=\"\$(bun pm bin -g):\$PATH\""
+  fi
+
+  printf "\n${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+  printf "${BOLD}${GREEN}  ✓ Omni CLI installed${NC}\n"
+  printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
+  printf "  Run ${BOLD}omni install${NC} to set up the server.\n\n"
+  exit 0
+fi
+warn "npm install failed — falling back to source build..."
 
 # ============================================================================
 # Clone (sparse — CLI + SDK only)

@@ -518,7 +518,7 @@ chatsRoutes.get('/by-external', async (c) => {
     return c.json({ error: 'instanceId and externalId are required' }, 400);
   }
 
-  const chat = await services.chats.getByExternalId(instanceId, externalId);
+  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
 
   if (!chat) {
     return c.json({ data: null });
@@ -567,17 +567,33 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
     'canReceiveReadReceipts',
   );
 
+  // Respect per-instance read receipt mode
+  const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
+
   // Check if plugin has markChatAsRead method (preferred) or markAsRead
   if ('markChatAsRead' in plugin && typeof plugin.markChatAsRead === 'function') {
-    await (plugin as { markChatAsRead: (instanceId: string, chatId: string) => Promise<void> }).markChatAsRead(
-      instanceId,
-      chat.externalId,
-    );
+    await (
+      plugin as {
+        markChatAsRead: (
+          instanceId: string,
+          chatId: string,
+          readReceiptMode?: 'on' | 'off' | 'exclude-self',
+        ) => Promise<void>;
+      }
+    ).markChatAsRead(instanceId, chat.externalId, readReceiptMode);
   } else if ('markAsRead' in plugin && typeof plugin.markAsRead === 'function') {
     // Fall back to markAsRead with 'all' marker (WhatsApp style)
     await (
-      plugin as { markAsRead: (instanceId: string, chatId: string, messageIds: string[]) => Promise<void> }
-    ).markAsRead(instanceId, chat.externalId, ['all']);
+      plugin as {
+        markAsRead: (
+          instanceId: string,
+          chatId: string,
+          messageIds: string[],
+          messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+          readReceiptMode?: 'on' | 'off' | 'exclude-self',
+        ) => Promise<void>;
+      }
+    ).markAsRead(instanceId, chat.externalId, ['all'], undefined, readReceiptMode);
   } else {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,

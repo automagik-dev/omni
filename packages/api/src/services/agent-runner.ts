@@ -154,7 +154,7 @@ export function shouldAgentReply(filter: AgentReplyFilter | null | undefined, co
  * Split response on double newlines (\n\n)
  * Trims each part and filters empty ones
  */
-export function splitResponse(content: string, enableSplit: boolean): string[] {
+function splitResponse(content: string, enableSplit: boolean): string[] {
   if (!enableSplit) {
     return [content.trim()].filter(Boolean);
   }
@@ -200,12 +200,18 @@ export function getSplitDelayConfig(instance: Instance): SplitDelayConfig {
 /**
  * Compute session ID based on the configured strategy
  *
- * @param strategy - Session strategy (per_user, per_chat)
+ * @param strategy - Session strategy (per_user, per_chat, per_thread)
  * @param userId - The user's identifier
  * @param chatId - The chat/conversation identifier
+ * @param threadId - Optional thread/topic identifier (required for per_thread)
  * @returns Computed session ID for the agent
  */
-export function computeSessionId(strategy: AgentSessionStrategy, userId: string, chatId: string): string {
+export function computeSessionId(
+  strategy: AgentSessionStrategy,
+  userId: string,
+  chatId: string,
+  threadId?: string,
+): string {
   switch (strategy) {
     case 'per_user':
       // Same session across all chats for this user
@@ -213,6 +219,9 @@ export function computeSessionId(strategy: AgentSessionStrategy, userId: string,
     case 'per_chat':
       // All users in a chat share the session (group memory)
       return chatId;
+    case 'per_thread':
+      // Isolated session per thread/topic
+      return `thread:${chatId}:${threadId ?? chatId}`;
     default:
       // Legacy fallback for persisted values outside the current enum
       return `${userId}:${chatId}`;
@@ -224,28 +233,9 @@ export function computeSessionId(strategy: AgentSessionStrategy, userId: string,
 // ============================================================================
 
 /**
- * Format a message with optional sender name prefix
- *
- * @param message - The message content
- * @param senderName - The sender's display name (optional)
- * @param prefixEnabled - Whether to prefix with sender name
- * @returns Formatted message: "[Name]: message" or just "message"
- */
-export function formatMessageWithSender(
-  message: string,
-  senderName: string | undefined,
-  prefixEnabled: boolean,
-): string {
-  if (!prefixEnabled || !senderName) {
-    return message;
-  }
-  return `[${senderName}]: ${message}`;
-}
-
-/**
  * Format multiple messages with optional sender name prefix
  */
-export function formatMessagesWithSender(
+function formatMessagesWithSender(
   messages: string[],
   senderName: string | undefined,
   prefixEnabled: boolean,

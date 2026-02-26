@@ -1,55 +1,70 @@
 /**
- * WhatsAppStreamSender — progressive response rendering via Baileys message edits
+ * WhatsAppStreamSender — progressive paragraph-based streaming for WhatsApp
  *
  * Implements the StreamSender interface for WhatsApp:
- * - Sends initial message, then edits it with progressive content
- * - Conservative 2500ms default throttle (WhatsApp has stricter rate limits than Telegram)
- * - Robust fallback: if edit fails, sends a new message and stops editing
- * - No humanDelay or typing simulation during streaming (avoids anti-bot double-penalty)
- * - Uses a tail window while streaming; splits into multiple messages on final render if needed
- * - Markdown→WhatsApp syntax conversion on final render
- *
- * Config: `streamThrottleMs` per instance (default 2500ms)
+ * - Content deltas are cumulative — we track what was already sent
+ * - As complete paragraphs (separated by \n\n) arrive, they're sent as new messages
+ * - No message editing — each paragraph goes out as a fresh message
+ * - On final: sends any remaining unsent content, with markdown→WhatsApp conversion
+ * - First message quotes the original trigger
+ * - Optional edit-based progressive mode (disabled by default — too buggy on WhatsApp)
  */
 
 import type { StreamSender } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { StreamDelta } from '@omni/core';
-import type { WASocket, proto } from '@whiskeysockets/baileys';
+import type { WASocket, proto } from 'baileys';
 
 import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';
 
 const log = createLogger('whatsapp:sender:stream');
 
-/** Default edit throttle interval (ms). Conservative for WhatsApp. */
-export const DEFAULT_THROTTLE_MS = 2500;
-
-/** Max chars to show during streaming (tail window if exceeded) */
-const MAX_STREAM_CHARS = 3800;
-
 /** WhatsApp max message length */
 const MAX_MESSAGE_LENGTH = 65_536;
 
-/** Cursor character shown during streaming */
+/** Default edit throttle interval (ms). Conservative for WhatsApp. */
+const DEFAULT_THROTTLE_MS = 2500;
+
+/** Max chars to show during edit-based streaming (tail window if exceeded) */
+const MAX_STREAM_CHARS = 3800;
+
+/** Cursor character shown during edit-based streaming */
 const CURSOR = '▍';
 
 export interface WhatsAppStreamSenderOptions {
-  /** Throttle interval for edits in ms (default 2500) */
-  throttleMs?: number;
   /** Format mode: 'convert' applies markdown→WhatsApp syntax, 'passthrough' sends raw text */
   formatMode?: 'convert' | 'passthrough';
+  /**
+   * Enable edit-based progressive rendering (WhatsApp message edits).
+   * Disabled by default — WhatsApp edits are buggy and cause duplicate/garbled messages.
+   * When disabled, uses paragraph-based streaming: sends each complete paragraph as a new message.
+   */
+  editMode?: boolean;
+  /** Throttle interval for edits in ms (default 2500). Only applies when editMode is true. */
+  throttleMs?: number;
 }
 
 export class WhatsAppStreamSender implements StreamSender {
+  private phase: 'idle' | 'thinking' | 'content' | 'done' = 'idle';
+  private readonly formatMode: 'convert' | 'passthrough';
+  private readonly editMode: boolean;
+
+  // ─── Progressive streaming state ────────────────────────────
+  /** How many characters of cumulative content we've already sent */
+  private sentLength = 0;
+  /** Whether the first message has been sent (for quoting) */
+  private firstMessageSent = false;
+  /** Send queue — serializes async sends to prevent out-of-order delivery */
+  private sendQueue: Promise<void> = Promise.resolve();
+
+  // ─── Edit-based streaming state ─────────────────────────────
   private messageId: string | null = null;
   private lastEditAt = 0;
-  private phase: 'idle' | 'thinking' | 'content' | 'done' = 'idle';
   private pendingEditTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRenderedText = '';
   private editFailed = false;
   private readonly throttleMs: number;
-  private readonly formatMode: 'convert' | 'passthrough';
 
   constructor(
     private readonly sock: WASocket,
@@ -58,13 +73,12 @@ export class WhatsAppStreamSender implements StreamSender {
     _chatType?: 'dm' | 'group' | 'channel',
     options?: WhatsAppStreamSenderOptions,
   ) {
-    this.throttleMs = options?.throttleMs ?? DEFAULT_THROTTLE_MS;
     this.formatMode = options?.formatMode ?? 'convert';
+    this.editMode = options?.editMode ?? false;
+    this.throttleMs = options?.throttleMs ?? DEFAULT_THROTTLE_MS;
   }
 
   async onThinkingDelta(_delta: StreamDelta & { phase: 'thinking' }): Promise<void> {
-    // WhatsApp doesn't support expandable blockquotes, so we skip
-    // thinking display entirely. Content phase will handle everything.
     if (this.phase === 'done') return;
     if (this.phase === 'idle') {
       this.phase = 'thinking';
@@ -78,11 +92,85 @@ export class WhatsAppStreamSender implements StreamSender {
       this.phase = 'content';
     }
 
-    const contentText = delta.content;
+    if (this.editMode) {
+      await this.handleEditModeDelta(delta.content);
+    } else {
+      await this.handleParagraphModeDelta(delta.content);
+    }
+  }
+
+  async onFinal(delta: StreamDelta & { phase: 'final' }): Promise<void> {
+    this.phase = 'done';
+
+    this.clearPendingEdit();
+
+    const finalContent = delta.content;
+    if (!finalContent) return;
+
+    if (this.editMode) {
+      await this.handleEditModeFinal(finalContent);
+    } else {
+      await this.handleParagraphModeFinal(finalContent);
+    }
+  }
+
+  async onError(_delta: StreamDelta & { phase: 'error' }): Promise<void> {
+    this.phase = 'done';
+
+    this.clearPendingEdit();
+    log.warn('Stream error', { jid: this.jid });
+  }
+
+  async abort(): Promise<void> {
+    this.phase = 'done';
+
+    this.clearPendingEdit();
+    log.debug('Stream aborted', { jid: this.jid });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Paragraph-based streaming (default)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Each content delta represents a completed block from the provider
+   * (emitted on content_block_stop, not on every token).
+   * Send the new portion immediately — no buffering, no risk of mid-sentence breaks.
+   */
+  private async handleParagraphModeDelta(cumulativeContent: string): Promise<void> {
+    const unsent = cumulativeContent.slice(this.sentLength).trimStart();
+    if (!unsent.trim()) return;
+
+    await this.sendFormattedChunks(unsent);
+    this.sentLength = cumulativeContent.length;
+  }
+
+  /** Format text and send as one or more WhatsApp messages. */
+  private async sendFormattedChunks(text: string): Promise<void> {
+    const formatted = this.formatMode !== 'passthrough' ? markdownToWhatsApp(text) : text;
+    const chunks = splitWhatsAppMessage(formatted, MAX_MESSAGE_LENGTH);
+    for (const chunk of chunks) {
+      if (chunk) {
+        await this.sendMessage(chunk);
+      }
+    }
+  }
+
+  /** Send any remaining unsent content on stream completion. */
+  private async handleParagraphModeFinal(finalContent: string): Promise<void> {
+    const unsent = finalContent.slice(this.sentLength).trimStart();
+    if (!unsent.trim()) return;
+    await this.sendFormattedChunks(unsent);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Edit-based streaming (opt-in via editMode: true)
+  // ═══════════════════════════════════════════════════════════════
+
+  private async handleEditModeDelta(contentText: string): Promise<void> {
     let displayText: string;
 
     if (contentText.length > MAX_STREAM_CHARS) {
-      // Tail window: show last MAX_STREAM_CHARS chars with ellipsis
       const header = '⏳ ...\n';
       const budget = MAX_STREAM_CHARS - header.length;
       const tail = contentText.slice(-budget);
@@ -94,85 +182,81 @@ export class WhatsAppStreamSender implements StreamSender {
     await this.throttledEdit(displayText);
   }
 
-  async onFinal(delta: StreamDelta & { phase: 'final' }): Promise<void> {
-    this.phase = 'done';
-    this.clearPendingEdit();
-
-    const finalContent = delta.content;
-    if (!finalContent) {
-      // Nothing to send — if we had a placeholder, leave it (WhatsApp can't reliably delete)
-      return;
-    }
-
-    // Convert markdown to WhatsApp syntax for final render (unless passthrough mode)
+  private async handleEditModeFinal(finalContent: string): Promise<void> {
     const text = this.formatMode !== 'passthrough' ? markdownToWhatsApp(finalContent) : finalContent;
     const chunks = splitWhatsAppMessage(text, MAX_MESSAGE_LENGTH);
 
-    if (this.messageId && !this.editFailed) {
-      await this.finalizeWithEdit(chunks);
-    } else {
-      await this.finalizeWithNewMessages(chunks);
+    if (!(this.messageId && !this.editFailed)) {
+      await this.sendAllChunks(chunks);
+      return;
     }
-  }
 
-  async onError(_delta: StreamDelta & { phase: 'error' }): Promise<void> {
-    this.phase = 'done';
-    this.clearPendingEdit();
-    // WhatsApp doesn't support reliable message deletion for cleanup.
-    // Leave the partial message as-is — better than a failed delete attempt.
-    log.warn('Stream error, leaving partial message', { jid: this.jid });
-  }
-
-  async abort(): Promise<void> {
-    this.phase = 'done';
-    this.clearPendingEdit();
-    log.debug('Stream aborted', { jid: this.jid });
-  }
-
-  // ─── Private helpers ────────────────────────────────────────
-
-  /** Edit placeholder to first chunk, send rest as new messages. */
-  private async finalizeWithEdit(chunks: string[]): Promise<void> {
     const firstChunk = chunks[0];
     if (!firstChunk) return;
 
     try {
       await this.doEditRaw(firstChunk);
-    } catch (err) {
-      log.warn('Failed to edit final message, sending as new', {
-        jid: this.jid,
-        error: String(err),
-      });
-      await this.finalizeWithNewMessages(chunks);
+    } catch {
+      // Edit failed — fall back to sending all chunks as new messages
+      await this.sendAllChunks(chunks);
       return;
     }
 
-    await this.sendRemainingChunks(chunks);
+    await this.sendChunksFrom(chunks, 1);
   }
 
-  /** Send all chunks as new messages (no placeholder to edit). */
-  private async finalizeWithNewMessages(chunks: string[]): Promise<void> {
+  /** Send all non-empty chunks as new messages. */
+  private async sendAllChunks(chunks: string[]): Promise<void> {
     for (const chunk of chunks) {
-      if (chunk) {
-        await this.sendNewMessage(chunk);
-      }
+      if (chunk) await this.sendMessage(chunk);
     }
   }
 
-  /** Send chunks[1..n] as new messages. */
-  private async sendRemainingChunks(chunks: string[]): Promise<void> {
-    for (let i = 1; i < chunks.length; i++) {
+  /** Send non-empty chunks starting from startIndex as new messages. */
+  private async sendChunksFrom(chunks: string[], startIndex: number): Promise<void> {
+    for (let i = startIndex; i < chunks.length; i++) {
       const chunk = chunks[i];
-      if (chunk) {
-        await this.sendNewMessage(chunk);
-      }
+      if (chunk) await this.sendMessage(chunk);
     }
   }
+
+  // ─── Shared helpers ─────────────────────────────────────────
+
+  /**
+   * Queue a message send — serializes all sends to prevent out-of-order delivery.
+   * Each send waits for the previous one to complete before starting.
+   */
+  private async sendMessage(text: string): Promise<void> {
+    this.sendQueue = this.sendQueue.then(() => this.doSend(text));
+    await this.sendQueue;
+  }
+
+  /** Actually send a single message to WhatsApp. */
+  private async doSend(text: string): Promise<void> {
+    try {
+      const quoteId = !this.firstMessageSent ? this.replyToMessageId : undefined;
+      const quoted = quoteId
+        ? {
+            quoted: {
+              key: { id: quoteId, remoteJid: this.jid, fromMe: false },
+              message: {},
+            },
+          }
+        : undefined;
+      await this.sock.sendMessage(this.jid, { text }, quoted);
+      this.firstMessageSent = true;
+    } catch (err) {
+      log.error('Failed to send message during stream', {
+        jid: this.jid,
+        error: String(err),
+      });
+    }
+  }
+
+  // ─── Edit-mode helpers ──────────────────────────────────────
 
   private async throttledEdit(text: string): Promise<void> {
-    // Don't edit if text hasn't changed
     if (text === this.lastRenderedText) return;
-    // Don't try to edit if a previous edit already failed
     if (this.editFailed && this.messageId) return;
 
     const now = Date.now();
@@ -182,14 +266,12 @@ export class WhatsAppStreamSender implements StreamSender {
       this.clearPendingEdit();
       await this.doEdit(text);
     } else {
-      // Schedule edit for when throttle window expires
       this.clearPendingEdit();
       const delay = this.throttleMs - elapsed;
       this.pendingEditTimer = setTimeout(async () => {
         this.pendingEditTimer = null;
         if (this.phase !== 'done') {
           await this.doEdit(text).catch((err: unknown) => {
-            // Defensive: doEdit already swallows send/edit errors, but we never want an unhandled rejection
             log.warn('Scheduled edit failed', { jid: this.jid, error: String(err) });
           });
         }
@@ -200,7 +282,6 @@ export class WhatsAppStreamSender implements StreamSender {
   private async doEdit(text: string): Promise<void> {
     try {
       if (!this.messageId) {
-        // Create initial message
         const quoted = this.replyToMessageId
           ? {
               quoted: {
@@ -211,8 +292,8 @@ export class WhatsAppStreamSender implements StreamSender {
           : undefined;
         const result = await this.sock.sendMessage(this.jid, { text }, quoted);
         this.messageId = result?.key?.id ?? null;
+        this.firstMessageSent = true;
       } else {
-        // Edit existing message
         await this.sock.sendMessage(this.jid, {
           text,
           edit: {
@@ -225,18 +306,15 @@ export class WhatsAppStreamSender implements StreamSender {
       this.lastRenderedText = text;
       this.lastEditAt = Date.now();
     } catch (err: unknown) {
-      const errStr = String(err);
       log.warn('Edit failed, switching to fallback mode', {
         jid: this.jid,
         messageId: this.messageId,
-        error: errStr,
+        error: String(err),
       });
-      // Mark edits as failed — onFinal will send as new message
       this.editFailed = true;
     }
   }
 
-  /** Direct edit without throttle — used for final message. */
   private async doEditRaw(text: string): Promise<void> {
     if (!this.messageId) throw new Error('No message to edit');
     await this.sock.sendMessage(this.jid, {
@@ -249,17 +327,6 @@ export class WhatsAppStreamSender implements StreamSender {
     });
     this.lastRenderedText = text;
     this.lastEditAt = Date.now();
-  }
-
-  private async sendNewMessage(text: string): Promise<void> {
-    try {
-      await this.sock.sendMessage(this.jid, { text });
-    } catch (err) {
-      log.error('Failed to send new message during stream finalize', {
-        jid: this.jid,
-        error: String(err),
-      });
-    }
   }
 
   private clearPendingEdit(): void {

@@ -4,14 +4,15 @@ import { STREAM_CONFIGS, STREAM_NAMES, getStreamForEventType } from '../streams'
 
 describe('streams', () => {
   describe('STREAM_NAMES', () => {
-    test('has all 8 streams defined', () => {
-      expect(Object.keys(STREAM_NAMES)).toHaveLength(8);
+    test('has all 9 streams defined', () => {
+      expect(Object.keys(STREAM_NAMES)).toHaveLength(9);
       expect(STREAM_NAMES.MESSAGE).toBe('MESSAGE');
       expect(STREAM_NAMES.REACTION).toBe('REACTION');
       expect(STREAM_NAMES.INSTANCE).toBe('INSTANCE');
       expect(STREAM_NAMES.IDENTITY).toBe('IDENTITY');
       expect(STREAM_NAMES.MEDIA).toBe('MEDIA');
       expect(STREAM_NAMES.ACCESS).toBe('ACCESS');
+      expect(STREAM_NAMES.SESSION).toBe('SESSION');
       expect(STREAM_NAMES.CUSTOM).toBe('CUSTOM');
       expect(STREAM_NAMES.SYSTEM).toBe('SYSTEM');
     });

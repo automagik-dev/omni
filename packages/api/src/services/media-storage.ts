@@ -5,7 +5,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, relative } from 'node:path';
 
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -18,20 +18,6 @@ const log = createLogger('services:media-storage');
  * Default base path for media storage
  */
 const DEFAULT_MEDIA_PATH = './data/media';
-
-/**
- * Media metadata from message
- */
-export interface MediaMetadata {
-  mimeType?: string;
-  size?: number;
-  width?: number;
-  height?: number;
-  duration?: number;
-  waveform?: number[];
-  isVoiceNote?: boolean;
-  filename?: string;
-}
 
 /**
  * Stored media result
@@ -145,7 +131,7 @@ export class MediaStorageService {
     log.debug('Stored media from base64', { messageId, localPath, size: buffer.length });
 
     return {
-      localPath: localPath.replace(this.basePath, '').replace(/^\//, ''),
+      localPath: relative(this.basePath, localPath),
       size: buffer.length,
       mimeType,
     };
@@ -174,7 +160,7 @@ export class MediaStorageService {
     log.debug('Stored media from buffer', { messageId, localPath, size: buffer.length });
 
     return {
-      localPath: localPath.replace(this.basePath, '').replace(/^\//, ''),
+      localPath: relative(this.basePath, localPath),
       size: buffer.length,
       mimeType,
     };
@@ -189,9 +175,10 @@ export class MediaStorageService {
     url: string,
     mimeType?: string,
     timestamp?: Date,
+    fetchOptions?: RequestInit,
   ): Promise<StoredMediaResult> {
-    // Fetch the media
-    const response = await fetch(url);
+    // Fetch the media (fetchOptions allows callers to supply auth headers, e.g. Slack bot token)
+    const response = await fetch(url, fetchOptions);
     if (!response.ok) {
       throw new Error(`Failed to download media: ${response.status}`);
     }

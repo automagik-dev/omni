@@ -13,7 +13,7 @@
 // @ts-nocheck - Conceptual tests with mock event bus
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
-import type { BaileysEventMap } from '@whiskeysockets/baileys';
+import type { BaileysEventMap } from 'baileys';
 
 interface MockEvent {
   type: string;

@@ -5,7 +5,7 @@
  */
 
 import type { EventBus } from '@omni/core';
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
   type ChannelType,
@@ -19,20 +19,13 @@ import {
   chats,
   omniGroups,
 } from '@omni/db';
-import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { sanitizeText } from '../utils/utf8';
+
+const log = createLogger('chats');
 
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
-}
-
-export interface ChatSummary extends Chat {
-  participantCount: number;
-  lastMessage?: {
-    textContent: string | null;
-    senderDisplayName: string | null;
-    platformTimestamp: Date;
-  };
 }
 
 export interface ListChatsOptions {
@@ -188,6 +181,9 @@ export class ChatService {
     // Enrich group chats with names from omni_groups when chat name is missing
     await this.enrichGroupNames(items);
 
+    // Enrich DM chats that have no name or a raw JID as name with participant display names
+    await this.enrichDmNames(items);
+
     // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
     this.deduplicateByCanonicalId(items);
 
@@ -217,6 +213,41 @@ export class ChatService {
       const groupName = nameMap.get(chat.externalId);
       if (groupName) {
         chat.name = groupName;
+      }
+    }
+  }
+
+  /**
+   * Enrich DM chats that have no name (or a raw JID as name) with participant display names.
+   * Looks up the most recently active participant's displayName for each nameless DM chat.
+   */
+  private async enrichDmNames(items: Chat[]): Promise<void> {
+    const needsName = items.filter((c) => {
+      if (c.chatType !== 'dm') return false;
+      if (!c.name) return true;
+      return c.name.endsWith('@lid') || c.name.endsWith('@s.whatsapp.net') || c.name.endsWith('@g.us');
+    });
+    if (needsName.length === 0) return;
+
+    const chatIds = needsName.map((c) => c.id);
+    const participants = await this.db
+      .select({ chatId: chatParticipants.chatId, displayName: chatParticipants.displayName })
+      .from(chatParticipants)
+      .where(and(inArray(chatParticipants.chatId, chatIds), sql`${chatParticipants.displayName} IS NOT NULL`))
+      .orderBy(asc(chatParticipants.chatId));
+
+    // Pick first non-null displayName per chat
+    const nameMap = new Map<string, string>();
+    for (const p of participants) {
+      if (p.displayName && !nameMap.has(p.chatId)) {
+        nameMap.set(p.chatId, p.displayName);
+      }
+    }
+
+    for (const chat of needsName) {
+      const participantName = nameMap.get(chat.id);
+      if (participantName) {
+        chat.name = participantName;
       }
     }
   }
@@ -310,6 +341,18 @@ export class ChatService {
   }
 
   /**
+   * Get all external IDs for an instance (non-deleted chats).
+   * Used by sync worker to discover chats from DB that survive restarts.
+   */
+  async getAllExternalIds(instanceId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ externalId: chats.externalId })
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), isNull(chats.deletedAt)));
+    return rows.map((r) => r.externalId).filter(Boolean);
+  }
+
+  /**
    * Find chat by external ID with smart lookup.
    * Performs secondary lookups via canonicalId and chatIdMappings
    * to handle LID/phone JID resolution (same logic as findOrCreate but without creating).
@@ -321,17 +364,18 @@ export class ChatService {
     // Primary lookup: exact externalId match
     const existing = await this.getByExternalId(instanceId, externalId);
     if (existing) {
+      log.debug('chat_resolution', { externalId, resolvedVia: 'direct', instanceId });
       return existing;
     }
 
     // Secondary lookup: check if another chat has this as its canonicalId
-    // (e.g., an @lid chat that was previously resolved to this phone JID)
     const [byCanonical] = await this.db
       .select()
       .from(chats)
       .where(and(eq(chats.instanceId, instanceId), eq(chats.canonicalId, externalId)))
       .limit(1);
     if (byCanonical) {
+      log.debug('chat_resolution', { externalId, resolvedVia: 'canonicalId', instanceId });
       return byCanonical;
     }
 
@@ -346,6 +390,7 @@ export class ChatService {
       if (mapping) {
         const lidChat = await this.getByExternalId(instanceId, mapping.lidId);
         if (lidChat) {
+          log.debug('chat_resolution', { externalId, resolvedVia: 'phoneMapping', instanceId });
           return lidChat;
         }
       }
@@ -359,6 +404,7 @@ export class ChatService {
       if (mapping) {
         const phoneChat = await this.getByExternalId(instanceId, mapping.phoneId);
         if (phoneChat) {
+          log.debug('chat_resolution', { externalId, resolvedVia: 'lidMapping', instanceId });
           return phoneChat;
         }
       }

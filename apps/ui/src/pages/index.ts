@@ -1,7 +1,6 @@
 export { AccessRules } from './AccessRules';
 export { Automations } from './Automations';
 export { BatchJobs } from './BatchJobs';
-export { ChatView } from './ChatView';
 export { Chats } from './Chats';
 export { Contacts } from './Contacts';
 export { Dashboard } from './Dashboard';

@@ -1,6 +1,6 @@
 {
   "name": "@omni/media-processing",
-  "version": "2.20260217.4",
+  "version": "2.260226.1",
   "type": "module",
   "exports": {
     ".": {
@@ -27,13 +27,12 @@
   },
   "dependencies": {
     "@omni/core": "workspace:*",
-    "@omni/db": "workspace:*",
     "groq-sdk": "^0.15.0",
     "openai": "^4.77.0",
     "@google/generative-ai": "^0.21.0",
     "pdf-parse": "^1.1.1",
     "mammoth": "^1.8.0",
-    "xlsx": "^0.18.5"
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.5",

@@ -52,6 +52,23 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle — WhatsApp
 
 ## Install
 
+### Quickest (npm)
+
+```bash
+bun add -g @automagik/omni
+omni install              # interactive wizard: sets up server + PM2
+```
+
+> **Migrating from `@omni/cli`?** Run `bun remove -g @omni/cli` first.
+
+### Via install script (npm-first, git fallback)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install-client.sh | bash
+```
+
+### Full server from source
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash
 ```
@@ -62,7 +79,7 @@ Three modes: **CLI only** · **Full server** · **CLI + connect to remote**
 <summary>Non-interactive & manual install</summary>
 
 ```bash
-# CLI only
+# CLI only (tries npm first, falls back to git clone)
 curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/install.sh | bash -s -- --cli
 
 # CLI + connect to remote
@@ -311,10 +328,12 @@ omni webhooks trigger --type "custom.event" --payload '{"key":"value"}'
 </details>
 
 <details>
-<summary><strong>System</strong> — status, auth, config, events, batch, logs</summary>
+<summary><strong>System</strong> — update, status, auth, config, events, batch, logs</summary>
 
 ```bash
-omni status                                    # Health check
+omni update -y                                 # Update CLI; restart only services that were already online
+omni update -y --no-restart                    # Update CLI only; skip restarts and API-port health check
+omni status                                    # Verify runtime health after update
 omni auth login --api-key <key>                # Authenticate
 omni config set defaultInstance <id>           # CLI settings
 omni events list --type "message.*" --since 2h # Event history
@@ -324,6 +343,10 @@ omni resync --instance <id>                    # History backfill
 omni logs list --level error --limit 50        # Server logs
 omni dead-letters list --limit 20              # Failed events
 ```
+
+`omni update` can exit non-zero after install only when restart runs (services were already online): in that path it checks API health on the configured API port and fails on restart or health-check errors.
+
+`omni doctor` is not available yet and is tracked as a follow-up.
 
 </details>
 

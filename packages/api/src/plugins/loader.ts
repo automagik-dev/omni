@@ -27,9 +27,8 @@ const logger = createLogger({ module: 'plugin-loader' });
  */
 function findMonorepoRoot(startDir: string): string | null {
   let current = startDir;
-  const root = dirname(current);
 
-  while (current !== root) {
+  while (current !== dirname(current)) {
     if (existsSync(join(current, 'turbo.json'))) {
       return current;
     }
@@ -96,11 +95,37 @@ export interface LoadPluginsResult {
  * Load and initialize all channel plugins
  */
 export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<LoadPluginsResult> {
-  const { packagesDir = getMonorepoPackagesDir(), eventBus, db } = options;
+  const { eventBus, db } = options;
 
   // Set database for persistent storage BEFORE creating plugin contexts
   setStorageDatabase(db);
 
+  // Import the singleton registry from channel-sdk
+  const { channelRegistry } = await import('@omni/channel-sdk');
+
+  // Check if channels were pre-registered (bundled npm distribution)
+  const preRegistered = channelRegistry.getAll();
+  if (preRegistered.length > 0) {
+    logger.info('Using pre-registered channel plugins', { count: preRegistered.length });
+    for (const plugin of preRegistered) {
+      try {
+        const context = createPluginContext({ pluginId: plugin.id, eventBus, db });
+        await channelRegistry.initialize(plugin.id, context);
+        logger.info(`Initialized channel: ${plugin.id}`, { name: plugin.name, version: plugin.version });
+      } catch (error) {
+        logger.error(`Failed to initialize channel: ${plugin.id}`, { error: String(error) });
+      }
+    }
+    return {
+      registry: channelRegistry,
+      loaded: preRegistered.length,
+      failed: 0,
+      pluginIds: preRegistered.map((p) => p.id),
+    };
+  }
+
+  // Filesystem discovery fallback (monorepo dev mode)
+  const packagesDir = options.packagesDir ?? getMonorepoPackagesDir();
   logger.info('Starting channel plugin discovery', { packagesDir });
 
   // Discover and register plugins
@@ -119,9 +144,6 @@ export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<L
   for (const failure of discoveryResult.failed) {
     logger.error('Failed to load plugin', { path: failure.path, error: failure.error });
   }
-
-  // Import the singleton registry from channel-sdk
-  const { channelRegistry } = await import('@omni/channel-sdk');
 
   // Initialize all registered plugins with context
   for (const plugin of discoveryResult.registered) {
@@ -153,85 +175,4 @@ export async function loadChannelPlugins(options: LoadPluginsOptions): Promise<L
 export async function getPlugin(id: string): Promise<ChannelPlugin | undefined> {
   const { channelRegistry } = await import('@omni/channel-sdk');
   return channelRegistry.get(id as Parameters<typeof channelRegistry.get>[0]);
-}
-
-/**
- * Get all loaded plugins from the global registry
- */
-export async function getAllPlugins(): Promise<ChannelPlugin[]> {
-  const { channelRegistry } = await import('@omni/channel-sdk');
-  return channelRegistry.getAll();
-}
-
-/**
- * Auto-reconnect previously active instances on startup
- *
- * Queries the database for instances with isActive=true and reconnects them.
- */
-export async function autoReconnectInstances(db: Database): Promise<{
-  attempted: number;
-  succeeded: number;
-  failed: number;
-}> {
-  const { instances } = await import('@omni/db');
-  const { eq } = await import('drizzle-orm');
-  const { channelRegistry } = await import('@omni/channel-sdk');
-
-  // Find all active instances
-  const activeInstances = await db.select().from(instances).where(eq(instances.isActive, true));
-
-  logger.info('Auto-reconnecting instances', { count: activeInstances.length });
-
-  let succeeded = 0;
-  let failed = 0;
-
-  for (const instance of activeInstances) {
-    try {
-      const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
-      if (!plugin) {
-        logger.warn('No plugin found for instance channel', { instanceId: instance.id, channel: instance.channel });
-        failed++;
-        continue;
-      }
-
-      // Reconnect the instance (uses stored auth state from database)
-      // Pass channel-specific tokens from DB for reconnection
-      const credentials: Record<string, unknown> = {};
-      const options: Record<string, unknown> = {};
-
-      // Telegram needs bot token
-      if (instance.telegramBotToken) {
-        options.token = instance.telegramBotToken;
-      }
-      // Discord needs bot token
-      if (instance.discordBotToken) {
-        options.token = instance.discordBotToken;
-      }
-
-      await plugin.connect(instance.id, {
-        instanceId: instance.id,
-        credentials,
-        options,
-      });
-
-      logger.info('Reconnected instance', { instanceId: instance.id, name: instance.name });
-      succeeded++;
-    } catch (error) {
-      logger.error('Failed to reconnect instance', {
-        instanceId: instance.id,
-        name: instance.name,
-        error: String(error),
-      });
-
-      // Mark instance as inactive since reconnection failed
-      await db.update(instances).set({ isActive: false }).where(eq(instances.id, instance.id));
-      failed++;
-    }
-  }
-
-  return {
-    attempted: activeInstances.length,
-    succeeded,
-    failed,
-  };
 }

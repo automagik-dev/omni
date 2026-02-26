@@ -6,7 +6,7 @@
  */
 
 import type { OutgoingMessage } from '@omni/channel-sdk';
-import type { AnyMessageContent } from '@whiskeysockets/baileys';
+import type { AnyMessageContent } from 'baileys';
 import { toJid } from '../jid';
 import { ErrorCode, WhatsAppError } from '../utils/errors';
 
@@ -161,11 +161,14 @@ const buildAudio: ContentBuilder = (message) => {
  */
 const buildVideo: ContentBuilder = (message) => {
   const mentionJids = extractMentionJids(message);
+  // Detect GIF content: MIME type is image/gif or metadata explicitly flags gifPlayback
+  const isGif = message.content.mimeType === 'image/gif' || (message.metadata?.gifPlayback as boolean) === true;
   return {
     video: getMediaSource(message),
     caption: message.content.caption,
     ...(mentionJids ? { mentions: mentionJids } : {}),
     mimetype: message.content.mimeType,
+    ...(isGif ? { gifPlayback: true } : {}),
   };
 };
 

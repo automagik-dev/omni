@@ -336,8 +336,27 @@ export class MessageService {
   }
 
   /**
-   * Get message by external ID and chat
+   * Check if the bot has participated in a specific thread.
+   * Matches two cases:
+   *  1. Bot replied in the thread (replyToExternalId == threadTs)
+   *  2. Bot started the thread (externalId == threadTs, root message)
    */
+  async hasBotRepliedInThread(chatId: string, threadExternalId: string): Promise<boolean> {
+    const [result] = await this.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          eq(messages.isFromMe, true),
+          or(eq(messages.replyToExternalId, threadExternalId), eq(messages.externalId, threadExternalId)),
+        ),
+      )
+      .limit(1);
+    return !!result;
+  }
+
+  /** Get message by external ID and chat */
   async getByExternalId(chatId: string, externalId: string): Promise<Message | null> {
     const [result] = await this.db
       .select()
@@ -346,6 +365,15 @@ export class MessageService {
       .limit(1);
 
     return result ?? null;
+  }
+
+  /** Get multiple messages by external IDs in a single query */
+  async getByExternalIds(chatId: string, externalIds: string[]): Promise<Message[]> {
+    if (externalIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), inArray(messages.externalId, externalIds)));
   }
 
   /**

@@ -40,15 +40,21 @@ export { AgnoClient, createAgnoClient } from './agno-client';
 
 // Claude Code Client
 export { ClaudeCodeClient, createClaudeCodeClient } from './claude-code-client';
-export type { ClaudeCodeConfig } from './claude-code-client';
+export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamRunMetrics } from './claude-code-client';
 
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';
 export { ClaudeCodeAgentProvider } from './claude-code-provider';
 export type { ClaudeCodeProviderOptions, SessionStorage } from './claude-code-provider';
 export { WebhookAgentProvider } from './webhook-provider';
-export { OpenClawAgentProvider, OpenClawClient, createOpenClawProvider } from './openclaw';
-export type { OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
+export {
+  ED25519_PKCS8_PREFIX,
+  OpenClawAgentProvider,
+  OpenClawClient,
+  createOpenClawProvider,
+  generateDeviceKeypair,
+} from './openclaw';
+export type { DeviceKeypair, OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
 
 // Factory
 export {
