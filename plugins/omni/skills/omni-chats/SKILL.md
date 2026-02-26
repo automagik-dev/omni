@@ -13,6 +13,7 @@ allowed-tools: Bash(omni *), Bash(jq *)
 omni chats list --instance <id> --limit 50 --json
 omni chats list --instance <id> --unread --sort activity --verbose --json
 omni chats list --channel whatsapp-baileys --type group --json
+omni chats list --instance <id> --all --json
 omni chats get <chatId> --json
 ```
 
@@ -20,6 +21,7 @@ omni chats get <chatId> --json
 
 ```bash
 omni chats create --instance <id> --external-id "whatsapp:+5511999" --channel whatsapp-baileys --type private --name "Lead" --json
+omni chats create --instance <id> --external-id "..." --channel whatsapp-baileys --type group --name "Team" --description "Team chat" --json
 omni chats update <chatId> --name "New name" --description "Notes" --json
 omni chats delete <chatId> --json
 ```
@@ -44,6 +46,9 @@ omni chats messages <chatId> --limit 100 --json
 omni chats messages <chatId> --since 7d --search "invoice" --json
 omni chats messages <chatId> --audio-only --compact --truncate 120 --json
 omni chats messages <chatId> --images-only --before <cursor> --json
+omni chats messages <chatId> --videos-only --json
+omni chats messages <chatId> --docs-only --json
+omni chats messages <chatId> --after <cursor> --json
 ```
 
 ## Participants
