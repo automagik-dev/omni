@@ -1258,7 +1258,7 @@ function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined 
  * TODO: wire mutated context values back into dispatch once allowlist infra exists.
  */
 async function executeBeforeAgentStartHooks(
-  instance: DispatchInstance,
+  instance: Instance & Partial<DispatchFields>,
   chatId: string,
   senderId: string,
   senderName: string | undefined,
