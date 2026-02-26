@@ -3,6 +3,8 @@
 # not from npm. This cron check for @whiskeysockets/baileys npm updates is no longer applicable.
 # Kept for reference only.
 #
+exit 0
+
 # Baileys update checker — called by cron, notifies via OpenClaw session
 set -euo pipefail
 

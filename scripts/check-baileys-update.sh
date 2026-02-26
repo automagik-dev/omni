@@ -3,6 +3,8 @@
 # not from npm. This version checker for @whiskeysockets/baileys is no longer applicable.
 # Kept for reference only.
 #
+exit 0
+
 # Baileys version checker — runs periodically via cron
 # Compares installed version with latest on npm
 # Notifies Felipe via OpenClaw if there's an update
