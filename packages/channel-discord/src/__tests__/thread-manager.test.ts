@@ -50,12 +50,26 @@ describe('Thread Manager', () => {
   });
 
   describe('createThread default behavior', () => {
-    test('default thread type is public (documented)', () => {
-      // This tests the documented API contract:
-      // createThread defaults to PublicThread when type is not specified.
-      // Verified by reading the source code: `options.type ?? 'public'`
-      // and mapThreadType('public') returns ChannelType.PublicThread.
-      expect(true).toBe(true); // Contract test - behavior verified in source
+    test('defaults to PublicThread when type is omitted', async () => {
+      const mod = await import('../threads/manager');
+      let createdType: number | undefined;
+
+      const fakeClient = {
+        channels: {
+          fetch: async () => ({
+            type: ChannelType.GuildText,
+            threads: {
+              create: async (opts: { type?: number }) => {
+                createdType = opts.type;
+                return { id: 'thread-1' };
+              },
+            },
+          }),
+        },
+      };
+
+      await mod.createThread(fakeClient as never, 'text-channel-id', { name: 'test' });
+      expect(createdType).toBe(ChannelType.PublicThread);
     });
   });
 

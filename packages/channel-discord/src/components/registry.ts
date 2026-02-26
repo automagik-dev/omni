@@ -95,7 +95,9 @@ export class ComponentRegistry {
 
   constructor() {
     // Periodic cleanup every 5 minutes
-    this.cleanupInterval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
+    const interval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
+    interval.unref(); // Don't block process exit
+    this.cleanupInterval = interval;
   }
 
   /**
