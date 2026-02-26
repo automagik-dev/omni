@@ -40,8 +40,10 @@ export function buildWhatsAppMessageContext(
 
   const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
 
-  // Handle replies to bot messages (same phone number extraction for LID compatibility)
-  const quotedParticipant = (rawPayload.quotedMessage as Record<string, unknown>)?.participant as string | undefined;
+  // Handle replies to bot messages (same phone number extraction for LID compatibility).
+  // channel-whatsapp stamps contextInfo.participant as rawPayload.quotedParticipant — read
+  // from the top-level key, not from the non-existent rawPayload.quotedMessage.participant path.
+  const quotedParticipant = rawPayload.quotedParticipant as string | undefined;
   const isReplyToBot = quotedParticipant
     ? quotedParticipant === ownerJid || extractPhoneFromJid(quotedParticipant) === ownerPhone
     : false;
