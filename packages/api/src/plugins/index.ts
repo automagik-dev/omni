@@ -32,7 +32,7 @@ export { setupMediaProcessor } from './media-processor';
 export { setupAgentResponder } from './agent-dispatcher';
 
 // Sync worker (processes sync jobs)
-export { setupSyncWorker } from './sync-worker';
+export { setupHistoryPushTracker, setupSyncWorker } from './sync-worker';
 
 // Session cleaner (clears agent sessions on trash emoji)
 export { setupSessionCleaner } from './session-cleaner';
