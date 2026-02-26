@@ -46,6 +46,13 @@ export class ConversationService {
       throw new Error('Failed to create conversation');
     }
 
+    await this.eventBus?.publish('conversation.created', {
+      conversationId: created.id,
+      title: created.title,
+      summary: created.summary,
+      state: created.state as Record<string, unknown> | null | undefined,
+    });
+
     return created;
   }
 
@@ -63,6 +70,13 @@ export class ConversationService {
       throw new NotFoundError('Conversation', id);
     }
 
+    await this.eventBus?.publish('conversation.updated', {
+      conversationId: updated.id,
+      title: updated.title,
+      summary: updated.summary,
+      state: updated.state as Record<string, unknown> | null | undefined,
+    });
+
     return updated;
   }
 
@@ -78,6 +92,10 @@ export class ConversationService {
     if (!deleted) {
       throw new NotFoundError('Conversation', id);
     }
+
+    await this.eventBus?.publish('conversation.deleted', {
+      conversationId: deleted.id,
+    });
   }
 
   /**

@@ -62,6 +62,10 @@ export const CORE_EVENT_TYPES = [
   'batch-job.completed',
   'batch-job.cancelled',
   'batch-job.failed',
+  // Conversation lifecycle
+  'conversation.created',
+  'conversation.updated',
+  'conversation.deleted',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -552,6 +556,27 @@ export interface SessionResetPayload {
 }
 
 /**
+ * Conversation event payloads
+ */
+export interface ConversationCreatedPayload {
+  conversationId: string;
+  title?: string | null;
+  summary?: string | null;
+  state?: Record<string, unknown> | null;
+}
+
+export interface ConversationUpdatedPayload {
+  conversationId: string;
+  title?: string | null;
+  summary?: string | null;
+  state?: Record<string, unknown> | null;
+}
+
+export interface ConversationDeletedPayload {
+  conversationId: string;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -592,6 +617,9 @@ export interface EventPayloadMap {
   'batch-job.completed': BatchJobCompletedPayload;
   'batch-job.cancelled': BatchJobCancelledPayload;
   'batch-job.failed': BatchJobFailedPayload;
+  'conversation.created': ConversationCreatedPayload;
+  'conversation.updated': ConversationUpdatedPayload;
+  'conversation.deleted': ConversationDeletedPayload;
 }
 
 /**
