@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED: Baileys is now installed from a vendor tarball (packages/channel-whatsapp/vendor/),
+# not from npm. This cron check for @whiskeysockets/baileys npm updates is no longer applicable.
+# Kept for reference only.
+#
 # Baileys update checker — called by cron, notifies via OpenClaw session
 set -euo pipefail
 

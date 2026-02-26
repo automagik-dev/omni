@@ -101,10 +101,11 @@ export function resolveEffectiveChatName(params: {
     }
     // Outbound: chatName > recipientName > verifiedBizName
     // pushName is our own name here — not the contact's — so skip it
+    // Truncate rawPayload fallbacks to 255 chars (chats.name is varchar(255))
     return (
       chatName ||
-      (rawPayload?.recipientName as string | undefined) ||
-      (rawPayload?.verifiedBizName as string | undefined)
+      (rawPayload?.recipientName as string | undefined)?.slice(0, 255) ||
+      (rawPayload?.verifiedBizName as string | undefined)?.slice(0, 255)
     );
   }
 

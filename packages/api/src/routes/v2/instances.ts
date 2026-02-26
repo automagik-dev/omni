@@ -973,7 +973,8 @@ const syncRequestSchema = z.object({
   channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
   downloadMedia: z.boolean().optional().describe('Download and store media files'),
   chatJids: z
-    .array(z.string())
+    .array(z.string().min(1).max(128))
+    .max(50)
     .optional()
     .describe('Specific chat JIDs for per-chat active sync (WhatsApp only). Omit for passive sync.'),
 });
@@ -1156,6 +1157,14 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
         },
       },
     });
+  }
+
+  // chatJids is only supported for WhatsApp instances
+  if (chatJids?.length && !instance.channel.startsWith('whatsapp')) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'chatJids is only supported for WhatsApp instances' } },
+      400,
+    );
   }
 
   // For other sync types, check for existing active job
