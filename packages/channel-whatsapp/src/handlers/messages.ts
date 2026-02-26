@@ -15,7 +15,7 @@ import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '
 import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
-import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
+import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
 import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';

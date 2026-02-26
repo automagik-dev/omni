@@ -6,7 +6,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from 'baileys';
 import { fromJid } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 

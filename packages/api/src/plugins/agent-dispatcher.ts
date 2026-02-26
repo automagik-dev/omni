@@ -2522,9 +2522,16 @@ async function getAgentProvider(services: Services, instance: Instance, db: Data
 async function resolveEffectiveInstance(
   services: Services,
   instance: Instance,
-  chatId: string,
+  chatId: string | undefined,
   personId?: string,
 ): Promise<{ instance: Instance; routeId: string | null }> {
+  // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
+  // and return instance defaults. This is the safe path for LID-only chats.
+  if (!chatId) {
+    log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
+    return { instance, routeId: null };
+  }
+
   // Resolve route (chat > user > null)
   const route = await services.routeResolver.resolve(instance.id, chatId, personId);
 
@@ -2587,7 +2594,7 @@ async function processReactionTrigger(
 
   // Look up internal chat UUID for route resolution
   const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
-  const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+  const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
@@ -2600,7 +2607,7 @@ async function processReactionTrigger(
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
     chatId: externalChatId,
-    routeChatId: internalChatId,
+    routeChatId: internalChatId ?? 'none',
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
@@ -3241,7 +3248,7 @@ export async function setupAgentDispatcher(
 
     // Look up internal chat UUID for route resolution
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-    const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+    const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(
       services,

@@ -18,7 +18,7 @@ import type {
   StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { GroupMetadata, WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
+import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';

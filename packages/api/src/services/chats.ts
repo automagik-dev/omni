@@ -19,7 +19,7 @@ import {
   chats,
   omniGroups,
 } from '@omni/db';
-import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { sanitizeText } from '../utils/utf8';
 
 const log = createLogger('chats');
@@ -338,6 +338,18 @@ export class ChatService {
       .limit(1);
 
     return result ?? null;
+  }
+
+  /**
+   * Get all external IDs for an instance (non-deleted chats).
+   * Used by sync worker to discover chats from DB that survive restarts.
+   */
+  async getAllExternalIds(instanceId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ externalId: chats.externalId })
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), isNull(chats.deletedAt)));
+    return rows.map((r) => r.externalId).filter(Boolean);
   }
 
   /**

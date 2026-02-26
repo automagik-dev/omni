@@ -39,7 +39,7 @@ function createMockSocket() {
   };
 
   return {
-    sock: sock as unknown as import('@whiskeysockets/baileys').WASocket,
+    sock: sock as unknown as import('baileys').WASocket,
     sent,
   };
 }

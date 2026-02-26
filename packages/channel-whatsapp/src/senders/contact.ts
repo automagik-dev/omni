@@ -2,7 +2,7 @@
  * Contact (vCard) message sender
  */
 
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, WASocket } from 'baileys';
 
 /**
  * Contact data

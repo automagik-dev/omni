@@ -13,8 +13,8 @@
 
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { downloadMediaMessage } from '../packages/channel-whatsapp/node_modules/@whiskeysockets/baileys';
-import type { WAMessage } from '../packages/channel-whatsapp/node_modules/@whiskeysockets/baileys';
+import { downloadMediaMessage } from '../packages/channel-whatsapp/node_modules/baileys';
+import type { WAMessage } from '../packages/channel-whatsapp/node_modules/baileys';
 import postgres from '../packages/db/node_modules/postgres';
 
 const DRY_RUN = process.env.DRY_RUN === '1';

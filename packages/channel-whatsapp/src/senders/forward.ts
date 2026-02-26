@@ -4,7 +4,7 @@
  * Handles forwarding existing messages to new recipients.
  */
 
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from 'baileys';
 
 /**
  * Forward a message to a new recipient
