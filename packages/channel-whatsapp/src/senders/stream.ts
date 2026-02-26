@@ -13,7 +13,7 @@
 import type { StreamSender } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { StreamDelta } from '@omni/core';
-import type { WASocket, proto } from '@whiskeysockets/baileys';
+import type { WASocket, proto } from 'baileys';
 
 import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';

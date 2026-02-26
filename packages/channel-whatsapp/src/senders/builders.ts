@@ -6,7 +6,7 @@
  */
 
 import type { OutgoingMessage } from '@omni/channel-sdk';
-import type { AnyMessageContent } from '@whiskeysockets/baileys';
+import type { AnyMessageContent } from 'baileys';
 import { toJid } from '../jid';
 import { ErrorCode, WhatsAppError } from '../utils/errors';
 

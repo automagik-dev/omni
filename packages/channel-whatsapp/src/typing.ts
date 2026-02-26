@@ -4,7 +4,7 @@
  * Provides typing indicator functionality with auto-pause.
  */
 
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from 'baileys';
 
 /**
  * Typing state
