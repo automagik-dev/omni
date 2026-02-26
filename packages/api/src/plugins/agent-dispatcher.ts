@@ -1258,7 +1258,7 @@ function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined 
  * TODO: wire mutated context values back into dispatch once allowlist infra exists.
  */
 async function executeBeforeAgentStartHooks(
-  instance: Instance,
+  instance: DispatchInstance,
   chatId: string,
   senderId: string,
   senderName: string | undefined,
@@ -1324,7 +1324,7 @@ async function executeBeforeMessageWriteHooks(instanceId: string, chatId: string
  */
 async function dispatchViaStreamingProvider(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   channel: ChannelType,
@@ -1566,7 +1566,7 @@ function recordJourneyCheckpoint(correlationId: string | undefined, stage: strin
  */
 async function dispatchViaProvider(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   channel: ChannelType,
@@ -2232,7 +2232,7 @@ async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): 
 
 async function processAgentResponse(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   db: Database,
@@ -2247,7 +2247,7 @@ async function processAgentResponse(
   const traceId = firstMessage.metadata.traceId;
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
-  const inst = instance as Record<string, unknown>;
+  const inst = instance as unknown as Record<string, unknown>;
   const ackConfig: ReactionAckConfig = {
     reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
     reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
