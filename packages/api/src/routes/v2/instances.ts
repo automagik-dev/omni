@@ -972,6 +972,10 @@ const syncRequestSchema = z.object({
   depth: z.enum(['7d', '30d', '90d', '1y', 'all']).optional().describe('Sync depth for message history'),
   channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
   downloadMedia: z.boolean().optional().describe('Download and store media files'),
+  chatJids: z
+    .array(z.string())
+    .optional()
+    .describe('Specific chat JIDs for per-chat active sync (WhatsApp only). Omit for passive sync.'),
 });
 
 /** Type for profile sync response */
@@ -1104,7 +1108,7 @@ instancesRoutes.put(
  */
 instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequestSchema), async (c) => {
   const id = c.req.param('id');
-  const { type, depth, channelId, downloadMedia } = c.req.valid('json');
+  const { type, depth, channelId, downloadMedia, chatJids } = c.req.valid('json');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
@@ -1165,7 +1169,12 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     instanceId: id,
     channelType: instance.channel,
     type,
-    config: { depth: depth ?? '7d', channelId, downloadMedia: downloadMedia ?? instance.downloadMediaOnSync },
+    config: {
+      depth: depth ?? '7d',
+      channelId,
+      downloadMedia: downloadMedia ?? instance.downloadMediaOnSync,
+      ...(chatJids?.length ? { chatJids } : {}),
+    },
   });
 
   return c.json(

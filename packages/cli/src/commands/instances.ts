@@ -14,7 +14,7 @@
  * omni instances disconnect <id>
  * omni instances restart <id>
  * omni instances logout <id>
- * omni instances sync <id> --type <type>
+ * omni instances sync <id> --type <type> [--chat <jid>]
  * omni instances syncs <id> [job-id]
  */
 
@@ -602,48 +602,54 @@ export function createInstancesCommand(): Command {
       }
     });
 
-  // omni instances sync <id> --type <type>
+  // omni instances sync <id> --type <type> [--chat <jid>]
   instances
     .command('sync <id>')
     .description('Start a sync operation')
     .requiredOption('--type <type>', `Sync type (${VALID_SYNC_TYPES.join(', ')})`)
     .option('--depth <depth>', 'Sync depth (7d, 30d, 90d, 1y, all)')
     .option('--download-media', 'Download media files')
-    .action(async (rawId: string, options: { type: string; depth?: string; downloadMedia?: boolean }) => {
-      if (!VALID_SYNC_TYPES.includes(options.type as (typeof VALID_SYNC_TYPES)[number])) {
-        output.error(`Invalid sync type: ${options.type}`, {
-          validTypes: VALID_SYNC_TYPES,
-        });
-      }
-
-      const client = getClient();
-
-      try {
-        const id = await resolveInstanceId(rawId);
-        // Profile sync is immediate
-        if (options.type === 'profile') {
-          const result = await client.instances.syncProfile(id);
-          output.success('Profile synced', result);
-          return;
+    .option('--chat <jid>', 'Specific chat JID for per-chat active sync (WhatsApp only)')
+    .action(
+      async (rawId: string, options: { type: string; depth?: string; downloadMedia?: boolean; chat?: string }) => {
+        if (!VALID_SYNC_TYPES.includes(options.type as (typeof VALID_SYNC_TYPES)[number])) {
+          output.error(`Invalid sync type: ${options.type}`, {
+            validTypes: VALID_SYNC_TYPES,
+          });
         }
 
-        // Other syncs create a job
-        const result = await client.instances.startSync(id, {
-          type: options.type as (typeof VALID_SYNC_TYPES)[number],
-          depth: options.depth as '7d' | '30d' | '90d' | '1y' | 'all' | undefined,
-          downloadMedia: options.downloadMedia,
-        });
+        const client = getClient();
 
-        output.success(result.message, {
-          jobId: result.jobId,
-          type: result.type,
-          status: result.status,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to start sync: ${message}`);
-      }
-    });
+        try {
+          const id = await resolveInstanceId(rawId);
+          // Profile sync is immediate
+          if (options.type === 'profile') {
+            const result = await client.instances.syncProfile(id);
+            output.success('Profile synced', result);
+            return;
+          }
+
+          // Other syncs create a job
+          const result = await client.instances.startSync(id, {
+            type: options.type as (typeof VALID_SYNC_TYPES)[number],
+            depth: options.depth as '7d' | '30d' | '90d' | '1y' | 'all' | undefined,
+            downloadMedia: options.downloadMedia,
+            ...(options.chat ? { chatJids: [options.chat] } : {}),
+          });
+
+          const syncMode = options.chat ? `active (chat: ${options.chat})` : 'passive';
+          output.success(result.message, {
+            jobId: result.jobId,
+            type: result.type,
+            status: result.status,
+            mode: syncMode,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to start sync: ${message}`);
+        }
+      },
+    );
 
   // omni instances syncs <id> [job-id]
   instances
