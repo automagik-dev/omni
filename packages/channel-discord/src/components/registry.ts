@@ -173,6 +173,7 @@ export class ComponentRegistry {
     if (shouldConsume) {
       this.entries.delete(key);
       this.removeFromInsertionOrder(key);
+      this.tombstones.add(key);
     } else {
       // Refresh LRU recency: move accessed key to the back of insertion order
       this.removeFromInsertionOrder(key);
@@ -347,6 +348,7 @@ export class ComponentRegistry {
       if (entry && now > entry.expiresAt) {
         this.entries.delete(key);
         this.insertionOrder.splice(i, 1);
+        this.tombstones.add(key);
         this.expiredCount++;
         return;
       }
