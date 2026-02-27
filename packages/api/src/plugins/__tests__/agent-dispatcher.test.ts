@@ -99,8 +99,36 @@ mock.module('@omni/core', () => {
 // Test Fixtures
 // ============================================================================
 
-// Mock database for tests
-const mockDb = {} as unknown as import('@omni/db').Database;
+// Mock database for tests.
+// The dispatcher's applyAgentFkOverrides calls db.select(...).from(...).where(...).limit(1)
+// to resolve agent entity overrides. We provide a chainable mock that returns a default agent row
+// matching the 'agent-uuid-1' FK used by createMockInstance.
+function createMockDb() {
+  const defaultAgentRow = {
+    id: 'agent-uuid-1',
+    agentProviderId: 'provider-1',
+    agentType: 'assistant',
+    metadata: {},
+    configPath: null,
+  };
+
+  const terminalChain = {
+    limit: mock(() => Promise.resolve([defaultAgentRow])),
+  };
+  const whereChain = {
+    where: mock(() => terminalChain),
+    limit: mock(() => Promise.resolve([defaultAgentRow])),
+  };
+  const fromChain = {
+    from: mock(() => whereChain),
+  };
+
+  return {
+    select: mock(() => fromChain),
+  } as unknown as import('@omni/db').Database;
+}
+
+const mockDb = createMockDb();
 
 function createMockInstance(overrides: Record<string, unknown> = {}) {
   return {
