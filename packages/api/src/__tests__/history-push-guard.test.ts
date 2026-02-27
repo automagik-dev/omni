@@ -276,4 +276,20 @@ describeWithDb('History-Push Sync Guard', () => {
 
     expect(res.status).toBe(409);
   });
+
+  test('POST /instances/:id/sync with type "all" returns 409 when history-push is running', async () => {
+    await cleanSyncJobs();
+    await insertHistoryPushJob('running');
+    const app = createTestApp();
+
+    const res = await app.request(`/instances/${testInstance.id}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'all' }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('SYNC_IN_PROGRESS');
+  });
 });
