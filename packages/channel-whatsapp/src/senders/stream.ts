@@ -67,7 +67,8 @@ export class WhatsAppStreamSender implements StreamSender {
   private readonly throttleMs: number;
 
   constructor(
-    private readonly sock: WASocket,
+    /** Lazy socket getter — called at send time to always use the current live socket */
+    private readonly getSock: () => WASocket,
     private readonly jid: string,
     private readonly replyToMessageId?: string,
     _chatType?: 'dm' | 'group' | 'channel',
@@ -243,7 +244,7 @@ export class WhatsAppStreamSender implements StreamSender {
             },
           }
         : undefined;
-      await this.sock.sendMessage(this.jid, { text }, quoted);
+      await this.getSock().sendMessage(this.jid, { text }, quoted);
       this.firstMessageSent = true;
     } catch (err) {
       log.error('Failed to send message during stream', {
@@ -290,11 +291,11 @@ export class WhatsAppStreamSender implements StreamSender {
               },
             }
           : undefined;
-        const result = await this.sock.sendMessage(this.jid, { text }, quoted);
+        const result = await this.getSock().sendMessage(this.jid, { text }, quoted);
         this.messageId = result?.key?.id ?? null;
         this.firstMessageSent = true;
       } else {
-        await this.sock.sendMessage(this.jid, {
+        await this.getSock().sendMessage(this.jid, {
           text,
           edit: {
             remoteJid: this.jid,
@@ -317,7 +318,7 @@ export class WhatsAppStreamSender implements StreamSender {
 
   private async doEditRaw(text: string): Promise<void> {
     if (!this.messageId) throw new Error('No message to edit');
-    await this.sock.sendMessage(this.jid, {
+    await this.getSock().sendMessage(this.jid, {
       text,
       edit: {
         remoteJid: this.jid,

@@ -387,7 +387,7 @@ export interface SyncJobProgress {
   totalEstimated?: number;
 }
 
-export type SyncJobType = 'profile' | 'messages' | 'contacts' | 'groups' | 'all';
+export type SyncJobType = 'profile' | 'messages' | 'contacts' | 'groups' | 'all' | 'history-push';
 
 export interface SyncStartedPayload {
   jobId: string;

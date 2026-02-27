@@ -23,6 +23,7 @@ import { ActivityType } from 'discord.js';
 import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
 
 import { clearToken, loadToken, saveToken } from './auth';
+import type { InteractionAuthConfig } from './auth/interaction-auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
 import { createClient, destroyClient, getBotUser, isClientReady } from './client';
 import {
@@ -43,6 +44,7 @@ import type {
   ButtonPayload,
   ContextMenuPayload,
   DiscordConfig,
+  EntitySelectMenuPayload,
   ModalSubmitPayload,
   SelectMenuPayload,
   SlashCommandPayload,
@@ -351,6 +353,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Plugin configuration */
   private pluginConfig: DiscordConfig = {};
 
+  /** Per-instance interaction auth configs */
+  private instanceAuthConfigs = new Map<string, InteractionAuthConfig>();
+
   /** Per-instance guild config overrides cache: instanceId → (guildId → config) */
   private guildConfigCache = new Map<string, Record<string, GuildConfigOverride>>();
 
@@ -420,6 +425,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
       await saveToken(this.storage, instanceId, token);
     }
 
+    // Always sync auth config so stale entries don't persist across reconnects
+    if (config.options?.interactionAuth) {
+      this.instanceAuthConfigs.set(instanceId, config.options.interactionAuth as InteractionAuthConfig);
+    } else {
+      this.instanceAuthConfigs.delete(instanceId);
+    }
+
     // Create and setup client
     await this.createConnection(instanceId, config, token);
   }
@@ -477,6 +489,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Destroy client
     await destroyClient(client);
     this.clients.delete(instanceId);
+    this.instanceAuthConfigs.delete(instanceId);
 
     // Dispose per-instance dedup cache
     this.dedupeCaches.get(instanceId)?.dispose();
@@ -1181,6 +1194,11 @@ export class DiscordPlugin extends BaseChannelPlugin {
     return client;
   }
 
+  /** Get the interaction auth config for an instance (undefined = allow all) */
+  getInteractionAuthConfig(instanceId: string): InteractionAuthConfig | undefined {
+    return this.instanceAuthConfigs.get(instanceId);
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Internal handlers called by event handlers
   // ─────────────────────────────────────────────────────────────
@@ -1531,6 +1549,14 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Handle entity select menu (user, role, channel, mentionable)
+   * @internal
+   */
+  async handleEntitySelectMenu(payload: EntitySelectMenuPayload): Promise<void> {
+    await this.emitCustomEvent('custom.discord.entity_select_menu', payload);
+  }
+
+  /**
    * Handle autocomplete
    * @internal
    */
@@ -1549,6 +1575,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
       | ContextMenuPayload
       | ButtonPayload
       | SelectMenuPayload
+      | EntitySelectMenuPayload
       | ModalSubmitPayload
       | AutocompletePayload,
   ): Promise<void> {

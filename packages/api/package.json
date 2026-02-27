@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260225.4",
+  "version": "2.260226.1",
   "type": "module",
   "exports": {
     ".": {
@@ -33,7 +33,7 @@
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
-    "pgserve": "^1.1.5",
+    "pgserve": "^1.1.6",
     "zod": "^3.24.1"
   },
   "devDependencies": {

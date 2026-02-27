@@ -537,10 +537,13 @@ function buildQueryOptions(
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
   if (config.mcpServers) options.mcpServers = config.mcpServers;
 
-  // Pass API key via env if provided (SDK reads ANTHROPIC_API_KEY)
+  // Pass API key via env if provided (SDK reads ANTHROPIC_API_KEY).
+  // Always unset CLAUDECODE to allow spawning from within a Claude Code session.
+  const baseEnv = { ...process.env, CLAUDECODE: undefined } as Record<string, string | undefined>;
   if (config.apiKey) {
-    options.env = { ...process.env, ANTHROPIC_API_KEY: config.apiKey };
+    baseEnv.ANTHROPIC_API_KEY = config.apiKey;
   }
+  options.env = baseEnv;
 
   // Resume session if provided (must be a valid UUID — Claude Code SDK requires it)
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -56,6 +56,10 @@ export * from './components';
 // Commands
 export * from './commands';
 
+// Threads
+export { createThread, createForumPost, archiveThread, addThreadMember } from './threads/manager';
+export type { CreateThreadOptions, CreateForumPostOptions, ThreadType } from './threads/manager';
+
 // Webhooks
 export * from './webhooks';
 
@@ -90,6 +94,7 @@ export type {
   ExtractedContent,
   DiscordWebhookInfo,
   WebhookSendOptions,
+  EntitySelectMenuPayload,
   DiscordMessage,
 } from './types';
 
@@ -99,6 +104,10 @@ export {
   isButton,
   isStringSelectMenu,
   isAnySelectMenu,
+  isUserSelectMenu,
+  isRoleSelectMenu,
+  isChannelSelectMenu,
+  isMentionableSelectMenu,
   isModalSubmit,
   isContextMenuCommand,
   isAutocomplete,
