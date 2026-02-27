@@ -6,6 +6,8 @@
  */
 
 import type { ProviderSchema } from '../types/agent';
+import { createA2AClient } from './a2a-client';
+import { createAgUiClient } from './ag-ui-client';
 import { createAgnoClient } from './agno-client';
 import { type ClaudeCodeConfig, createClaudeCodeClient } from './claude-code-client';
 import { type IAgentClient, ProviderError } from './types';
@@ -62,7 +64,18 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
       );
 
     case 'ag-ui':
-      throw new ProviderError('AG-UI provider not yet implemented', 'NOT_FOUND', 501, { schema: 'ag-ui' });
+      return createAgUiClient({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        defaultTimeoutMs: config.defaultTimeoutMs,
+      });
+
+    case 'a2a':
+      return createA2AClient({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        defaultTimeoutMs: config.defaultTimeoutMs,
+      });
 
     case 'claude-code': {
       const ccConfig = config.schemaConfig as ClaudeCodeConfig | undefined;
@@ -88,12 +101,19 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
  * Check if a provider schema is currently supported
  */
 export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
-  return schema === 'agno' || schema === 'webhook' || schema === 'openclaw' || schema === 'claude-code';
+  return (
+    schema === 'agno' ||
+    schema === 'webhook' ||
+    schema === 'openclaw' ||
+    schema === 'claude-code' ||
+    schema === 'ag-ui' ||
+    schema === 'a2a'
+  );
 }
 
 /**
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agno', 'webhook', 'openclaw', 'claude-code'];
+  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a'];
 }

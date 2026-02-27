@@ -23,7 +23,8 @@
       "ignoreDependencies": []
     },
     "packages/core": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/logger/adapters/baileys.ts"]
     },
     "packages/channel-sdk": {
       "project": ["src/**/*.ts"]
@@ -41,7 +42,7 @@
       "project": ["src/**/*.ts"]
     },
     "packages/cli": {
-      "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
+      "entry": ["src/index.ts", "src/commands/*.ts", "src/bundled-server-entry.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/db": {

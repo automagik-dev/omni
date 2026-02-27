@@ -44,39 +44,51 @@ export type UpdatePersonInput = z.infer<typeof UpdatePersonSchema>;
 /**
  * Platform identity schema
  */
-export const PlatformIdentitySchema = z.object({
-  id: UuidSchema,
-  personId: UuidSchema.nullable(),
-  channel: ChannelTypeSchema,
-  instanceId: UuidSchema.nullable(),
-  platformUserId: z.string().max(255),
-  platformUsername: z.string().max(255).nullable(),
-  profilePicUrl: z.string().url().nullable(),
-  profileData: MetadataSchema.nullable(),
-  messageCount: z.number().int().min(0),
-  lastSeenAt: z.date().nullable(),
-  firstSeenAt: z.date(),
-  linkedBy: z.enum(['auto', 'manual', 'phone_match', 'initial']).nullable(),
-  confidence: z.number().int().min(0).max(100),
-  linkReason: z.string().nullable(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
-});
+export const PlatformIdentitySchema = z
+  .object({
+    id: UuidSchema,
+    personId: UuidSchema.nullable(),
+    agentId: UuidSchema.nullable(),
+    channel: ChannelTypeSchema,
+    instanceId: UuidSchema.nullable(),
+    platformUserId: z.string().max(255),
+    platformUsername: z.string().max(255).nullable(),
+    profilePicUrl: z.string().url().nullable(),
+    profileData: MetadataSchema.nullable(),
+    messageCount: z.number().int().min(0),
+    lastSeenAt: z.date().nullable(),
+    firstSeenAt: z.date(),
+    linkedBy: z.enum(['auto', 'manual', 'phone_match', 'initial']).nullable(),
+    confidence: z.number().int().min(0).max(100),
+    linkReason: z.string().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .refine((v) => !(v.personId != null && v.agentId != null), {
+    message: 'personId and agentId are mutually exclusive — at most one can be set',
+    path: ['agentId'],
+  });
 
 export type PlatformIdentity = z.infer<typeof PlatformIdentitySchema>;
 
 /**
  * Create platform identity input
  */
-export const CreatePlatformIdentitySchema = z.object({
-  personId: UuidSchema.optional(),
-  channel: ChannelTypeSchema,
-  instanceId: UuidSchema.optional(),
-  platformUserId: z.string().max(255),
-  platformUsername: z.string().max(255).optional(),
-  profilePicUrl: z.string().url().optional(),
-  profileData: MetadataSchema.optional(),
-});
+export const CreatePlatformIdentitySchema = z
+  .object({
+    personId: UuidSchema.optional(),
+    agentId: UuidSchema.optional(),
+    channel: ChannelTypeSchema,
+    instanceId: UuidSchema.optional(),
+    platformUserId: z.string().max(255),
+    platformUsername: z.string().max(255).optional(),
+    profilePicUrl: z.string().url().optional(),
+    profileData: MetadataSchema.optional(),
+  })
+  .refine((v) => !(v.personId != null && v.agentId != null), {
+    message: 'personId and agentId are mutually exclusive — at most one can be set',
+    path: ['agentId'],
+  });
 
 export type CreatePlatformIdentityInput = z.infer<typeof CreatePlatformIdentitySchema>;
 
@@ -92,6 +104,19 @@ export const LinkIdentitySchema = z.object({
 });
 
 export type LinkIdentityInput = z.infer<typeof LinkIdentitySchema>;
+
+/**
+ * Link identity to agent input
+ */
+export const LinkIdentityToAgentSchema = z.object({
+  platformIdentityId: UuidSchema,
+  agentId: UuidSchema,
+  linkedBy: z.enum(['auto', 'manual']),
+  confidence: z.number().int().min(0).max(100).default(100),
+  linkReason: z.string().optional(),
+});
+
+export type LinkIdentityToAgentInput = z.infer<typeof LinkIdentityToAgentSchema>;
 
 /**
  * Person with identities (expanded view)

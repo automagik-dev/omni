@@ -234,16 +234,11 @@ export class WhatsAppStreamSender implements StreamSender {
   /** Actually send a single message to WhatsApp. */
   private async doSend(text: string): Promise<void> {
     try {
-      const quoteId = !this.firstMessageSent ? this.replyToMessageId : undefined;
-      const quoted = quoteId
-        ? {
-            quoted: {
-              key: { id: quoteId, remoteJid: this.jid, fromMe: false },
-              message: {},
-            },
-          }
-        : undefined;
-      await this.sock.sendMessage(this.jid, { text }, quoted);
+      // Don't use a fake quoted stub — { conversation: ' ' } without participant
+      // causes ghost messages in group chats (blank chat-list preview, malformed
+      // reply bubble). Quote support requires passing the actual WAMessage proto,
+      // which is not available here. Plain messages render correctly for all clients.
+      await this.sock.sendMessage(this.jid, { text });
       this.firstMessageSent = true;
     } catch (err) {
       log.error('Failed to send message during stream', {
@@ -282,15 +277,8 @@ export class WhatsAppStreamSender implements StreamSender {
   private async doEdit(text: string): Promise<void> {
     try {
       if (!this.messageId) {
-        const quoted = this.replyToMessageId
-          ? {
-              quoted: {
-                key: { id: this.replyToMessageId, remoteJid: this.jid, fromMe: false },
-                message: {},
-              },
-            }
-          : undefined;
-        const result = await this.sock.sendMessage(this.jid, { text }, quoted);
+        // No fake quoted stub — see doSend comment for rationale.
+        const result = await this.sock.sendMessage(this.jid, { text });
         this.messageId = result?.key?.id ?? null;
         this.firstMessageSent = true;
       } else {

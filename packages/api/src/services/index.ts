@@ -10,12 +10,16 @@ import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
+import { AgentStateService } from './agent-state';
+import { AgentTaskService } from './agent-tasks';
+import { AgentService } from './agents';
 import { ApiKeyService } from './api-keys';
 import { AuditService } from './audit';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
 import { ConsumerOffsetService } from './consumer-offsets';
+import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
@@ -35,7 +39,11 @@ import { WebhookService } from './webhooks';
  * Service container
  */
 export interface Services {
+  agents: AgentService;
+  agentState: AgentStateService;
+  agentTasks: AgentTaskService;
   apiKeys: ApiKeyService;
+  conversations: ConversationService;
   audit: AuditService;
   instances: InstanceService;
   persons: PersonService;
@@ -71,7 +79,11 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const routeResolver = new RouteResolver(db);
 
   return {
+    agents: new AgentService(db, eventBus),
+    agentState: new AgentStateService(eventBus),
+    agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
+    conversations: new ConversationService(db, eventBus),
     audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),

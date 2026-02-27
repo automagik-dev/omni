@@ -28,9 +28,8 @@ export interface ResolvedRoute {
   scope: 'chat' | 'user';
   chatId: string | null;
   personId: string | null;
-  agentProviderId: string;
-  agentId: string;
-  agentType: 'agent' | 'team' | 'workflow';
+  /** FK to agents table (replaces legacy agentProviderId + agentId varchar + agentType). */
+  agentId: string | null;
   agentTimeout: number | null;
   agentStreamMode: boolean | null;
   agentReplyFilter: unknown | null;

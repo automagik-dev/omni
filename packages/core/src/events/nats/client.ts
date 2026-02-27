@@ -492,6 +492,13 @@ export class NatsEventBus implements EventBus {
   }
 
   /**
+   * Get the JetStream client for advanced operations (e.g. KV, object store)
+   */
+  getJetStreamClient(): JetStreamClient | null {
+    return this.js;
+  }
+
+  /**
    * Get current subscription count
    */
   getSubscriptionCount(): number {

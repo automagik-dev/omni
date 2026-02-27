@@ -31,6 +31,8 @@ import {
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isLidJid, isUserJid, toJid } from './jid';
+import { type ReceiptTracker, createReceiptTracker, isDelivered, isRead, mapStatusCode } from './receipts';
+import { resendStore } from './resend-store';
 import { buildMessageContent } from './senders/builders';
 import { sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -270,6 +272,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private decryptTrackers = new Map<string, DecryptFailureTracker>();
 
+  /**
+   * Per-instance receipt trackers for in-memory delivery status.
+   * Allows omni-ktb (resend in-flight) to query current delivery state
+   * without hitting the DB for each status check.
+   */
+  private receiptTrackers = new Map<string, ReceiptTracker>();
+
   /** Get or create a rate limit manager for an instance */
   private getRateLimitManager(instanceId: string): RateLimitManager {
     let manager = this.rateLimitManagers.get(instanceId);
@@ -410,6 +419,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Get the ReceiptTracker for an instance.
+   *
+   * Allows external callers (e.g. the resend-in-flight logic in omni-ktb) to
+   * check current in-memory delivery status for a message without a DB query.
+   *
+   * Returns undefined if no receipts have been received for this instance yet.
+   */
+  getReceiptTracker(instanceId: string): ReceiptTracker | undefined {
+    return this.receiptTrackers.get(instanceId);
   }
 
   /**
@@ -956,6 +977,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.sentMessageIds.delete(instanceId);
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
+    this.receiptTrackers.delete(instanceId);
+    // Clear any pending resend entries — no point retrying after intentional disconnect/logout
+    resendStore.clear(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
@@ -1039,7 +1063,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return {
       quoted: {
         key: { id: message.replyTo, remoteJid: jid, fromMe: replyToFromMe },
-        message: replyToText ? { conversation: replyToText } : {},
+        message: replyToText ? { conversation: replyToText } : { conversation: ' ' },
       },
     };
   }
@@ -1173,6 +1197,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Track this message ID so we can detect the echo when Baileys receives it back
       if (externalId) {
         this.trackSentMessageId(instanceId, externalId);
+        // Register in resend store so we can re-send if connection drops before server ACK
+        resendStore.register(instanceId, externalId, jid, message);
       }
 
       // Emit sent event
@@ -2239,6 +2265,59 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.prefetchGroupMetadata(instanceId, sock).catch((err) => {
       this.logger.warn('Failed to prefetch group metadata', { instanceId, error: String(err) });
     });
+
+    // Re-send any outbound messages that were in-flight when the connection dropped.
+    // Only fires on reconnects (when the resend store has pending entries) — new
+    // connections always have an empty store for this instanceId.
+    this.resendUnackedMessages(instanceId).catch((err) => {
+      this.logger.warn('Failed to resend unacked messages on reconnect', { instanceId, error: String(err) });
+    });
+  }
+
+  /**
+   * Re-send outbound messages that were in-flight when the connection dropped.
+   *
+   * On reconnect we query the ResendStore for messages sent in the last
+   * RESEND_WINDOW_MS (5 minutes) that have not yet received a server ACK
+   * (status >= 2). Each message is re-sent via the normal sendMessage() path,
+   * which will re-register it in the resend store with a fresh sentAt. The old
+   * entry was already cleaned up by the new send's register() call (it overwrites
+   * the same messageId is NOT reused — Baileys generates a new ID, so the old
+   * unacked entry stays until cleared or TTL). We clear it explicitly here after
+   * querying to avoid double-sends if handleConnected fires more than once.
+   *
+   * This is intentionally fire-and-forget (called with .catch) to avoid
+   * delaying the connection-open flow.
+   */
+  private async resendUnackedMessages(instanceId: string): Promise<void> {
+    const pending = resendStore.getPendingForResend(instanceId);
+    if (pending.length === 0) return;
+
+    this.logger.info('Reconnect: found unacked in-flight messages, re-sending', {
+      instanceId,
+      count: pending.length,
+    });
+
+    // Clear the pending list now — each successful resend will register new entries.
+    // If resend fails we won't retry again in this cycle (avoids infinite loops).
+    for (const [messageId] of pending) {
+      resendStore.ack(instanceId, messageId);
+    }
+
+    for (const [messageId, { jid, message, sentAt }] of pending) {
+      const ageSeconds = Math.round((Date.now() - sentAt) / 1000);
+      this.logger.info('Resending unacked message', { instanceId, messageId, jid, ageSeconds });
+      try {
+        await this.sendMessage(instanceId, message);
+      } catch (err) {
+        this.logger.error('Failed to resend unacked message', {
+          instanceId,
+          messageId,
+          jid,
+          error: String(err),
+        });
+      }
+    }
   }
 
   /**
@@ -2534,8 +2613,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       isFromMe, // Include for message-persistence to use
     };
 
-    // Extract mentionedJids from contextInfo (WhatsApp mentions)
+    // Extract contextInfo fields for reply detection and mention handling.
+    // contextInfo.participant = JID of the message being replied to's author.
+    // This is surfaced as quotedParticipant so the dispatcher can determine
+    // isReplyToBot without having to traverse the Baileys message tree.
     const contextInfo = this.getMessageContextInfo(rawMessage);
+    if (contextInfo?.participant) {
+      extendedPayload.quotedParticipant = contextInfo.participant;
+    }
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
@@ -2691,9 +2776,39 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle message delivered receipt
+   *
+   * Updates in-memory ReceiptTracker so callers (e.g. omni-ktb resend logic)
+   * can query delivery state without a DB round-trip, then emits
+   * message.delivered on the event bus which triggers the DB update via
+   * the message-persistence subscriber.
+   *
    * @internal
    */
+  /**
+   * Handle server ACK (status code 2 — message accepted by WhatsApp server).
+   *
+   * This is the earliest confirmation that a message was received by WhatsApp.
+   * We use it to remove the message from the resend store so it won't be
+   * retried if the connection drops shortly after (the server already has it).
+   *
+   * @internal
+   */
+  handleServerAck(instanceId: string, externalId: string): void {
+    resendStore.ack(instanceId, externalId);
+  }
+
   async handleMessageDelivered(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Ack from resend store — message reached the recipient's device (status >= 3)
+    resendStore.ack(instanceId, externalId);
+
+    // Update in-memory tracker
+    let tracker = this.receiptTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = createReceiptTracker();
+      this.receiptTrackers.set(instanceId, tracker);
+    }
+    tracker.update(externalId, 'delivered');
+
     await this.emitMessageDelivered({
       instanceId,
       externalId,
@@ -2704,9 +2819,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /**
    * Handle message read receipt
+   *
+   * Updates in-memory ReceiptTracker then emits message.read on the event bus
+   * which triggers the DB update via the message-persistence subscriber.
+   *
    * @internal
    */
   async handleMessageRead(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    // Ack from resend store — message was read (status >= 4)
+    resendStore.ack(instanceId, externalId);
+
+    // Update in-memory tracker
+    let tracker = this.receiptTrackers.get(instanceId);
+    if (!tracker) {
+      tracker = createReceiptTracker();
+      this.receiptTrackers.set(instanceId, tracker);
+    }
+    tracker.update(externalId, 'read');
+
     await this.emitMessageRead({
       instanceId,
       externalId,
@@ -3210,11 +3340,59 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Handle message receipt update (detailed read receipts)
+   * Handle message receipt update (message-receipt.update from Baileys)
+   *
+   * This event carries per-user read/delivery timestamps for group and 1:1 chats.
+   * The receipt object has three optional timestamp fields (in Baileys seconds):
+   *   - readTimestamp / playedTimestamp → message was read or voice note played
+   *   - receiptTimestamp → message was delivered to the recipient's device
+   *
+   * We derive the effective status via mapStatusCode so the same enum path
+   * is used as in the messages.update handler (processStatusUpdate), then
+   * delegate to handleMessageRead / handleMessageDelivered which:
+   *   1. Update the in-memory ReceiptTracker
+   *   2. Emit message.read / message.delivered on the event bus
+   *   3. Trigger the DB deliveryStatus update via message-persistence subscriber
+   *
    * @internal
    */
-  handleMessageReceiptUpdate(_instanceId: string, _update: unknown): void {
-    // TODO: Process detailed receipt info
+  async handleMessageReceiptUpdate(instanceId: string, update: unknown): Promise<void> {
+    const u = update as {
+      key?: { id?: string; remoteJid?: string };
+      receipt?: { readTimestamp?: number; playedTimestamp?: number; receiptTimestamp?: number };
+    };
+    const messageExternalId = u.key?.id;
+    const chatId = u.key?.remoteJid;
+    if (!messageExternalId || !chatId) return;
+
+    const receipt = u.receipt;
+    if (!receipt) return;
+
+    // Determine effective status from receipt timestamps, then map to our enum.
+    // readTimestamp / playedTimestamp → status code 4 (read) or 5 (played)
+    // receiptTimestamp               → status code 3 (delivered)
+    // No timestamp fields → unknown delivery, skip.
+    let statusCode: number;
+
+    if (receipt.playedTimestamp) {
+      statusCode = 5; // played (voice note)
+    } else if (receipt.readTimestamp) {
+      statusCode = 4; // read
+    } else if (receipt.receiptTimestamp) {
+      statusCode = 3; // delivered
+    } else {
+      return; // nothing actionable
+    }
+
+    const mappedStatus = mapStatusCode(statusCode);
+
+    if (isRead(mappedStatus)) {
+      // Covers status codes 4 (read) and 5 (played)
+      await this.handleMessageRead(instanceId, messageExternalId, chatId);
+    } else if (isDelivered(mappedStatus)) {
+      // Covers status code 3 (delivered)
+      await this.handleMessageDelivered(instanceId, messageExternalId, chatId);
+    }
   }
 
   /**

@@ -348,6 +348,9 @@ async function handleConnectionClose(
  * Handle connection open event
  */
 async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, sock: WASocket): Promise<void> {
+  // Detect if this is a reconnection (instance was previously authenticated)
+  const isReconnect = authenticatedInstances.has(instanceId);
+
   // Clear all tracking state on successful connection
   reconnectAttempts.delete(instanceId);
   qrCodeAttempts.delete(instanceId);
@@ -358,7 +361,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
   authenticatedInstances.add(instanceId);
 
-  log.info('Connection opened', { instanceId });
+  log.info('Connection opened', { instanceId, isReconnect });
   await plugin.handleConnected(instanceId, sock);
 }
 

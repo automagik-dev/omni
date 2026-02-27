@@ -293,14 +293,22 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
+    const timeoutMs = this.options.timeoutMs ?? 120_000;
     const streamConfig = this.options.streamConfig;
-    const result = this.client.streamRun(request, streamConfig);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      log.warn('Claude Code stream timed out', { traceId: context.traceId, timeoutMs });
+      controller.abort();
+    }, timeoutMs);
+
+    const result = this.client.streamRun(request, streamConfig, controller.signal);
 
     try {
       for await (const delta of result.stream) {
         yield delta;
       }
     } finally {
+      clearTimeout(timer);
       // Persist session after stream completes (success or error)
       const claudeSessionId = result.getSessionId();
       if (claudeSessionId) {

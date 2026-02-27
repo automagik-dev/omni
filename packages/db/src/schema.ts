@@ -12,6 +12,7 @@
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   boolean,
   check,
@@ -30,11 +31,27 @@ import {
 // ENUMS
 // ============================================================================
 
-export const channelTypes = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
+export const channelTypes = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'a2a',
+  'internal',
+] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
 export const agentTypes = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof agentTypes)[number];
+
+// What AI system powers the agent — distinct from AgentProvider (the table type)
+export const agentSystems = ['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal'] as const;
+export type AgentSystem = (typeof agentSystems)[number];
+
+// Role of the agent entity — distinct from existing agentTypes used on Instance/AgentRoute
+export const agentEntityTypes = ['assistant', 'workflow', 'team', 'tool'] as const;
+export type AgentEntityType = (typeof agentEntityTypes)[number];
 
 export const debounceMode = ['disabled', 'fixed', 'randomized'] as const;
 export type DebounceMode = (typeof debounceMode)[number];
@@ -217,6 +234,7 @@ export const providerSchemas = [
   'openclaw',
   'ag-ui',
   'claude-code',
+  'a2a',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
@@ -276,6 +294,46 @@ export const agentProviders = pgTable(
 );
 
 // ============================================================================
+// AGENTS
+// ============================================================================
+
+/**
+ * First-class agent entities with persistent identity.
+ * An agent is the AI actor that replies to messages. Previously agents existed
+ * only as loose config fields on instances and agent_routes; this table gives
+ * them a proper row in the database for observability and FK references.
+ */
+export const agents = pgTable(
+  'agents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    provider: varchar('provider', { length: 50 }).notNull().$type<AgentSystem>(),
+    model: varchar('model', { length: 120 }),
+    agentType: varchar('agent_type', { length: 20 }).notNull().default('assistant').$type<AgentEntityType>(),
+    capabilities: text('capabilities').array().notNull().default([]),
+    ownerId: uuid('owner_id').references(() => persons.id, { onDelete: 'set null' }),
+    agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    configPath: text('config_path'),
+    isInternal: boolean('is_internal').notNull().default(false),
+    isActive: boolean('is_active').notNull().default(true),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: index('agents_name_idx').on(table.name),
+    ownerIdx: index('agents_owner_idx').on(table.ownerId),
+    providerIdx: index('agents_provider_idx').on(table.provider),
+    activeIdx: index('agents_active_idx').on(table.isActive),
+  }),
+);
+
+export type Agent = typeof agents.$inferSelect;
+export type NewAgent = typeof agents.$inferInsert;
+
+// ============================================================================
 // AGENT ROUTES
 // ============================================================================
 
@@ -299,11 +357,8 @@ export const agentRoutes = pgTable(
     personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
 
     // ---- Target: which agent handles it? ----
-    agentProviderId: uuid('agent_provider_id')
-      .notNull()
-      .references(() => agentProviders.id, { onDelete: 'cascade' }),
-    agentId: varchar('agent_id', { length: 255 }).notNull(),
-    agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
+    /** FK to agents table (replaces legacy agentProviderId + agentId varchar + agentType). */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Behavior overrides (NULL = inherit from instance) ----
     agentTimeout: integer('agent_timeout'),
@@ -341,6 +396,7 @@ export const agentRoutes = pgTable(
     chatIdx: index('agent_routes_chat_idx').on(table.chatId),
     personIdx: index('agent_routes_person_idx').on(table.personId),
     activeIdx: index('agent_routes_active_idx').on(table.instanceId, table.isActive),
+    agentIdIdx: index('agent_routes_agent_id_idx').on(table.agentId),
   }),
 );
 
@@ -554,14 +610,11 @@ export const instances = pgTable(
     /** Telegram reaction level: off (default), ack, minimal, extensive */
     telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
-    // ---- Agent Provider Reference ----
-    agentProviderId: uuid('agent_provider_id').references(() => agentProviders.id, { onDelete: 'set null' }),
+    // ---- Agent Reference ----
+    /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Agent Configuration (Instance Override) ----
-    agentApiUrl: text('agent_api_url'),
-    agentApiKey: text('agent_api_key'),
-    agentId: varchar('agent_id', { length: 255 }).default('default'),
-    agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
     agentTimeout: integer('agent_timeout').notNull().default(60),
     agentStreamMode: boolean('agent_stream_mode').notNull().default(false),
     /** When agent should reply to messages */
@@ -688,6 +741,14 @@ export const instances = pgTable(
     /** Timestamp of last processed message (for reconnect gap detection) */
     lastMessageAt: timestamp('last_message_at'),
 
+    // ---- Agent Chaining ----
+    /** Target instance for agent-to-agent chaining */
+    agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {
+      onDelete: 'set null',
+    }),
+    /** Chain mode: 'off' | 'forward' | 'bidirectional' */
+    chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -697,6 +758,7 @@ export const instances = pgTable(
     channelIdx: index('instances_channel_idx').on(table.channel),
     isActiveIdx: index('instances_is_active_idx').on(table.isActive),
     isDefaultIdx: index('instances_is_default_idx').on(table.isDefault),
+    agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
   }),
 );
 
@@ -744,6 +806,7 @@ export const platformIdentities = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
     instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'cascade' }),
     platformUserId: varchar('platform_user_id', { length: 255 }).notNull(), // JID, Discord ID, etc.
@@ -767,6 +830,7 @@ export const platformIdentities = pgTable(
   },
   (table) => ({
     personIdx: index('platform_identities_person_idx').on(table.personId),
+    agentIdx: index('platform_identities_agent_idx').on(table.agentId),
     channelIdx: index('platform_identities_channel_idx').on(table.channel),
     instanceIdx: index('platform_identities_instance_idx').on(table.instanceId),
     platformUserIdx: index('platform_identities_platform_user_idx').on(table.platformUserId),
@@ -775,8 +839,37 @@ export const platformIdentities = pgTable(
       table.instanceId,
       table.platformUserId,
     ),
+    actorXor: check('platform_identities_actor_xor', sql`NOT (person_id IS NOT NULL AND agent_id IS NOT NULL)`),
   }),
 );
+
+// ============================================================================
+// CONVERSATIONS
+// ============================================================================
+
+/**
+ * Channel-agnostic conversation container.
+ * Groups multiple Chats (across channels) into a single thread of continuity.
+ * @see docs/architecture/actor-model.md — omni-233
+ */
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: varchar('title', { length: 500 }),
+    summary: text('summary'),
+    state: jsonb('state').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
+    updatedAtIdx: index('conversations_updated_at_idx').on(table.updatedAt),
+  }),
+);
+
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
 
 // ============================================================================
 // CHATS (Unified Chat Model)
@@ -826,6 +919,9 @@ export const chats = pgTable(
     // ---- Platform metadata ----
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
+    // ---- Conversation ----
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -843,6 +939,7 @@ export const chats = pgTable(
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),
     lastMessageIdx: index('chats_last_message_idx').on(table.lastMessageAt),
+    conversationIdx: index('chats_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -986,7 +1083,10 @@ export const messages = pgTable(
     }),
     senderPlatformUserId: varchar('sender_platform_user_id', { length: 255 }),
     senderDisplayName: varchar('sender_display_name', { length: 255 }),
+    /** @deprecated Use senderAgentId IS NOT NULL. Kept for backward compat. */
     isFromMe: boolean('is_from_me').notNull().default(false),
+    /** FK to agents.id — set when the sender is a registered AI agent */
+    senderAgentId: uuid('sender_agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // === CONTENT (CURRENT STATE) ===
     messageType: varchar('message_type', { length: 50 }).notNull().$type<MessageType>(),
@@ -1062,6 +1162,7 @@ export const messages = pgTable(
     chatIdx: index('messages_chat_idx').on(table.chatId),
     senderPersonIdx: index('messages_sender_person_idx').on(table.senderPersonId),
     senderPlatformIdentityIdx: index('messages_sender_platform_identity_idx').on(table.senderPlatformIdentityId),
+    senderAgentIdx: index('messages_sender_agent_idx').on(table.senderAgentId),
     sourceIdx: index('messages_source_idx').on(table.source),
     typeIdx: index('messages_type_idx').on(table.messageType),
     statusIdx: index('messages_status_idx').on(table.status),
@@ -1118,8 +1219,11 @@ export const omniEvents = pgTable(
     // ---- Context ----
     replyToEventId: uuid('reply_to_event_id'),
     replyToExternalId: varchar('reply_to_external_id', { length: 255 }),
-    chatId: varchar('chat_id', { length: 255 }), // Chat/conversation ID
+    chatId: varchar('chat_id', { length: 255 }), // Chat/conversation ID (JID — stays varchar)
     canonicalChatId: varchar('canonical_chat_id', { length: 255 }), // Resolved @lid → phone
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1156,6 +1260,9 @@ export const omniEvents = pgTable(
     receivedAtIdx: index('omni_events_received_at_idx').on(table.receivedAt),
     chatIdIdx: index('omni_events_chat_id_idx').on(table.chatId),
     canonicalChatIdx: index('omni_events_canonical_chat_idx').on(table.canonicalChatId),
+    agentIdIdx: index('omni_events_agent_id_idx').on(table.agentId),
+    chatUuidIdx: index('omni_events_chat_uuid_idx').on(table.chatUuid),
+    conversationIdIdx: index('omni_events_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -1479,12 +1586,22 @@ export type NewPluginStorageRow = typeof pluginStorage.$inferInsert;
 
 export const agentProvidersRelations = relations(agentProviders, ({ many }) => ({
   instances: many(instances),
+  agents: many(agents),
+}));
+
+export const agentsRelations = relations(agents, ({ one, many }) => ({
+  owner: one(persons, { fields: [agents.ownerId], references: [persons.id] }),
+  agentProvider: one(agentProviders, { fields: [agents.agentProviderId], references: [agentProviders.id] }),
+  platformIdentities: many(platformIdentities),
+  sentMessages: many(messages),
+  omniEvents: many(omniEvents),
+  agentRoutes: many(agentRoutes),
 }));
 
 export const instancesRelations = relations(instances, ({ one, many }) => ({
-  agentProvider: one(agentProviders, {
-    fields: [instances.agentProviderId],
-    references: [agentProviders.id],
+  agent: one(agents, {
+    fields: [instances.agentId],
+    references: [agents.id],
   }),
   platformIdentities: many(platformIdentities),
   accessRules: many(accessRules),
@@ -1515,6 +1632,10 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
     fields: [platformIdentities.personId],
     references: [persons.id],
   }),
+  agent: one(agents, {
+    fields: [platformIdentities.agentId],
+    references: [agents.id],
+  }),
   instance: one(instances, {
     fields: [platformIdentities.instanceId],
     references: [instances.id],
@@ -1524,10 +1645,19 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
   sentMessages: many(messages),
 }));
 
+export const conversationsRelations = relations(conversations, ({ many }) => ({
+  chats: many(chats),
+  omniEvents: many(omniEvents),
+}));
+
 export const chatsRelations = relations(chats, ({ one, many }) => ({
   instance: one(instances, {
     fields: [chats.instanceId],
     references: [instances.id],
+  }),
+  conversation: one(conversations, {
+    fields: [chats.conversationId],
+    references: [conversations.id],
   }),
   parentChat: one(chats, {
     fields: [chats.parentChatId],
@@ -1569,6 +1699,10 @@ export const messagesRelations = relations(messages, ({ one }) => ({
     fields: [messages.senderPlatformIdentityId],
     references: [platformIdentities.id],
   }),
+  senderAgent: one(agents, {
+    fields: [messages.senderAgentId],
+    references: [agents.id],
+  }),
   replyToMessage: one(messages, {
     fields: [messages.replyToMessageId],
     references: [messages.id],
@@ -1601,6 +1735,18 @@ export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
   platformIdentity: one(platformIdentities, {
     fields: [omniEvents.platformIdentityId],
     references: [platformIdentities.id],
+  }),
+  chat: one(chats, {
+    fields: [omniEvents.chatUuid],
+    references: [chats.id],
+  }),
+  agent: one(agents, {
+    fields: [omniEvents.agentId],
+    references: [agents.id],
+  }),
+  conversation: one(conversations, {
+    fields: [omniEvents.conversationId],
+    references: [conversations.id],
   }),
   mediaContent: many(mediaContent),
 }));
@@ -2210,6 +2356,114 @@ export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
   }),
 }));
 
-export const agentRoutesRelations = relations(agentRoutes, ({ many }) => ({
+export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentRoutes.agentId],
+    references: [agents.id],
+  }),
   triggerLogs: many(triggerLogs),
+}));
+
+// ============================================================================
+// AGENT TASKS
+// ============================================================================
+
+export const agentTaskStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled', 'waiting_input'] as const;
+export type AgentTaskStatus = (typeof agentTaskStatuses)[number];
+
+/**
+ * Persistent task history for agents.
+ * Each row represents a discrete unit of work performed by an agent
+ * (e.g. web search, code execution, API call, sub-agent delegation).
+ *
+ * @see docs/architecture/actor-model.md — "Agent Task (persistent)"
+ */
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // ---- Core FKs ----
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    /** The message that triggered this task (null for programmatically created tasks) */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+
+    // ---- Classification ----
+    /** Task type: 'web_search' | 'code_exec' | 'api_call' | 'sub_agent' | 'media_process' | 'custom.*' */
+    type: varchar('type', { length: 100 }).notNull(),
+    /** Human-readable title: "Searching for X" */
+    title: varchar('title', { length: 500 }).notNull(),
+    description: text('description'),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<AgentTaskStatus>(),
+    /** Progress percentage 0-100 */
+    progress: integer('progress').notNull().default(0),
+    priority: integer('priority').notNull().default(0),
+
+    // ---- Payload ----
+    /** Open per-task-type metadata — no migration needed for new fields */
+    metadata: jsonb('metadata').notNull().default({}).$type<Record<string, unknown>>(),
+    result: jsonb('result').$type<Record<string, unknown>>(),
+    error: text('error'),
+
+    // ---- Subtask nesting ----
+    parentTaskId: uuid('parent_task_id').references(
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      (): AnyPgColumn => agentTasks.id,
+      { onDelete: 'set null' },
+    ),
+    subtaskCount: integer('subtask_count').notNull().default(0),
+    completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
+    chatIdIdx: index('agent_tasks_chat_id_idx').on(table.chatId),
+    conversationIdIdx: index('agent_tasks_conversation_id_idx').on(table.conversationId),
+    parentTaskIdIdx: index('agent_tasks_parent_task_id_idx').on(table.parentTaskId),
+    statusIdx: index('agent_tasks_status_idx').on(table.status),
+    agentChatIdx: index('agent_tasks_agent_chat_idx').on(table.agentId, table.chatId),
+    agentStatusIdx: index('agent_tasks_agent_status_idx').on(table.agentId, table.status),
+  }),
+);
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type NewAgentTask = typeof agentTasks.$inferInsert;
+
+export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentTasks.agentId],
+    references: [agents.id],
+  }),
+  chat: one(chats, {
+    fields: [agentTasks.chatId],
+    references: [chats.id],
+  }),
+  conversation: one(conversations, {
+    fields: [agentTasks.conversationId],
+    references: [conversations.id],
+  }),
+  message: one(messages, {
+    fields: [agentTasks.messageId],
+    references: [messages.id],
+  }),
+  parentTask: one(agentTasks, {
+    fields: [agentTasks.parentTaskId],
+    references: [agentTasks.id],
+    relationName: 'parentChild',
+  }),
+  subtasks: many(agentTasks, {
+    relationName: 'parentChild',
+  }),
 }));

@@ -86,7 +86,7 @@ export async function sendContactMessage(
       ? {
           quoted: {
             key: { id: replyToId, remoteJid: jid, fromMe: false },
-            message: {},
+            message: { conversation: '' },
           },
         }
       : undefined,
@@ -113,7 +113,7 @@ export async function sendMultiContactMessage(
       ? {
           quoted: {
             key: { id: replyToId, remoteJid: jid, fromMe: false },
-            message: {},
+            message: { conversation: '' },
           },
         }
       : undefined,

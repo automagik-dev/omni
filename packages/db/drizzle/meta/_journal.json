@@ -8,6 +8,69 @@
       "when": 1771856815384,
       "tag": "0000_closed_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1771826916323,
+      "tag": "0009_dark_archangel",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1771999999999,
+      "tag": "0010_actor_model_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1771830578484,
+      "tag": "0011_instance_agent_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1771999999000,
+      "tag": "0012_instance_drop_legacy_agent_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1772000000000,
+      "tag": "0013_conversations_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1772100000000,
+      "tag": "0014_agent_tasks_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1772200000000,
+      "tag": "0015_agent_routes_drop_legacy_agent_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1772200000001,
+      "tag": "0016_platform_identity_actor_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1771884315141,
+      "tag": "0017_material_maverick",
+      "breakpoints": true
     }
   ]
 }
