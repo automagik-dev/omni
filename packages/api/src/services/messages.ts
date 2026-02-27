@@ -70,8 +70,6 @@ export interface CreateMessageOptions {
   quotedSenderName?: string;
   isForwarded?: boolean;
   forwardedFromExternalId?: string;
-  // Actor FK
-  senderAgentId?: string | null;
   // Raw data
   rawPayload?: Record<string, unknown>;
   // Event links (optional - only for realtime)
@@ -398,7 +396,6 @@ export class MessageService {
           senderPlatformIdentityId: options.senderPlatformIdentityId,
           senderPlatformUserId: options.senderPlatformUserId,
           senderDisplayName: options.senderDisplayName,
-          senderAgentId: options.senderAgentId ?? undefined,
           isFromMe: options.isFromMe ?? false,
           // Media
           hasMedia: options.hasMedia ?? false,

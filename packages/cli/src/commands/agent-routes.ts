@@ -3,7 +3,7 @@
  *
  * omni routes list --instance <id> [--scope chat|user] [--active]
  * omni routes get --instance <id> <route-id>
- * omni routes create --instance <id> --scope <scope> --chat <id>|--person <id> --agent <agentUUID> [options]
+ * omni routes create --instance <id> --scope <scope> --chat <id>|--person <id> --provider <id> --agent <id> [options]
  * omni routes update --instance <id> <route-id> [options]
  * omni routes delete --instance <id> <route-id>
  * omni routes test --instance <id> [--chat <id>] [--person <id>]
@@ -49,7 +49,9 @@ async function createAgentRouteAction(options: {
   scope: string;
   chat?: string;
   person?: string;
+  provider: string;
   agent: string;
+  agentType?: string;
   timeout?: number;
   stream?: boolean;
   prefixSender?: boolean;
@@ -86,7 +88,9 @@ async function createAgentRouteAction(options: {
       scope: options.scope as 'chat' | 'user',
       chatId: options.chat,
       personId: options.person,
+      agentProviderId: options.provider,
       agentId: options.agent,
+      agentType: (options.agentType as 'agent' | 'team' | 'workflow') || 'agent',
       agentTimeout: options.timeout,
       agentStreamMode: options.stream,
       agentPrefixSenderName: options.prefixSender,
@@ -115,6 +119,7 @@ async function updateAgentRouteAction(
   options: {
     instance: string;
     agent?: string;
+    agentType?: string;
     timeout?: number;
     stream?: boolean;
     prefixSender?: boolean;
@@ -144,6 +149,7 @@ async function updateAgentRouteAction(
     // Build update object with only provided options
     const updates: Partial<UpdateAgentRoute> = {};
     if (options.agent) updates.agentId = options.agent;
+    if (options.agentType) updates.agentType = options.agentType as 'agent' | 'team' | 'workflow';
     if (options.timeout !== undefined) updates.agentTimeout = options.timeout;
     if (options.stream !== undefined) updates.agentStreamMode = options.stream;
     if (options.prefixSender !== undefined) updates.agentPrefixSenderName = options.prefixSender;
@@ -200,7 +206,8 @@ export function createRoutesCommand(): Command {
           scope: r.scope,
           chatId: r.chatId ? r.chatId.substring(0, 8) : '-',
           personId: r.personId ? r.personId.substring(0, 8) : '-',
-          agent: r.agentId ? r.agentId.substring(0, 8) : '-',
+          provider: r.agentProviderId.substring(0, 8),
+          agent: r.agentId,
           filter: formatReplyFilter(r.agentReplyFilter as ReplyFilter),
           label: r.label || '-',
           priority: r.priority,
@@ -241,7 +248,9 @@ export function createRoutesCommand(): Command {
     .requiredOption('--scope <scope>', 'Route scope: chat or user')
     .option('--chat <chatId>', 'Chat UUID (required when scope=chat)')
     .option('--person <personId>', 'Person UUID (required when scope=user)')
-    .requiredOption('--agent <agentId>', 'Agent UUID (FK to agents table)')
+    .requiredOption('--provider <providerId>', 'Agent provider UUID')
+    .requiredOption('--agent <agentId>', 'Agent ID within the provider')
+    .option('--agent-type <type>', 'Agent type: agent, team, or workflow', 'agent')
     .option('--timeout <seconds>', 'Agent timeout in seconds', Number.parseInt)
     .option('--stream', 'Enable streaming responses')
     .option('--no-stream', 'Disable streaming responses')
@@ -266,7 +275,8 @@ export function createRoutesCommand(): Command {
     .command('update <routeId>')
     .description('Update an existing agent route')
     .requiredOption('--instance <id>', 'Instance ID')
-    .option('--agent <agentId>', 'Agent UUID (FK to agents table)')
+    .option('--agent <agentId>', 'Agent ID within the provider')
+    .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--timeout <seconds>', 'Agent timeout in seconds', Number.parseInt)
     .option('--stream', 'Enable streaming responses')
     .option('--no-stream', 'Disable streaming responses (set to null)')

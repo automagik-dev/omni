@@ -369,7 +369,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         to: params.to,
         content: params.content,
         replyToId: params.replyToId,
-        senderAgentId: params.senderAgentId,
       },
       {
         correlationId: generateCorrelationId('evt'),

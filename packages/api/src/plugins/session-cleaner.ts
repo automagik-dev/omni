@@ -10,8 +10,6 @@
 import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
-import { agents } from '@omni/db';
-import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { computeSessionId } from '../services/agent-runner';
 import { resolveProvider } from './agent-dispatcher';
@@ -64,23 +62,12 @@ async function clearAgentSession(
   // Get instance with provider
   const instance = await services.agentRunner.getInstanceWithProvider(instanceId);
 
-  if (!instance?.agentId) {
-    throw new Error('No agent configured for instance');
-  }
-
-  // Resolve agent provider from the agent FK
-  const [agentRow] = await db
-    .select({ agentProviderId: agents.agentProviderId })
-    .from(agents)
-    .where(eq(agents.id, instance.agentId))
-    .limit(1);
-
-  if (!agentRow?.agentProviderId) {
-    throw new Error('Agent has no provider configured');
+  if (!instance?.agentProviderId) {
+    throw new Error('No agent provider configured for instance');
   }
 
   // Get provider record from DB
-  const providerRecord = await services.providers.getById(agentRow.agentProviderId);
+  const providerRecord = await services.providers.getById(instance.agentProviderId);
 
   // Compute session ID using the same strategy as agent-runner
   const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
@@ -90,9 +77,7 @@ async function clearAgentSession(
   // Pass chatId so providers that build their own key format (e.g. OpenClaw)
   // can reconstruct the correct session key instead of using the generic sessionId.
   // Pass instanceId for providers that persist session state scoped by instance.
-  // Extend instance with transient dispatch fields required by resolveProvider.
-  const dispatchInstance = { ...instance, agentProviderId: agentRow.agentProviderId };
-  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
+  const agentProvider = resolveProvider(providerRecord, instance, db);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);
     return { sessionId, sessionStrategy };
@@ -148,13 +133,8 @@ async function handleTrashEmojiMessage(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Skip silently for instances without an agent/provider configured
-    if (
-      errorMessage.includes('No agent configured') ||
-      errorMessage.includes('No agent provider') ||
-      errorMessage.includes('Agent has no provider') ||
-      errorMessage.includes('not supported for')
-    ) {
+    // Skip logging if it's a known skippable case
+    if (errorMessage.includes('No agent provider') || errorMessage.includes('not supported for')) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
       return;
     }

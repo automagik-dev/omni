@@ -77,5 +77,4 @@ export const apiTags = [
   { name: 'Logs', description: 'Application logs' },
   { name: 'Automations', description: 'Workflow automations' },
   { name: 'Payloads', description: 'Event payload management' },
-  { name: 'Conversations', description: 'Cross-channel conversation continuity' },
 ];

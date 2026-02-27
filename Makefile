@@ -133,7 +133,7 @@ _init-db-wait: _setup-env
 # Quick schema sync — assumes DB is already running (used by test targets)
 _sync-db:
 	@set -a && . ./.env && set +a && \
-	cd packages/db && bun x drizzle-kit push --force </dev/null >/dev/null 2>&1 && \
+	cd packages/db && bun x drizzle-kit push --force >/dev/null 2>&1 && \
 	echo "✓ Schema synced" || \
 	echo "⚠️  Schema sync skipped (is PostgreSQL running?)"
 

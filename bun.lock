@@ -18,7 +18,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -51,7 +51,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@hono/swagger-ui": "^0.4.1",
         "@hono/zod-validator": "^0.4.3",
@@ -63,7 +63,6 @@
         "drizzle-orm": "^0.38.4",
         "hono": "^4.6.17",
         "lru-cache": "^11.2.6",
-        "nats": "^2.29.3",
         "pgserve": "^1.1.5",
         "zod": "^3.24.1",
       },
@@ -80,24 +79,9 @@
       "name": "audio-decode",
       "version": "2.2.3",
     },
-    "packages/channel-a2a": {
-      "name": "@omni/channel-a2a",
-      "version": "0.1.0",
-      "dependencies": {
-        "@omni/channel-sdk": "workspace:*",
-        "@omni/core": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "^5.7.3",
-      },
-      "peerDependencies": {
-        "typescript": "^5.0.0",
-      },
-    },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -111,24 +95,9 @@
         "typescript": "^5.0.0",
       },
     },
-    "packages/channel-internal": {
-      "name": "@omni/channel-internal",
-      "version": "0.1.0",
-      "dependencies": {
-        "@omni/channel-sdk": "workspace:*",
-        "@omni/core": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "^5.7.3",
-      },
-      "peerDependencies": {
-        "typescript": "^5.0.0",
-      },
-    },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -139,7 +108,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -157,7 +126,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -173,7 +142,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -193,7 +162,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -219,7 +188,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.39",
         "croner": "^9.1.0",
@@ -234,7 +203,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.4",
@@ -248,7 +217,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -266,7 +235,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.7.3",
@@ -274,7 +243,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.260226.1",
+      "version": "2.260225.4",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -588,11 +557,7 @@
 
     "@omni/api": ["@omni/api@workspace:packages/api"],
 
-    "@omni/channel-a2a": ["@omni/channel-a2a@workspace:packages/channel-a2a"],
-
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
-
-    "@omni/channel-internal": ["@omni/channel-internal@workspace:packages/channel-internal"],
 
     "@omni/channel-sdk": ["@omni/channel-sdk@workspace:packages/channel-sdk"],
 

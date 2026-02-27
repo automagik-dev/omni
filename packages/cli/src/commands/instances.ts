@@ -42,8 +42,9 @@ function setBool(body: Record<string, unknown>, key: string, val: unknown): void
 
 /** Extract agent routing fields from CLI options into body */
 function applyAgentFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
-  // agentFkId (--agent-fk-id) is now the primary way to set the agent (maps to agentId in DB)
-  setVal(body, 'agentId', opts.agentFkId);
+  setVal(body, 'agentProviderId', opts.agentProvider);
+  setVal(body, 'agentId', opts.agent);
+  setVal(body, 'agentType', opts.agentType);
   if (opts.agentTimeout !== undefined) body.agentTimeout = opts.agentTimeout;
   setBool(body, 'agentStreamMode', opts.agentStreamMode);
   setVal(body, 'agentSessionStrategy', opts.agentSessionStrategy);
@@ -247,7 +248,6 @@ export function createInstancesCommand(): Command {
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -705,7 +705,6 @@ export function createInstancesCommand(): Command {
     .option('--is-default', 'Set as default instance for channel')
     .option('--no-is-default', 'Unset as default instance for channel')
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
     .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')

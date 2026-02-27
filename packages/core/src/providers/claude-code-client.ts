@@ -670,26 +670,18 @@ export class ClaudeCodeClient implements IAgentClient {
   async run(request: ProviderRequest): Promise<ProviderResponse> {
     const { query } = await import('@anthropic-ai/claude-agent-sdk');
     const startTime = Date.now();
-    const timeoutMs = request.timeoutMs ?? 120_000;
     const acc: RunAccumulator = { content: '', sessionId: '', costUsd: 0, inputTokens: 0, outputTokens: 0 };
 
     log.info('Running Claude Code agent', {
       projectPath: this.config.projectPath,
       sessionId: request.sessionId,
       model: this.config.model,
-      timeoutMs,
     });
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      log.warn('Claude Code agent run timed out', { sessionId: acc.sessionId, timeoutMs });
-      controller.abort();
-    }, timeoutMs);
 
     try {
       for await (const message of query({
         prompt: request.message,
-        options: this.buildOptions(request, { abortSignal: controller.signal }),
+        options: this.buildOptions(request),
       })) {
         const earlyReturn = processRunMessage(message, acc, startTime);
         if (earlyReturn) return earlyReturn;
@@ -703,8 +695,6 @@ export class ClaudeCodeClient implements IAgentClient {
         status: 'failed',
         metrics: { inputTokens: 0, outputTokens: 0, durationMs: Date.now() - startTime },
       };
-    } finally {
-      clearTimeout(timer);
     }
 
     const durationMs = Date.now() - startTime;

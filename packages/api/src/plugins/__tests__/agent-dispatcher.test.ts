@@ -99,40 +99,16 @@ mock.module('@omni/core', () => {
 // Test Fixtures
 // ============================================================================
 
-// Mock database for tests.
-// The dispatcher calls db.select({...}).from(agents).where(...).limit(1) in applyAgentFkOverrides.
-// We build a chainable mock that returns an agent row matching the mock instance fixture.
-function createMockDb(agentRowOverrides: Record<string, unknown> = {}) {
-  const agentRow = {
-    id: 'agent-uuid-1',
-    agentProviderId: 'provider-1',
-    agentType: 'assistant',
-    metadata: { providerAgentId: 'default-agent' },
-    configPath: null,
-    ...agentRowOverrides,
-  };
-
-  const chain = {
-    from: mock(() => chain),
-    where: mock(() => chain),
-    limit: mock(() => Promise.resolve([agentRow])),
-  };
-
-  return {
-    select: mock(() => chain),
-  } as unknown as import('@omni/db').Database;
-}
-
-const mockDb = createMockDb();
+// Mock database for tests
+const mockDb = {} as unknown as import('@omni/db').Database;
 
 function createMockInstance(overrides: Record<string, unknown> = {}) {
   return {
     id: 'inst-1',
     name: 'Test Instance',
     channel: 'whatsapp-baileys',
-    // agentId is now the UUID FK to agents (phase 3); agentProviderId/agentType are transient dispatch fields
-    agentId: 'agent-uuid-1',
     agentProviderId: 'provider-1',
+    agentId: 'agent-1',
     agentType: 'agent',
     agentTimeout: 60,
     agentStreamMode: false,
@@ -319,7 +295,7 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(5);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(4);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
@@ -327,7 +303,6 @@ describe('agent-dispatcher', () => {
       expect(subscribedTypes).toContain('reaction.received');
       expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
-      expect(subscribedTypes).toContain('instance.disconnected');
 
       cleanup();
     });
@@ -462,10 +437,10 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.run).not.toHaveBeenCalled();
     });
 
-    it('skips messages when instance has no agentId', async () => {
+    it('skips messages when instance has no agentProviderId', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ agentId: null })),
+        getInstanceWithProvider: mock(async () => createMockInstance({ agentProviderId: null })),
         getSenderName: mock(async () => 'User'),
         run: mock(async () => ({ parts: ['resp'], metadata: { runId: 'r', sessionId: 's', status: 'completed' } })),
       };

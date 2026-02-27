@@ -6,7 +6,7 @@
  * - onContentDelta with no \n\n separator → no messages sent yet
  * - onContentDelta with \n\n → completed paragraphs sent immediately
  * - onFinal sends remaining unsent content
- * - No quoting: messages are sent plain (fake quoted stubs cause ghost messages in groups)
+ * - Quoting: first message quotes the trigger
  * - Multi-chunk splitting for long content
  * - Thinking deltas are no-ops
  * - Error/abort don't throw
@@ -165,11 +165,9 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
     expect(mockSocket.sent.length).toBe(0);
   });
 
-  // ─── No quoting — plain messages only ─────────────────────
-  // Fake quoted stubs ({ conversation: ' ' } without participant) cause ghost
-  // messages / blank chat-list previews in group chats. Messages are sent plain.
+  // ─── Reply-to quoting ──────────────────────────────────────
 
-  test('no quoting even when replyToMessageId is provided', async () => {
+  test('first message quotes trigger, subsequent do not', async () => {
     const quotingSender = new WhatsAppStreamSender(
       () => mockSocket.sock,
       '5511999999999@s.whatsapp.net',
@@ -177,15 +175,18 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
       'group',
     );
 
+    // First delta sends and should quote the trigger
     await quotingSender.onContentDelta({
       phase: 'content',
       content: 'First block.',
     });
 
     expect(mockSocket.sent.length).toBe(1);
-    // No options at all — plain sendMessage(jid, { text }) call
-    expect(mockSocket.sent[0]?.options).toBeUndefined();
+    expect(mockSocket.sent[0]?.options).toBeDefined();
+    const opts = mockSocket.sent[0]?.options as { quoted: { key: { id: string } } };
+    expect(opts.quoted.key.id).toBe('original-msg-id');
 
+    // Second delta (cumulative) — only new portion sent, no quote
     await quotingSender.onContentDelta({
       phase: 'content',
       content: 'First block.\n\nSecond block.',

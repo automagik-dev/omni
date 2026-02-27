@@ -28,21 +28,9 @@ const log = createLogger('agent-runner');
 // Types
 // ============================================================================
 
-/**
- * Transient dispatch fields available on DispatchInstance (set by applyAgentFkOverrides).
- * Duplicated here to avoid a cross-module circular import with agent-dispatcher.ts.
- */
-export interface DispatchFields {
-  agentProviderId?: string | null;
-  agentType?: 'agent' | 'team' | 'workflow';
-  agentInternalId?: string;
-}
-
-export type RunInstance = Instance & DispatchFields;
-
 export interface AgentRunContext {
-  /** The instance making the agent call (may include transient dispatch fields) */
-  instance: RunInstance;
+  /** The instance making the agent call */
+  instance: Instance;
   /** Chat ID for session continuity */
   chatId: string;
 
@@ -412,8 +400,8 @@ export class AgentRunnerService {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
     }
 
-    if (!instance.agentInternalId) {
-      throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
+    if (!instance.agentId) {
+      throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
     const client = await this.getClient(instance.agentProviderId);
@@ -431,7 +419,7 @@ export class AgentRunnerService {
 
     log.info('Running agent', {
       instanceId: instance.id,
-      agentInternalId: instance.agentInternalId,
+      agentId: instance.agentId,
       agentType: instance.agentType,
       messageCount: messages.length,
       sessionStrategy,
@@ -442,7 +430,7 @@ export class AgentRunnerService {
     // Build request — client routes by agentType internally
     const request = {
       message: combinedMessage,
-      agentId: instance.agentInternalId,
+      agentId: instance.agentId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: false,
       sessionId, // Computed based on session strategy
@@ -514,8 +502,8 @@ export class AgentRunnerService {
       throw new ProviderError('No agent provider configured for instance', 'NOT_FOUND', 400);
     }
 
-    if (!instance.agentInternalId) {
-      throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
+    if (!instance.agentId) {
+      throw new ProviderError('No agent ID configured for instance', 'NOT_FOUND', 400);
     }
 
     const client = await this.getClient(instance.agentProviderId);
@@ -533,7 +521,7 @@ export class AgentRunnerService {
 
     const request = {
       message: combinedMessage,
-      agentId: instance.agentInternalId,
+      agentId: instance.agentId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: true,
       sessionId, // Computed based on session strategy

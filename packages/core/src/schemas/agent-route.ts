@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import { UuidSchema } from './common';
+import { AgentTypeSchema } from './instance';
 
 /**
  * Route scope enum
@@ -48,8 +49,9 @@ export const AgentRouteSchema = z.object({
   chatId: UuidSchema.nullable(),
   personId: UuidSchema.nullable(),
 
-  /** FK to agents table. Null if no agent is explicitly assigned. */
-  agentId: UuidSchema.nullable(),
+  agentProviderId: UuidSchema,
+  agentId: z.string().min(1).max(255),
+  agentType: AgentTypeSchema,
 
   // Behavior overrides (null = inherit from instance)
   agentTimeout: z.number().int().positive().nullable(),
@@ -82,8 +84,9 @@ export const CreateAgentRouteSchema = z
     chatId: UuidSchema.optional(),
     personId: UuidSchema.optional(),
 
-    /** FK to agents table. Required to assign an agent to this route. */
-    agentId: UuidSchema,
+    agentProviderId: UuidSchema,
+    agentId: z.string().min(1).max(255),
+    agentType: AgentTypeSchema.default('agent'),
 
     // Optional overrides
     agentTimeout: z.number().int().positive().optional(),
@@ -113,8 +116,8 @@ export type CreateAgentRoute = z.infer<typeof CreateAgentRouteSchema>;
  * Update agent route schema (for PATCH)
  */
 export const UpdateAgentRouteSchema = z.object({
-  /** FK to agents table. Set to null to clear the agent assignment. */
-  agentId: UuidSchema.optional().nullable(),
+  agentId: z.string().min(1).max(255).optional(),
+  agentType: AgentTypeSchema.optional(),
 
   // Optional overrides
   agentTimeout: z.number().int().positive().optional().nullable(),

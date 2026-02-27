@@ -107,7 +107,7 @@ export async function sendImageMessage(
       ? {
           quoted: {
             key: { id: options.replyToId, remoteJid: jid, fromMe: false },
-            message: { conversation: '' },
+            message: {},
           },
         }
       : undefined,
@@ -138,7 +138,7 @@ export async function sendAudioMessage(
       ? {
           quoted: {
             key: { id: options.replyToId, remoteJid: jid, fromMe: false },
-            message: { conversation: '' },
+            message: {},
           },
         }
       : undefined,
@@ -169,7 +169,7 @@ export async function sendVideoMessage(
       ? {
           quoted: {
             key: { id: options.replyToId, remoteJid: jid, fromMe: false },
-            message: { conversation: '' },
+            message: {},
           },
         }
       : undefined,
@@ -201,7 +201,7 @@ export async function sendDocumentMessage(
       ? {
           quoted: {
             key: { id: options.replyToId, remoteJid: jid, fromMe: false },
-            message: { conversation: '' },
+            message: {},
           },
         }
       : undefined,
@@ -228,7 +228,7 @@ export async function sendStickerMessage(
       ? {
           quoted: {
             key: { id: replyToId, remoteJid: jid, fromMe: false },
-            message: { conversation: '' },
+            message: {},
           },
         }
       : undefined,

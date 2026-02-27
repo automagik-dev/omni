@@ -23,7 +23,9 @@ function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     scope: 'chat',
     chatId: TEST_CHAT_UUID,
     personId: null,
-    agentId: '00000000-0000-0000-0000-000000000001',
+    agentProviderId: 'provider-1',
+    agentId: 'agent-1',
+    agentType: 'agent',
     agentTimeout: 60,
     agentStreamMode: true,
     agentReplyFilter: null,
@@ -119,11 +121,7 @@ describe('RouteResolver', () => {
 
   test('chat route takes priority over user route', async () => {
     // DB query should return chat route first due to ORDER BY
-    const chatRoute = createRoute({
-      scope: 'chat',
-      chatId: TEST_CHAT_UUID,
-      agentId: '00000000-0000-0000-0000-000000000002',
-    });
+    const chatRoute = createRoute({ scope: 'chat', chatId: TEST_CHAT_UUID, agentId: 'chat-agent' });
     const db = createMockDb([chatRoute]); // Only chat route returned (DB does filtering)
     const resolver = new RouteResolver(db);
 
@@ -131,7 +129,7 @@ describe('RouteResolver', () => {
 
     expect(result).not.toBeNull();
     expect(result?.scope).toBe('chat');
-    expect(result?.agentId).toBe('00000000-0000-0000-0000-000000000002');
+    expect(result?.agentId).toBe('chat-agent');
   });
 
   test('caches route resolution results', async () => {

@@ -239,14 +239,9 @@ export class OpenClawAgentProvider implements IAgentProvider {
         providerId: this.id,
       });
 
-      // Phase 2: Accumulate response by runId (Promise.race as outer safety net)
+      // Phase 2: Accumulate response by runId
       const sendTimestamp = Date.now();
-      const accumulated = await Promise.race([
-        this.accumulateResponse(runId, agentTimeoutMs, context.traceId, sendTimestamp),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`trigger() timed out after ${agentTimeoutMs}ms`)), agentTimeoutMs),
-        ),
-      ]);
+      const accumulated = await this.accumulateResponse(runId, agentTimeoutMs, context.traceId, sendTimestamp);
 
       // Success — reset circuit breaker
       this.consecutiveFailures = 0;

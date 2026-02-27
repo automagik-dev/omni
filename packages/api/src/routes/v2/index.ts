@@ -8,14 +8,10 @@ import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
 import { accessRoutes } from './access';
 import { routesRoutes } from './agent-routes';
-import { agentStateRoutes } from './agent-state';
-import { agentTasksRoutes } from './agent-tasks';
-import { agentsRoutes } from './agents';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
 import { chatsRoutes } from './chats';
-import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
@@ -35,9 +31,6 @@ import { webhooksRoutes } from './webhooks';
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
 // Mount all route modules
-v2Routes.route('/agents', agentsRoutes);
-v2Routes.route('/agent-state', agentStateRoutes);
-v2Routes.route('/agent-tasks', agentTasksRoutes); // Agent task history (omni-m7m)
 v2Routes.route('/auth', authRoutes);
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);
@@ -51,7 +44,6 @@ v2Routes.route('/providers', providersRoutes);
 v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);
 v2Routes.route('/metrics', metricsRoutes);
-v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id

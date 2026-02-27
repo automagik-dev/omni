@@ -784,7 +784,6 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             senderPersonId: metadata.personId,
             senderPlatformIdentityId: metadata.platformIdentityId,
             isFromMe: true,
-            senderAgentId: (payload as MessageSentPayload & { senderAgentId?: string }).senderAgentId ?? null,
             // Media
             hasMedia: !!payload.content.mediaUrl,
             mediaUrl: payload.content.mediaUrl,

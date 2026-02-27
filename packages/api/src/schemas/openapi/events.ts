@@ -17,9 +17,6 @@ export const EventSchema = z.object({
   textContent: z.string().nullable().openapi({ description: 'Text content' }),
   transcription: z.string().nullable().openapi({ description: 'Audio transcription' }),
   imageDescription: z.string().nullable().openapi({ description: 'Image description' }),
-  chatUuid: z.string().uuid().nullable().openapi({ description: 'Chat UUID (FK → chats.id)' }),
-  agentId: z.string().uuid().nullable().openapi({ description: 'Agent UUID (FK → agents.id)' }),
-  conversationId: z.string().uuid().nullable().openapi({ description: 'Conversation UUID (FK → conversations.id)' }),
   receivedAt: z.string().datetime().openapi({ description: 'When event was received' }),
   processedAt: z.string().datetime().nullable().openapi({ description: 'When event was processed' }),
 });

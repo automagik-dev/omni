@@ -127,27 +127,6 @@ export function createApp(
   // OpenAPI spec and Swagger UI (no auth required)
   app.route('/api/v2', openapiRoutes);
 
-  // ── A2A protocol endpoints — auth-exempt, use A2A's own security model ──────
-  // Agent Card: GET /.well-known/agent.json?instanceId={id}
-  app.get('/.well-known/agent.json', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-    const plugin = channelRegistry?.get('a2a');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: 'A2A channel not available' }, 503);
-    }
-    return plugin.handleWebhook(c.req.raw);
-  });
-
-  // A2A JSON-RPC: POST /a2a/:instanceId
-  app.post('/a2a/:instanceId', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-    const plugin = channelRegistry?.get('a2a');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: 'A2A channel not available' }, 503);
-    }
-    return plugin.handleWebhook(c.req.raw);
-  });
-
   // Public Telegram webhook endpoint — auth-exempt, verified by X-Telegram-Bot-Api-Secret-Token.
   // Must be mounted before protectedApp so Telegram's servers (which send no x-api-key) can reach it.
   app.post('/api/v2/instances/:id/telegram/webhook', async (c) => {

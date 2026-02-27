@@ -2,15 +2,7 @@
  * Channel type definitions
  */
 
-export const CHANNEL_TYPES = [
-  'whatsapp-baileys',
-  'whatsapp-cloud',
-  'discord',
-  'slack',
-  'telegram',
-  'a2a',
-  'internal',
-] as const;
+export const CHANNEL_TYPES = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 
 export const CONTENT_TYPES = [

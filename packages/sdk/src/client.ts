@@ -323,7 +323,7 @@ export interface ListProvidersParams {
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a';
+export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code';
 
 /**
  * Body for creating a provider

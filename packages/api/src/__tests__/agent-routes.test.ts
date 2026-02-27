@@ -12,8 +12,8 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
-import type { Agent, AgentRoute, Database, Instance } from '@omni/db';
-import { agentProviders, agentRoutes, agents, chats, instances, persons } from '@omni/db';
+import type { AgentProvider, AgentRoute, Database, Instance } from '@omni/db';
+import { agentProviders, agentRoutes, chats, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { routesRoutes } from '../routes/v2/agent-routes';
@@ -24,7 +24,7 @@ import { describeWithDb, getTestDb } from './db-helper';
 describeWithDb('Agent Routes Endpoints', () => {
   let db: Database;
   let testInstance: Instance;
-  let testAgent: Agent;
+  let testProvider: AgentProvider;
   let testChat: { id: string };
   let testChat2: { id: string };
   let testChat3: { id: string };
@@ -32,14 +32,12 @@ describeWithDb('Agent Routes Endpoints', () => {
   const insertedIds: {
     instances: string[];
     providers: string[];
-    agents: string[];
     routes: string[];
     chats: string[];
     persons: string[];
   } = {
     instances: [],
     providers: [],
-    agents: [],
     routes: [],
     chats: [],
     persons: [],
@@ -60,7 +58,7 @@ describeWithDb('Agent Routes Endpoints', () => {
     testInstance = instance;
     insertedIds.instances.push(instance.id);
 
-    // Create a test provider (needed for agent FK)
+    // Create test provider
     const [provider] = await db
       .insert(agentProviders)
       .values({
@@ -70,22 +68,8 @@ describeWithDb('Agent Routes Endpoints', () => {
       })
       .returning();
     if (!provider) throw new Error('Failed to create test provider');
+    testProvider = provider;
     insertedIds.providers.push(provider.id);
-
-    // Create test agent (UUID FK to agents table)
-    const [agent] = await db
-      .insert(agents)
-      .values({
-        name: `test-agent-${Date.now()}`,
-        provider: 'agno',
-        agentType: 'assistant',
-        agentProviderId: provider.id,
-        isInternal: false,
-      })
-      .returning();
-    if (!agent) throw new Error('Failed to create test agent');
-    testAgent = agent;
-    insertedIds.agents.push(agent.id);
 
     // Create test chat 1
     const [chat] = await db
@@ -146,7 +130,7 @@ describeWithDb('Agent Routes Endpoints', () => {
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Cleanup logic requires sequential steps
   afterAll(async () => {
-    // Cleanup in reverse order (routes -> chats/persons -> agents -> providers -> instances)
+    // Cleanup in reverse order (routes -> chats/persons -> providers -> instances)
     if (insertedIds.routes.length > 0) {
       await db.delete(agentRoutes).where(eq(agentRoutes.instanceId, testInstance.id));
     }
@@ -156,11 +140,6 @@ describeWithDb('Agent Routes Endpoints', () => {
     if (insertedIds.persons.length > 0) {
       for (const id of insertedIds.persons) {
         await db.delete(persons).where(eq(persons.id, id));
-      }
-    }
-    if (insertedIds.agents.length > 0) {
-      for (const id of insertedIds.agents) {
-        await db.delete(agents).where(eq(agents.id, id));
       }
     }
     if (insertedIds.providers.length > 0) {
@@ -206,7 +185,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         body: JSON.stringify({
           scope: 'chat',
           chatId: testChat.id,
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'test-agent',
           label: 'Test Chat Route',
           priority: 10,
         }),
@@ -217,7 +197,8 @@ describeWithDb('Agent Routes Endpoints', () => {
       expect(data.data).toMatchObject({
         scope: 'chat',
         chatId: testChat.id,
-        agentId: testAgent.id,
+        agentProviderId: testProvider.id,
+        agentId: 'test-agent',
         label: 'Test Chat Route',
         priority: 10,
         isActive: true,
@@ -233,7 +214,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         body: JSON.stringify({
           scope: 'user',
           personId: testPerson.id,
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'vip-agent',
           label: 'VIP User Route',
           priority: 20,
         }),
@@ -244,7 +226,8 @@ describeWithDb('Agent Routes Endpoints', () => {
       expect(data.data).toMatchObject({
         scope: 'user',
         personId: testPerson.id,
-        agentId: testAgent.id,
+        agentProviderId: testProvider.id,
+        agentId: 'vip-agent',
         label: 'VIP User Route',
         priority: 20,
       });
@@ -258,7 +241,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scope: 'chat',
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'test-agent',
         }),
       });
 
@@ -272,7 +256,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scope: 'user',
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'test-agent',
         }),
       });
 
@@ -445,7 +430,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         body: JSON.stringify({
           scope: 'chat',
           chatId: testChat2.id,
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'cache-test-agent',
         }),
       });
 
@@ -470,7 +456,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         body: JSON.stringify({
           scope: 'chat',
           chatId: testChat3.id,
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'unique-test-1',
         }),
       });
       expect(res1.status).toBe(201);
@@ -484,7 +471,8 @@ describeWithDb('Agent Routes Endpoints', () => {
         body: JSON.stringify({
           scope: 'chat',
           chatId: testChat3.id,
-          agentId: testAgent.id,
+          agentProviderId: testProvider.id,
+          agentId: 'unique-test-2',
         }),
       });
       expect(res2.status).toBe(500); // Unique constraint violation

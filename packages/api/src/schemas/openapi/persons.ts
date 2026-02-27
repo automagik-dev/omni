@@ -9,8 +9,7 @@ import { ErrorSchema, PaginationMetaSchema } from './common';
 // Identity schema
 export const IdentitySchema = z.object({
   id: z.string().uuid().openapi({ description: 'Identity UUID' }),
-  personId: z.string().uuid().nullable().openapi({ description: 'Person UUID' }),
-  agentId: z.string().uuid().nullable().openapi({ description: 'Agent UUID' }),
+  personId: z.string().uuid().openapi({ description: 'Person UUID' }),
   channel: z.string().openapi({ description: 'Channel type' }),
   platformUserId: z.string().openapi({ description: 'Platform user ID' }),
   displayName: z.string().nullable().openapi({ description: 'Display name' }),
