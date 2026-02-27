@@ -846,6 +846,34 @@ export const platformIdentities = pgTable(
 );
 
 // ============================================================================
+// CONVERSATIONS
+// ============================================================================
+
+/**
+ * Channel-agnostic conversation container.
+ * Groups multiple Chats (across channels) into a single thread of continuity.
+ * @see docs/architecture/actor-model.md — omni-233
+ */
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: varchar('title', { length: 500 }),
+    summary: text('summary'),
+    state: jsonb('state').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
+    updatedAtIdx: index('conversations_updated_at_idx').on(table.updatedAt),
+  }),
+);
+
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+
+// ============================================================================
 // CHATS (Unified Chat Model)
 // ============================================================================
 
@@ -893,6 +921,9 @@ export const chats = pgTable(
     // ---- Platform metadata ----
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
+    // ---- Conversation ----
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -910,6 +941,7 @@ export const chats = pgTable(
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),
     lastMessageIdx: index('chats_last_message_idx').on(table.lastMessageAt),
+    conversationIdx: index('chats_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -1193,7 +1225,7 @@ export const omniEvents = pgTable(
     canonicalChatId: varchar('canonical_chat_id', { length: 255 }), // Resolved @lid → phone
     chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
-    conversationId: uuid('conversation_id'), // no FK yet — conversations table pending
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1615,10 +1647,19 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
   sentMessages: many(messages),
 }));
 
+export const conversationsRelations = relations(conversations, ({ many }) => ({
+  chats: many(chats),
+  omniEvents: many(omniEvents),
+}));
+
 export const chatsRelations = relations(chats, ({ one, many }) => ({
   instance: one(instances, {
     fields: [chats.instanceId],
     references: [instances.id],
+  }),
+  conversation: one(conversations, {
+    fields: [chats.conversationId],
+    references: [conversations.id],
   }),
   parentChat: one(chats, {
     fields: [chats.parentChatId],
@@ -1704,6 +1745,10 @@ export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
   agent: one(agents, {
     fields: [omniEvents.agentId],
     references: [agents.id],
+  }),
+  conversation: one(conversations, {
+    fields: [omniEvents.conversationId],
+    references: [conversations.id],
   }),
   mediaContent: many(mediaContent),
 }));
