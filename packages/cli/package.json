@@ -25,7 +25,7 @@
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.52",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
     "ora": "^8.1.1",
