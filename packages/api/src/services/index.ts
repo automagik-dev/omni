@@ -10,6 +10,8 @@ import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
+import { AgentStateService } from './agent-state';
+import { AgentTaskService } from './agent-tasks';
 import { AgentService } from './agents';
 import { ApiKeyService } from './api-keys';
 import { AuditService } from './audit';
@@ -38,6 +40,8 @@ import { WebhookService } from './webhooks';
  */
 export interface Services {
   agents: AgentService;
+  agentState: AgentStateService;
+  agentTasks: AgentTaskService;
   apiKeys: ApiKeyService;
   conversations: ConversationService;
   audit: AuditService;
@@ -76,6 +80,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 
   return {
     agents: new AgentService(db, eventBus),
+    agentState: new AgentStateService(eventBus),
+    agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
     conversations: new ConversationService(db, eventBus),
     audit: new AuditService(db),

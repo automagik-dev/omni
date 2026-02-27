@@ -4,6 +4,8 @@
 
 export * from './agent';
 export * from './agent-route';
+export * from './agent-state';
+export * from './agent-task';
 export * from './common';
 export * from './conversation';
 export * from './guild-config';

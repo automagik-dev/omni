@@ -62,6 +62,14 @@ export const CORE_EVENT_TYPES = [
   'batch-job.completed',
   'batch-job.cancelled',
   'batch-job.failed',
+  // Agent state machine (ephemeral — NATS KV)
+  'agent.state.changed',
+  // Agent task lifecycle (persistent — omni-m7m)
+  'agent.task.created',
+  'agent.task.updated',
+  'agent.task.completed',
+  'agent.task.failed',
+  'agent.task.cancelled',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -552,6 +560,59 @@ export interface SessionResetPayload {
 }
 
 /**
+ * Agent state event payload
+ */
+export interface AgentStateChangedPayload {
+  agentId: string;
+  chatId: string;
+  conversationId: string | null;
+  status: string;
+  statusMeta?: Record<string, unknown>;
+  updatedAt: number;
+}
+
+/**
+ * Agent task event payloads (omni-m7m)
+ */
+export interface AgentTaskCreatedPayload {
+  taskId: string;
+  agentId: string;
+  chatId: string;
+  conversationId: string | null;
+  type: string;
+  title: string;
+  status: string;
+}
+
+export interface AgentTaskUpdatedPayload {
+  taskId: string;
+  agentId: string;
+  chatId: string;
+  status: string;
+  progress: number;
+}
+
+export interface AgentTaskCompletedPayload {
+  taskId: string;
+  agentId: string;
+  chatId: string;
+  result: Record<string, unknown> | null;
+}
+
+export interface AgentTaskFailedPayload {
+  taskId: string;
+  agentId: string;
+  chatId: string;
+  error: string;
+}
+
+export interface AgentTaskCancelledPayload {
+  taskId: string;
+  agentId: string;
+  chatId: string;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -592,6 +653,12 @@ export interface EventPayloadMap {
   'batch-job.completed': BatchJobCompletedPayload;
   'batch-job.cancelled': BatchJobCancelledPayload;
   'batch-job.failed': BatchJobFailedPayload;
+  'agent.state.changed': AgentStateChangedPayload;
+  'agent.task.created': AgentTaskCreatedPayload;
+  'agent.task.updated': AgentTaskUpdatedPayload;
+  'agent.task.completed': AgentTaskCompletedPayload;
+  'agent.task.failed': AgentTaskFailedPayload;
+  'agent.task.cancelled': AgentTaskCancelledPayload;
 }
 
 /**
