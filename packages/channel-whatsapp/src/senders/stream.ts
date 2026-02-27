@@ -244,7 +244,7 @@ export class WhatsAppStreamSender implements StreamSender {
             },
           }
         : undefined;
-      await this.sock.sendMessage(this.jid, { text }, quoted);
+      await this.getSock().sendMessage(this.jid, { text }, quoted);
       this.firstMessageSent = true;
     } catch (err) {
       log.error('Failed to send message during stream', {
@@ -291,7 +291,7 @@ export class WhatsAppStreamSender implements StreamSender {
               },
             }
           : undefined;
-        const result = await this.sock.sendMessage(this.jid, { text }, quoted);
+        const result = await this.getSock().sendMessage(this.jid, { text }, quoted);
         this.messageId = result?.key?.id ?? null;
         this.firstMessageSent = true;
       } else {
