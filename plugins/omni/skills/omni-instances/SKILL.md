@@ -65,7 +65,7 @@ omni instances qr <id> --json
 ```bash
 omni instances sync <id> --type messages --depth 30d --download-media --json
 # Sync a specific chat (WhatsApp only)
-omni instances sync <id> --type active --chat <jid> --json
+omni instances sync <id> --type messages --chat <jid> --json
 omni instances syncs <id> --limit 20 --json
 omni instances syncs <id> <jobId> --json
 

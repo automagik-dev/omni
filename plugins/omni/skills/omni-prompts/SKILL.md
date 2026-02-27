@@ -2,7 +2,7 @@
 name: omni-prompts
 description: |
   View and override LLM prompt templates used for media description (image/video/document) and gating decisions.
-allowed-tools: Bash(omni *), Bash(jq *)
+allowed-tools: Bash(omni prompts *), Bash(jq *)
 ---
 
 # Omni Prompts

@@ -149,6 +149,9 @@ export async function setupSyncWorker(
               // All sync - process each type
               await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry);
               break;
+            case 'history-push':
+              // Progress/completion is driven by tracker subscribers, not the worker
+              break;
             default:
               log.warn('Unknown sync type', { jobId, type });
               await services.syncJobs.fail(jobId, `Unknown sync type: ${type}`);
@@ -926,7 +929,10 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
             stored: 0,
             duplicates: 0,
             mediaDownloaded: 0,
-            totalEstimated: payload.progress ? Math.round((payload.fetched ?? 0) / (payload.progress / 100)) : 0,
+            totalEstimated:
+              payload.progress && payload.progress > 0
+                ? Math.round((payload.fetched ?? 0) / (payload.progress / 100))
+                : 0,
           });
 
           historyPushLog.debug('Updated history-push progress', {

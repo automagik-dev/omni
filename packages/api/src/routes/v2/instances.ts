@@ -2324,7 +2324,7 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
   }
 
   // Guard: block resync while a history-push job is active
-  const guardError = await validateMessageSyncPreconditions(services, id, instance.channel, 'messages');
+  const guardError = await validateMessageSyncPreconditions(services, id, instance.channel, 'messages', chatJids);
   if (guardError) return c.json({ error: guardError.error }, guardError.status);
 
   const sinceDate = parseSince(since);

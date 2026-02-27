@@ -27,7 +27,7 @@ omni webhooks get <id> --json
 omni webhooks create --name "My Webhook" --description "Receives external events" --json
 
 # Create with expected headers for validation
-omni webhooks create --name "Secure Hook" --headers '{"X-Secret": true}' --json
+omni webhooks create --name "Secure Hook" --headers '{"X-Webhook-Secret":"replace-with-random-token"}' --json
 
 # Create in disabled state
 omni webhooks create --name "Draft Hook" --disabled --json

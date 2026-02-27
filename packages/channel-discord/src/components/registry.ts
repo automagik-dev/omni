@@ -360,6 +360,7 @@ export class ComponentRegistry {
     const oldestKey = this.insertionOrder.shift();
     if (oldestKey !== undefined) {
       this.entries.delete(oldestKey);
+      this.tombstones.add(oldestKey);
     }
   }
 }

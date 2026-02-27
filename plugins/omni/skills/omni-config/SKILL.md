@@ -39,7 +39,7 @@ omni config unset defaultInstance --json
 
 ## Providers
 
-Available schemas: `agno`, `webhook`, `openclaw`, `ag-ui`, `claude-code`
+Available schemas: `agno`, `webhook`, `openclaw`, `claude-code`
 
 ```bash
 omni providers list --json
@@ -65,7 +65,7 @@ omni providers create \
   --system-prompt "You are a helpful assistant." \
   --json
 
-# agno / webhook / ag-ui providers (use --base-url and --api-key as needed)
+# agno / webhook providers (use --base-url and --api-key as needed)
 omni providers create --name "agno-prod" --schema agno --base-url https://api.agno.com --api-key <key> --json
 
 omni providers test <id> --json
@@ -107,10 +107,10 @@ omni update -y --no-restart --json
 ## Logs
 
 ```bash
-omni logs --json
-omni logs error --limit 50 --json
-omni logs --modules api,nats --follow --json
-omni logs --process nats --json
+omni logs
+omni logs error --limit 50
+omni logs --modules api,nats --follow
+omni logs --process nats
 ```
 
 Flags: `[level]` (debug, info, warn, error), `--modules <modules>`, `--limit <n>` (default: 100), `--process [service]` (default: api), `--follow`

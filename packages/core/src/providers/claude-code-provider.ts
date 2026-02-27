@@ -294,7 +294,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
     });
 
     const streamConfig = this.options.streamConfig;
-    const result = this.client.streamRun(request, streamConfig);
+    const result = this.client.streamRun(request, streamConfig, context.abortSignal);
 
     try {
       for await (const delta of result.stream) {

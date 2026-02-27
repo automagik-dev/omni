@@ -959,6 +959,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
+    this.historyPushFetchCount.delete(instanceId);
     // Dispose and remove per-instance dedup cache
     this.dedupeCaches.get(instanceId)?.dispose();
     this.dedupeCaches.delete(instanceId);

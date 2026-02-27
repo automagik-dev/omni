@@ -234,26 +234,22 @@ async function enforceRegistryTTL(instanceId: string, interaction: Interaction, 
     return true;
   }
 
-  // Was registered but expired — apply rate limiting
+  // Was registered but expired/consumed — always block (even if rate limit not triggered)
   const userId = interaction.user.id;
-  if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
-    log.debug(`Suppressing expired ${label} interaction (rate limit)`, {
-      instanceId,
-      userId,
-      messageId,
-    });
-    try {
-      const ci = interaction as MessageComponentInteraction;
-      if (!ci.replied && !ci.deferred) {
-        await ci.deferUpdate();
-      }
-    } catch (_) {
-      // Ignore
+  log.debug(`Blocking stale ${label} interaction (expired/consumed)`, {
+    instanceId,
+    userId,
+    messageId,
+  });
+  try {
+    const ci = interaction as MessageComponentInteraction;
+    if (!ci.replied && !ci.deferred) {
+      await ci.deferUpdate();
     }
-    return false;
+  } catch (_) {
+    // Ignore
   }
-
-  return true;
+  return false;
 }
 
 /**

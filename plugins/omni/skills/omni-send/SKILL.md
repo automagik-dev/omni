@@ -69,12 +69,12 @@ omni media list --chat <chatId> --remote-only --json
 
 # Download a specific media item
 omni media download --message <uuid> --output ./file.jpg --json
-omni media download --chat <uuid> --external <externalId> --json
+omni media download --chat <chatId> --external <externalId> --json
 ```
 
-Flags for `media list`: `--instance <id>`, `--chat <id>`, `--since <datetime>`, `--until <datetime>`, `--type <types>` (audio,image,video,document), `--limit <n>` (default: 20, max: 100), `--remote-only`, `--cached-only`, `--full`
+Flags for `media list`: `--instance <id>`, `--chat <chatId>`, `--since <datetime>`, `--until <datetime>`, `--type <types>` (audio,image,video,document), `--limit <n>` (default: 20, max: 100), `--remote-only`, `--cached-only`, `--full`
 
-Flags for `media download`: `--message <uuid>`, `--chat <uuid>`, `--external <id>`, `--output <path>`
+Flags for `media download`: `--message <uuid>`, `--chat <chatId>`, `--external <id>`, `--output <path>`
 
 ## Notes
 
