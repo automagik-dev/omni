@@ -537,13 +537,15 @@ function buildQueryOptions(
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
   if (config.mcpServers) options.mcpServers = config.mcpServers;
 
-  // Pass API key via env if provided (SDK reads ANTHROPIC_API_KEY).
-  // Always unset CLAUDECODE to allow spawning from within a Claude Code session.
-  const baseEnv = { ...process.env, CLAUDECODE: undefined } as Record<string, string | undefined>;
+  // Build clean env: always clear CLAUDECODE to prevent the SDK from thinking
+  // it's already inside a Claude Code session (happens when Omni is spawned
+  // from within Claude Code, which sets CLAUDECODE=1 in its environment)
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
+  const env: Record<string, string> = { ...baseEnv, CLAUDECODE: '0' };
   if (config.apiKey) {
-    baseEnv.ANTHROPIC_API_KEY = config.apiKey;
+    env.ANTHROPIC_API_KEY = config.apiKey;
   }
-  options.env = baseEnv;
+  options.env = env;
 
   // Resume session if provided (must be a valid UUID — Claude Code SDK requires it)
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
