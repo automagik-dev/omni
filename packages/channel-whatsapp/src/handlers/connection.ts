@@ -9,8 +9,8 @@
 
 import type { Boom } from '@hapi/boom';
 import { createLogger } from '@omni/core';
-import type { ConnectionState, WASocket } from '@whiskeysockets/baileys';
-import { DisconnectReason } from '@whiskeysockets/baileys';
+import type { ConnectionState, WASocket } from 'baileys';
+import { DisconnectReason } from 'baileys';
 import type { WhatsAppPlugin } from '../plugin';
 
 const log = createLogger('whatsapp:connection');

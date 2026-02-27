@@ -7,8 +7,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { WAMessage } from '@whiskeysockets/baileys';
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import type { WAMessage } from 'baileys';
+import { downloadMediaMessage } from 'baileys';
 
 /**
  * Result of downloading media

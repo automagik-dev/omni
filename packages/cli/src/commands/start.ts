@@ -4,7 +4,7 @@
  * omni start — Start API and NATS via PM2 using ~/.omni/config.json
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
@@ -39,7 +39,7 @@ function buildApiRuntimeEnv(): Record<string, string> {
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
     PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pglite'),
+    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: serverConfig.nodeEnv,
     LOG_LEVEL: serverConfig.logLevel,
@@ -69,7 +69,7 @@ async function runStart(): Promise<void> {
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   const env = buildApiRuntimeEnv();
   const launcherPath = getServerLauncherPath();
-  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api], env);
+  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api, '--interpreter', 'bash'], env);
   if (apiCode !== 0) {
     output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
     return;
@@ -79,7 +79,9 @@ async function runStart(): Promise<void> {
   const natsPath = join(homedir(), '.omni', 'nats-server');
   if (existsSync(natsPath)) {
     output.info(`Starting ${PM2_PROCESSES.nats}...`);
-    const natsCode = await runPm2(['start', natsPath, '--name', PM2_PROCESSES.nats]);
+    const natsDataDir = join(serverConfig.dataDir, 'nats');
+    mkdirSync(natsDataDir, { recursive: true });
+    const natsCode = await runPm2(['start', natsPath, '--name', PM2_PROCESSES.nats, '--', '-js', '-sd', natsDataDir]);
     if (natsCode !== 0) {
       output.warn(`${PM2_PROCESSES.nats} failed to start — run 'omni install' to download NATS first`);
     }

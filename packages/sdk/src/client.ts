@@ -772,6 +772,8 @@ export interface StartSyncBody {
   depth?: '7d' | '30d' | '90d' | '1y' | 'all';
   channelId?: string;
   downloadMedia?: boolean;
+  /** Specific chat JIDs for per-chat active sync (WhatsApp only). Omit for passive sync. */
+  chatJids?: string[];
 }
 
 /**

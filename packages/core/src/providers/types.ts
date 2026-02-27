@@ -317,6 +317,8 @@ export interface AgentTrigger {
     emoji?: string;
     /** Referenced message ID (for reply triggers) */
     referencedMessageId?: string;
+    /** File attachments (media with paths) */
+    files?: ProviderFile[];
   };
   /** Session ID computed from instance's session strategy */
   sessionId: string;

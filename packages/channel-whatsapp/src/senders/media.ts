@@ -2,7 +2,7 @@
  * Media message senders (image, audio, video, document, sticker)
  */
 
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, WASocket } from 'baileys';
 
 /**
  * Build image message content

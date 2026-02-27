@@ -7,8 +7,8 @@
 
 import type { PluginStorage } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
-import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '@whiskeysockets/baileys';
-import { initAuthCreds } from '@whiskeysockets/baileys';
+import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from 'baileys';
+import { initAuthCreds } from 'baileys';
 
 const log = createLogger('whatsapp:auth');
 

@@ -11,18 +11,81 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Client, Interaction } from 'discord.js';
+import type { Client, GuildMember, Interaction, MessageComponentInteraction } from 'discord.js';
+import { checkInteractionAuth } from '../auth/interaction-auth';
+import { getComponentRegistry } from '../components/registry';
 import type { DiscordPlugin } from '../plugin';
 import {
   isAutocomplete,
   isButton,
+  isChannelSelectMenu,
   isChatInputCommand,
   isContextMenuCommand,
+  isMentionableSelectMenu,
   isModalSubmit,
+  isRoleSelectMenu,
   isStringSelectMenu,
+  isUserSelectMenu,
 } from '../types';
 
 const log = createLogger('discord:interactions');
+
+/**
+ * Extract user role IDs from an interaction for auth checking.
+ * Handles both GuildMember (cache-backed) and APIInteractionGuildMember (string[]).
+ */
+function getUserRoleIds(interaction: Interaction): string[] {
+  const member = interaction.member;
+  if (!member) return [];
+  return Array.isArray(member.roles)
+    ? member.roles // APIInteractionGuildMember: string[]
+    : [...(member as GuildMember).roles.cache.keys()]; // GuildMember: Collection
+}
+
+/**
+ * Check component interaction authorization.
+ *
+ * Returns true if the interaction is allowed.
+ * When denied, defers the interaction silently (so Discord doesn't show "failed")
+ * and returns false — callers should return immediately.
+ */
+async function isComponentInteractionAuthorized(
+  plugin: DiscordPlugin,
+  instanceId: string,
+  interaction: Interaction,
+): Promise<boolean> {
+  const authResult = checkInteractionAuth(
+    {
+      userId: interaction.user.id,
+      guildId: interaction.guildId ?? undefined,
+      userRoleIds: getUserRoleIds(interaction),
+    },
+    plugin.getInteractionAuthConfig(instanceId),
+  );
+
+  if (!authResult.allowed) {
+    log.debug('Component interaction denied by auth', {
+      instanceId,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      reason: authResult.reason,
+    });
+    // Acknowledge silently so Discord doesn't show "Interaction failed".
+    // Component interactions (buttons/selects) use deferUpdate; modal submits use deferReply.
+    try {
+      if ('deferUpdate' in interaction && typeof interaction.deferUpdate === 'function') {
+        await (interaction as MessageComponentInteraction).deferUpdate();
+      } else if (isModalSubmit(interaction)) {
+        await interaction.deferReply({ ephemeral: true });
+      }
+    } catch (_) {
+      // Ignore if already replied
+    }
+    return false;
+  }
+
+  return true;
+}
 
 /**
  * Extract common base payload from interaction
@@ -101,6 +164,8 @@ async function processContextMenu(plugin: DiscordPlugin, instanceId: string, int
  */
 async function processButton(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isButton(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'button'))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -125,6 +190,8 @@ async function processButton(plugin: DiscordPlugin, instanceId: string, interact
  */
 async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isStringSelectMenu(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'string select'))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -145,10 +212,113 @@ async function processSelectMenu(plugin: DiscordPlugin, instanceId: string, inte
 }
 
 /**
+ * Enforce registry TTL for a component interaction.
+ * Unregistered components (legacy) always pass through for backward compatibility.
+ * Only components that were previously registered and have since expired are rate-limited.
+ * Returns true if the interaction should proceed, false if suppressed.
+ */
+async function enforceRegistryTTL(instanceId: string, interaction: Interaction, label: string): Promise<boolean> {
+  const messageId = (interaction as { message?: { id: string } }).message?.id;
+  if (!messageId) return true;
+
+  const registry = getComponentRegistry();
+  if (registry.has(instanceId, messageId)) {
+    // Active registered component — consume and proceed
+    registry.resolve(instanceId, messageId);
+    return true;
+  }
+
+  // Not in registry — check if it was previously registered (expired/consumed)
+  // Legacy components that were never registered always pass through
+  if (!registry.wasRegistered(instanceId, messageId)) {
+    return true;
+  }
+
+  // Was registered but expired — apply rate limiting
+  const userId = interaction.user.id;
+  if (registry.shouldSuppressExpired(userId, instanceId, messageId)) {
+    log.debug(`Suppressing expired ${label} interaction (rate limit)`, {
+      instanceId,
+      userId,
+      messageId,
+    });
+    try {
+      const ci = interaction as MessageComponentInteraction;
+      if (!ci.replied && !ci.deferred) {
+        await ci.deferUpdate();
+      }
+    } catch (_) {
+      // Ignore
+    }
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Resolve the entity select menu type and extract values from the interaction.
+ * Returns null if the interaction is not a recognized entity select menu.
+ */
+function resolveEntitySelectType(
+  interaction: Interaction,
+): { selectType: 'user' | 'role' | 'channel' | 'mentionable'; customId: string; values: string[] } | null {
+  if (isUserSelectMenu(interaction)) {
+    return { selectType: 'user', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isRoleSelectMenu(interaction)) {
+    return { selectType: 'role', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isChannelSelectMenu(interaction)) {
+    return { selectType: 'channel', customId: interaction.customId, values: interaction.values.map(String) };
+  }
+  if (isMentionableSelectMenu(interaction)) {
+    return {
+      selectType: 'mentionable',
+      customId: interaction.customId,
+      values: [...interaction.users.keys(), ...interaction.roles.keys()],
+    };
+  }
+  return null;
+}
+
+/**
+ * Process entity select menu interaction (user, role, channel, mentionable)
+ */
+async function processEntitySelectMenu(
+  plugin: DiscordPlugin,
+  instanceId: string,
+  interaction: Interaction,
+): Promise<void> {
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
+  if (!(await enforceRegistryTTL(instanceId, interaction, 'entity select'))) return;
+
+  const base = extractBasePayload(interaction, instanceId);
+  const resolved = resolveEntitySelectType(interaction);
+  if (!resolved) return;
+
+  await plugin.handleEntitySelectMenu({
+    ...base,
+    ...resolved,
+  });
+
+  // Defer update
+  try {
+    const ci = interaction as MessageComponentInteraction;
+    if (!ci.replied && !ci.deferred) {
+      await ci.deferUpdate();
+    }
+  } catch (error) {
+    log.warn('Failed to defer entity select menu update', { instanceId, error });
+  }
+}
+
+/**
  * Process modal submission interaction
  */
 async function processModalSubmit(plugin: DiscordPlugin, instanceId: string, interaction: Interaction): Promise<void> {
   if (!isModalSubmit(interaction)) return;
+  if (!(await isComponentInteractionAuthorized(plugin, instanceId, interaction))) return;
 
   const base = extractBasePayload(interaction, instanceId);
 
@@ -217,6 +387,15 @@ async function routeInteraction(plugin: DiscordPlugin, instanceId: string, inter
   }
   if (isStringSelectMenu(interaction)) {
     await processSelectMenu(plugin, instanceId, interaction);
+    return true;
+  }
+  if (
+    isUserSelectMenu(interaction) ||
+    isRoleSelectMenu(interaction) ||
+    isChannelSelectMenu(interaction) ||
+    isMentionableSelectMenu(interaction)
+  ) {
+    await processEntitySelectMenu(plugin, instanceId, interaction);
     return true;
   }
   if (isModalSubmit(interaction)) {

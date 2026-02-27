@@ -2,7 +2,7 @@
  * Text message sender
  */
 
-import type { AnyMessageContent, WASocket } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, WASocket } from 'baileys';
 import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';
 

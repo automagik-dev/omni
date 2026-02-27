@@ -19,8 +19,8 @@
     },
     "packages/api": {
       "project": ["src/**/*.ts"],
-      "ignore": ["src/plugins/agent-responder.ts", "src/trpc/context.ts", "src/trpc/index.ts", "src/trpc/router.ts"],
-      "ignoreDependencies": ["@trpc/server"]
+      "ignore": ["src/plugins/agent-responder.ts"],
+      "ignoreDependencies": []
     },
     "packages/core": {
       "project": ["src/**/*.ts"],

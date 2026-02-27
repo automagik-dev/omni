@@ -73,6 +73,46 @@ function isInternalWhatsAppJid(chatId: string): boolean {
 }
 
 /**
+ * Resolve the effective chat name for a message based on chat type and direction.
+ *
+ * For DMs:
+ * - Inbound (!isFromMe): chatName > pushName (sender's display name)
+ * - Outbound (isFromMe): chatName > recipientName > verifiedBizName
+ *   (pushName is the bot's own name, not the contact's — so we skip it for outbound)
+ *
+ * For groups/channels: always chatName (group subject)
+ *
+ * Exported for unit testing. See also: packages/db/scripts/backfill-chat-names.ts
+ * for fixing existing null-named DMs created before this fix.
+ */
+export function resolveEffectiveChatName(params: {
+  chatType: string;
+  isFromMe: boolean;
+  chatName: string | undefined;
+  pushName: string | undefined;
+  rawPayload: Record<string, unknown> | undefined;
+}): string | undefined {
+  const { chatType, isFromMe, chatName, pushName, rawPayload } = params;
+
+  if (chatType === 'dm') {
+    if (!isFromMe) {
+      // Inbound: chatName > pushName (sender's display name)
+      return chatName || pushName;
+    }
+    // Outbound: chatName > recipientName > verifiedBizName
+    // pushName is our own name here — not the contact's — so skip it
+    return (
+      chatName ||
+      truncate(rawPayload?.recipientName as string | undefined, 255) ||
+      truncate(rawPayload?.verifiedBizName as string | undefined, 255)
+    );
+  }
+
+  // Groups and channels: always use chatName (group subject / channel name)
+  return chatName;
+}
+
+/**
  * Map content type to message type
  */
 function mapContentType(contentType: string | undefined): MessageType {
@@ -348,7 +388,7 @@ async function persistLidMappings(
 async function postProcessChat(
   services: Services,
   chat: { id: string; canonicalId?: string | null; name?: string | null },
-  chatCreated: boolean,
+  _chatCreated: boolean,
   chatExternalId: string,
   chatType: ChatType,
   pushName: string | undefined,
@@ -366,13 +406,21 @@ async function postProcessChat(
   await persistLidMappings(services, chat, chatExternalId, instanceId, rawPayload);
 
   // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
-  // For DMs: only update from incoming messages (not sent by us) to prevent flip-flopping
-  if (!chatCreated) {
-    const chatName = rawPayload?.chatName as string | undefined;
-    const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
-    if (effectiveName && shouldUpdateChatName(chat.name, effectiveName)) {
-      await services.chats.update(chat.id, { name: effectiveName });
-      chat.name = effectiveName;
+  // For outbound DMs: also resolve from rawPayload (recipientName, verifiedBizName)
+  // Note: we process both new and existing chats — new chats may have been created
+  // without a name if effectiveName was not available at findOrCreate time.
+  {
+    const chatNameLocal = rawPayload?.chatName as string | undefined;
+    const effectiveNameLocal = resolveEffectiveChatName({
+      chatType,
+      isFromMe,
+      chatName: chatNameLocal,
+      pushName,
+      rawPayload,
+    });
+    if (effectiveNameLocal && shouldUpdateChatName(chat.name, effectiveNameLocal)) {
+      await services.chats.update(chat.id, { name: effectiveNameLocal });
+      chat.name = effectiveNameLocal;
     }
   }
 }
@@ -523,12 +571,12 @@ async function handleMessageReceived(
   const chatType = inferChatType(payload.chatId, rawPayload?.isGroup as boolean | undefined);
   const isFromMe = rawPayload?.isFromMe === true;
 
-  // For DMs: only use pushName if message is FROM the other person (not sent by us)
-  // This prevents the chat name from flip-flopping between sender names
-  // For groups: always use chatName (group subject)
+  // Resolve the chat name based on direction and chat type.
+  // For outbound DMs, we look at rawPayload fields (recipientName, verifiedBizName)
+  // since pushName is our own name, not the contact's.
   const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
   const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
-  const effectiveName = chatName || (chatType === 'dm' && !isFromMe ? pushName : undefined);
+  const effectiveName = resolveEffectiveChatName({ chatType, isFromMe, chatName, pushName, rawPayload });
 
   // Determine canonicalId upfront for phone-based chats
   const canonicalId = chatExternalId.endsWith('@s.whatsapp.net') ? chatExternalId : undefined;

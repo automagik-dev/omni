@@ -29,6 +29,8 @@ import {
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
+  type BeforeAgentStartContext,
+  type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
   type IAgentProvider,
@@ -49,7 +51,9 @@ import {
   checkSessionReset,
   createLogger,
   createProviderClient,
+  executeHooks,
   generateCorrelationId,
+  getHookRegistry,
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
@@ -66,8 +70,11 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
 import { createSessionStorage } from './session-storage';
+
+export { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 
 const log = createLogger('agent-dispatcher');
 
@@ -337,47 +344,6 @@ function buildSlackMessageContext(rawPayload: Record<string, unknown>, text: str
   };
 }
 
-/** Build message context for WhatsApp / default channels */
-function buildWhatsAppMessageContext(
-  rawPayload: Record<string, unknown>,
-  chatId: string,
-  instance: Instance,
-  text: string,
-): MessageContext {
-  const isDirectMessage =
-    !chatId.includes('@g.us') &&
-    !chatId.includes('@broadcast') &&
-    !chatId.includes('@newsletter') &&
-    !(rawPayload.isGroup as boolean);
-
-  const mentionedJids = (rawPayload.mentionedJids as string[]) ?? [];
-  const ownerJid = instance.ownerIdentifier ?? '';
-
-  // Baileys LID addressing: mentionedJids may use @lid format while ownerIdentifier
-  // is phone-jid format (e.g. 5511...@s.whatsapp.net), causing direct JID match to fail.
-  // Extract the phone number part from both formats for comparison
-  const extractPhone = (jid: string) => jid.replace(/@.*$/, '').replace(/^@/, '');
-  const ownerPhone = extractPhone(ownerJid);
-
-  const jidMatchesOwner = mentionedJids.some((jid) => {
-    const mentionPhone = extractPhone(jid);
-    return jid === ownerJid || mentionPhone === ownerPhone;
-  });
-
-  const mentionsBot = jidMatchesOwner || rawPayload.isMention === true || rawPayload.isMentioningInstance === true;
-
-  // Handle replies to bot messages.
-  // The plugin extracts contextInfo.participant (the author of the quoted message)
-  // into rawPayload.quotedParticipant. We use the same phone-extraction logic as
-  // mentions to handle LID ↔ phone-JID format differences.
-  const quotedParticipant = rawPayload.quotedParticipant as string | undefined;
-  const isReplyToBot = quotedParticipant
-    ? quotedParticipant === ownerJid || extractPhone(quotedParticipant) === ownerPhone
-    : false;
-
-  return { isDirectMessage, mentionsBot, isReplyToBot, text };
-}
-
 /** Build message context for Discord channels */
 function buildDiscordMessageContext(
   rawPayload: Record<string, unknown>,
@@ -576,24 +542,33 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
 /**
  * Convert a relative media URL (/api/v2/media/...) to a local file path.
+ * Returns null if the resolved path escapes the media base directory (path traversal).
  */
-function resolveMediaPath(mediaUrl: string): string {
+function resolveMediaPath(mediaUrl: string): string | null {
   const relativePath = mediaUrl.replace(/^\/api\/v2\/media\//, '');
-  return join(MEDIA_BASE_PATH, relativePath);
+  const fullPath = resolve(MEDIA_BASE_PATH, relativePath);
+  const basePath = resolve(MEDIA_BASE_PATH);
+  if (!fullPath.startsWith(`${basePath}/`) && fullPath !== basePath) {
+    log.warn('Path traversal attempt blocked', { mediaUrl, resolved: fullPath, basePath });
+    return null;
+  }
+  return fullPath;
 }
 
 /**
  * Extract ProviderFile entries from buffered messages that have media attachments.
+ * Respects agentSendMediaPath instance setting — returns empty if disabled.
  */
-function extractMediaFiles(messages: BufferedMessage[]): ProviderFile[] {
+function extractMediaFiles(messages: BufferedMessage[], agentSendMediaPath: boolean): ProviderFile[] {
+  if (!agentSendMediaPath) return [];
   const files: ProviderFile[] = [];
   for (const m of messages) {
     const content = m.payload.content;
     if (content?.mediaUrl && content.mimeType) {
-      files.push({
-        path: resolveMediaPath(content.mediaUrl),
-        mimeType: content.mimeType,
-      });
+      const path = resolveMediaPath(content.mediaUrl);
+      if (path) {
+        files.push({ path, mimeType: content.mimeType });
+      }
     }
   }
   return files;
@@ -798,8 +773,7 @@ const BOT_PREFIX = '\u{1F916} ';
  */
 function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
   if (!ownerIdentifier) return false;
-  const normalize = (jid: string) => jid.replace(/:.*/, '').replace(/@.*/, '');
-  return normalize(chatId) === normalize(ownerIdentifier);
+  return extractPhoneFromJid(chatId) === extractPhoneFromJid(ownerIdentifier);
 }
 
 // ============================================================================
@@ -1075,12 +1049,12 @@ async function prepareAgentContent(
   }
 
   const processedMediaTexts: string[] = [];
-  let mediaFiles = extractMediaFiles(messages);
+  const mediaFiles = extractMediaFiles(messages, instance.agentSendMediaPath);
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
     processedMediaTexts.push(...processed);
-    if (processedMediaTexts.length > 0) mediaFiles = [];
+    // Keep mediaFiles — agent gets both processed text AND file references
   }
 
   await prependQuotedContext(services, instance.id, chatId, messages, messageEntries, messageKeyByIndex);
@@ -1442,6 +1416,85 @@ function mergeContextMessages(extra: string[] | undefined, db: string[]): string
   return extra?.length ? [...extra, ...db] : db;
 }
 
+/** Convert media files array to trigger files (undefined when empty) */
+function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined {
+  return mediaFiles.length > 0 ? mediaFiles : undefined;
+}
+
+// ============================================================================
+// Hook Helpers
+// ============================================================================
+
+/**
+ * Execute before_agent_start hooks and return the (possibly modified) context.
+ * Returns null on fast path (no hooks registered) or if structuredClone fails.
+ *
+ * NOTE: For v1, mutated model/provider/agentId values are logged but NOT applied
+ * back into the dispatch flow. DEC-5 (provider/agentId allowlist validation via
+ * DB lookup) is required before we can safely honour redirects.
+ * TODO: wire mutated context values back into dispatch once allowlist infra exists.
+ */
+async function executeBeforeAgentStartHooks(
+  instance: Instance,
+  chatId: string,
+  senderId: string,
+  senderName: string | undefined,
+  triggerType: AgentTriggerType,
+  traceId: string,
+  correlationId: string | undefined,
+  files: ProviderFile[] | undefined,
+): Promise<BeforeAgentStartContext | null> {
+  const registry = getHookRegistry();
+  const hookCount = registry.getHookCount(instance.id, 'before_agent_start');
+  if (hookCount === 0) return null; // fast path — zero overhead when no hooks
+
+  const context: BeforeAgentStartContext = {
+    instanceId: instance.id,
+    chatId,
+    senderId,
+    senderName,
+    model: instance.agentId ?? undefined,
+    provider: instance.agentProviderId ?? undefined,
+    agentId: instance.agentId ?? undefined,
+    triggerType,
+    traceId,
+    correlationId,
+    files: files as unknown[] | undefined,
+  };
+
+  const result = await executeHooks(instance.id, 'before_agent_start', context, {
+    timeoutMs: 2000,
+    pipelineTimeoutMs: 15_000,
+  });
+
+  return result.context;
+}
+
+/**
+ * Execute before_message_write hooks on response content.
+ * Returns the (possibly transformed) content string.
+ * Fast path: returns input content unchanged when no hooks are registered.
+ */
+async function executeBeforeMessageWriteHooks(instanceId: string, chatId: string, content: string): Promise<string> {
+  const registry = getHookRegistry();
+  const hookCount = registry.getHookCount(instanceId, 'before_message_write');
+  if (hookCount === 0) return content; // fast path — zero overhead when no hooks
+
+  const context: BeforeMessageWriteContext = {
+    instanceId,
+    chatId,
+    content,
+    direction: 'outbound' as const,
+  };
+
+  const result = await executeHooks(instanceId, 'before_message_write', context, {
+    timeoutMs: 2000,
+    pipelineTimeoutMs: 15_000,
+  });
+
+  return result.context.content;
+}
+
 /**
  * Execute a guarded stream: runs the provider generator, routes deltas to the sender,
  * and cleans up the activeStreams guard on completion (whether success or failure).
@@ -1512,6 +1565,23 @@ async function dispatchViaStreamingProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
+
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    messages[0]?.metadata.correlationId,
+    triggerFiles,
+  );
+
+  // TODO: before_message_write for streaming — batch after stream completes
+  // (per-segment hooks would add latency; batch transform is the right approach)
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1530,6 +1600,7 @@ async function dispatchViaStreamingProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
@@ -1749,6 +1820,20 @@ async function dispatchViaProvider(
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
+  const triggerFiles = toTriggerFiles(mediaFiles);
+
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    messages[0]?.metadata.correlationId,
+    triggerFiles,
+  );
 
   const trigger: AgentTrigger = {
     traceId,
@@ -1767,6 +1852,7 @@ async function dispatchViaProvider(
     },
     content: {
       text: messageTexts.join('\n'),
+      files: triggerFiles,
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
@@ -1781,7 +1867,9 @@ async function dispatchViaProvider(
 
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+    const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+    // Apply before_message_write hooks to each response part before sending
+    const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
@@ -1869,6 +1957,19 @@ async function dispatchViaLegacy(
 
   const correlationId = messages[0]?.metadata.correlationId;
 
+  // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
+  // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
+  await executeBeforeAgentStartHooks(
+    instance,
+    chatId,
+    senderId,
+    senderName,
+    triggerType,
+    traceId,
+    correlationId,
+    mediaFiles.length > 0 ? (mediaFiles as unknown as ProviderFile[]) : undefined,
+  );
+
   const result = await services.agentRunner.run({
     instance,
     chatId,
@@ -1888,7 +1989,10 @@ async function dispatchViaLegacy(
   recordJourneyCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
 
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-  const parts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+  const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+
+  // Apply before_message_write hooks to each response part before sending
+  const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
@@ -2854,9 +2958,16 @@ async function resolveEffectiveInstance(
   services: Services,
   db: Database,
   instance: Instance,
-  chatId: string,
+  chatId: string | undefined,
   personId?: string,
-): Promise<{ instance: DispatchInstance; routeId: string | null }> {
+): Promise<{ instance: Instance; routeId: string | null }> {
+  // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
+  // and return instance defaults. This is the safe path for LID-only chats.
+  if (!chatId) {
+    log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
+    return { instance, routeId: null };
+  }
+
   // Resolve route (chat > user > null)
   const route = await services.routeResolver.resolve(instance.id, chatId, personId);
 
@@ -2923,7 +3034,7 @@ async function processReactionTrigger(
 
   // Look up internal chat UUID for route resolution
   const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
-  const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+  const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
@@ -2937,7 +3048,7 @@ async function processReactionTrigger(
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
     chatId: externalChatId,
-    routeChatId: internalChatId,
+    routeChatId: internalChatId ?? 'none',
     emoji: payload.emoji,
     messageId: payload.messageId,
     traceId: metadata.traceId,
@@ -3131,12 +3242,12 @@ async function resolveLidMentionBot(
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
 
-  const ownerPhone = ownerIdentifier.replace(/:.*$/, '').replace(/@.*$/, '');
+  const ownerPhone = extractPhoneFromJid(ownerIdentifier);
   for (const lidJid of lidMentions) {
     try {
       const mapping = await chatsService.findLidMapping(instanceId, lidJid);
       if (mapping) {
-        const resolvedPhone = mapping.replace(/:.*$/, '').replace(/@.*$/, '');
+        const resolvedPhone = extractPhoneFromJid(mapping);
         if (resolvedPhone === ownerPhone) {
           messageContext.mentionsBot = true;
           log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
@@ -3578,7 +3689,7 @@ export async function setupAgentDispatcher(
 
     // Look up internal chat UUID for route resolution
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-    const internalChatId = chat?.id ?? externalChatId; // Fallback to external ID if chat not found
+    const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(
       services,

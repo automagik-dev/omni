@@ -212,9 +212,29 @@ function sendWsRequest(
   });
 }
 
-/** Wait for a specific WS event by name */
-function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 10_000): Promise<WsEventFrame> {
+/** Wait for a specific WS event by name, checking buffered messages first */
+function waitForWsEvent(
+  ws: WebSocket,
+  eventName: string,
+  buffered: MessageEvent[] = [],
+  timeoutMs = 10_000,
+): Promise<WsEventFrame> {
   return new Promise((resolve, reject) => {
+    // Check buffered messages first (connect.challenge may already be here)
+    for (let i = 0; i < buffered.length; i++) {
+      try {
+        const parsed = JSON.parse(String(buffered[i].data)) as WsEventFrame;
+        if (parsed.type === 'event' && parsed.event === eventName) {
+          buffered.splice(i, 1);
+          resolve(parsed);
+          return;
+        }
+      } catch {
+        /* skip non-JSON */
+      }
+    }
+
+    // Not in buffer — listen for new messages
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for event "${eventName}"`));
@@ -248,18 +268,28 @@ function waitForWsEvent(ws: WebSocket, eventName: string, timeoutMs = 10_000): P
   });
 }
 
-/** Open a WS connection and wait for it to be ready */
-function openWs(url: string): Promise<WebSocket> {
+type WsBufferedOpen = [ws: WebSocket, buffered: MessageEvent[], bufferListener: (event: MessageEvent) => void];
+
+/** Open a WS connection and wait for it to be ready, buffering early messages */
+function openWs(url: string): Promise<WsBufferedOpen> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
+    const buffered: MessageEvent[] = [];
+    const bufferListener = (event: MessageEvent) => {
+      buffered.push(event);
+    };
+
+    // Buffer messages BEFORE open — gateway sends connect.challenge immediately
+    ws.addEventListener('message', bufferListener);
 
     const onOpen = () => {
       ws.removeEventListener('error', onError);
-      resolve(ws);
+      resolve([ws, buffered, bufferListener]);
     };
 
     const onError = () => {
       ws.removeEventListener('open', onOpen);
+      ws.removeEventListener('message', bufferListener);
       reject(new Error(`Failed to connect to ${url}`));
     };
 
@@ -277,63 +307,71 @@ async function connectWithDevice(
   ws: WebSocket,
   gatewayToken: string,
   keypair: DeviceKeypair,
+  buffered: MessageEvent[] = [],
+  bufferListener?: (event: MessageEvent) => void,
 ): Promise<Record<string, unknown>> {
-  // Wait for the connect.challenge event to get the nonce
-  const challengeEvent = await waitForWsEvent(ws, 'connect.challenge');
-  const nonce = (challengeEvent.payload as Record<string, unknown>)?.nonce as string;
+  try {
+    // Wait for the connect.challenge event to get the nonce
+    const challengeEvent = await waitForWsEvent(ws, 'connect.challenge', buffered);
+    const nonce = (challengeEvent.payload as Record<string, unknown>)?.nonce as string;
 
-  const role = 'operator';
-  const scopes = ['operator.read', 'operator.write'];
-  const clientId = 'gateway-client';
-  const clientMode = 'backend';
-  const signedAtMs = Date.now();
+    const role = 'operator';
+    const scopes = ['operator.read', 'operator.write'];
+    const clientId = 'gateway-client';
+    const clientMode = 'backend';
+    const signedAtMs = Date.now();
 
-  // Build payload matching gateway's buildDeviceAuthPayload (v2 with nonce)
-  // For first-time pairing, dev.token is empty string
-  const payload = [
-    'v2',
-    keypair.deviceId,
-    clientId,
-    clientMode,
-    role,
-    scopes.join(','),
-    String(signedAtMs),
-    gatewayToken, // gateway uses auth.token in the payload: token = connectParams.auth?.token ?? null
-    nonce,
-  ].join('|');
-
-  // Sign with Ed25519 private key (PKCS8 DER reconstruction)
-  const rawPrivKey = Buffer.from(keypair.privateKey, 'base64url');
-  const pkcs8Der = Buffer.concat([ED25519_PKCS8_PREFIX, rawPrivKey]);
-  const privateKey = nodeCrypto.createPrivateKey({ key: pkcs8Der, type: 'pkcs8', format: 'der' });
-  const signature = nodeCrypto.sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
-
-  const params: WsConnectParams = {
-    minProtocol: 3,
-    maxProtocol: 3,
-    client: {
-      id: clientId,
-      version: '1.0.0',
-      platform: 'omni',
-      mode: clientMode,
-    },
-    role,
-    scopes,
-    caps: [],
-    auth: { token: gatewayToken },
-    locale: 'en-US',
-    userAgent: 'omni-cli/setup',
-    device: {
-      id: keypair.deviceId,
-      publicKey: keypair.publicKey,
-      signature,
-      signedAt: signedAtMs,
+    // Build payload matching gateway's buildDeviceAuthPayload (v2 with nonce)
+    // For first-time pairing, dev.token is empty string
+    const payload = [
+      'v2',
+      keypair.deviceId,
+      clientId,
+      clientMode,
+      role,
+      scopes.join(','),
+      String(signedAtMs),
+      gatewayToken, // gateway uses auth.token in the payload: token = connectParams.auth?.token ?? null
       nonce,
-    },
-  };
+    ].join('|');
 
-  const result = await sendWsRequest(ws, 'connect', params as unknown as Record<string, unknown>);
-  return (result ?? {}) as Record<string, unknown>;
+    // Sign with Ed25519 private key (PKCS8 DER reconstruction)
+    const rawPrivKey = Buffer.from(keypair.privateKey, 'base64url');
+    const pkcs8Der = Buffer.concat([ED25519_PKCS8_PREFIX, rawPrivKey]);
+    const privateKey = nodeCrypto.createPrivateKey({ key: pkcs8Der, type: 'pkcs8', format: 'der' });
+    const signature = nodeCrypto.sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64url');
+
+    const params: WsConnectParams = {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: clientId,
+        version: '1.0.0',
+        platform: 'omni',
+        mode: clientMode,
+      },
+      role,
+      scopes,
+      caps: [],
+      auth: { token: gatewayToken },
+      locale: 'en-US',
+      userAgent: 'omni-cli/setup',
+      device: {
+        id: keypair.deviceId,
+        publicKey: keypair.publicKey,
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      },
+    };
+
+    const result = await sendWsRequest(ws, 'connect', params as unknown as Record<string, unknown>);
+    return (result ?? {}) as Record<string, unknown>;
+  } finally {
+    if (bufferListener) {
+      ws.removeEventListener('message', bufferListener);
+    }
+  }
 }
 
 /**
@@ -347,11 +385,11 @@ async function pairDevice(
   spinner: ReturnType<typeof ora>,
 ): Promise<PairingResult> {
   spinner.text = 'Connecting to gateway...';
-  const ws = await openWs(gatewayUrl);
+  const [ws, buffered, bufferListener] = await openWs(gatewayUrl);
 
   try {
     spinner.text = 'Authenticating with device credentials...';
-    const result = await connectWithDevice(ws, gatewayToken, keypair);
+    const result = await connectWithDevice(ws, gatewayToken, keypair, buffered, bufferListener);
 
     // Extract device token from hello-ok response: payload.auth.deviceToken
     const auth = result.auth as Record<string, unknown> | undefined;

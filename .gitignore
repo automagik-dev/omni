@@ -36,8 +36,9 @@ bin/nats-server
 # Testing
 coverage/
 
-# Worktrees (forge isolation)
+# Worktrees (forge isolation + bd)
 .worktrees/
+.claude/worktrees/
 
 # Misc
 *.bak
@@ -49,18 +50,6 @@ __pycache__/
 *.pyc
 # Genie workspace (lives at ../../.genie, not in repo)
 .genie/
-# Worker worktrees (genie-cli spawns these)
-omni-*/
-# bd worktree
-omni-soi/
-# bd worktree
-omni-j2s/
-# bd worktree
-omni-jp2/
-# bd worktree
-omni-93g/
-# bd worktree
-omni-4l0/
 .research/
 *.egg-info/
 
@@ -81,11 +70,5 @@ memory/
 # Keep this informational stub tracked
 !.beads/README.md
 
-# bd worktree
-omni-jmn/
-# bd worktree
-omni-0t1/
-# bd worktree
-omni-qbi/
 version.json
 .beads/*.log.gz

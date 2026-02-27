@@ -1421,7 +1421,7 @@ export const batchJobs = pgTable(
 // SYNC JOBS
 // ============================================================================
 
-export const syncJobTypes = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
+export const syncJobTypes = ['profile', 'messages', 'contacts', 'groups', 'all', 'history-push'] as const;
 export type SyncJobType = (typeof syncJobTypes)[number];
 
 /**

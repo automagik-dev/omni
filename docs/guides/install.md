@@ -35,7 +35,7 @@ omni install --non-interactive
 This runs the full wizard with defaults:
 - Port: `8882`
 - Data dir: `~/.omni/data`
-- Database: embedded PGlite at `~/.omni/data/pglite`
+- Database: embedded PostgreSQL via pgserve at `~/.omni/data/pgserve`
 - Process manager: PM2
 - API key: auto-generated (printed once — capture it)
 - NATS: downloaded to `~/.omni/nats-server` if missing
@@ -82,7 +82,7 @@ omni install
 
 Prompts for: process manager (PM2/systemd/manual), port, data dir, database URL, API key.
 
-Use this when you need to customize the database URL (external PostgreSQL instead of embedded PGlite).
+Use this when you need to customize the database URL (external PostgreSQL instead of embedded pgserve).
 
 ## Verify
 
@@ -205,7 +205,7 @@ rm -rf ~/.omni
 ├── config.json          # CLI config (apiUrl, apiKey, format)
 ├── server-config.json   # Server config (port, dataDir, databaseUrl)
 ├── data/
-│   ├── pglite/          # Embedded PostgreSQL data (PGlite)
+│   ├── pgserve/         # Embedded PostgreSQL data (pgserve)
 │   └── media/           # Downloaded media files
 └── nats-server          # NATS binary (downloaded by installer)
 ```
@@ -230,7 +230,7 @@ pm2 logs omni-api --lines 20 --nostream
 
 Common causes:
 - **Port conflict** — another process on 8882. Use `--port <other>`.
-- **PGlite crash** — check for `PGSERVE` errors in logs. Delete `~/.omni/data/pglite` and restart.
+- **pgserve crash** — check for `PGSERVE` errors in logs. Delete `~/.omni/data/pgserve` and restart.
 - **Missing bun** — PM2 spawns with `bun` interpreter. Ensure `which bun` works for the PM2 user.
 
 ### `omni status` shows "keyValid: no"
@@ -265,7 +265,7 @@ pm2 delete omni-v2-pgserve
 omni restart
 ```
 
-The embedded PGlite backend doesn't use port 8432 — a stale `omni-v2-pgserve` process is conflicting. Delete it and restart.
+The embedded pgserve auto-increments ports if 8432 is taken, but a stale `omni-v2-pgserve` process may still conflict. Delete it and restart.
 
 ### PM2 not found
 

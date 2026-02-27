@@ -283,45 +283,56 @@ function hasKnownChatJids(plugin: unknown): plugin is { getKnownChatJids: (id: s
   );
 }
 
-function discoverAnchorsFromPlugin(
+async function discoverAnchorsFromPlugin(
   jobId: string,
   instanceId: string,
   plugin: unknown,
   dbAnchors: WAnchor[],
-): WAnchor[] {
-  if (!hasKnownChatJids(plugin)) return [];
+  services: Services,
+): Promise<WAnchor[]> {
+  const anchoredJids = new Set(dbAnchors.map((a) => a.chatJid));
 
-  const dbJids = new Set(dbAnchors.map((a) => a.chatJid));
-  const knownJids = plugin.getKnownChatJids(instanceId);
+  // Query DB for all known chat external IDs (survives restarts)
+  const dbExternalIds = await services.chats.getAllExternalIds(instanceId);
+
+  // Merge with Baileys volatile cache (newly connected chats not yet in DB)
+  const baileysJids = hasKnownChatJids(plugin) ? plugin.getKnownChatJids(instanceId) : [];
+  const allJids = new Set([...dbExternalIds, ...baileysJids]);
 
   const discovered: WAnchor[] = [];
-  for (const jid of knownJids) {
-    if (dbJids.has(jid)) continue;
+  for (const jid of allJids) {
+    if (anchoredJids.has(jid)) continue;
     if (jid.includes('@newsletter') || jid.includes('@broadcast')) continue;
     discovered.push({ chatJid: jid, messageKey: { remoteJid: jid, id: '', fromMe: false }, timestamp: Date.now() });
   }
 
   if (discovered.length > 0) {
-    log.info('Discovered chats from Baileys not in DB', { jobId, discoveredCount: discovered.length });
+    log.info('Discovered chats from DB + Baileys not in anchors', {
+      jobId,
+      discoveredCount: discovered.length,
+      fromDb: dbExternalIds.length,
+      fromBaileys: baileysJids.length,
+    });
   }
 
   return discovered;
 }
 
-function resolveWhatsAppAnchors(
+async function resolveWhatsAppAnchors(
   jobId: string,
   instanceId: string,
   config: SyncJobConfig,
   plugin: unknown,
   dbAnchors: WAnchor[],
-): WAnchor[] {
-  // Explicit chatJids take priority
+  services: Services,
+): Promise<WAnchor[]> {
+  // Explicit chatJids take priority (per-chat active sync)
   if (config.chatJids?.length) {
     return buildAnchorsForExplicitChatJids(jobId, config.chatJids, dbAnchors);
   }
 
   // Default: use DB anchors + discover chats known to Baileys but not in DB.
-  return [...dbAnchors, ...discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors)];
+  return [...dbAnchors, ...(await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services))];
 }
 
 /**
@@ -361,13 +372,19 @@ async function processMessageSync(
     since: since?.toISOString(),
   });
 
-  // Build anchors for WhatsApp to enable active history fetching
+  // Build anchors for WhatsApp history fetching
+  // Passive-first: default sync uses NO anchors (WhatsApp controls pace via messaging-history.set)
+  // Active: only used when explicit chatJids are provided (per-chat sync)
   let anchors: WAnchor[] = [];
 
-  if (channelType === 'whatsapp-baileys') {
+  if (channelType === 'whatsapp-baileys' && config.chatJids?.length) {
+    // Per-chat active sync: build anchors for the specific requested chats only
     const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
-    anchors = resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors);
-    log.info('WhatsApp anchors built', { jobId, anchorCount: anchors.length });
+    anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services);
+    log.info('WhatsApp per-chat active sync', { jobId, anchorCount: anchors.length, chatJids: config.chatJids });
+  } else if (channelType === 'whatsapp-baileys') {
+    // Default passive sync: no anchors, WhatsApp pushes history via messaging-history.set
+    log.info('WhatsApp passive sync (no active fetching)', { jobId, instanceId });
   }
 
   const fetchOptions: Record<string, unknown> = {
@@ -830,4 +847,164 @@ async function processGroupsSync(
     stored,
     updated,
   });
+}
+
+const historyPushLog = createLogger('history-push-tracker');
+
+/**
+ * Set up history-push sync tracker
+ *
+ * - Subscribes to `instance.connected` to auto-create a `history-push` sync job
+ * - Subscribes to `sync.progress` (jobType=history-push) to update sync job progress
+ * - Subscribes to `sync.completed` (jobType=history-push) to mark sync job completed
+ */
+export async function setupHistoryPushTracker(eventBus: EventBus, services: Services): Promise<void> {
+  try {
+    // 1. Create history-push sync job when an instance connects
+    await eventBus.subscribe(
+      'instance.connected',
+      async (event) => {
+        const { instanceId, channelType } = event.payload;
+
+        try {
+          // Create a running history-push sync job
+          const job = await services.syncJobs.create({
+            instanceId,
+            channelType,
+            type: 'history-push',
+          });
+
+          // Immediately start the job (set status to running)
+          await services.syncJobs.start(job.id);
+
+          historyPushLog.info('Created history-push sync job', {
+            jobId: job.id,
+            instanceId,
+            channel: channelType,
+          });
+        } catch (error) {
+          historyPushLog.error('Failed to create history-push sync job', {
+            instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-creator',
+        startFrom: 'new',
+      },
+    );
+
+    // 2. Update history-push sync job progress from WhatsApp plugin events
+    await eventBus.subscribePattern(
+      'sync.progress.>',
+      async (event) => {
+        const payload = event.payload as {
+          instanceId?: string;
+          jobType?: string;
+          fetched?: number;
+          progress?: number;
+        };
+
+        // Only handle history-push progress events (from WhatsApp plugin)
+        if (payload.jobType !== 'history-push' || !payload.instanceId) return;
+
+        try {
+          // Find the active history-push job for this instance
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
+
+          if (!historyPushJob) {
+            historyPushLog.debug('No active history-push job found for progress update', {
+              instanceId: payload.instanceId,
+            });
+            return;
+          }
+
+          await services.syncJobs.updateProgress(historyPushJob.id, {
+            fetched: payload.fetched ?? 0,
+            stored: 0,
+            duplicates: 0,
+            mediaDownloaded: 0,
+            totalEstimated: payload.progress ? Math.round((payload.fetched ?? 0) / (payload.progress / 100)) : 0,
+          });
+
+          historyPushLog.debug('Updated history-push progress', {
+            jobId: historyPushJob.id,
+            instanceId: payload.instanceId,
+            fetched: payload.fetched,
+            progress: payload.progress,
+          });
+        } catch (error) {
+          historyPushLog.warn('Failed to update history-push progress', {
+            instanceId: payload.instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-tracker',
+        startFrom: 'new',
+      },
+    );
+
+    // 3. Complete history-push sync job when WhatsApp signals completion
+    await eventBus.subscribePattern(
+      'sync.completed.>',
+      async (event) => {
+        const payload = event.payload as {
+          instanceId?: string;
+          jobType?: string;
+          totalFetched?: number;
+        };
+
+        // Only handle history-push completed events (from WhatsApp plugin)
+        if (payload.jobType !== 'history-push' || !payload.instanceId) return;
+
+        try {
+          // Find the active history-push job for this instance
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
+
+          if (!historyPushJob) {
+            historyPushLog.debug('No active history-push job found for completion', {
+              instanceId: payload.instanceId,
+            });
+            return;
+          }
+
+          // Update final progress
+          await services.syncJobs.updateProgress(historyPushJob.id, {
+            fetched: payload.totalFetched ?? 0,
+            stored: 0,
+            duplicates: 0,
+            mediaDownloaded: 0,
+          });
+
+          // Mark completed
+          await services.syncJobs.complete(historyPushJob.id);
+
+          historyPushLog.info('History-push sync completed', {
+            jobId: historyPushJob.id,
+            instanceId: payload.instanceId,
+            totalFetched: payload.totalFetched,
+          });
+        } catch (error) {
+          historyPushLog.warn('Failed to complete history-push sync job', {
+            instanceId: payload.instanceId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        durable: 'history-push-completer',
+        startFrom: 'new',
+      },
+    );
+
+    historyPushLog.info('History-push tracker initialized');
+  } catch (error) {
+    historyPushLog.error('Failed to set up history-push tracker', { error: String(error) });
+    throw error;
+  }
 }

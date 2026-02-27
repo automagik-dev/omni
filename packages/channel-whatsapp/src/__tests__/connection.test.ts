@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { DisconnectReason } from '@whiskeysockets/baileys';
+import { DisconnectReason } from 'baileys';
 import {
   cancelPendingReconnect,
   resetConnectionState,

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   secrets-scan:
     name: Secrets Scan (GitGuardian)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
@@ -31,7 +31,7 @@ jobs:
 
   quality-gate:
     name: Quality Gate (typecheck + lint + test)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
 
     steps:
@@ -106,7 +106,7 @@ jobs:
 
   smoke-test:
     name: Smoke Test (Fresh Environment)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
 
     steps:

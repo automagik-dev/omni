@@ -5,6 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -129,6 +130,22 @@ const createInstanceSchema = z.object({
     .describe(
       'Number of context messages to include for group chats when dispatching to agent (0 = disabled, max 200)',
     ),
+  reactionAck: z
+    .enum(['on', 'off'])
+    .default('off')
+    .describe('Reaction ack mode: on to send a reaction while agent processes'),
+  reactionAckEmoji: z
+    .record(z.string())
+    .optional()
+    .nullable()
+    .describe('Per-channel emoji map for reaction ack (e.g. {"whatsapp":"\\u2705"})'),
+  ackTimeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(120_000)
+    .default(30_000)
+    .describe('Ack timeout in milliseconds (max 120000)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -152,6 +169,9 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // so PATCH only updates what is explicitly sent (not reset to defaults)
   readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
   groupHistorySize: z.number().int().min(0).max(200).optional(),
+  reactionAck: z.enum(['on', 'off']).optional(),
+  reactionAckEmoji: z.record(z.string()).nullable().optional(),
+  ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
 });
 
 /**
@@ -913,6 +933,11 @@ const syncRequestSchema = z.object({
   depth: z.enum(['7d', '30d', '90d', '1y', 'all']).optional().describe('Sync depth for message history'),
   channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
   downloadMedia: z.boolean().optional().describe('Download and store media files'),
+  chatJids: z
+    .array(z.string().min(1).max(128))
+    .max(50)
+    .optional()
+    .describe('Specific chat JIDs for per-chat active sync (WhatsApp only). Omit for passive sync.'),
 });
 
 /** Type for profile sync response */
@@ -1033,6 +1058,30 @@ instancesRoutes.put(
   },
 );
 
+/** Validate chatJids + history-push guard for message sync. Returns error tuple [message, status] or null. */
+async function validateMessageSyncPreconditions(
+  services: { syncJobs: { hasActiveJob: (id: string, type: SyncJobType) => Promise<boolean> } },
+  instanceId: string,
+  channel: string,
+  type: string,
+  chatJids?: string[],
+): Promise<{ error: string | { code: string; message: string }; status: 400 | 409 } | null> {
+  if (chatJids?.length && !channel.startsWith('whatsapp')) {
+    return {
+      error: { code: 'VALIDATION_ERROR', message: 'chatJids is only supported for WhatsApp instances' },
+      status: 400,
+    };
+  }
+  if ((type === 'messages' || chatJids?.length) && (await services.syncJobs.hasActiveJob(instanceId, 'history-push'))) {
+    return {
+      error:
+        'Cannot start manual sync while history push sync is in progress. Wait for the push sync to complete or check progress with GET /instances/:id/sync.',
+      status: 409,
+    };
+  }
+  return null;
+}
+
 /**
  * POST /instances/:id/sync - Request a sync operation
  *
@@ -1045,7 +1094,7 @@ instancesRoutes.put(
  */
 instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequestSchema), async (c) => {
   const id = c.req.param('id');
-  const { type, depth, channelId, downloadMedia } = c.req.valid('json');
+  const { type, depth, channelId, downloadMedia, chatJids } = c.req.valid('json');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
@@ -1095,6 +1144,10 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     });
   }
 
+  // Validate chatJids support + history-push guard
+  const preconditionError = await validateMessageSyncPreconditions(services, id, instance.channel, type, chatJids);
+  if (preconditionError) return c.json({ error: preconditionError.error }, preconditionError.status);
+
   // For other sync types, check for existing active job
   const hasActiveJob = await services.syncJobs.hasActiveJob(id, type);
   if (hasActiveJob) {
@@ -1106,7 +1159,12 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     instanceId: id,
     channelType: instance.channel,
     type,
-    config: { depth: depth ?? '7d', channelId, downloadMedia: downloadMedia ?? instance.downloadMediaOnSync },
+    config: {
+      depth: depth ?? '7d',
+      channelId,
+      downloadMedia: downloadMedia ?? instance.downloadMediaOnSync,
+      ...(chatJids?.length ? { chatJids } : {}),
+    },
   });
 
   return c.json(
@@ -2224,6 +2282,10 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
   if (!channelRegistry || !eventBus) {
     return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Channel registry or event bus not available' } }, 503);
   }
+
+  // Guard: block resync while a history-push job is active
+  const guardError = await validateMessageSyncPreconditions(services, id, instance.channel, 'messages');
+  if (guardError) return c.json({ error: guardError.error }, guardError.status);
 
   const sinceDate = parseSince(since);
   const untilDate = until ? new Date(until) : new Date();

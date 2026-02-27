@@ -4,18 +4,24 @@ description: Always-on Omni router for any messaging task across WhatsApp, Teleg
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
-Omni is running. Don't install it. Check: `omni auth status`
+First, check if Omni is running: `omni auth status --json 2>/dev/null || echo "not running"`
 
-Use `--json` by default for agent consumption. Before sending, verify instance/channel status (connected/ready).
-Read the relevant SKILL.md below for the specific task before executing commands.
+If not running → load `omni-install/SKILL.md` and follow it.
+If running → use `--json` by default for agent consumption. Verify instance/channel status before sending.
 
 ## Keyword → skill routing
 
-- send, message, text, TTS, voice, media, image, reaction, sticker, poll, embed → `omni-send/SKILL.md`
+- install, setup, fresh install, server not running, not installed → `omni-install/SKILL.md`
+- send, message, text, TTS, voice, media, image, browse media, download media, reaction, sticker, poll, embed → `omni-send/SKILL.md`
 - search messages, read messages, star, delete message → `omni-messages/SKILL.md`
 - chats, conversations, list chats, chat history, participants, groups → `omni-chats/SKILL.md`
 - events, analytics, replay, timeline, journey, latency, debug flow → `omni-events/SKILL.md`
-- instances, connect, disconnect, QR, sync, agent routing, reply filter, WhatsApp, Telegram, Discord → `omni-instances/SKILL.md`
+- instances, connect, disconnect, QR, sync, resync, backfill, agent routing, reply filter, WhatsApp, Telegram, Discord → `omni-instances/SKILL.md`
+- access, allowlist, blocklist, allow, deny, pairing requests, access control → `omni-instances/SKILL.md`
 - automations, triggers, workflows → `omni-automations/SKILL.md`
 - batch, transcribe, extract, audio, document → `omni-batch/SKILL.md`
-- auth, config, providers, API key, default instance, webhooks → `omni-config/SKILL.md`
+- auth, config, keys, API keys, providers, default instance, dead letters, payloads, logs, completions, service management, start, stop, restart, update → `omni-config/SKILL.md`
+- persons, contacts, person search, contact directory, presence → `omni-persons/SKILL.md`
+- routes, routing, agent route, route resolution, route metrics → `omni-routes/SKILL.md`
+- webhooks, webhook source, custom event, trigger event, event injection → `omni-webhooks/SKILL.md`
+- prompts, LLM prompt, image prompt, gate prompt, prompt override → `omni-prompts/SKILL.md`

@@ -5,9 +5,10 @@
  * Handles connection, messaging, and lifecycle for WhatsApp instances.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  DedupeCache,
   FetchHistoryResult,
   HistorySyncMessage,
   InstanceConfig,
@@ -17,7 +18,7 @@ import type {
   StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { GroupMetadata, WAMessage, WASocket, proto } from '@whiskeysockets/baileys';
+import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
@@ -228,6 +229,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
   >();
 
+  /** Tracks total messages fetched during initial history push (no explicit sync job) per instance */
+  private historyPushFetchCount = new Map<string, number>();
+
   /** Cached contacts from sync events per instance */
   private contactsCache = new Map<string, Map<string, SyncContact>>();
 
@@ -257,6 +261,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Rate limit managers per instance — handles Baileys 429 backoff */
   private rateLimitManagers = new Map<string, RateLimitManager>();
+
+  /** Per-instance inbound dedup caches */
+  private dedupeCaches = new Map<string, DedupeCache>();
 
   /**
    * Decrypt failure trackers per instance (#70).
@@ -439,6 +446,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getMeJid(instanceId: string): string | undefined {
     return this.sockets.get(instanceId)?.user?.id;
+  }
+
+  /**
+   * Get the API base URL (e.g., "http://localhost:8881") for constructing absolute media URLs.
+   * Used by message handlers so that tryDownloadMedia() returns fetch-able URLs.
+   */
+  getApiBaseUrl(): string {
+    return this.config.apiBaseUrl;
   }
 
   /**
@@ -911,8 +926,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
     );
 
+    // Create per-instance dedup cache for the lifetime of this connection
+    const dedupeCache = createInboundDedupeCache();
+    this.dedupeCaches.set(instanceId, dedupeCache);
+
     // Set up message handlers (pass decrypt tracker for dynamic JID blocking)
-    setupMessageHandlers(sock, this, instanceId, decryptTracker);
+    setupMessageHandlers(sock, this, instanceId, decryptTracker, dedupeCache);
 
     // Set up ALL other event handlers (calls, presence, groups, etc.)
     setupAllEventHandlers(sock, this, instanceId);
@@ -964,6 +983,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.lastActionTime.delete(instanceId);
+    // Dispose and remove per-instance dedup cache
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
     // recentMessageKeys uses composite keys — clean entries for this instance
     for (const key of this.recentMessageKeys.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.recentMessageKeys.delete(key);
@@ -3488,7 +3510,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     // Download media if present (same as realtime messages)
-    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id);
+    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
       // Note: content doesn't have mediaLocalPath field, but mediaUrl is enough for storage
@@ -3595,9 +3617,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     isLatest: boolean | undefined,
     messageCount: number,
   ): void {
-    // Report progress
+    // Report progress via sync state callbacks (explicit sync jobs)
     if (syncState?.onProgress && progress !== undefined && progress !== null) {
       syncState.onProgress(syncState.totalFetched, progress);
+    }
+
+    // Track and publish history-push progress via NATS (initial connection push)
+    if (!syncState) {
+      const prevCount = this.historyPushFetchCount.get(instanceId) ?? 0;
+      const totalFetched = prevCount + messageCount;
+      this.historyPushFetchCount.set(instanceId, totalFetched);
+
+      const meta = { instanceId, channelType: this.id };
+
+      // Publish sync.progress event
+      this.eventBus
+        .publishGeneric(
+          'sync.progress' as const,
+          { instanceId, jobType: 'history-push', fetched: totalFetched, progress: progress ?? 0 },
+          meta,
+        )
+        .catch((err) => this.logger.warn('Failed to publish sync.progress for history-push', { error: String(err) }));
+
+      // Publish sync.completed when Baileys signals completion
+      if (isLatest || progress === 100) {
+        this.eventBus
+          .publishGeneric('sync.completed' as const, { instanceId, jobType: 'history-push', totalFetched }, meta)
+          .catch((err) =>
+            this.logger.warn('Failed to publish sync.completed for history-push', { error: String(err) }),
+          );
+        this.historyPushFetchCount.delete(instanceId);
+      }
     }
 
     // Check if sync is complete

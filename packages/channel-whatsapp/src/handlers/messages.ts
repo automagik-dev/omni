@@ -10,11 +10,12 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
-import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from '@whiskeysockets/baileys';
+import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
 import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import { isDelivered, isRead, mapStatusCode } from '../receipts';
@@ -24,8 +25,8 @@ import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
 
-/** Shared dedupe cache for all WhatsApp instances (cache key includes instanceId) */
-const dedupeCache = createInboundDedupeCache();
+/** Fallback dedupe cache — used when no per-instance cache is provided */
+const fallbackDedupeCache = createInboundDedupeCache();
 
 /** Download size guard — 50MB default */
 const downloadGuard = createDownloadGuard();
@@ -538,12 +539,16 @@ const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
  * Download media from a message and return the API-serving URL.
  *
  * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
- * Returns:   /api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ * Returns:   {apiBaseUrl}/api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ *
+ * When apiBaseUrl is provided, returns an absolute URL (e.g. http://host:port/api/v2/media/...).
+ * This is required for downstream consumers like the media processor that use fetch().
  */
 export async function tryDownloadMedia(
   msg: WAMessage,
   instanceId: string,
   externalId: string,
+  apiBaseUrl?: string,
 ): Promise<{ mediaUrl: string; mediaLocalPath: string; mimeType: string; size: number } | null> {
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
@@ -576,7 +581,10 @@ export async function tryDownloadMedia(
     const now = new Date();
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const ext = getExtension(result.mimeType);
-    const relativePath = join(instanceId, yearMonth, `${externalId}${ext}`);
+    // Sanitize externalId to prevent path traversal: strip directory components
+    // and replace any non-alphanumeric characters (WhatsApp IDs are hex/alphanum).
+    const safeExternalId = basename(externalId).replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const relativePath = join(instanceId, yearMonth, `${safeExternalId}${ext}`);
     const fullPath = join(MEDIA_BASE_PATH, relativePath);
 
     // Write to disk
@@ -588,8 +596,9 @@ export async function tryDownloadMedia(
 
     log.debug('Downloaded media', { externalId, path: relativePath, size: result.buffer.length });
 
+    const mediaPath = `/api/v2/media/${relativePath}`;
     return {
-      mediaUrl: `/api/v2/media/${relativePath}`,
+      mediaUrl: apiBaseUrl ? `${apiBaseUrl}${mediaPath}` : mediaPath,
       mediaLocalPath: relativePath,
       mimeType: result.mimeType,
       size: result.buffer.length,
@@ -737,7 +746,12 @@ function getPlatformTimestamp(msg: WAMessage): number {
 /**
  * Process a single message
  */
-async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage): Promise<void> {
+async function processMessage(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  msg: WAMessage,
+  dedupeCache: DedupeCache,
+): Promise<void> {
   // DEBUG: Log full raw payload for development
   if (process.env.DEBUG_PAYLOADS === 'true') {
     log.debug('Raw payload', { msgId: msg.key.id, payload: msg });
@@ -772,7 +786,7 @@ async function processMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
   }
 
   // Download media if present (non-blocking on failure)
-  const mediaResult = await tryDownloadMedia(msg, instanceId, externalId);
+  const mediaResult = await tryDownloadMedia(msg, instanceId, externalId, plugin.getApiBaseUrl());
   if (mediaResult) {
     content.mediaUrl = mediaResult.mediaUrl;
     content.mediaLocalPath = mediaResult.mediaLocalPath;
@@ -870,7 +884,10 @@ export function setupMessageHandlers(
   plugin: WhatsAppPlugin,
   instanceId: string,
   decryptTracker?: DecryptFailureTracker,
+  dedupeCache?: DedupeCache,
 ): void {
+  const cache = dedupeCache ?? fallbackDedupeCache;
+
   sock.ev.on('messages.upsert', async (upsert: { messages: WAMessage[]; type: MessageUpsertType }) => {
     // Log all message types to diagnose missing messages
     log.debug('messages.upsert received', {
@@ -891,7 +908,7 @@ export function setupMessageHandlers(
     // We need both to capture all conversation activity
     for (const msg of upsert.messages) {
       if (shouldProcessMessage(plugin, instanceId, msg)) {
-        await processMessage(plugin, instanceId, msg);
+        await processMessage(plugin, instanceId, msg, cache);
       }
     }
   });

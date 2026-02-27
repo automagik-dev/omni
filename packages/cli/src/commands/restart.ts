@@ -35,7 +35,7 @@ function buildApiRuntimeEnv(): Record<string, string> {
     OMNI_API_KEY: config.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pglite'),
+    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: serverConfig.nodeEnv,
     LOG_LEVEL: serverConfig.logLevel,

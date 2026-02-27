@@ -27,16 +27,45 @@ omni instances logout <id> --json
 
 ## WhatsApp connect
 
+**Pairing code is the preferred method** — works directly in the terminal with no camera needed.
+The user just types an 8-digit code into WhatsApp. Use QR only as a fallback.
+
+### Recommended workflow (pairing code)
+
 ```bash
-omni instances qr <id> --watch --json
-omni instances qr <id> --base64 --json
-omni instances pair <id> --phone +5511999999999 --json
+# 1. Create the instance
+omni instances create --name "WhatsApp" --channel whatsapp-baileys --json
+
+# 2. Start the connection (generates session, prepares for auth)
+omni instances connect <id> --json
+
+# 3. Request a pairing code (ask the user for their phone number in international format: +XXXXXXXXXXX)
+omni instances pair <id> --phone <number> --json
+# Returns an 8-digit pairing code like XXXX-XXXX
+
+# 4. Tell the user:
+#    "Enter XXXX-XXXX in WhatsApp > Settings > Linked Devices > Link with phone number"
+
+# 5. Wait ~15 seconds for WhatsApp to complete the link, then verify:
+omni instances status <id> --json
+# Expected: status "connected"
+```
+
+### Fallback: QR code
+
+If pairing code does not work, fall back to QR:
+
+```bash
+omni instances qr <id> --json
+# QR auto-refreshes by default. Use --no-watch for a single static QR.
 ```
 
 ## Sync and backfill
 
 ```bash
 omni instances sync <id> --type messages --depth 30d --download-media --json
+# Sync a specific chat (WhatsApp only)
+omni instances sync <id> --type active --chat <jid> --json
 omni instances syncs <id> --limit 20 --json
 omni instances syncs <id> <jobId> --json
 
@@ -53,6 +82,49 @@ omni instances profile <id> <userId> --json
 omni instances check <id> +5511999 --json
 omni instances update-bio <id> "Available" --json
 omni instances privacy <id> --json
+
+# Profile pictures
+omni instances update-picture <id> --url "https://example.com/pic.jpg" --json
+omni instances update-picture <id> --base64 "<data>" --json
+omni instances remove-picture <id> --json
+omni instances group-update-picture <id> --group <groupJid> --url "https://example.com/pic.jpg" --json
+
+# Reject incoming call
+omni instances reject-call <id> --call-id <callId> --from <jid> --json
+```
+
+## Access control (`omni access`)
+
+Manage allow/deny lists per instance. Works with `accessMode` on the instance (`allowlist`, `blocklist`, or `disabled`).
+
+```bash
+# List rules (optionally filter by instance or type)
+omni access list --json
+omni access list --instance <id> --json
+omni access list --instance <id> --type allow --json
+
+# Create allow or deny rule
+omni access create --type allow --instance <id> --phone <number> --reason "description" --json
+omni access create --type deny --instance <id> --phone <number> --reason "description" --json
+# Options: --user <platformId>, --phone <pattern> (supports * wildcard, e.g. +55*),
+#          --priority <n>, --action block|silent_block|allow, --message "custom block msg", --disabled
+
+# Delete a rule
+omni access delete <ruleId> --json
+
+# Get or set access mode for an instance
+omni access mode <instanceId> --json              # get current mode
+omni access mode <instanceId> allowlist --json     # set to allowlist
+omni access mode <instanceId> blocklist --json     # set to blocklist
+omni access mode <instanceId> disabled --json      # disable access control
+
+# Check if a user has access
+omni access check --instance <id> --user <platformUserId> --json
+
+# Pairing requests (users requesting access)
+omni access pending <instanceId> --json
+omni access approve <instanceId> <requestId> --json   # adds user to allowlist
+omni access deny <instanceId> <requestId> --reason "not authorized" --json
 ```
 
 ## Moderation and group ops

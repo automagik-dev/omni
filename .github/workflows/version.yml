@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [dev]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,14 +18,16 @@ concurrency:
 jobs:
   auto-version:
     name: Auto Version
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'dev' &&
-       !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request'))
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
+       contains(github.event.workflow_run.head_commit.message, '/dev') &&
+       !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4

@@ -8,13 +8,17 @@
  * Controlled by env vars:
  *   PGSERVE_EMBEDDED  — 'true' (default) to start in-process, 'false' to skip
  *   PGSERVE_PORT      — port for the embedded PostgreSQL proxy (default 8432)
- *   PGSERVE_DATA      — data directory path; omit or empty for memory mode
+ *   PGSERVE_DATA      — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createLogger } from '@omni/core';
 import { getDefaultDatabaseUrl } from '@omni/db';
 
 const log = createLogger('api:pgserve');
+
+const MAX_PORT_RETRIES = 10;
 
 export interface PgserveConfig {
   enabled: boolean;
@@ -32,9 +36,39 @@ export function resolvePgserveConfig(): PgserveConfig {
   const enabled = (process.env.PGSERVE_EMBEDDED ?? 'true') === 'true';
   const port = Number.parseInt(process.env.PGSERVE_PORT ?? '8432', 10);
   const raw = process.env.PGSERVE_DATA;
-  const dataDir = raw && raw.trim().length > 0 ? raw.trim() : null;
+  // Default to persistent storage inside ~/.omni/data/pgserve — never memory mode unless explicitly empty
+  const defaultDataDir = join(homedir(), '.omni', 'data', 'pgserve');
+  const dataDir = raw !== undefined && raw.trim().length === 0 ? null : raw?.trim() || defaultDataDir;
 
   return { enabled, port, dataDir };
+}
+
+function isAddressInUse(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes('EADDRINUSE') || msg.includes('address already in use');
+}
+
+function buildDatabaseUrl(port: number): string {
+  return `postgresql://postgres:postgres@localhost:${port}/omni`;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: pgserve has no type declarations
+type StartServerFn = (opts: Record<string, unknown>) => Promise<any>;
+
+async function tryStartOnPort(startFn: StartServerFn, port: number, config: PgserveConfig): Promise<string | null> {
+  try {
+    serverInstance = await startFn({
+      port,
+      baseDir: config.dataDir,
+      autoProvision: true,
+      enablePgvector: true,
+      logLevel: 'warn',
+    });
+    return buildDatabaseUrl(port);
+  } catch (error: unknown) {
+    if (isAddressInUse(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -56,32 +90,28 @@ export async function startEmbeddedPgserve(config: PgserveConfig): Promise<strin
     dataDir: config.dataDir ?? '(in-memory)',
   });
 
-  try {
-    const { startMultiTenantServer } = await import('pgserve');
+  const { startMultiTenantServer } = await import('pgserve');
 
-    serverInstance = await startMultiTenantServer({
-      port: config.port,
-      baseDir: config.dataDir,
-      autoProvision: true,
-      enablePgvector: true,
-      logLevel: 'warn',
-    });
+  // Try the configured port first, then increment up to MAX_PORT_RETRIES times
+  for (let offset = 0; offset <= MAX_PORT_RETRIES; offset++) {
+    const port = config.port + offset;
+    const result = await tryStartOnPort(startMultiTenantServer, port, config);
 
-    const databaseUrl = `postgresql://postgres:postgres@localhost:${config.port}/omni`;
-    log.info('Embedded pgserve ready', { port: config.port, databaseUrl: databaseUrl.replace(/\/\/.*@/, '//***@') });
-    return databaseUrl;
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : String(error);
-
-    // EADDRINUSE / pgserve "Failed to listen" — another process already holds the port; fall through
-    if (msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen')) {
-      log.warn('Port already in use, assuming external pgserve is running', { port: config.port });
-      const databaseUrl = `postgresql://postgres:postgres@localhost:${config.port}/omni`;
-      return databaseUrl;
+    if (result) {
+      if (offset > 0) {
+        log.info('Embedded pgserve ready on alternate port', { originalPort: config.port, port });
+      } else {
+        log.info('Embedded pgserve ready', { port, databaseUrl: result.replace(/\/\/.*@/, '//***@') });
+      }
+      return result;
     }
 
-    throw error;
+    log.warn('Port already in use, trying next', { port, nextPort: port + 1 });
   }
+
+  // All ports exhausted — fall back to assuming external pgserve on original port
+  log.warn('All port attempts exhausted, assuming external pgserve', { port: config.port });
+  return buildDatabaseUrl(config.port);
 }
 
 /**
