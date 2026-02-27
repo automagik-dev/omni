@@ -1115,8 +1115,11 @@ async function validateMessageSyncPreconditions(
   const requiresMessageHistory = type === 'messages' || type === 'all' || Boolean(chatJids?.length);
   if (requiresMessageHistory && (await services.syncJobs.hasActiveJob(instanceId, 'history-push'))) {
     return {
-      error:
-        'Cannot start manual sync while history push sync is in progress. Wait for the push sync to complete or check progress with GET /instances/:id/sync.',
+      error: {
+        code: 'SYNC_IN_PROGRESS',
+        message:
+          'Cannot start manual sync while history push sync is in progress. Wait for the push sync to complete or check progress with GET /instances/:id/sync.',
+      },
       status: 409,
     };
   }

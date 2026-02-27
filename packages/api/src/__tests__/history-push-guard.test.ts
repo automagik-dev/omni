@@ -124,8 +124,8 @@ describeWithDb('History-Push Sync Guard', () => {
     });
 
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('history push sync is in progress');
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('SYNC_IN_PROGRESS');
   });
 
   test('POST /instances/:id/sync with chatJids returns 409 when history-push is running', async () => {
@@ -140,8 +140,8 @@ describeWithDb('History-Push Sync Guard', () => {
     });
 
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('history push sync is in progress');
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('SYNC_IN_PROGRESS');
   });
 
   test('POST /instances/:id/sync with type "messages" works when history-push is completed', async () => {
@@ -232,8 +232,8 @@ describeWithDb('History-Push Sync Guard', () => {
     });
 
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('history push sync is in progress');
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('SYNC_IN_PROGRESS');
   });
 
   test('POST /instances/:id/resync works when history-push is completed', async () => {
