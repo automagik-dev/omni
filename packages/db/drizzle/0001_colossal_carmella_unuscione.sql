@@ -17,8 +17,8 @@ CREATE TABLE "agents" (
 --> statement-breakpoint
 ALTER TABLE "instances" DROP CONSTRAINT "instances_agent_provider_id_agent_providers_id_fk";
 --> statement-breakpoint
-ALTER TABLE "instances" ALTER COLUMN "agent_id" SET DATA TYPE uuid;--> statement-breakpoint
 ALTER TABLE "instances" ALTER COLUMN "agent_id" DROP DEFAULT;--> statement-breakpoint
+ALTER TABLE "instances" ALTER COLUMN "agent_id" SET DATA TYPE uuid USING CASE WHEN agent_id ~ '^[0-9a-f]{8}-' THEN agent_id::uuid ELSE NULL END;--> statement-breakpoint
 ALTER TABLE "agent_routes" ADD COLUMN "agent_fk_id" uuid;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "sender_agent_id" uuid;--> statement-breakpoint
 ALTER TABLE "omni_events" ADD COLUMN "chat_uuid" uuid;--> statement-breakpoint
