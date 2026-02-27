@@ -94,13 +94,20 @@ agentTasksRoutes.get('/:id', async (c) => {
 
 /**
  * PATCH /agent-tasks/:id — update status, progress, metadata, result
+ *
+ * Status transitions that have dedicated lifecycle methods use those methods
+ * to emit the correct typed event (e.g. agent.task.cancelled instead of
+ * agent.task.updated).
  */
 agentTasksRoutes.patch('/:id', zValidator('json', updateTaskSchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  const task = await services.agentTasks.update(id, data);
+  const task =
+    data.status === 'cancelled'
+      ? await services.agentTasks.cancelTask(id)
+      : await services.agentTasks.update(id, data);
 
   return c.json({ data: task });
 });

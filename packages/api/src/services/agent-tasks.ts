@@ -8,7 +8,7 @@ import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentTask, type AgentTaskStatus, type NewAgentTask, agentTasks } from '@omni/db';
-import { and, desc, eq, inArray, lte } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 
 export interface ListAgentTasksOptions {
   agentId?: string;
@@ -113,7 +113,16 @@ export class AgentTaskService {
 
     if (cursor) {
       const cursorTask = await this.getById(cursor);
-      conditions.push(lte(agentTasks.createdAt, cursorTask.createdAt));
+      // Composite keyset pagination: avoid duplicates when multiple rows share the same createdAt.
+      // Order is (createdAt DESC, id DESC), so the next page starts after rows where either:
+      //   - createdAt is strictly older, OR
+      //   - createdAt is the same but id is strictly smaller
+      conditions.push(
+        or(
+          lt(agentTasks.createdAt, cursorTask.createdAt),
+          and(eq(agentTasks.createdAt, cursorTask.createdAt), lt(agentTasks.id, cursorTask.id)),
+        ),
+      );
     }
 
     let query = this.db.select().from(agentTasks).$dynamic();
@@ -122,7 +131,7 @@ export class AgentTaskService {
       query = query.where(and(...conditions));
     }
 
-    const items = await query.orderBy(desc(agentTasks.createdAt)).limit(limit + 1);
+    const items = await query.orderBy(desc(agentTasks.createdAt), desc(agentTasks.id)).limit(limit + 1);
 
     const hasMore = items.length > limit;
     if (hasMore) {
@@ -248,6 +257,38 @@ export class AgentTaskService {
           agentId: updated.agentId,
           chatId: updated.chatId,
           error,
+        },
+        { instanceId: undefined },
+      );
+    }
+
+    return updated;
+  }
+
+  /**
+   * Transition a task to cancelled — sets status=cancelled, completedAt=now
+   */
+  async cancelTask(id: string): Promise<AgentTask> {
+    const [updated] = await this.db
+      .update(agentTasks)
+      .set({
+        status: 'cancelled',
+        completedAt: new Date(),
+      })
+      .where(eq(agentTasks.id, id))
+      .returning();
+
+    if (!updated) {
+      throw new NotFoundError('AgentTask', id);
+    }
+
+    if (this.eventBus) {
+      await this.eventBus.publish(
+        'agent.task.cancelled',
+        {
+          taskId: updated.id,
+          agentId: updated.agentId,
+          chatId: updated.chatId,
         },
         { instanceId: undefined },
       );
