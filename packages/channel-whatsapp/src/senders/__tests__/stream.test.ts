@@ -50,7 +50,7 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
 
   beforeEach(() => {
     mockSocket = createMockSocket();
-    sender = new WhatsAppStreamSender(mockSocket.sock, '5511999999999@s.whatsapp.net');
+    sender = new WhatsAppStreamSender(() => mockSocket.sock, '5511999999999@s.whatsapp.net');
   });
 
   // ─── Content deltas — paragraph detection ──────────────────
@@ -171,7 +171,7 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
 
   test('no quoting even when replyToMessageId is provided', async () => {
     const quotingSender = new WhatsAppStreamSender(
-      mockSocket.sock,
+      () => mockSocket.sock,
       '5511999999999@s.whatsapp.net',
       'original-msg-id',
       'group',
@@ -251,7 +251,7 @@ describe('WhatsAppStreamSender (paragraph mode — default)', () => {
 
   test('passthrough mode skips markdown conversion', async () => {
     const passthroughSender = new WhatsAppStreamSender(
-      mockSocket.sock,
+      () => mockSocket.sock,
       '5511999999999@s.whatsapp.net',
       undefined,
       'dm',
@@ -274,7 +274,7 @@ describe('WhatsAppStreamSender (edit mode — opt-in)', () => {
 
   beforeEach(() => {
     mockSocket = createMockSocket();
-    sender = new WhatsAppStreamSender(mockSocket.sock, '5511999999999@s.whatsapp.net', undefined, 'dm', {
+    sender = new WhatsAppStreamSender(() => mockSocket.sock, '5511999999999@s.whatsapp.net', undefined, 'dm', {
       editMode: true,
       throttleMs: 0, // No throttle for tests
     });

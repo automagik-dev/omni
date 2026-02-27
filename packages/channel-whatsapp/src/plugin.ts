@@ -1414,7 +1414,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     chatType?: 'dm' | 'group' | 'channel',
     options?: { formatMode?: 'convert' | 'passthrough' },
   ): StreamSender {
-    const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
     // Read per-instance stream config
@@ -1423,10 +1422,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Pre-warm group caches before streaming starts (#70)
     if (jid.endsWith('@g.us')) {
-      this.prewarmGroupCaches(instanceId, sock, jid).catch(() => {});
+      this.prewarmGroupCaches(instanceId, this.getSocket(instanceId), jid).catch(() => {});
     }
 
-    return new WhatsAppStreamSender(sock, jid, replyToMessageId, chatType, {
+    // Pass a lazy getter so the sender always uses the current live socket,
+    // even if the instance reconnects while the agent response is streaming.
+    return new WhatsAppStreamSender(() => this.getSocket(instanceId), jid, replyToMessageId, chatType, {
       formatMode: options?.formatMode,
       editMode: (streamOpts.streamEditMode as boolean) ?? false,
       throttleMs: (streamOpts.streamThrottleMs as number) ?? undefined,
