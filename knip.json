@@ -18,6 +18,7 @@
       "ignoreDependencies": ["@openapitools/openapi-generator-cli"]
     },
     "packages/api": {
+      "entry": ["src/schemas/openapi/*.ts"],
       "project": ["src/**/*.ts"],
       "ignore": ["src/plugins/agent-responder.ts"],
       "ignoreDependencies": []
@@ -26,6 +27,7 @@
       "project": ["src/**/*.ts"]
     },
     "packages/channel-sdk": {
+      "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/channel-discord": {
@@ -62,5 +64,5 @@
   },
   "ignoreWorkspaces": ["packages/sdk", "packages/sdk-go", "packages/sdk-python", "packages/audio-decode-shim"],
   "exclude": ["classMembers", "unresolved", "duplicates", "enumMembers"],
-  "ignoreExportsUsedInFile": true
+  "ignoreExportsUsedInFile": { "interface": true, "type": true }
 }

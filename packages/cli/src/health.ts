@@ -6,7 +6,7 @@
 
 export const DEFAULT_API_PORT = 8882;
 export const HEALTH_TIMEOUT_MS = 15_000;
-export const HEALTH_POLL_INTERVAL_MS = 500;
+const HEALTH_POLL_INTERVAL_MS = 500;
 
 /** Build the health-check URL for a given port */
 export function getHealthCheckUrl(port: number): string {

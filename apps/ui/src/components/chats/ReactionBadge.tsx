@@ -11,7 +11,7 @@ interface ReactionBadgeProps {
 /**
  * Display a reaction emoji with count as a badge on a message
  */
-export function ReactionBadge({ emoji, count, users, isFromMe }: ReactionBadgeProps) {
+function ReactionBadge({ emoji, count, users, isFromMe }: ReactionBadgeProps) {
   const tooltipContent =
     users.length > 3 ? `${users.slice(0, 3).join(', ')} +${users.length - 3} more` : users.join(', ');
 

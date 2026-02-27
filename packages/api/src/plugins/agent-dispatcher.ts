@@ -70,8 +70,6 @@ import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/me
 import { getPlugin } from './loader';
 import { createSessionStorage } from './session-storage';
 
-export { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
-
 const log = createLogger('agent-dispatcher');
 
 // ============================================================================
