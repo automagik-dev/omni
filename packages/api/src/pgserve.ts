@@ -45,7 +45,8 @@ export function resolvePgserveConfig(): PgserveConfig {
 
 function isAddressInUse(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
-  return msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen');
+  // pgserve throws "Failed to listen on 0.0.0.0:<port>" when the proxy port is taken
+  return msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen on');
 }
 
 function buildDatabaseUrl(port: number): string {
