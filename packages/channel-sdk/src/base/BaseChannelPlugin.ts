@@ -10,7 +10,6 @@
 
 import { generateCorrelationId } from '@omni/core';
 import type { EventBus } from '@omni/core/events';
-import { buildSubject } from '@omni/core/events/nats';
 import { JOURNEY_STAGES, getJourneyTracker } from '@omni/core/tracing';
 import type { ChannelType } from '@omni/core/types';
 import type {
@@ -325,7 +324,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * });
    */
   protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<string> {
-    const _subject = buildSubject('message.received', this.id, params.instanceId);
     const correlationId = generateCorrelationId('evt');
 
     await this.eventBus.publish(
@@ -358,8 +356,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit message.sent event with hierarchical subject
    */
   protected async emitMessageSent(params: EmitMessageSentParams): Promise<void> {
-    const _subject = buildSubject('message.sent', this.id, params.instanceId);
-
     await this.eventBus.publish(
       'message.sent',
       {
@@ -386,8 +382,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit message.failed event
    */
   protected async emitMessageFailed(params: EmitMessageFailedParams): Promise<void> {
-    const _subject = buildSubject('message.failed', this.id, params.instanceId);
-
     await this.eventBus.publish(
       'message.failed',
       {
@@ -530,8 +524,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit message.button_click event
    */
   protected async emitButtonClick(params: EmitButtonClickParams): Promise<void> {
-    const _subject = buildSubject('message.button_click', this.id, params.instanceId);
-
     await this.eventBus.publish(
       'message.button_click',
       {
@@ -563,8 +555,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit message.poll event
    */
   protected async emitPoll(params: EmitPollParams): Promise<void> {
-    const _subject = buildSubject('message.poll', this.id, params.instanceId);
-
     await this.eventBus.publish(
       'message.poll',
       {
@@ -596,8 +586,6 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit message.poll_vote event
    */
   protected async emitPollVote(params: EmitPollVoteParams): Promise<void> {
-    const _subject = buildSubject('message.poll_vote', this.id, params.instanceId);
-
     await this.eventBus.publish(
       'message.poll_vote',
       {
