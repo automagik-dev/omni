@@ -74,7 +74,7 @@ omni media download --chat <chatId> --external <externalId> --json
 
 Flags for `media list`: `--instance <id>`, `--chat <chatId>`, `--since <datetime>`, `--until <datetime>`, `--type <types>` (audio,image,video,document), `--limit <n>` (default: 20, max: 100), `--remote-only`, `--cached-only`, `--full`
 
-Flags for `media download`: `--message <uuid>`, `--chat <chatId>`, `--external <id>`, `--output <path>`
+Flags for `media download`: `--message <uuid>`, `--chat <chatId>`, `--external <externalId>`, `--output <path>`
 
 ## Notes
 

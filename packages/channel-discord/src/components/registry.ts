@@ -244,6 +244,7 @@ export class ComponentRegistry {
     const existed = this.entries.delete(key);
     if (existed) {
       this.removeFromInsertionOrder(key);
+      this.tombstones.add(key);
     }
     return existed;
   }
