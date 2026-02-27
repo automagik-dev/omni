@@ -8,8 +8,8 @@
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
 import { JOURNEY_STAGES, createLogger, getJourneyTracker } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { type ChannelType, type ContentType, channelTypes, contentTypes, omniEvents } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents } from '@omni/db';
+import { and, eq } from 'drizzle-orm';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
@@ -35,6 +35,29 @@ function mapContentType(contentType: string | undefined): ContentType | null {
   }
   // Return null for unsupported types (poll, poll_update, etc.)
   return null;
+}
+
+/**
+ * Resolve the chats.id UUID for a given instance + platform JID (chatId).
+ * Best-effort: returns null if the chat doesn't exist yet or the lookup fails.
+ * Never throws — event persistence must not fail because of this lookup.
+ */
+async function resolveChatUuid(
+  db: Database,
+  instanceId: string | undefined,
+  chatId: string | undefined,
+): Promise<string | null> {
+  if (!instanceId || !chatId) return null;
+  try {
+    const [chat] = await db
+      .select({ id: chats.id })
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
+      .limit(1);
+    return chat?.id ?? null;
+  } catch {
+    return null; // best-effort — never fail event persistence because of this
+  }
 }
 
 /** Shared consumer options for event persistence */
@@ -66,6 +89,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         }
 
         try {
+          const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
+
           const newEvent: NewOmniEvent = {
             externalId: payload.externalId,
             channel: mapChannelType(metadata.channelType),
@@ -87,6 +112,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               correlationId: metadata.correlationId,
               from: payload.from,
             },
+            agentId: metadata.agentId ?? null,
+            conversationId: null,
+            chatUuid,
           };
 
           await db.insert(omniEvents).values(newEvent);
@@ -119,6 +147,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         const metadata = event.metadata;
 
         try {
+          const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
+
           const newEvent: NewOmniEvent = {
             externalId: payload.externalId,
             channel: mapChannelType(metadata.channelType),
@@ -139,6 +169,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               correlationId: metadata.correlationId,
               to: payload.to,
             },
+            agentId: metadata.agentId ?? null,
+            conversationId: null,
+            chatUuid,
           };
 
           await db.insert(omniEvents).values(newEvent);
@@ -176,6 +209,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
 
           if (updated.length === 0) {
             // No existing event found, create a new record
+            const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
             const newEvent: NewOmniEvent = {
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
@@ -186,6 +220,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               status: 'completed',
               receivedAt: new Date(event.timestamp),
               deliveredAt: new Date(payload.deliveredAt),
+              agentId: metadata.agentId ?? null,
+              conversationId: null,
+              chatUuid,
             };
             await db.insert(omniEvents).values(newEvent);
           }
@@ -221,6 +258,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
 
           if (updated.length === 0) {
             // No existing event found, create a new record
+            const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
             const newEvent: NewOmniEvent = {
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
@@ -231,6 +269,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               status: 'completed',
               receivedAt: new Date(event.timestamp),
               readAt: new Date(payload.readAt),
+              agentId: metadata.agentId ?? null,
+              conversationId: null,
+              chatUuid,
             };
             await db.insert(omniEvents).values(newEvent);
           }
@@ -262,6 +303,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         const metadata = event.metadata;
 
         try {
+          const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
+
           const newEvent: NewOmniEvent = {
             externalId: payload.externalId,
             channel: mapChannelType(metadata.channelType),
@@ -278,6 +321,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               correlationId: metadata.correlationId,
               retryable: payload.retryable,
             },
+            agentId: metadata.agentId ?? null,
+            conversationId: null,
+            chatUuid,
           };
 
           await db.insert(omniEvents).values(newEvent);

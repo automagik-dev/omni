@@ -543,7 +543,7 @@ async function processIncomingMessage(
   debouncer: MessageDebouncer,
 ): Promise<void> {
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-  if (!instance?.agentProviderId) return;
+  if (!instance?.agentId) return;
 
   const messageContext = buildMessageContext(payload, instance);
   if (!shouldAgentReply(instance.agentReplyFilter, messageContext)) {
@@ -676,7 +676,7 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
 
         try {
           const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance?.agentProviderId) return;
+          if (!instance?.agentId) return;
 
           const debounceConfig = getDebounceConfig(instance);
           if (debounceConfig.restartOnTyping) {

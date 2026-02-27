@@ -101,11 +101,7 @@ export const InstanceSchema = z.object({
   telegramBotToken: z.string().nullable(),
 
   // Agent config
-  agentProviderId: UuidSchema.nullable(),
-  agentApiUrl: z.string().url().nullable(),
-  agentApiKey: z.string().nullable(),
-  agentId: z.string().max(255),
-  agentType: AgentTypeSchema,
+  agentId: z.string().uuid().nullable().optional(),
   agentTimeout: z.number().int().positive(),
   agentStreamMode: z.boolean(),
 
@@ -153,9 +149,7 @@ export type Instance = z.infer<typeof InstanceSchema>;
 export const CreateInstanceSchema = z.object({
   name: z.string().max(255),
   channel: ChannelTypeSchema,
-  agentProviderId: UuidSchema.optional(),
-  agentId: z.string().max(255).default('default'),
-  agentType: AgentTypeSchema.default('agent'),
+  agentId: z.string().uuid().nullable().optional(),
   agentTimeout: z.number().int().positive().default(60),
   agentStreamMode: z.boolean().default(false),
   isDefault: z.boolean().default(false),

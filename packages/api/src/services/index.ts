@@ -10,6 +10,7 @@ import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
+import { AgentService } from './agents';
 import { ApiKeyService } from './api-keys';
 import { AuditService } from './audit';
 import { AutomationService } from './automations';
@@ -35,6 +36,7 @@ import { WebhookService } from './webhooks';
  * Service container
  */
 export interface Services {
+  agents: AgentService;
   apiKeys: ApiKeyService;
   audit: AuditService;
   instances: InstanceService;
@@ -71,6 +73,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const routeResolver = new RouteResolver(db);
 
   return {
+    agents: new AgentService(db, eventBus),
     apiKeys,
     audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),
