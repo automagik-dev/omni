@@ -8,8 +8,11 @@
  * message/stream → async: parses SSE taskArtifactUpdateEvent chunks
  */
 
+import { createLogger } from '../logger';
 import { ProviderError } from './types';
 import type { IAgentClient, ProviderRequest, ProviderResponse, StreamChunk } from './types';
+
+const log = createLogger('providers:a2a-client');
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_POLL_ATTEMPTS = 60;
@@ -192,7 +195,8 @@ export class A2AClient implements IAgentClient {
     try {
       const event = JSON.parse(data) as Record<string, unknown>;
       return this.parseSSEEvent(event);
-    } catch {
+    } catch (e) {
+      log.warn('Failed to parse A2A SSE event', { data, error: String(e) });
       return null;
     }
   }

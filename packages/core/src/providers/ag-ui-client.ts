@@ -13,8 +13,11 @@
  * @see https://docs.copilotkit.ai/ag-ui
  */
 
+import { createLogger } from '../logger';
 import { ProviderError } from './types';
 import type { IAgentClient, ProviderRequest, ProviderResponse, StreamChunk } from './types';
+
+const log = createLogger('providers:ag-ui-client');
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -246,7 +249,8 @@ export class AgUiClient implements IAgentClient {
     try {
       const event = JSON.parse(data) as AgUiEvent;
       return this.parseAgUiEvent(event, currentRunId);
-    } catch {
+    } catch (e) {
+      log.warn('Failed to parse AG-UI SSE event', { data, error: String(e) });
       return null;
     }
   }
