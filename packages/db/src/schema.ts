@@ -736,6 +736,20 @@ export const instances = pgTable(
     /** Timestamp of last processed message (for reconnect gap detection) */
     lastMessageAt: timestamp('last_message_at'),
 
+    // ---- Agent Replay ----
+    /** When true (default), automatically replay missed messages on reconnect */
+    replayEnabled: boolean('replay_enabled').notNull().default(true),
+    /** Timestamp of when the instance was last seen connected (used as replay window start) */
+    lastSeenAt: timestamp('last_seen_at'),
+
+    // ---- Agent Chaining ----
+    /** Target instance for agent-to-agent chaining */
+    agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {
+      onDelete: 'set null',
+    }),
+    /** Chain mode: 'off' | 'forward' | 'bidirectional' */
+    chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
