@@ -7,7 +7,7 @@
 import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type AgentTask, type NewAgentTask, agentTasks } from '@omni/db';
+import { type AgentTask, type AgentTaskStatus, type NewAgentTask, agentTasks } from '@omni/db';
 import { and, desc, eq, inArray, lte } from 'drizzle-orm';
 
 export interface ListAgentTasksOptions {
@@ -99,7 +99,7 @@ export class AgentTaskService {
     }
 
     if (status) {
-      const statusList = Array.isArray(status) ? status : [status];
+      const statusList = (Array.isArray(status) ? status : [status]) as AgentTaskStatus[];
       conditions.push(inArray(agentTasks.status, statusList));
     }
 
