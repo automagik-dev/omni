@@ -133,8 +133,9 @@ async function handleTrashEmojiMessage(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Skip logging if it's a known skippable case
-    if (errorMessage.includes('No agent provider') || errorMessage.includes('not supported for')) {
+    // Skip silently for instances without an agent/provider configured
+    const skippableErrors = ['No agent configured', 'No agent provider', 'Agent has no provider', 'not supported for'];
+    if (skippableErrors.some((e) => errorMessage.includes(e))) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
       return;
     }
