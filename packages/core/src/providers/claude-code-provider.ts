@@ -301,6 +301,11 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       controller.abort();
     }, timeoutMs);
 
+    // Chain external abort signal (e.g. from stream-recovery on socket reconnect)
+    if (context.abortSignal) {
+      context.abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
     const result = this.client.streamRun(request, streamConfig, controller.signal);
 
     try {

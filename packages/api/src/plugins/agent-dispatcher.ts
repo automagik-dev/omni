@@ -1172,6 +1172,8 @@ interface ActiveStream {
   startedAt: number;
   /** setTimeout handle — cancelled on normal completion */
   ttlTimer: ReturnType<typeof setTimeout>;
+  /** AbortController — signal is passed to the provider so it can cancel the subprocess */
+  abortController: AbortController;
 }
 
 const activeStreams = new Map<string, ActiveStream>();
@@ -1204,6 +1206,7 @@ function abortStreamsForInstance(instanceId: string): void {
   for (const [key, entry] of activeStreams.entries()) {
     if (key.startsWith(`${instanceId}:`)) {
       clearTimeout(entry.ttlTimer);
+      entry.abortController.abort();
       entry.sender.abort().catch(() => {
         // Best-effort — connection is already gone
       });
@@ -1217,12 +1220,20 @@ function abortStreamsForInstance(instanceId: string): void {
  * Register a stream sender in the guard map with a TTL timer.
  * The timer auto-aborts the stream after STREAM_TTL_MS if it has not
  * completed by then, preventing a hung stream from blocking the chat forever.
+ * Returns the AbortController to thread into the provider trigger.
  */
-function registerStreamGuard(streamKey: string, sender: StreamSender, instanceId: string, chatId: string): void {
+function registerStreamGuard(
+  streamKey: string,
+  sender: StreamSender,
+  instanceId: string,
+  chatId: string,
+): AbortController {
+  const abortController = new AbortController();
   const ttlTimer = setTimeout(() => {
     const stale = activeStreams.get(streamKey);
     if (stale) {
       activeStreams.delete(streamKey);
+      stale.abortController.abort();
       stale.sender.abort().catch(() => {
         // Best-effort — stream may already be gone
       });
@@ -1233,7 +1244,8 @@ function registerStreamGuard(streamKey: string, sender: StreamSender, instanceId
       });
     }
   }, STREAM_TTL_MS);
-  activeStreams.set(streamKey, { sender, startedAt: Date.now(), ttlTimer });
+  activeStreams.set(streamKey, { sender, startedAt: Date.now(), ttlTimer, abortController });
+  return abortController;
 }
 
 const recoveryLog = createLogger('stream-recovery');
@@ -1255,7 +1267,11 @@ export async function recoverInterruptedStreams(instanceId: string, channelType:
   for (const { chatId, sender } of interrupted) {
     const streamKey = `${instanceId}:${chatId}`;
     const entry = activeStreams.get(streamKey);
-    if (entry) clearTimeout(entry.ttlTimer);
+    if (entry) {
+      clearTimeout(entry.ttlTimer);
+      // Abort the provider subprocess immediately so it doesn't run for up to STREAM_TTL_MS
+      entry.abortController.abort();
+    }
     activeStreams.delete(streamKey);
     try {
       await sender.abort();
@@ -1610,9 +1626,11 @@ async function dispatchViaStreamingProvider(
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const sender = resolved.createSender(instance.id, chatId, replyToId, chatType, { formatMode });
   const streamKey = `${instance.id}:${chatId}`;
-  // Register the stream guard: stores the sender and sets a TTL timer so
-  // a hung stream is automatically aborted after STREAM_TTL_MS.
-  registerStreamGuard(streamKey, sender, instance.id, chatId);
+  // Register the stream guard: stores the sender, sets a TTL timer, and returns an
+  // AbortController whose signal is threaded into the provider so that stream-recovery
+  // can cancel the running subprocess immediately on socket reconnect.
+  const abortController = registerStreamGuard(streamKey, sender, instance.id, chatId);
+  trigger.abortSignal = abortController.signal;
 
   return runGuardedStream(resolved.provider, trigger, sender, streamKey, instance.id, chatId, traceId);
 }

@@ -324,6 +324,11 @@ export interface AgentTrigger {
   sessionId: string;
   /** Recent message history for context (optional, formatted as "[Name - time] message") */
   contextMessages?: string[];
+  /**
+   * Optional abort signal — when aborted, the provider should stop the running stream
+   * as soon as possible. Set by the dispatcher when stream-recovery fires on reconnect.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
