@@ -53,7 +53,7 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
-import { agentSessions } from '@omni/db';
+import { agentSessions, agents } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import { and, eq } from 'drizzle-orm';
@@ -69,8 +69,6 @@ import {
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
 import { createSessionStorage } from './session-storage';
-
-export { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 
 const log = createLogger('agent-dispatcher');
 
@@ -103,6 +101,22 @@ interface DebounceConfig {
   restartOnTyping: boolean;
   groupMs: number | null;
 }
+
+/**
+ * Transient dispatch fields stamped onto an effectiveInstance copy by applyAgentFkOverrides.
+ * These are runtime-only fields derived from the Agent entity and are NOT persisted on instances.
+ */
+interface DispatchFields {
+  /** Agent provider UUID resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentProviderId?: string | null;
+  /** Agent type resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentType?: 'agent' | 'team' | 'workflow';
+  /** Provider-internal agent name resolved from the Agent entity (transient — set by applyAgentFkOverrides) */
+  agentInternalId?: string;
+}
+
+/** Instance extended with transient dispatch fields for in-process agent resolution. */
+type DispatchInstance = Instance & DispatchFields;
 
 // ============================================================================
 // Rate Limiter
@@ -421,6 +435,8 @@ async function sendTextMessage(
   text: string,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
+  senderAgentId?: string,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -429,7 +445,7 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text },
     replyTo,
-    metadata: { messageFormatMode },
+    metadata: { messageFormatMode, correlationId, senderAgentId },
   });
 }
 
@@ -740,6 +756,8 @@ async function sendResponseParts(
   splitConfig: SplitDelayConfig,
   messageFormatMode: 'convert' | 'passthrough' = 'convert',
   replyTo?: string,
+  correlationId?: string,
+  senderAgentId?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const allChunks: string[] = [];
@@ -754,7 +772,16 @@ async function sendResponseParts(
 
   for (const [index, chunk] of allChunks.entries()) {
     const chunkReplyTo = isSlack || index === 0 ? replyTo : undefined;
-    await sendTextMessage(channel, instanceId, chatId, chunk, messageFormatMode, chunkReplyTo);
+    await sendTextMessage(
+      channel,
+      instanceId,
+      chatId,
+      chunk,
+      messageFormatMode,
+      chunkReplyTo,
+      correlationId,
+      senderAgentId,
+    );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
@@ -1229,7 +1256,7 @@ function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined 
  * TODO: wire mutated context values back into dispatch once allowlist infra exists.
  */
 async function executeBeforeAgentStartHooks(
-  instance: Instance,
+  instance: DispatchInstance,
   chatId: string,
   senderId: string,
   senderName: string | undefined,
@@ -1295,7 +1322,7 @@ async function executeBeforeMessageWriteHooks(instanceId: string, chatId: string
  */
 async function dispatchViaStreamingProvider(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   channel: ChannelType,
@@ -1522,13 +1549,22 @@ async function buildContextMessages(
   }
 }
 
+/** Record a journey checkpoint when tracking is active for this correlationId. */
+function recordJourneyCheckpoint(correlationId: string | undefined, stage: string, stageName: string): void {
+  if (!correlationId) return;
+  const tracker = getJourneyTracker();
+  if (tracker.isTracking(correlationId)) {
+    tracker.recordCheckpoint(correlationId, stage, stageName);
+  }
+}
+
 /**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
 async function dispatchViaProvider(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   channel: ChannelType,
@@ -1540,6 +1576,7 @@ async function dispatchViaProvider(
   rawEvent: AgentTrigger['event'],
   db: Database,
   extraContextMessages?: string[],
+  senderAgentId?: string,
 ): Promise<boolean> {
   const provider = await getAgentProvider(services, instance, db);
   if (!provider) return false;
@@ -1601,6 +1638,7 @@ async function dispatchViaProvider(
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
   };
 
+  const correlationId = messages[0]?.metadata.correlationId;
   const result = await provider.trigger(trigger);
 
   if (result && result.parts.length > 0) {
@@ -1610,7 +1648,24 @@ async function dispatchViaProvider(
     const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
     const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-    await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+    // T8: Processing send request
+    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+    await sendResponseParts(
+      channel,
+      instance.id,
+      chatId,
+      parts,
+      getSplitDelayConfig(instance),
+      _fmtMode,
+      replyTo,
+      correlationId,
+      senderAgentId,
+    );
+
+    // T9: Outbound sent via plugin
+    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -1631,7 +1686,7 @@ async function dispatchViaProvider(
  */
 async function dispatchViaLegacy(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   channel: ChannelType,
@@ -1641,6 +1696,7 @@ async function dispatchViaLegacy(
   senderName: string | undefined,
   traceId: string,
   perThreadExtraContext?: string[],
+  senderAgentId?: string,
 ): Promise<void> {
   const { messageTexts, mediaFiles } = await prepareAgentContent(services, instance, messages);
 
@@ -1700,6 +1756,7 @@ async function dispatchViaLegacy(
     files: mediaFiles.length > 0 ? mediaFiles : undefined,
   });
 
+  const correlationId = messages[0]?.metadata.correlationId;
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
@@ -1708,7 +1765,24 @@ async function dispatchViaLegacy(
 
   const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-  await sendResponseParts(channel, instance.id, chatId, parts, getSplitDelayConfig(instance), _fmtMode, replyTo);
+
+  // T8: Processing send request
+  recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+  await sendResponseParts(
+    channel,
+    instance.id,
+    chatId,
+    parts,
+    getSplitDelayConfig(instance),
+    _fmtMode,
+    replyTo,
+    correlationId,
+    senderAgentId,
+  );
+
+  // T9: Outbound sent via plugin
+  recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
 
   log.info('Agent response via legacy runner', {
     instanceId: instance.id,
@@ -2146,9 +2220,17 @@ async function resolvePerThreadExtraContext(
   return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
 }
 
+/**
+ * omni-930 phase 3: Resolve the agent entity UUID for a dispatched message.
+ * instance.agentId is the UUID FK to agents.
+ */
+async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): Promise<string | undefined> {
+  return instance.agentId ?? undefined;
+}
+
 async function processAgentResponse(
   services: Services,
-  instance: Instance,
+  instance: DispatchInstance,
   messages: BufferedMessage[],
   triggerType: AgentTriggerType,
   db: Database,
@@ -2163,7 +2245,7 @@ async function processAgentResponse(
   const traceId = firstMessage.metadata.traceId;
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
-  const inst = instance as Record<string, unknown>;
+  const inst = instance as unknown as Record<string, unknown>;
   const ackConfig: ReactionAckConfig = {
     reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
     reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
@@ -2199,6 +2281,11 @@ async function processAgentResponse(
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
 
+  // omni-h3q / omni-930: Look up the Agent entity UUID for this instance so that
+  // sent messages can be attributed to the specific agent in the DB.
+  // Uses agentFkId directly when set (phase 2a), otherwise falls back to agentProviderId lookup.
+  const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
+
   log.info('Dispatching to agent', {
     instanceId: instance.id,
     chatId,
@@ -2206,6 +2293,7 @@ async function processAgentResponse(
     triggerType,
     traceId,
     senderName,
+    senderAgentId,
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
@@ -2265,6 +2353,7 @@ async function processAgentResponse(
           rawEvent,
           db,
           perThreadExtraContext,
+          senderAgentId,
         );
       }
     } catch (providerError) {
@@ -2299,6 +2388,7 @@ async function processAgentResponse(
       senderName,
       traceId,
       perThreadExtraContext,
+      senderAgentId,
     );
   } catch (error) {
     log.error('Failed to process agent response', {
@@ -2325,7 +2415,7 @@ const providerCache = new Map<string, IAgentProvider>();
 const openclawClientPool = new Map<string, OpenClawClient>();
 
 /** Create an OpenClaw-based agent provider */
-function createOpenClawProviderInstance(provider: AgentProvider, instance: Instance): IAgentProvider {
+function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
   // DEC-3: Reuse shared WS client per provider ID
   let client = openclawClientPool.get(provider.id);
   if (!client) {
@@ -2357,7 +2447,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Insta
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
-    defaultAgentId: (instance.agentId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
+    defaultAgentId: (instance.agentInternalId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
     agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2367,7 +2457,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Insta
 }
 
 /** Create an Agno-based agent provider */
-function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgentProvider | null {
+function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
   if (!provider.apiKey) {
     log.warn('Provider has no API key, falling back to legacy path', { providerId: provider.id });
     return null;
@@ -2383,7 +2473,7 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
 
   return new AgnoAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -2392,7 +2482,11 @@ function createAgnoProvider(provider: AgentProvider, instance: Instance): IAgent
 }
 
 /** Create a Claude Code agent provider */
-function createClaudeCodeProviderInstance(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider {
+function createClaudeCodeProviderInstance(
+  provider: AgentProvider,
+  instance: DispatchInstance,
+  db: Database,
+): IAgentProvider {
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const projectPath = schemaConfig.projectPath as string;
 
@@ -2457,7 +2551,11 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
  *
  * Exported for use by session-cleaner (provider.resetSession).
  */
-export function resolveProvider(provider: AgentProvider, instance: Instance, db: Database): IAgentProvider | null {
+export function resolveProvider(
+  provider: AgentProvider,
+  instance: DispatchInstance,
+  db: Database,
+): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
   if (cached) return cached;
@@ -2492,9 +2590,14 @@ export function resolveProvider(provider: AgentProvider, instance: Instance, db:
 }
 
 /**
- * Look up provider from DB and resolve to IAgentProvider
+ * Look up provider from DB and resolve to IAgentProvider.
+ * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */
-async function getAgentProvider(services: Services, instance: Instance, db: Database): Promise<IAgentProvider | null> {
+async function getAgentProvider(
+  services: Services,
+  instance: DispatchInstance,
+  db: Database,
+): Promise<IAgentProvider | null> {
   if (!instance.agentProviderId) return null;
 
   try {
@@ -2514,6 +2617,56 @@ async function getAgentProvider(services: Services, instance: Instance, db: Data
 }
 
 /**
+ * omni-p7r: Apply agent entity overrides from the agentId FK on the instance/route.
+ * Mutates effectiveInstance in-place with values from the Agent entity row.
+ * Stamps transient dispatch fields (agentProviderId, agentType, agentInternalId) onto the copy.
+ */
+async function applyAgentFkOverrides(
+  db: Database,
+  agentFkId: string,
+  effectiveInstance: DispatchInstance,
+): Promise<void> {
+  const [agentRow] = await db
+    .select({
+      id: agents.id,
+      agentProviderId: agents.agentProviderId,
+      agentType: agents.agentType,
+      metadata: agents.metadata,
+      configPath: agents.configPath,
+    })
+    .from(agents)
+    .where(eq(agents.id, agentFkId))
+    .limit(1);
+
+  if (!agentRow) return;
+
+  // Stamp transient dispatch fields from the Agent entity
+  effectiveInstance.agentProviderId = agentRow.agentProviderId ?? effectiveInstance.agentProviderId;
+  // Map agentType: AgentEntityType → AgentType
+  // 'assistant'|'tool' → 'agent', 'workflow' → 'workflow', 'team' → 'team'
+  const typeMap: Record<string, string> = { assistant: 'agent', tool: 'agent', workflow: 'workflow', team: 'team' };
+  effectiveInstance.agentType = (typeMap[agentRow.agentType] ??
+    effectiveInstance.agentType) as DispatchFields['agentType'];
+  // Provider-internal agent name from metadata or configPath
+  const providerAgentId = (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath;
+  if (providerAgentId) effectiveInstance.agentInternalId = providerAgentId as string;
+}
+
+/**
+ * omni-930 phase 3: Apply instance-level agentId (UUID FK) overrides and return the result.
+ * Used as the no-route early-return path in resolveEffectiveInstance.
+ */
+async function applyInstanceFkAndReturn(
+  db: Database,
+  instance: Instance,
+): Promise<{ instance: DispatchInstance; routeId: null }> {
+  if (!instance.agentId) return { instance, routeId: null };
+  const effectiveInstance: DispatchInstance = { ...instance };
+  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance);
+  return { instance: effectiveInstance, routeId: null };
+}
+
+/**
  * Resolve effective instance by applying route overrides.
  * Resolution priority: chat route > user route > instance default
  *
@@ -2521,32 +2674,33 @@ async function getAgentProvider(services: Services, instance: Instance, db: Data
  */
 async function resolveEffectiveInstance(
   services: Services,
+  db: Database,
   instance: Instance,
   chatId: string | undefined,
   personId?: string,
-): Promise<{ instance: Instance; routeId: string | null }> {
+): Promise<{ instance: DispatchInstance; routeId: string | null }> {
   // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
   // and return instance defaults. This is the safe path for LID-only chats.
   if (!chatId) {
     log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
-    return { instance, routeId: null };
+    return applyInstanceFkAndReturn(db, instance);
   }
-
   // Resolve route (chat > user > null)
   const route = await services.routeResolver.resolve(instance.id, chatId, personId);
 
   if (!route) {
-    // No route matched - use instance defaults
-    return { instance, routeId: null };
+    // No route matched - use instance defaults.
+    // omni-930 phase 2a: Apply instance-level agentFkId entity overrides if set.
+    return applyInstanceFkAndReturn(db, instance);
   }
 
   // Merge route overrides with instance defaults
-  const effectiveInstance: Instance = {
+  const effectiveInstance: DispatchInstance = {
     ...instance,
-    // Override provider and agent ID
+    // Stamp transient dispatch fields from the route (legacy agent_routes columns)
     agentProviderId: route.agentProviderId,
-    agentId: route.agentId,
-    agentType: route.agentType,
+    agentInternalId: route.agentId,
+    agentType: route.agentType as DispatchFields['agentType'],
     // Override behavior (null = inherit from instance)
     agentTimeout: route.agentTimeout ?? instance.agentTimeout,
     agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
@@ -2561,17 +2715,26 @@ async function resolveEffectiveInstance(
     agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
   };
 
+  // omni-p7r / omni-930 phase 3: Resolve agent entity overrides.
+  // Route-level agentFkId takes priority; fall back to instance-level agentId.
+  const effectiveAgentFkId = route.agentFkId ?? instance.agentId;
+  if (effectiveAgentFkId) {
+    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
+  }
+
   log.debug('Route resolved and merged', {
     instanceId: instance.id,
     chatId,
     personId,
     routeId: route.id,
     routeScope: route.scope,
-    agentProviderId: route.agentProviderId,
-    agentId: route.agentId,
+    routeAgentProviderId: route.agentProviderId,
+    routeAgentId: route.agentId,
     agentStreamMode: effectiveInstance.agentStreamMode,
     routeAgentStreamMode: route.agentStreamMode,
     instanceAgentStreamMode: instance.agentStreamMode,
+    routeAgentFkId: route.agentFkId,
+    instanceAgentId: instance.agentId,
   });
 
   return { instance: effectiveInstance, routeId: route.id };
@@ -2599,6 +2762,7 @@ async function processReactionTrigger(
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
     services,
+    db,
     baseInstance,
     internalChatId,
     metadata.personId,
@@ -2894,8 +3058,8 @@ async function shouldProcessMessage(
   }
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-  if (!instance?.agentProviderId) {
-    log.debug('Instance has no agentProviderId', { instanceId: metadata.instanceId });
+  if (!instance?.agentId) {
+    log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
     return null;
   }
 
@@ -3030,7 +3194,7 @@ async function shouldProcessReaction(
   if (!metadata.instanceId) return null;
 
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-  if (!instance?.agentProviderId) return null;
+  if (!instance?.agentId) return null;
 
   if (!instanceTriggersOnEvent(instance, eventType)) return null;
 
@@ -3105,7 +3269,7 @@ async function shouldRespondViaGate(
   const inst = instance as Record<string, unknown>;
   if (!inst.agentGateEnabled) return true;
 
-  const agentName = instance.agentId ?? instance.name ?? 'assistant';
+  const agentName = instance.name ?? 'assistant';
   const model = (inst.agentGateModel as string | null) ?? DEFAULT_GATE_MODEL;
   const basePrompt = await resolveGatePrompt(inst.agentGatePrompt as string | null, settings);
 
@@ -3252,6 +3416,7 @@ export async function setupAgentDispatcher(
 
     const { instance, routeId: _routeId } = await resolveEffectiveInstance(
       services,
+      db,
       baseInstance,
       internalChatId,
       personId,
@@ -3465,7 +3630,7 @@ export async function setupAgentDispatcher(
 
         try {
           const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance?.agentProviderId) return;
+          if (!instance?.agentId) return;
 
           const debounceConfig = getDebounceConfig(instance);
           if (debounceConfig.restartOnTyping) {

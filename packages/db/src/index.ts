@@ -12,4 +12,4 @@ export { createDb, createPostgresClient, getDb, closeDb, getDefaultDatabaseUrl }
 export type { Database, DbConfig } from './client';
 
 // Migration exports
-export { migrateDb } from './migrate';
+export { applyMigrations } from './migrate';

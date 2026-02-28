@@ -82,6 +82,9 @@ export interface EmitMessageSentParams {
 
   /** ID of message this was replying to */
   replyToId?: string;
+
+  /** agents.id UUID — set by agent-dispatcher when agent sends */
+  senderAgentId?: string;
 }
 
 /**

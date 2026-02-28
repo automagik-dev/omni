@@ -26,6 +26,7 @@ function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     agentProviderId: 'provider-1',
     agentId: 'agent-1',
     agentType: 'agent',
+    agentFkId: null,
     agentTimeout: 60,
     agentStreamMode: true,
     agentReplyFilter: null,

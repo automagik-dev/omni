@@ -99,16 +99,45 @@ mock.module('@omni/core', () => {
 // Test Fixtures
 // ============================================================================
 
-// Mock database for tests
-const mockDb = {} as unknown as import('@omni/db').Database;
+// Mock database for tests.
+// The dispatcher's applyAgentFkOverrides calls db.select(...).from(...).where(...).limit(1)
+// to resolve agent entity overrides. We provide a chainable mock that returns a default agent row
+// matching the 'agent-uuid-1' FK used by createMockInstance.
+function createMockDb() {
+  const defaultAgentRow = {
+    id: 'agent-uuid-1',
+    agentProviderId: 'provider-1',
+    agentType: 'assistant',
+    metadata: {},
+    configPath: null,
+  };
+
+  const terminalChain = {
+    limit: mock(() => Promise.resolve([defaultAgentRow])),
+  };
+  const whereChain = {
+    where: mock(() => terminalChain),
+    limit: mock(() => Promise.resolve([defaultAgentRow])),
+  };
+  const fromChain = {
+    from: mock(() => whereChain),
+  };
+
+  return {
+    select: mock(() => fromChain),
+  } as unknown as import('@omni/db').Database;
+}
+
+const mockDb = createMockDb();
 
 function createMockInstance(overrides: Record<string, unknown> = {}) {
   return {
     id: 'inst-1',
     name: 'Test Instance',
     channel: 'whatsapp-baileys',
+    // agentId is now the UUID FK to agents (phase 3); agentProviderId/agentType are transient dispatch fields
+    agentId: 'agent-uuid-1',
     agentProviderId: 'provider-1',
-    agentId: 'agent-1',
     agentType: 'agent',
     agentTimeout: 60,
     agentStreamMode: false,
@@ -437,10 +466,10 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.run).not.toHaveBeenCalled();
     });
 
-    it('skips messages when instance has no agentProviderId', async () => {
+    it('skips messages when instance has no agentId', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ agentProviderId: null })),
+        getInstanceWithProvider: mock(async () => createMockInstance({ agentId: null })),
         getSenderName: mock(async () => 'User'),
         run: mock(async () => ({ parts: ['resp'], metadata: { runId: 'r', sessionId: 's', status: 'completed' } })),
       };
