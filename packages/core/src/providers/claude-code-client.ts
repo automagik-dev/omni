@@ -467,6 +467,15 @@ interface RunAccumulator {
   outputTokens: number;
 }
 
+type SDKUsage =
+  | { input_tokens?: number; output_tokens?: number }
+  | { total_tokens: number; tool_uses: number; duration_ms: number };
+
+function extractTokens(usage: SDKUsage | undefined): { input: number; output: number } {
+  if (!usage || !('input_tokens' in usage)) return { input: 0, output: 0 };
+  return { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0 };
+}
+
 /** Process a single SDK message during run(), returning a failed ProviderResponse for errors or null to continue */
 function processRunMessage(
   message: {
@@ -476,7 +485,7 @@ function processRunMessage(
     result?: string;
     errors?: string[];
     total_cost_usd?: number;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: SDKUsage;
   },
   acc: RunAccumulator,
   startTime: number,
@@ -491,8 +500,9 @@ function processRunMessage(
   if (message.subtype === 'success') {
     acc.content = message.result ?? '';
     acc.costUsd = message.total_cost_usd ?? 0;
-    acc.inputTokens = message.usage?.input_tokens ?? 0;
-    acc.outputTokens = message.usage?.output_tokens ?? 0;
+    const tokens = extractTokens(message.usage);
+    acc.inputTokens = tokens.input;
+    acc.outputTokens = tokens.output;
     return null;
   }
 
