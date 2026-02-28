@@ -1,6 +1,6 @@
 {
-  "id": "303e8f31-460e-402d-bf05-c7c08223e16b",
-  "prevId": "bf6088cb-5b82-4332-9196-e095a909ab5b",
+  "id": "b2dfb058-ecef-4d48-a0a5-eabe1a7a9201",
+  "prevId": "dc80630e-4e5b-45da-9965-7fa92b2b65b9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -482,6 +482,12 @@
           "notNull": true,
           "default": "'agent'"
         },
+        "agent_fk_id": {
+          "name": "agent_fk_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "agent_timeout": {
           "name": "agent_timeout",
           "type": "integer",
@@ -691,6 +697,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "agent_routes_agent_fk_idx": {
+          "name": "agent_routes_agent_fk_idx",
+          "columns": [
+            {
+              "expression": "agent_fk_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -728,6 +749,15 @@
           "columnsFrom": ["agent_provider_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_routes_agent_fk_id_agents_id_fk": {
+          "name": "agent_routes_agent_fk_id_agents_id_fk",
+          "tableFrom": "agent_routes",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_fk_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -860,6 +890,190 @@
           "columnsFrom": ["instance_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agents": {
+      "name": "agents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_type": {
+          "name": "agent_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'assistant'"
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'"
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_provider_id": {
+          "name": "agent_provider_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "config_path": {
+          "name": "config_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_internal": {
+          "name": "is_internal",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "agents_name_idx": {
+          "name": "agents_name_idx",
+          "columns": [
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agents_owner_idx": {
+          "name": "agents_owner_idx",
+          "columns": [
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agents_provider_idx": {
+          "name": "agents_provider_idx",
+          "columns": [
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agents_active_idx": {
+          "name": "agents_active_idx",
+          "columns": [
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agents_owner_id_persons_id_fk": {
+          "name": "agents_owner_id_persons_id_fk",
+          "tableFrom": "agents",
+          "tableTo": "persons",
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "agents_agent_provider_id_agent_providers_id_fk": {
+          "name": "agents_agent_provider_id_agent_providers_id_fk",
+          "tableFrom": "agents",
+          "tableTo": "agent_providers",
+          "columnsFrom": ["agent_provider_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -2955,37 +3169,11 @@
           "notNull": true,
           "default": "'off'"
         },
-        "agent_provider_id": {
-          "name": "agent_provider_id",
+        "agent_id": {
+          "name": "agent_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
-        },
-        "agent_api_url": {
-          "name": "agent_api_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "agent_api_key": {
-          "name": "agent_api_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "agent_id": {
-          "name": "agent_id",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'default'"
-        },
-        "agent_type": {
-          "name": "agent_type",
-          "type": "varchar(20)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'agent'"
         },
         "agent_timeout": {
           "name": "agent_timeout",
@@ -3408,14 +3596,29 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "instances_agent_id_idx": {
+          "name": "instances_agent_id_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "instances_agent_provider_id_agent_providers_id_fk": {
-          "name": "instances_agent_provider_id_agent_providers_id_fk",
+        "instances_agent_id_agents_id_fk": {
+          "name": "instances_agent_id_agents_id_fk",
           "tableFrom": "instances",
-          "tableTo": "agent_providers",
-          "columnsFrom": ["agent_provider_id"],
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -3656,6 +3859,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "sender_agent_id": {
+          "name": "sender_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         },
         "message_type": {
           "name": "message_type",
@@ -3950,6 +4159,21 @@
           "method": "btree",
           "with": {}
         },
+        "messages_sender_agent_idx": {
+          "name": "messages_sender_agent_idx",
+          "columns": [
+            {
+              "expression": "sender_agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "messages_source_idx": {
           "name": "messages_source_idx",
           "columns": [
@@ -4110,6 +4334,15 @@
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "messages_sender_agent_id_agents_id_fk": {
+          "name": "messages_sender_agent_id_agents_id_fk",
+          "tableFrom": "messages",
+          "tableTo": "agents",
+          "columnsFrom": ["sender_agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4253,6 +4486,24 @@
         "canonical_chat_id": {
           "name": "canonical_chat_id",
           "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "chat_uuid": {
+          "name": "chat_uuid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -4485,6 +4736,51 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "omni_events_agent_id_idx": {
+          "name": "omni_events_agent_id_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "omni_events_chat_uuid_idx": {
+          "name": "omni_events_chat_uuid_idx",
+          "columns": [
+            {
+              "expression": "chat_uuid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "omni_events_conversation_id_idx": {
+          "name": "omni_events_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -4511,6 +4807,24 @@
           "tableFrom": "omni_events",
           "tableTo": "platform_identities",
           "columnsFrom": ["platform_identity_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "omni_events_chat_uuid_chats_id_fk": {
+          "name": "omni_events_chat_uuid_chats_id_fk",
+          "tableFrom": "omni_events",
+          "tableTo": "chats",
+          "columnsFrom": ["chat_uuid"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "omni_events_agent_id_agents_id_fk": {
+          "name": "omni_events_agent_id_agents_id_fk",
+          "tableFrom": "omni_events",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -4945,6 +5259,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "channel": {
           "name": "channel",
           "type": "varchar(50)",
@@ -5051,6 +5371,21 @@
           "method": "btree",
           "with": {}
         },
+        "platform_identities_agent_idx": {
+          "name": "platform_identities_agent_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "platform_identities_channel_idx": {
           "name": "platform_identities_channel_idx",
           "columns": [
@@ -5134,6 +5469,15 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
+        "platform_identities_agent_id_agents_id_fk": {
+          "name": "platform_identities_agent_id_agents_id_fk",
+          "tableFrom": "platform_identities",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "platform_identities_instance_id_instances_id_fk": {
           "name": "platform_identities_instance_id_instances_id_fk",
           "tableFrom": "platform_identities",
@@ -5147,7 +5491,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "platform_identities_actor_xor": {
+          "name": "platform_identities_actor_xor",
+          "value": "NOT (person_id IS NOT NULL AND agent_id IS NOT NULL)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.plugin_storage": {

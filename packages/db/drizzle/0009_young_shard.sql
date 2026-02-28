@@ -1,1 +1,0 @@
-ALTER TABLE "media_content" ALTER COLUMN "cost_usd" SET DATA TYPE real;
