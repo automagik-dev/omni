@@ -414,7 +414,6 @@ describeWithDb('Agent Routes Endpoints', () => {
       const res = await app.request('/routes/metrics');
 
       expect(res.status).toBe(200);
-      // biome-ignore lint/suspicious/noExplicitAny: Metrics object has dynamic structure
       const data = (await res.json()) as { data: { cache: any; timestamp: string } };
       expect(data.data.cache).toMatchObject({
         hits: expect.any(Number),
