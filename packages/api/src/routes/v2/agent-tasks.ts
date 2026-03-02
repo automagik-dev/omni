@@ -105,9 +105,7 @@ agentTasksRoutes.patch('/:id', zValidator('json', updateTaskSchema), async (c) =
   const services = c.get('services');
 
   const task =
-    data.status === 'cancelled'
-      ? await services.agentTasks.cancelTask(id)
-      : await services.agentTasks.update(id, data);
+    data.status === 'cancelled' ? await services.agentTasks.cancelTask(id) : await services.agentTasks.update(id, data);
 
   return c.json({ data: task });
 });
