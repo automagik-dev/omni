@@ -16,6 +16,8 @@ interface StreamEntry {
 }
 
 const IDLE_CLOSE_MS = 30_000;
+const MAX_STREAMS = 5000;
+const MAX_STREAMS_PER_INSTANCE = 100;
 
 export class A2AStreamStore {
   private readonly streams = new Map<string, StreamEntry>();
@@ -30,6 +32,20 @@ export class A2AStreamStore {
    * The stream auto-closes after IDLE_CLOSE_MS of inactivity.
    */
   createPendingStream(instanceId: string, taskId: string): ReadableStream<Uint8Array> {
+    if (this.streams.size >= MAX_STREAMS) {
+      throw new Error('Stream store capacity exceeded');
+    }
+
+    let instanceCount = 0;
+    for (const key of this.streams.keys()) {
+      if (key.startsWith(`${instanceId}:`)) {
+        instanceCount++;
+      }
+    }
+    if (instanceCount >= MAX_STREAMS_PER_INSTANCE) {
+      throw new Error(`Stream limit exceeded for instance ${instanceId}`);
+    }
+
     const key = this.streamKey(instanceId, taskId);
     const store = this;
 

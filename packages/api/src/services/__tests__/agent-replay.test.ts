@@ -315,6 +315,66 @@ describe('AgentReplayService', () => {
       expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
+    test('paginates when first page is full — replays all messages across pages', async () => {
+      // Build 1000 rows for the first page and 3 rows for the second page
+      const page1Timestamp = new Date('2026-01-01T10:30:00Z');
+      const page2Timestamp = new Date('2026-01-01T11:30:00Z');
+
+      const page1Rows = Array.from({ length: 1000 }, (_, i) =>
+        createMockMessageRow({
+          id: `msg-p1-${i}`,
+          externalId: `ext-p1-${i}`,
+          platformTimestamp: page1Timestamp,
+        }),
+      );
+      const page2Rows = [
+        createMockMessageRow({ id: 'msg-p2-0', externalId: 'ext-p2-0', platformTimestamp: page2Timestamp }),
+        createMockMessageRow({ id: 'msg-p2-1', externalId: 'ext-p2-1', platformTimestamp: page2Timestamp }),
+        createMockMessageRow({ id: 'msg-p2-2', externalId: 'ext-p2-2', platformTimestamp: page2Timestamp }),
+      ];
+
+      // DB mock that returns page1Rows on first messages query, page2Rows on second
+      let messagesQueryCount = 0;
+      const mockUpdate = mock(() => ({
+        set: mock(() => ({ where: mock(() => Promise.resolve()) })),
+      }));
+      const mockSelect = mock(() => {
+        messagesQueryCount++;
+        const rows = messagesQueryCount === 1 ? page1Rows : page2Rows;
+        return {
+          from: mock(() => ({
+            innerJoin: mock(() => ({
+              where: mock(() => ({
+                orderBy: mock(() => ({
+                  limit: mock(() => Promise.resolve(rows)),
+                })),
+              })),
+            })),
+          })),
+        };
+      });
+      const db = { select: mockSelect, update: mockUpdate } as unknown as Database & {
+        select: ReturnType<typeof mock>;
+        update: ReturnType<typeof mock>;
+      };
+
+      const service = new AgentReplayService(db, eventBus);
+      const result = await service.replayMissedMessages({
+        instanceId: 'inst-1',
+        since: new Date('2026-01-01T10:00:00Z'),
+      });
+
+      // All 1003 messages should be replayed across two pages
+      expect(result.replayed).toBe(1003);
+      expect(result.skipped).toBe(0);
+      // DB was queried twice (two pages)
+      expect(mockSelect).toHaveBeenCalledTimes(2);
+      // Event bus received all 1003 publish calls
+      expect(eventBus.publish).toHaveBeenCalledTimes(1003);
+      // until should be the last page's timestamp, not now
+      expect(result.until).toBe(page2Timestamp);
+    });
+
     test('uses cutoff when since is undefined', async () => {
       const db = createMessagesOnlyDb([]);
       const service = new AgentReplayService(db, eventBus);

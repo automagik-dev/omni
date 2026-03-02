@@ -145,6 +145,7 @@ export function createApp(
       '/a2a/:instanceId',
       authMiddleware,
       requireInstanceAccess((c) => c.req.param('instanceId')),
+      rateLimitMiddleware,
       async (c) => {
         const instanceId = c.req.param('instanceId');
         if (!UUID_REGEX.test(instanceId)) {

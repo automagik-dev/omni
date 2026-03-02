@@ -109,9 +109,7 @@ function formatJobStatus(job: {
     `Failed: ${job.failedItems}`,
     job.skippedItems !== undefined ? `Skipped: ${job.skippedItems}` : null,
     job.currentItem ? `Current: ${job.currentItem}` : null,
-    job.totalCostUsd !== null && job.totalCostUsd !== undefined
-      ? `Cost: $${(job.totalCostUsd / 100).toFixed(2)}`
-      : null,
+    job.totalCostUsd !== null && job.totalCostUsd !== undefined ? `Cost: $${(job.totalCostUsd ?? 0).toFixed(2)}` : null,
     job.estimatedCompletion ? `ETA: ${new Date(job.estimatedCompletion).toLocaleTimeString()}` : null,
   ];
   return lines.filter(Boolean).join('\n');

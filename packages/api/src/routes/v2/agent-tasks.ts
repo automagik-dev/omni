@@ -108,8 +108,23 @@ agentTasksRoutes.patch('/:id', zValidator('param', idParamSchema), zValidator('j
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  const task =
-    data.status === 'cancelled' ? await services.agentTasks.cancelTask(id) : await services.agentTasks.update(id, data);
+  let task: Awaited<ReturnType<typeof services.agentTasks.update>>;
+  switch (data.status) {
+    case 'running':
+      task = await services.agentTasks.startTask(id);
+      break;
+    case 'completed':
+      task = await services.agentTasks.completeTask(id, data.result ?? undefined);
+      break;
+    case 'failed':
+      task = await services.agentTasks.failTask(id, data.error ?? 'Unknown error');
+      break;
+    case 'cancelled':
+      task = await services.agentTasks.cancelTask(id);
+      break;
+    default:
+      task = await services.agentTasks.update(id, data);
+  }
 
   return c.json({ data: task });
 });

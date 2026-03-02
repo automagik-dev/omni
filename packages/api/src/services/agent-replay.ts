@@ -11,7 +11,7 @@ import type { EventBus } from '@omni/core';
 import { createLogger, generateCorrelationId } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
-import { and, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, lte, or, sql } from 'drizzle-orm';
 
 const log = createLogger('agent-replay');
 
@@ -96,7 +96,7 @@ export class AgentReplayService {
         skipped: result.skipped,
         since: result.since.toISOString(),
       });
-      await this.updateLastSeenAt(instanceId);
+      await this.updateLastSeenAt(instanceId, result.until);
     } catch (error) {
       log.error('Replay failed', { instanceId, error: String(error) });
     }
@@ -119,55 +119,103 @@ export class AgentReplayService {
 
     log.debug('Fetching missed messages', { instanceId, since: since.toISOString(), until: now.toISOString() });
 
-    // Query all inbound messages for this instance within the window
-    const rows = await this.db
-      .select({
-        id: messages.id,
-        chatId: messages.chatId,
-        externalId: messages.externalId,
-        messageType: messages.messageType,
-        textContent: messages.textContent,
-        mediaUrl: messages.mediaUrl,
-        mediaLocalPath: messages.mediaLocalPath,
-        mediaMimeType: messages.mediaMimeType,
-        senderPlatformUserId: messages.senderPlatformUserId,
-        replyToExternalId: messages.replyToExternalId,
-        rawPayload: messages.rawPayload,
-        platformTimestamp: messages.platformTimestamp,
-        isFromMe: messages.isFromMe,
-        senderAgentId: messages.senderAgentId,
-        // Join chat to get instanceId and externalId (the platform chat/JID)
-        chatExternalId: chats.externalId,
-        chatInstanceId: chats.instanceId,
-      })
-      .from(messages)
-      .innerJoin(chats, eq(messages.chatId, chats.id))
-      .where(
-        and(
-          eq(chats.instanceId, instanceId),
-          eq(messages.isFromMe, false),
-          // Only include non-agent-sent messages
-          sql`${messages.senderAgentId} IS NULL`,
-          // Only active messages
-          sql`${messages.deletedAt} IS NULL`,
-          // Within the replay window
-          gte(messages.platformTimestamp, since),
-          lte(messages.platformTimestamp, now),
-        ),
-      )
-      .orderBy(messages.platformTimestamp)
-      .limit(1000);
+    let cursorTimestamp = since;
+    let cursorId: string | null = null;
+    let totalReplayed = 0;
+    let totalSkipped = 0;
+    const PAGE_SIZE = 1000;
 
-    if (rows.length === 1000) {
-      log.warn('Replay message cap hit', { instanceId, limit: 1000 });
+    while (true) {
+      const rows = await this.db
+        .select({
+          id: messages.id,
+          chatId: messages.chatId,
+          externalId: messages.externalId,
+          messageType: messages.messageType,
+          textContent: messages.textContent,
+          mediaUrl: messages.mediaUrl,
+          mediaLocalPath: messages.mediaLocalPath,
+          mediaMimeType: messages.mediaMimeType,
+          senderPlatformUserId: messages.senderPlatformUserId,
+          replyToExternalId: messages.replyToExternalId,
+          rawPayload: messages.rawPayload,
+          platformTimestamp: messages.platformTimestamp,
+          isFromMe: messages.isFromMe,
+          senderAgentId: messages.senderAgentId,
+          // Join chat to get instanceId and externalId (the platform chat/JID)
+          chatExternalId: chats.externalId,
+          chatInstanceId: chats.instanceId,
+        })
+        .from(messages)
+        .innerJoin(chats, eq(messages.chatId, chats.id))
+        .where(
+          and(
+            eq(chats.instanceId, instanceId),
+            eq(messages.isFromMe, false),
+            // Only include non-agent-sent messages
+            sql`${messages.senderAgentId} IS NULL`,
+            // Only active messages
+            sql`${messages.deletedAt} IS NULL`,
+            // Composite cursor: (timestamp > cursor) OR (timestamp = cursor AND id > cursorId)
+            // This avoids skipping messages with identical timestamps at page boundaries
+            cursorId
+              ? or(
+                  gt(messages.platformTimestamp, cursorTimestamp),
+                  and(eq(messages.platformTimestamp, cursorTimestamp), gt(messages.id, cursorId)),
+                )
+              : gt(messages.platformTimestamp, cursorTimestamp),
+            lte(messages.platformTimestamp, now),
+          ),
+        )
+        .orderBy(asc(messages.platformTimestamp), asc(messages.id))
+        .limit(PAGE_SIZE);
+
+      if (rows.length === 0) break;
+
+      if (rows.length === PAGE_SIZE) {
+        log.warn('Replay page cap hit, fetching next page', {
+          instanceId,
+          limit: PAGE_SIZE,
+          cursor: cursorTimestamp.toISOString(),
+        });
+      }
+
+      const counts = await this.redispatchRows(instanceId, rows);
+      totalReplayed += counts.replayed;
+      totalSkipped += counts.skipped;
+
+      // Advance composite cursor to last row's (timestamp, id)
+      // Safe: rows.length > 0 is guaranteed by the break above
+      const lastRow = rows[rows.length - 1] as (typeof rows)[0];
+      cursorTimestamp = lastRow.platformTimestamp;
+      cursorId = lastRow.id;
+
+      if (rows.length < PAGE_SIZE) break;
     }
 
+    return { instanceId, replayed: totalReplayed, skipped: totalSkipped, since, until: cursorTimestamp };
+  }
+
+  /**
+   * Update `lastSeenAt` for an instance to now.
+   * Called on both clean connect and disconnect so the next replay window is accurate.
+   */
+  async updateLastSeenAt(instanceId: string, timestamp?: Date): Promise<void> {
+    await this.db
+      .update(instances)
+      .set({ lastSeenAt: timestamp ?? new Date() })
+      .where(eq(instances.id, instanceId));
+  }
+
+  private async redispatchRows(
+    instanceId: string,
+    rows: { id: string; [k: string]: unknown }[],
+  ): Promise<{ replayed: number; skipped: number }> {
     let replayed = 0;
     let skipped = 0;
-
     for (const row of rows) {
       try {
-        await this.redispatchMessage(instanceId, row);
+        await this.redispatchMessage(instanceId, row as Parameters<typeof this.redispatchMessage>[1]);
         replayed++;
       } catch (error) {
         log.warn('Failed to redispatch message during replay', {
@@ -178,16 +226,7 @@ export class AgentReplayService {
         skipped++;
       }
     }
-
-    return { instanceId, replayed, skipped, since, until: now };
-  }
-
-  /**
-   * Update `lastSeenAt` for an instance to now.
-   * Called on both clean connect and disconnect so the next replay window is accurate.
-   */
-  async updateLastSeenAt(instanceId: string): Promise<void> {
-    await this.db.update(instances).set({ lastSeenAt: new Date() }).where(eq(instances.id, instanceId));
+    return { replayed, skipped };
   }
 
   /**

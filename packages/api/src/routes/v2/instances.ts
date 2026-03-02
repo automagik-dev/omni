@@ -2339,7 +2339,10 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
 const replaySchema = z.object({
   since: z
     .string()
-    .refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid ISO 8601 timestamp')
+    .refine(
+      (v) => /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(v),
+      'Invalid ISO 8601 timestamp (expected YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ)',
+    )
     .optional()
     .describe('Replay start time (ISO 8601 timestamp). Default: lastSeenAt from instance record. Capped at 24h ago.'),
 });
