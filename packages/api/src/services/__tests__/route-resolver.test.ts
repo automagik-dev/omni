@@ -119,7 +119,11 @@ describe('RouteResolver', () => {
 
   test('chat route takes priority over user route', async () => {
     // DB query should return chat route first due to ORDER BY
-    const chatRoute = createRoute({ scope: 'chat', chatId: TEST_CHAT_UUID, agentId: 'chat-agent' });
+    const chatRoute = createRoute({
+      scope: 'chat',
+      chatId: TEST_CHAT_UUID,
+      agentId: '00000000-0000-0000-0000-000000000002',
+    });
     const db = createMockDb([chatRoute]); // Only chat route returned (DB does filtering)
     const resolver = new RouteResolver(db);
 
