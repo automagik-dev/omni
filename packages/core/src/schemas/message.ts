@@ -49,6 +49,9 @@ export const OmniEventRecordSchema = z.object({
   replyToExternalId: z.string().max(255).nullable(),
   chatId: z.string().max(255).nullable(),
   canonicalChatId: z.string().max(255).nullable(),
+  chatUuid: UuidSchema.nullable(),
+  agentId: UuidSchema.nullable(),
+  conversationId: UuidSchema.nullable(),
 
   // Status
   status: EventStatusSchema,

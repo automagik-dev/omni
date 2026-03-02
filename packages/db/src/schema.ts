@@ -846,6 +846,34 @@ export const platformIdentities = pgTable(
 );
 
 // ============================================================================
+// CONVERSATIONS
+// ============================================================================
+
+/**
+ * Channel-agnostic conversation container.
+ * Groups multiple Chats (across channels) into a single thread of continuity.
+ * @see docs/architecture/actor-model.md — omni-233
+ */
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: varchar('title', { length: 500 }),
+    summary: text('summary'),
+    state: jsonb('state').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
+    updatedAtIdx: index('conversations_updated_at_idx').on(table.updatedAt),
+  }),
+);
+
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+
+// ============================================================================
 // CHATS (Unified Chat Model)
 // ============================================================================
 
@@ -893,6 +921,9 @@ export const chats = pgTable(
     // ---- Platform metadata ----
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
+    // ---- Conversation ----
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -910,6 +941,7 @@ export const chats = pgTable(
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),
     lastMessageIdx: index('chats_last_message_idx').on(table.lastMessageAt),
+    conversationIdx: index('chats_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -1193,7 +1225,7 @@ export const omniEvents = pgTable(
     canonicalChatId: varchar('canonical_chat_id', { length: 255 }), // Resolved @lid → phone
     chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
-    conversationId: uuid('conversation_id'), // no FK yet — conversations table pending
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1615,10 +1647,19 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
   sentMessages: many(messages),
 }));
 
+export const conversationsRelations = relations(conversations, ({ many }) => ({
+  chats: many(chats),
+  omniEvents: many(omniEvents),
+}));
+
 export const chatsRelations = relations(chats, ({ one, many }) => ({
   instance: one(instances, {
     fields: [chats.instanceId],
     references: [instances.id],
+  }),
+  conversation: one(conversations, {
+    fields: [chats.conversationId],
+    references: [conversations.id],
   }),
   parentChat: one(chats, {
     fields: [chats.parentChatId],
@@ -1704,6 +1745,10 @@ export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
   agent: one(agents, {
     fields: [omniEvents.agentId],
     references: [agents.id],
+  }),
+  conversation: one(conversations, {
+    fields: [omniEvents.conversationId],
+    references: [conversations.id],
   }),
   mediaContent: many(mediaContent),
 }));
@@ -2319,4 +2364,108 @@ export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
     references: [agents.id],
   }),
   triggerLogs: many(triggerLogs),
+}));
+
+// ============================================================================
+// AGENT TASKS
+// ============================================================================
+
+export const agentTaskStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled', 'waiting_input'] as const;
+export type AgentTaskStatus = (typeof agentTaskStatuses)[number];
+
+/**
+ * Persistent task history for agents.
+ * Each row represents a discrete unit of work performed by an agent
+ * (e.g. web search, code execution, API call, sub-agent delegation).
+ *
+ * @see docs/architecture/actor-model.md — "Agent Task (persistent)"
+ */
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // ---- Core FKs ----
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    /** The message that triggered this task (null for programmatically created tasks) */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+
+    // ---- Classification ----
+    /** Task type: 'web_search' | 'code_exec' | 'api_call' | 'sub_agent' | 'media_process' | 'custom.*' */
+    type: varchar('type', { length: 100 }).notNull(),
+    /** Human-readable title: "Searching for X" */
+    title: varchar('title', { length: 500 }).notNull(),
+    description: text('description'),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<AgentTaskStatus>(),
+    /** Progress percentage 0-100 */
+    progress: integer('progress').notNull().default(0),
+    priority: integer('priority').notNull().default(0),
+
+    // ---- Payload ----
+    /** Open per-task-type metadata — no migration needed for new fields */
+    metadata: jsonb('metadata').notNull().default({}).$type<Record<string, unknown>>(),
+    result: jsonb('result').$type<Record<string, unknown>>(),
+    error: text('error'),
+
+    // ---- Subtask nesting ----
+    parentTaskId: uuid('parent_task_id').references(
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      (): AnyPgColumn => agentTasks.id,
+      { onDelete: 'set null' },
+    ),
+    subtaskCount: integer('subtask_count').notNull().default(0),
+    completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
+    chatIdIdx: index('agent_tasks_chat_id_idx').on(table.chatId),
+    conversationIdIdx: index('agent_tasks_conversation_id_idx').on(table.conversationId),
+    parentTaskIdIdx: index('agent_tasks_parent_task_id_idx').on(table.parentTaskId),
+    statusIdx: index('agent_tasks_status_idx').on(table.status),
+    agentChatIdx: index('agent_tasks_agent_chat_idx').on(table.agentId, table.chatId),
+    agentStatusIdx: index('agent_tasks_agent_status_idx').on(table.agentId, table.status),
+  }),
+);
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type NewAgentTask = typeof agentTasks.$inferInsert;
+
+export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentTasks.agentId],
+    references: [agents.id],
+  }),
+  chat: one(chats, {
+    fields: [agentTasks.chatId],
+    references: [chats.id],
+  }),
+  conversation: one(conversations, {
+    fields: [agentTasks.conversationId],
+    references: [conversations.id],
+  }),
+  message: one(messages, {
+    fields: [agentTasks.messageId],
+    references: [messages.id],
+  }),
+  parentTask: one(agentTasks, {
+    fields: [agentTasks.parentTaskId],
+    references: [agentTasks.id],
+    relationName: 'parentChild',
+  }),
+  subtasks: many(agentTasks, {
+    relationName: 'parentChild',
+  }),
 }));

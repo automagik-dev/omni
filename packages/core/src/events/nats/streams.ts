@@ -23,6 +23,7 @@ export const STREAM_NAMES = {
   SESSION: 'SESSION',
   CUSTOM: 'CUSTOM',
   SYSTEM: 'SYSTEM',
+  AGENT: 'AGENT',
 } as const;
 
 export type StreamName = (typeof STREAM_NAMES)[keyof typeof STREAM_NAMES];
@@ -108,6 +109,14 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
     retention: RetentionPolicy.Limits,
     description: 'Internal system events (dead_letter, replay, health, sync, batch-job, presence)',
   },
+  [STREAM_NAMES.AGENT]: {
+    name: STREAM_NAMES.AGENT,
+    subjects: ['agent.>'],
+    max_age: daysToNs(1),
+    storage: StorageType.File,
+    retention: RetentionPolicy.Limits,
+    description: 'Agent lifecycle and state change events (state.changed, registered, etc.)',
+  },
 };
 
 /**
@@ -129,6 +138,7 @@ export function getStreamForEventType(eventType: string): StreamName {
     sync: STREAM_NAMES.SYSTEM,
     'batch-job': STREAM_NAMES.SYSTEM,
     presence: STREAM_NAMES.SYSTEM,
+    agent: STREAM_NAMES.AGENT,
   };
 
   return prefixToStream[prefix] ?? STREAM_NAMES.CUSTOM;

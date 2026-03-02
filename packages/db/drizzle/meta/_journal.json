@@ -29,6 +29,13 @@
       "when": 1772464938620,
       "tag": "0003_real_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1772465159677,
+      "tag": "0004_solid_gladiator",
+      "breakpoints": true
     }
   ]
 }
