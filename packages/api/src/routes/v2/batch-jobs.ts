@@ -173,7 +173,7 @@ batchJobsRoutes.get('/:id', async (c) => {
   return c.json({
     data: {
       ...job,
-      totalCostUsd: Number(job.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
+      totalCostUsd: Number(job.totalCostUsd ?? 0), // USD decimal from DB
     },
   });
 });
@@ -200,7 +200,7 @@ batchJobsRoutes.get('/:id/status', async (c) => {
       skippedItems: status.skippedItems,
       progressPercent: status.progressPercent,
       currentItem: status.currentItem,
-      totalCostUsd: Number(status.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
+      totalCostUsd: Number(status.totalCostUsd ?? 0), // USD decimal from DB
       totalTokens: status.totalTokens,
       estimatedCompletion: status.estimatedCompletion?.toISOString(),
       startedAt: status.startedAt?.toISOString(),

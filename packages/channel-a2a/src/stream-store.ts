@@ -33,6 +33,14 @@ export class A2AStreamStore {
     const key = this.streamKey(instanceId, taskId);
     const store = this;
 
+    // Clear any existing stream's idle timer before replacing it
+    const existing = this.streams.get(key);
+    if (existing?.closeTimer !== undefined) {
+      clearTimeout(existing.closeTimer);
+    }
+
+    let entryRef: StreamEntry;
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const entry: StreamEntry = {
@@ -49,11 +57,14 @@ export class A2AStreamStore {
             } catch {
               // Already closed
             }
-            store.streams.delete(key);
+            if (store.streams.get(key) === entryRef) {
+              store.streams.delete(key);
+            }
           },
           partIndex: 0,
         };
 
+        entryRef = entry;
         store.streams.set(key, entry);
 
         // Auto-close on idle (no parts received)
@@ -62,7 +73,12 @@ export class A2AStreamStore {
         }, IDLE_CLOSE_MS);
       },
       cancel() {
-        store.streams.delete(key);
+        if (store.streams.get(key) === entryRef) {
+          if (entryRef.closeTimer !== undefined) {
+            clearTimeout(entryRef.closeTimer);
+          }
+          store.streams.delete(key);
+        }
       },
     });
 

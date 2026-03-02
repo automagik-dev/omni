@@ -140,11 +140,16 @@ export function createApp(
     });
 
     // A2A JSON-RPC: POST /a2a/:instanceId (requires auth + instance-level access)
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     app.post(
       '/a2a/:instanceId',
       authMiddleware,
       requireInstanceAccess((c) => c.req.param('instanceId')),
       async (c) => {
+        const instanceId = c.req.param('instanceId');
+        if (!UUID_REGEX.test(instanceId)) {
+          return c.json({ error: 'Invalid instance ID format' }, 400);
+        }
         const channelRegistry = c.get('channelRegistry');
         const plugin = channelRegistry?.get('a2a');
         if (!plugin?.handleWebhook) {

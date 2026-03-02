@@ -110,7 +110,7 @@ export class A2AClient implements IAgentClient {
         body: JSON.stringify({ jsonrpc: '2.0', id: 'health', method: 'tasks/get', params: { id: 'ping' } }),
         signal: AbortSignal.timeout(5_000),
       });
-      return { healthy: response.status !== 0, latencyMs: Date.now() - start };
+      return { healthy: response.ok, latencyMs: Date.now() - start };
     } catch (error) {
       return { healthy: false, latencyMs: Date.now() - start, error: String(error) };
     }
