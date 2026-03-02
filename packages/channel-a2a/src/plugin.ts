@@ -72,6 +72,17 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
     return { success: true, timestamp: Date.now() };
   }
 
+  /**
+   * Called by dispatcher after sendResponseParts completes (duration=0 → 'paused').
+   * Closes the A2A stream with 'completed' so the client gets a terminal event
+   * instead of waiting for the 30s idle timeout.
+   */
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    if (duration === 0 && this.streamStore.hasStream(instanceId, chatId)) {
+      this.streamStore.closeStream(instanceId, chatId, 'completed');
+    }
+  }
+
   // ─── Webhook ──────────────────────────────────────────────────
 
   async handleWebhook(request: Request): Promise<Response> {

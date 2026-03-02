@@ -171,6 +171,16 @@ describe('A2AClient', () => {
       expect(body.params.contextId).toBe('my-session');
     });
 
+    it('throws ProviderError on non-ok HTTP response', async () => {
+      mockImpl.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }));
+
+      const client = new A2AClient(CONFIG);
+
+      await expect(client.run({ message: 'Test', userId: 'u-1', agentId: 'test-agent' })).rejects.toBeInstanceOf(
+        ProviderError,
+      );
+    });
+
     it('sends Authorization header when apiKey is set', async () => {
       const rpcResponse = {
         jsonrpc: '2.0',

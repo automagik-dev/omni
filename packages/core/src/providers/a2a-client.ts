@@ -43,6 +43,9 @@ export class A2AClient implements IAgentClient {
     const body = this.buildJsonRpcRequest('message/send', request);
 
     const response = await this.post(body, request.timeoutMs ?? this.defaultTimeoutMs);
+    if (!response.ok) {
+      throw new ProviderError(`A2A request failed: ${response.status}`, 'SERVER_ERROR', response.status);
+    }
     const result = (await response.json()) as Record<string, unknown>;
 
     if (result.error) {
@@ -285,6 +288,9 @@ export class A2AClient implements IAgentClient {
       };
 
       const response = await this.post(body, Math.min(10_000, Math.max(0, deadline - Date.now())));
+      if (!response.ok) {
+        throw new ProviderError(`A2A poll failed: ${response.status}`, 'SERVER_ERROR', response.status);
+      }
       const result = (await response.json()) as Record<string, unknown>;
 
       if (result.error) break; // Unexpected error — return empty
