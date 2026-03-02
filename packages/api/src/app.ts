@@ -41,7 +41,7 @@ function getAllowedOrigins(): string[] | '*' {
   return envOrigins.split(',').map((origin) => origin.trim());
 }
 
-import { authMiddleware } from './middleware/auth';
+import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
 
 import { createContextMiddleware } from './middleware/context';
@@ -139,15 +139,20 @@ export function createApp(
       return plugin.handleWebhook(c.req.raw);
     });
 
-    // A2A JSON-RPC: POST /a2a/:instanceId (requires auth — reuse authMiddleware)
-    app.post('/a2a/:instanceId', authMiddleware, async (c) => {
-      const channelRegistry = c.get('channelRegistry');
-      const plugin = channelRegistry?.get('a2a');
-      if (!plugin?.handleWebhook) {
-        return c.json({ error: 'A2A channel not available' }, 503);
-      }
-      return plugin.handleWebhook(c.req.raw);
-    });
+    // A2A JSON-RPC: POST /a2a/:instanceId (requires auth + instance-level access)
+    app.post(
+      '/a2a/:instanceId',
+      authMiddleware,
+      requireInstanceAccess((c) => c.req.param('instanceId')),
+      async (c) => {
+        const channelRegistry = c.get('channelRegistry');
+        const plugin = channelRegistry?.get('a2a');
+        if (!plugin?.handleWebhook) {
+          return c.json({ error: 'A2A channel not available' }, 503);
+        }
+        return plugin.handleWebhook(c.req.raw);
+      },
+    );
   } else {
     app.all('/a2a/*', (c) => c.json({ error: 'A2A channel not enabled. Set A2A_ENABLED=true.' }, 503));
     app.get('/.well-known/agent.json', (c) => c.json({ error: 'A2A not enabled' }, 503));

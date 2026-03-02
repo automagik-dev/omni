@@ -105,6 +105,10 @@ export async function handleA2ARequest(request: Request, ctx: A2AHandlerContext)
     return jsonResponse(jsonRpcError(null, RPC_PARSE_ERROR, 'Parse error'), 400);
   }
 
+  if (typeof rpcReq !== 'object' || rpcReq === null) {
+    return jsonResponse(jsonRpcError(null, RPC_INVALID_REQUEST, 'Invalid JSON-RPC request'), 400);
+  }
+
   if (rpcReq.jsonrpc !== '2.0' || !rpcReq.method) {
     return jsonResponse(jsonRpcError(rpcReq.id ?? null, RPC_INVALID_REQUEST, 'Invalid JSON-RPC request'), 400);
   }

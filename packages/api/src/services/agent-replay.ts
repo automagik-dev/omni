@@ -96,10 +96,9 @@ export class AgentReplayService {
         skipped: result.skipped,
         since: result.since.toISOString(),
       });
+      await this.updateLastSeenAt(instanceId);
     } catch (error) {
       log.error('Replay failed', { instanceId, error: String(error) });
-    } finally {
-      await this.updateLastSeenAt(instanceId);
     }
   }
 

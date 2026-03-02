@@ -189,7 +189,7 @@ describe('AgentReplayService', () => {
       expect(db.update).toHaveBeenCalledTimes(1);
     });
 
-    test('updates lastSeenAt even when replay throws', async () => {
+    test('does NOT update lastSeenAt when replay throws', async () => {
       const instance = createMockInstance();
       let selectCallCount = 0;
 
@@ -227,8 +227,8 @@ describe('AgentReplayService', () => {
 
       await service.onInstanceConnect('inst-1');
 
-      // Even after failure, lastSeenAt must be updated (finally block)
-      expect(db.update).toHaveBeenCalledTimes(1);
+      // Failed replay must NOT advance lastSeenAt — prevents message loss
+      expect(db.update).not.toHaveBeenCalled();
     });
   });
 
