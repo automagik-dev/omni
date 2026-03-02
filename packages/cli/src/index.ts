@@ -31,6 +31,7 @@ import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createReplayCommand } from './commands/replay.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSendCommand } from './commands/send.js';
@@ -212,6 +213,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Trigger history backfill for instances',
+  },
+  {
+    create: createReplayCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Replay missed messages for an agent instance',
   },
 
   // Performance/tracing

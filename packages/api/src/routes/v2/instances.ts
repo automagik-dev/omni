@@ -12,6 +12,7 @@ import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
+import { AgentReplayService } from '../../services/agent-replay';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
@@ -2328,6 +2329,72 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
     const message = error instanceof Error ? error.message : 'Unknown error';
     log.error('Failed to trigger resync', { instanceId: id, error: message });
     return c.json({ error: { code: 'RESYNC_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
+// Agent Replay: manually replay missed messages
+// ============================================================================
+
+const replaySchema = z.object({
+  since: z
+    .string()
+    .optional()
+    .describe('Replay start time (ISO 8601 timestamp). Default: lastSeenAt from instance record. Capped at 24h ago.'),
+});
+
+/**
+ * POST /v2/instances/:id/replay - Manually trigger agent replay for missed messages
+ *
+ * Re-dispatches inbound messages received since `since` (or lastSeenAt, capped at 24h)
+ * through the normal agent handler pipeline.
+ */
+instancesRoutes.post('/:id/replay', instanceAccess, zValidator('json', replaySchema), async (c) => {
+  const id = c.req.param('id');
+  const { since } = c.req.valid('json');
+  const services = c.get('services');
+  const eventBus = c.get('eventBus');
+  const db = c.get('db');
+
+  if (!eventBus) {
+    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Event bus not available' } }, 503);
+  }
+
+  let instance: Awaited<ReturnType<typeof services.instances.getById>>;
+  try {
+    instance = await services.instances.getById(id);
+  } catch (err) {
+    if (err instanceof NotFoundError) {
+      return c.json({ error: { code: 'NOT_FOUND', message: `Instance ${id} not found` } }, 404);
+    }
+    throw err;
+  }
+
+  const replayService = new AgentReplayService(db, eventBus);
+  const sinceDate = since ? new Date(since) : undefined;
+
+  try {
+    const result = await replayService.replayMissedMessages({ instanceId: instance.id, since: sinceDate });
+
+    log.info('Manual replay triggered', {
+      instanceId: instance.id,
+      replayed: result.replayed,
+      since: result.since.toISOString(),
+    });
+
+    return c.json({
+      data: {
+        message: `Replay complete for ${instance.name}. ${result.replayed} message(s) re-dispatched.`,
+        replayed: result.replayed,
+        skipped: result.skipped,
+        since: result.since.toISOString(),
+        until: result.until.toISOString(),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    log.error('Manual replay failed', { instanceId: id, error: message });
+    return c.json({ error: { code: 'REPLAY_FAILED', message } }, 500);
   }
 });
 
