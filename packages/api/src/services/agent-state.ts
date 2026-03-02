@@ -195,6 +195,8 @@ export class AgentStateService {
    */
   async listActiveAgents(chatId?: string): Promise<AgentChatState[]> {
     const states: AgentChatState[] = [];
+    const MAX_LIST_KEYS = 1000;
+    const FETCH_CONCURRENCY = 50;
 
     try {
       const kv = await this.ensureKv();
@@ -207,24 +209,29 @@ export class AgentStateService {
 
       for await (const key of iter) {
         keys.push(key);
+        if (keys.length >= MAX_LIST_KEYS) break;
       }
 
-      await Promise.all(
-        keys.map(async (key) => {
-          const parts = key.split(':');
-          if (parts.length !== 2) return;
+      // Fetch in chunks to avoid unbounded concurrent requests
+      for (let i = 0; i < keys.length; i += FETCH_CONCURRENCY) {
+        const chunk = keys.slice(i, i + FETCH_CONCURRENCY);
+        await Promise.all(
+          chunk.map(async (key) => {
+            const parts = key.split(':');
+            if (parts.length !== 2) return;
 
-          const [_keyAgentId, keyChatId] = parts as [string, string];
+            const [_keyAgentId, keyChatId] = parts as [string, string];
 
-          if (chatId && keyChatId !== chatId) return;
+            if (chatId && keyChatId !== chatId) return;
 
-          const entry = await kv.get(key);
-          if (!entry) return;
+            const entry = await kv.get(key);
+            if (!entry) return;
 
-          const state = this.parseWatchEntry(entry);
-          if (state) states.push(state);
-        }),
-      );
+            const state = this.parseWatchEntry(entry);
+            if (state) states.push(state);
+          }),
+        );
+      }
     } catch (err) {
       log.warn('AgentStateService: failed to list active agents', {
         chatId,

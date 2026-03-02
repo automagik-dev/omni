@@ -147,10 +147,13 @@ async function handleMessageSend(
 
   await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
 
+  // Return a terminal state so A2A clients don't attempt to poll tasks/get.
+  // Omni processes messages asynchronously via event bus — the actual response
+  // will arrive via streaming or webhook, not via task polling.
   const task: A2ATask = {
     id: taskId,
     contextId,
-    status: { state: 'submitted', timestamp: new Date().toISOString() },
+    status: { state: 'completed', timestamp: new Date().toISOString() },
   };
 
   return jsonResponse(jsonRpc(id, { task }));

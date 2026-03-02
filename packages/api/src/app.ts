@@ -139,8 +139,8 @@ export function createApp(
       return plugin.handleWebhook(c.req.raw);
     });
 
-    // A2A JSON-RPC: POST /a2a/:instanceId
-    app.post('/a2a/:instanceId', async (c) => {
+    // A2A JSON-RPC: POST /a2a/:instanceId (requires auth — reuse authMiddleware)
+    app.post('/a2a/:instanceId', authMiddleware, async (c) => {
       const channelRegistry = c.get('channelRegistry');
       const plugin = channelRegistry?.get('a2a');
       if (!plugin?.handleWebhook) {

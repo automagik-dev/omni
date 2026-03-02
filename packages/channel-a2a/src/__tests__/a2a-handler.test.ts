@@ -111,12 +111,12 @@ describe('handleA2ARequest', () => {
       },
     };
 
-    it('returns 200 with task in submitted state', async () => {
+    it('returns 200 with task in completed (terminal) state', async () => {
       const res = await handleA2ARequest(makeRequest(validSend), makeCtx());
       const body = (await res.json()) as JsonRpcBody;
 
       expect(res.status).toBe(200);
-      expect(body.result?.task?.status?.state).toBe('submitted');
+      expect(body.result?.task?.status?.state).toBe('completed');
       expect(body.result?.task?.id).toBeDefined();
     });
 

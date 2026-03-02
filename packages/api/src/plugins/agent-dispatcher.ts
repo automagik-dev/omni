@@ -1574,7 +1574,7 @@ async function forwardToChainedInstance(
   const internalPlugin = await getPlugin('internal');
   if (!internalPlugin) return;
   // Propagate hop count carried in rawPayload (0 for external triggers)
-  const hopCount = ((messages[0]?.payload.rawPayload?.hopCount as number | undefined) ?? 0) + 1;
+  const hopCount = (messages[0]?.payload.rawPayload?.hopCount as number | undefined) ?? 0;
   for (const part of parts) {
     await internalPlugin.sendMessage(instance.agentChainToInstanceId, {
       to: instance.agentChainToInstanceId,
