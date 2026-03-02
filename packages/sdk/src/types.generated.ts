@@ -3290,16 +3290,9 @@ export interface components {
             personId: string | null;
             /**
              * Format: uuid
-             * @description Agent provider UUID
+             * @description Agent UUID (FK to agents table)
              */
-            agentProviderId: string;
-            /** @description Agent ID within the provider */
-            agentId: string;
-            /**
-             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-             * @enum {string}
-             */
-            agentType: "agent" | "team" | "workflow";
+            agentId: string | null;
             /** @description Agent timeout override (seconds) */
             agentTimeout: number | null;
             /** @description Stream mode override */
@@ -3376,17 +3369,9 @@ export interface components {
             personId?: string;
             /**
              * Format: uuid
-             * @description Agent provider UUID
+             * @description Agent UUID (FK to agents table)
              */
-            agentProviderId: string;
-            /** @description Agent ID within the provider */
             agentId: string;
-            /**
-             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-             * @default agent
-             * @enum {string}
-             */
-            agentType: "agent" | "team" | "workflow";
             /** @description Agent timeout (seconds) */
             agentTimeout?: number;
             /** @description Enable streaming responses */
@@ -3442,13 +3427,11 @@ export interface components {
             isActive: boolean;
         };
         UpdateAgentRouteRequest: {
-            /** @description Agent ID within the provider */
-            agentId?: string;
             /**
-             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-             * @enum {string}
+             * Format: uuid
+             * @description Agent UUID (FK to agents table). Set null to clear.
              */
-            agentType?: "agent" | "team" | "workflow";
+            agentId?: string | null;
             /** @description Agent timeout (seconds) */
             agentTimeout?: number | null;
             /** @description Enable streaming responses */
@@ -10189,16 +10172,9 @@ export interface operations {
                             personId: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (FK to agents table)
                              */
-                            agentProviderId: string;
-                            /** @description Agent ID within the provider */
-                            agentId: string;
-                            /**
-                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                             * @enum {string}
-                             */
-                            agentType: "agent" | "team" | "workflow";
+                            agentId: string | null;
                             /** @description Agent timeout override (seconds) */
                             agentTimeout: number | null;
                             /** @description Stream mode override */
@@ -10312,17 +10288,9 @@ export interface operations {
                     personId?: string;
                     /**
                      * Format: uuid
-                     * @description Agent provider UUID
+                     * @description Agent UUID (FK to agents table)
                      */
-                    agentProviderId: string;
-                    /** @description Agent ID within the provider */
                     agentId: string;
-                    /**
-                     * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                     * @default agent
-                     * @enum {string}
-                     */
-                    agentType?: "agent" | "team" | "workflow";
                     /** @description Agent timeout (seconds) */
                     agentTimeout?: number;
                     /** @description Enable streaming responses */
@@ -10415,16 +10383,9 @@ export interface operations {
                             personId: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (FK to agents table)
                              */
-                            agentProviderId: string;
-                            /** @description Agent ID within the provider */
-                            agentId: string;
-                            /**
-                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                             * @enum {string}
-                             */
-                            agentType: "agent" | "team" | "workflow";
+                            agentId: string | null;
                             /** @description Agent timeout override (seconds) */
                             agentTimeout: number | null;
                             /** @description Stream mode override */
@@ -10598,16 +10559,9 @@ export interface operations {
                             personId: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (FK to agents table)
                              */
-                            agentProviderId: string;
-                            /** @description Agent ID within the provider */
-                            agentId: string;
-                            /**
-                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                             * @enum {string}
-                             */
-                            agentType: "agent" | "team" | "workflow";
+                            agentId: string | null;
                             /** @description Agent timeout override (seconds) */
                             agentTimeout: number | null;
                             /** @description Stream mode override */
@@ -10793,13 +10747,11 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Agent ID within the provider */
-                    agentId?: string;
                     /**
-                     * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                     * @enum {string}
+                     * Format: uuid
+                     * @description Agent UUID (FK to agents table). Set null to clear.
                      */
-                    agentType?: "agent" | "team" | "workflow";
+                    agentId?: string | null;
                     /** @description Agent timeout (seconds) */
                     agentTimeout?: number | null;
                     /** @description Enable streaming responses */
@@ -10886,16 +10838,9 @@ export interface operations {
                             personId: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (FK to agents table)
                              */
-                            agentProviderId: string;
-                            /** @description Agent ID within the provider */
-                            agentId: string;
-                            /**
-                             * @description Agent type: agent (single agent), team (multi-agent), or workflow (agentic workflow)
-                             * @enum {string}
-                             */
-                            agentType: "agent" | "team" | "workflow";
+                            agentId: string | null;
                             /** @description Agent timeout override (seconds) */
                             agentTimeout: number | null;
                             /** @description Stream mode override */

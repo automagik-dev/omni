@@ -1,6 +1,6 @@
 {
-  "id": "b2dfb058-ecef-4d48-a0a5-eabe1a7a9201",
-  "prevId": "dc80630e-4e5b-45da-9965-7fa92b2b65b9",
+  "id": "d9bbf4d4-9b1d-4172-bbe8-c5c579cb9542",
+  "prevId": "45b0589b-5f75-47b9-8239-db6f5ceb3616",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -463,27 +463,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "agent_provider_id": {
-          "name": "agent_provider_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
         "agent_id": {
           "name": "agent_id",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agent_type": {
-          "name": "agent_type",
-          "type": "varchar(20)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'agent'"
-        },
-        "agent_fk_id": {
-          "name": "agent_fk_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -698,11 +679,11 @@
           "method": "btree",
           "with": {}
         },
-        "agent_routes_agent_fk_idx": {
-          "name": "agent_routes_agent_fk_idx",
+        "agent_routes_agent_id_idx": {
+          "name": "agent_routes_agent_id_idx",
           "columns": [
             {
-              "expression": "agent_fk_id",
+              "expression": "agent_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -742,20 +723,11 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agent_routes_agent_provider_id_agent_providers_id_fk": {
-          "name": "agent_routes_agent_provider_id_agent_providers_id_fk",
-          "tableFrom": "agent_routes",
-          "tableTo": "agent_providers",
-          "columnsFrom": ["agent_provider_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "agent_routes_agent_fk_id_agents_id_fk": {
-          "name": "agent_routes_agent_fk_id_agents_id_fk",
+        "agent_routes_agent_id_agents_id_fk": {
+          "name": "agent_routes_agent_id_agents_id_fk",
           "tableFrom": "agent_routes",
           "tableTo": "agents",
-          "columnsFrom": ["agent_fk_id"],
+          "columnsFrom": ["agent_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -899,6 +871,311 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.agent_tasks": {
+      "name": "agent_tasks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chat_id": {
+          "name": "chat_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "type": {
+          "name": "type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "progress": {
+          "name": "progress",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "result": {
+          "name": "result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subtask_count": {
+          "name": "subtask_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "completed_subtask_count": {
+          "name": "completed_subtask_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_tasks_agent_id_idx": {
+          "name": "agent_tasks_agent_id_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_chat_id_idx": {
+          "name": "agent_tasks_chat_id_idx",
+          "columns": [
+            {
+              "expression": "chat_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_conversation_id_idx": {
+          "name": "agent_tasks_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_parent_task_id_idx": {
+          "name": "agent_tasks_parent_task_id_idx",
+          "columns": [
+            {
+              "expression": "parent_task_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_status_idx": {
+          "name": "agent_tasks_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_agent_chat_idx": {
+          "name": "agent_tasks_agent_chat_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "chat_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_tasks_agent_status_idx": {
+          "name": "agent_tasks_agent_status_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_tasks_agent_id_agents_id_fk": {
+          "name": "agent_tasks_agent_id_agents_id_fk",
+          "tableFrom": "agent_tasks",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_tasks_chat_id_chats_id_fk": {
+          "name": "agent_tasks_chat_id_chats_id_fk",
+          "tableFrom": "agent_tasks",
+          "tableTo": "chats",
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_tasks_conversation_id_conversations_id_fk": {
+          "name": "agent_tasks_conversation_id_conversations_id_fk",
+          "tableFrom": "agent_tasks",
+          "tableTo": "conversations",
+          "columnsFrom": ["conversation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "agent_tasks_message_id_messages_id_fk": {
+          "name": "agent_tasks_message_id_messages_id_fk",
+          "tableFrom": "agent_tasks",
+          "tableTo": "messages",
+          "columnsFrom": ["message_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "agent_tasks_parent_task_id_agent_tasks_id_fk": {
+          "name": "agent_tasks_parent_task_id_agent_tasks_id_fk",
+          "tableFrom": "agent_tasks",
+          "tableTo": "agent_tasks",
+          "columnsFrom": ["parent_task_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.agents": {
       "name": "agents",
       "schema": "",
@@ -976,6 +1253,12 @@
         },
         "metadata": {
           "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_card": {
+          "name": "agent_card",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -2310,6 +2593,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -2455,6 +2744,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "chats_conversation_id_idx": {
+          "name": "chats_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -2465,6 +2769,15 @@
           "columnsFrom": ["instance_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "chats_conversation_id_conversations_id_fk": {
+          "name": "chats_conversation_id_conversations_id_fk",
+          "tableFrom": "chats",
+          "tableTo": "conversations",
+          "columnsFrom": ["conversation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -2512,6 +2825,89 @@
         }
       },
       "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.conversations": {
+      "name": "conversations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "conversations_created_at_idx": {
+          "name": "conversations_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "conversations_updated_at_idx": {
+          "name": "conversations_updated_at_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -3521,6 +3917,32 @@
           "primaryKey": false,
           "notNull": false
         },
+        "replay_enabled": {
+          "name": "replay_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_chain_to_instance_id": {
+          "name": "agent_chain_to_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "chain_mode": {
+          "name": "chain_mode",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'off'"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -3619,6 +4041,15 @@
           "tableFrom": "instances",
           "tableTo": "agents",
           "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "instances_agent_chain_to_instance_id_instances_id_fk": {
+          "name": "instances_agent_chain_to_instance_id_instances_id_fk",
+          "tableFrom": "instances",
+          "tableTo": "instances",
+          "columnsFrom": ["agent_chain_to_instance_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -4825,6 +5256,15 @@
           "tableFrom": "omni_events",
           "tableTo": "agents",
           "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "omni_events_conversation_id_conversations_id_fk": {
+          "name": "omni_events_conversation_id_conversations_id_fk",
+          "tableFrom": "omni_events",
+          "tableTo": "conversations",
+          "columnsFrom": ["conversation_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"

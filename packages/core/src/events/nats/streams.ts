@@ -112,10 +112,10 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
   [STREAM_NAMES.AGENT]: {
     name: STREAM_NAMES.AGENT,
     subjects: ['agent.>'],
-    max_age: daysToNs(1),
+    max_age: daysToNs(30),
     storage: StorageType.File,
     retention: RetentionPolicy.Limits,
-    description: 'Agent lifecycle and state change events (state.changed, registered, etc.)',
+    description: 'Agent lifecycle events (state, tasks, A2A, internal routing)',
   },
 };
 

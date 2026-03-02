@@ -27,6 +27,7 @@ export const AgentSchema = z.object({
   isInternal: z.boolean(),
   isActive: z.boolean(),
   metadata: MetadataSchema.nullable(),
+  agentCard: z.record(z.unknown()).nullable().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

@@ -5,7 +5,7 @@
 export const AGENT_TYPES = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code'] as const;
+export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a'] as const;
 export type ProviderSchema = (typeof PROVIDER_SCHEMAS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;

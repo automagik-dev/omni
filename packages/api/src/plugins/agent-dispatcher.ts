@@ -24,6 +24,8 @@ import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } fr
 import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
+  A2AAgentProvider,
+  AgUiAgentProvider,
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
@@ -1256,7 +1258,7 @@ function toTriggerFiles(mediaFiles: ProviderFile[]): ProviderFile[] | undefined 
  * TODO: wire mutated context values back into dispatch once allowlist infra exists.
  */
 async function executeBeforeAgentStartHooks(
-  instance: DispatchInstance,
+  instance: Instance & Partial<DispatchFields>,
   chatId: string,
   senderId: string,
   senderName: string | undefined,
@@ -1559,6 +1561,31 @@ function recordJourneyCheckpoint(correlationId: string | undefined, stage: strin
 }
 
 /**
+ * T10: Forward agent response parts to a chained instance via the internal channel plugin.
+ * Extracted to keep dispatchViaProvider below the complexity limit.
+ */
+async function forwardToChainedInstance(
+  instance: Instance,
+  parts: string[],
+  correlationId: string | undefined,
+  messages: BufferedMessage[],
+): Promise<void> {
+  if (instance.chainMode === 'off' || !instance.agentChainToInstanceId) return;
+  const internalPlugin = await getPlugin('internal');
+  if (!internalPlugin) return;
+  // Propagate hop count carried in rawPayload (0 for external triggers)
+  const hopCount = ((messages[0]?.payload.rawPayload?.hopCount as number | undefined) ?? 0) + 1;
+  for (const part of parts) {
+    await internalPlugin.sendMessage(instance.agentChainToInstanceId, {
+      to: instance.agentChainToInstanceId,
+      content: { type: 'text', text: part },
+      metadata: { sourceInstanceId: instance.id, chainMode: instance.chainMode, hopCount },
+    });
+  }
+  if (correlationId) recordJourneyCheckpoint(correlationId, 'T10', 'internal_chain_forwarded');
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1666,6 +1693,9 @@ async function dispatchViaProvider(
 
     // T9: Outbound sent via plugin
     recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+
+    // T10: Agent chaining — forward response to chained instance if configured
+    await forwardToChainedInstance(instance, parts, correlationId, messages);
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -2283,7 +2313,7 @@ async function processAgentResponse(
 
   // omni-h3q / omni-930: Look up the Agent entity UUID for this instance so that
   // sent messages can be attributed to the specific agent in the DB.
-  // Uses agentFkId directly when set (phase 2a), otherwise falls back to agentProviderId lookup.
+  // Uses agentId (UUID FK) directly when set, otherwise falls back to agentProviderId lookup.
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
   log.info('Dispatching to agent', {
@@ -2545,6 +2575,52 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
   });
 }
 
+/** Create an AG-UI agent provider */
+function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+  if (!provider.apiKey) {
+    log.warn('AG-UI provider has no API key, falling back to legacy path', { providerId: provider.id });
+    return null;
+  }
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const client = createProviderClient({
+    schema: provider.schema,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  return new AgUiAgentProvider(provider.id, provider.name, client, {
+    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    enableAutoSplit: instance.enableAutoSplit ?? true,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
+/** Create an A2A agent provider */
+function createA2AProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+  if (!provider.apiKey) {
+    log.warn('A2A provider has no API key, falling back to legacy path', { providerId: provider.id });
+    return null;
+  }
+
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  const client = createProviderClient({
+    schema: provider.schema,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+  });
+
+  return new A2AAgentProvider(provider.id, provider.name, client, {
+    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    enableAutoSplit: instance.enableAutoSplit ?? true,
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
  * Returns null if the schema is not supported for the new provider abstraction.
@@ -2574,6 +2650,12 @@ export function resolveProvider(
       break;
     case 'claude-code':
       agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
+      break;
+    case 'ag-ui':
+      agentProvider = createAgUiProviderInstance(provider, instance);
+      break;
+    case 'a2a':
+      agentProvider = createA2AProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -2690,17 +2772,13 @@ async function resolveEffectiveInstance(
 
   if (!route) {
     // No route matched - use instance defaults.
-    // omni-930 phase 2a: Apply instance-level agentFkId entity overrides if set.
+    // omni-930 phase 3 / omni-p7r: Apply instance-level agentId entity overrides if set.
     return applyInstanceFkAndReturn(db, instance);
   }
 
   // Merge route overrides with instance defaults
   const effectiveInstance: DispatchInstance = {
     ...instance,
-    // Stamp transient dispatch fields from the route (legacy agent_routes columns)
-    agentProviderId: route.agentProviderId,
-    agentInternalId: route.agentId,
-    agentType: route.agentType as DispatchFields['agentType'],
     // Override behavior (null = inherit from instance)
     agentTimeout: route.agentTimeout ?? instance.agentTimeout,
     agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
@@ -2715,9 +2793,9 @@ async function resolveEffectiveInstance(
     agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
   };
 
-  // omni-p7r / omni-930 phase 3: Resolve agent entity overrides.
-  // Route-level agentFkId takes priority; fall back to instance-level agentId.
-  const effectiveAgentFkId = route.agentFkId ?? instance.agentId;
+  // omni-p7r phase 2: Resolve agent entity overrides.
+  // Route-level agentId takes priority; fall back to instance-level agentId.
+  const effectiveAgentFkId = route.agentId ?? instance.agentId;
   if (effectiveAgentFkId) {
     await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
   }
@@ -2728,12 +2806,10 @@ async function resolveEffectiveInstance(
     personId,
     routeId: route.id,
     routeScope: route.scope,
-    routeAgentProviderId: route.agentProviderId,
     routeAgentId: route.agentId,
     agentStreamMode: effectiveInstance.agentStreamMode,
     routeAgentStreamMode: route.agentStreamMode,
     instanceAgentStreamMode: instance.agentStreamMode,
-    routeAgentFkId: route.agentFkId,
     instanceAgentId: instance.agentId,
   });
 
