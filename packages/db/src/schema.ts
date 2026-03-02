@@ -18,6 +18,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -1352,7 +1353,7 @@ export const batchJobs = pgTable(
     progressPercent: integer('progress_percent').notNull().default(0),
 
     // ---- Cost Tracking ----
-    totalCostUsd: integer('total_cost_usd'), // Stored as cents
+    totalCostUsd: numeric('total_cost_usd', { precision: 15, scale: 6 }),
     totalTokens: integer('total_tokens'),
 
     // ---- Error Handling ----
@@ -1464,7 +1465,7 @@ export const mediaContent = pgTable(
     language: varchar('language', { length: 10 }),
     duration: integer('duration'), // For audio/video
     tokensUsed: integer('tokens_used'),
-    costUsd: integer('cost_usd'), // Stored as cents
+    costUsd: numeric('cost_usd', { precision: 15, scale: 6 }),
 
     // ---- Source Info ----
     batchJobId: uuid('batch_job_id').references(() => batchJobs.id, { onDelete: 'set null' }),
