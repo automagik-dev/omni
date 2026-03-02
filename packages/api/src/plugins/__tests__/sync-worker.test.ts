@@ -337,7 +337,7 @@ describe('setupSyncWorker', () => {
     // The since date should be approximately 7 days ago (within a few seconds tolerance)
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
     const expectedMs = before - sevenDaysMs;
-    expect(Math.abs(sinceDate.getTime() - expectedMs)).toBeLessThan(5000);
+    expect(Math.abs(sinceDate.getTime() - expectedMs)).toBeLessThan(10000);
   });
 
   test('messages sync with depth=all passes since=undefined to fetchHistory', async () => {

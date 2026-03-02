@@ -121,6 +121,8 @@ export class AgentStateService {
         status,
         error: String(err),
       });
+      // state not persisted → don't notify subscribers
+      return state;
     }
 
     if (this.eventBus) {
@@ -284,7 +286,7 @@ export class AgentStateService {
   /**
    * Parse a KV watch entry into an AgentChatState, returning null if invalid or deleted.
    */
-  private parseWatchEntry(entry: { operation: string; value: Uint8Array }): AgentChatState | null {
+  private parseWatchEntry(entry: { operation: 'PUT' | 'DEL' | 'PURGE'; value: Uint8Array }): AgentChatState | null {
     if (entry.operation === 'DEL' || entry.operation === 'PURGE') return null;
 
     const raw = JSON.parse(sc.decode(entry.value));

@@ -766,6 +766,7 @@ export const instances = pgTable(
     isActiveIdx: index('instances_is_active_idx').on(table.isActive),
     isDefaultIdx: index('instances_is_default_idx').on(table.isDefault),
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
+    chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );
 

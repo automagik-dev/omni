@@ -40,6 +40,22 @@ describe('A2AStreamStore', () => {
   });
 
   afterEach(() => {
+    // Close all open streams to clear any pending idle-close timers (IDLE_CLOSE_MS = 30_000).
+    // Tests that call createPendingStream() without a matching closeStream() leave dangling timers.
+    const allKnownKeys: Array<[string, string]> = [
+      ['inst-1', 'task-1'],
+      ['inst-1', 'task-2'],
+      ['inst-1', 'task-3'],
+      ['inst-1', 'task-4'],
+      ['inst-1', 'task-5'],
+      ['inst-1', 'task-a'],
+      ['inst-1', 'task-b'],
+    ];
+    for (const [instanceId, taskId] of allKnownKeys) {
+      if (store.hasStream(instanceId, taskId)) {
+        store.closeStream(instanceId, taskId, 'completed');
+      }
+    }
     mock.restore();
   });
 

@@ -150,13 +150,13 @@ export class A2AClient implements IAgentClient {
   private buildJsonRpcRequest(method: string, request: ProviderRequest): unknown {
     return {
       jsonrpc: '2.0',
-      id: `omni-${Date.now()}`,
+      id: `omni-${crypto.randomUUID()}`,
       method,
       params: {
         message: {
           role: 'user',
           parts: [{ type: 'text', text: request.message }],
-          messageId: `msg-${Date.now()}`,
+          messageId: `msg-${crypto.randomUUID()}`,
         },
         configuration: {
           acceptedOutputModes: ['text'],
@@ -277,8 +277,6 @@ export class A2AClient implements IAgentClient {
         throw new ProviderError('A2A task timed out while polling', 'TIMEOUT', undefined, { taskId });
       }
 
-      await sleep(POLL_INTERVAL_MS);
-
       const body = {
         jsonrpc: '2.0',
         id: `poll-${attempt}`,
@@ -286,7 +284,7 @@ export class A2AClient implements IAgentClient {
         params: { id: taskId },
       };
 
-      const response = await this.post(body, Math.min(10_000, deadline - Date.now()));
+      const response = await this.post(body, Math.min(10_000, Math.max(0, deadline - Date.now())));
       const result = (await response.json()) as Record<string, unknown>;
 
       if (result.error) break; // Unexpected error — return empty
@@ -299,6 +297,8 @@ export class A2AClient implements IAgentClient {
       if (state === 'completed' || state === 'failed') {
         return this.taskToProviderResponse(task, taskId, startMs);
       }
+
+      await sleep(POLL_INTERVAL_MS);
     }
 
     throw new ProviderError('A2A task polling exhausted', 'TIMEOUT', undefined, { taskId });

@@ -69,6 +69,7 @@ export class InternalChannelPlugin extends BaseChannelPlugin {
     const text = message.content.text ?? '';
 
     if (!text) {
+      log.debug('Skipping empty message', { instanceId, sourceInstanceId });
       return { success: true, timestamp: Date.now() };
     }
 

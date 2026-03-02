@@ -83,7 +83,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     agentState: new AgentStateService(eventBus),
     agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
-    conversations: new ConversationService(db, eventBus),
+    conversations: new ConversationService(db),
     audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),
     persons: new PersonService(db, eventBus),

@@ -95,7 +95,7 @@ describe('InternalChannelPlugin', () => {
   });
 
   describe('connect', () => {
-    it('publishes a connected status event', async () => {
+    it('completes without error', async () => {
       await plugin.connect('inst-1', { instanceId: 'inst-1', channelType: 'internal' } as never);
 
       // BaseChannelPlugin emits via updateInstanceStatus which may or may not publish

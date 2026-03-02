@@ -69,7 +69,7 @@ export class A2AStreamStore {
 
         // Auto-close on idle (no parts received)
         entry.closeTimer = setTimeout(() => {
-          store.closeStream(instanceId, taskId, 'completed');
+          store.closeStream(instanceId, taskId, 'failed');
         }, IDLE_CLOSE_MS);
       },
       cancel() {
@@ -117,7 +117,7 @@ export class A2AStreamStore {
 
     // Re-schedule auto-close
     entry.closeTimer = setTimeout(() => {
-      this.closeStream(instanceId, taskId, 'completed');
+      this.closeStream(instanceId, taskId, 'failed');
     }, IDLE_CLOSE_MS);
   }
 

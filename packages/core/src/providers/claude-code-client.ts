@@ -472,7 +472,12 @@ type SDKUsage =
   | { total_tokens: number; tool_uses: number; duration_ms: number };
 
 function extractTokens(usage: SDKUsage | undefined): { input: number; output: number } {
-  if (!usage || !('input_tokens' in usage)) return { input: 0, output: 0 };
+  if (!usage) return { input: 0, output: 0 };
+  if ('total_tokens' in usage) {
+    // { total_tokens } branch — split evenly between input and output
+    const half = Math.floor(usage.total_tokens / 2);
+    return { input: half, output: usage.total_tokens - half };
+  }
   return { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0 };
 }
 

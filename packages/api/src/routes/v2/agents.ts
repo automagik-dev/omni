@@ -10,6 +10,11 @@ import type { AppVariables } from '../../types';
 
 const agentsRoutes = new Hono<{ Variables: AppVariables }>();
 
+// Shared param schema for UUID path params
+const idParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
 // List query schema
 const listQuerySchema = z.object({
   ownerId: z.string().uuid().optional(),
@@ -132,8 +137,8 @@ agentsRoutes.post('/:id/identities/link', zValidator('json', LinkIdentityToAgent
 /**
  * GET /agents/:id/tasks - List tasks for this agent (shortcut)
  */
-agentsRoutes.get('/:id/tasks', async (c) => {
-  const id = c.req.param('id');
+agentsRoutes.get('/:id/tasks', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   await services.agents.getById(id);

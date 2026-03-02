@@ -124,7 +124,7 @@ describe('AgentStateService', () => {
       expect(state.status).toBe('idle');
     });
 
-    test('returns state even when KV write fails', async () => {
+    test('returns state but skips event publish when KV write fails', async () => {
       const eb = createMockEventBus();
       const { service, kv } = serviceWithKv(eb);
       kv.put.mockImplementation(async () => {
@@ -134,9 +134,8 @@ describe('AgentStateService', () => {
       const state = await service.setState(AGENT_ID, CHAT_ID, 'error');
 
       expect(state.status).toBe('error');
-      // Event should still be published despite KV failure
-      expect(eb._calls.length).toBe(1);
-      expect(eb._calls[0]?.type).toBe('agent.state.changed');
+      // N14: state not persisted → don't notify subscribers
+      expect(eb._calls.length).toBe(0);
     });
   });
 

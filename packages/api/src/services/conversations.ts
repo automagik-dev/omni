@@ -3,16 +3,12 @@
  */
 
 import { NotFoundError } from '@omni/core';
-import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type Chat, type Conversation, type NewConversation, chats, conversations } from '@omni/db';
 import { desc, eq } from 'drizzle-orm';
 
 export class ConversationService {
-  constructor(
-    private db: Database,
-    private eventBus: EventBus | null,
-  ) {}
+  constructor(private db: Database) {}
 
   /**
    * List conversations ordered by most recently updated

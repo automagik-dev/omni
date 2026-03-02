@@ -15,6 +15,10 @@ const agentTasksRoutes = new Hono<{ Variables: AppVariables }>();
 
 const agentTaskStatusValues = ['pending', 'running', 'completed', 'failed', 'cancelled', 'waiting_input'] as const;
 
+const idParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
 const listQuerySchema = z.object({
   agentId: z.string().uuid().optional(),
   chatId: z.string().uuid().optional(),
@@ -83,8 +87,8 @@ agentTasksRoutes.post('/', zValidator('json', createTaskSchema), async (c) => {
 /**
  * GET /agent-tasks/:id — get by id
  */
-agentTasksRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+agentTasksRoutes.get('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const task = await services.agentTasks.getById(id);
@@ -99,8 +103,8 @@ agentTasksRoutes.get('/:id', async (c) => {
  * to emit the correct typed event (e.g. agent.task.cancelled instead of
  * agent.task.updated).
  */
-agentTasksRoutes.patch('/:id', zValidator('json', updateTaskSchema), async (c) => {
-  const id = c.req.param('id');
+agentTasksRoutes.patch('/:id', zValidator('param', idParamSchema), zValidator('json', updateTaskSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const data = c.req.valid('json');
   const services = c.get('services');
 
@@ -113,8 +117,8 @@ agentTasksRoutes.patch('/:id', zValidator('json', updateTaskSchema), async (c) =
 /**
  * DELETE /agent-tasks/:id — delete a task
  */
-agentTasksRoutes.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+agentTasksRoutes.delete('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   await services.agentTasks.delete(id);

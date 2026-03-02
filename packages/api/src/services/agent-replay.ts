@@ -155,7 +155,12 @@ export class AgentReplayService {
           lte(messages.platformTimestamp, now),
         ),
       )
-      .orderBy(messages.platformTimestamp);
+      .orderBy(messages.platformTimestamp)
+      .limit(1000);
+
+    if (rows.length === 1000) {
+      log.warn('Replay message cap hit', { instanceId, limit: 1000 });
+    }
 
     let replayed = 0;
     let skipped = 0;

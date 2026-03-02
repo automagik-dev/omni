@@ -2,11 +2,10 @@
  * Unit tests for ConversationService
  *
  * Tests CRUD operations and chat retrieval with mocked database.
- * Verifies eventBus is injected but never called (no events published).
+ * ConversationService does not publish events — no eventBus dependency.
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { ConversationService } from '../conversations';
 
@@ -55,22 +54,13 @@ function createMockDatabase() {
   } as unknown as Database;
 }
 
-function createMockEventBus() {
-  return {
-    publish: mock(async () => ({})),
-    publishGeneric: mock(async () => ({})),
-  } as unknown as EventBus;
-}
-
 describe('ConversationService', () => {
   let service: ConversationService;
   let mockDb: ReturnType<typeof createMockDatabase>;
-  let mockEventBus: ReturnType<typeof createMockEventBus>;
 
   beforeEach(() => {
     mockDb = createMockDatabase();
-    mockEventBus = createMockEventBus();
-    service = new ConversationService(mockDb as unknown as Database, mockEventBus);
+    service = new ConversationService(mockDb as unknown as Database);
   });
 
   describe('list()', () => {
@@ -141,7 +131,7 @@ describe('ConversationService', () => {
       expect(mockDb.insert).toHaveBeenCalled();
     });
 
-    test('does NOT publish any events', async () => {
+    test('does NOT publish any events (no eventBus dependency)', async () => {
       const created = mockConversation();
       mockDb.insert = mock(() => ({
         values: mock(() => ({
@@ -149,10 +139,8 @@ describe('ConversationService', () => {
         })),
       })) as unknown as typeof mockDb.insert;
 
-      await service.create({ title: 'Silent' } as any);
-
-      expect(mockEventBus.publish).not.toHaveBeenCalled();
-      expect(mockEventBus.publishGeneric).not.toHaveBeenCalled();
+      // ConversationService has no eventBus — create should succeed without any event publishing
+      await expect(service.create({ title: 'Silent' } as any)).resolves.toMatchObject({ id: 'conv-123' });
     });
   });
 

@@ -57,9 +57,17 @@ async function triggerReplay(baseUrl: string, apiKey: string, instanceId: string
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
 
-  const json = (await resp.json()) as ReplayResponse;
+  let json: ReplayResponse;
+  try {
+    json = (await resp.json()) as ReplayResponse;
+  } catch {
+    const errMsg = `API error: ${resp.status} (non-JSON response)`;
+    output.error(`Replay failed: ${errMsg}`);
+    return;
+  }
 
   if (resp.ok && json.data) {
     output.success(json.data.message);

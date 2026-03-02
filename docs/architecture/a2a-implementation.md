@@ -376,7 +376,7 @@ class InternalChannelPlugin extends BaseChannelPlugin {
 
   async sendMessage(instanceId, message): Promise<SendResult> {
     // Route agent response as a new inbound message to target instance
-    const targetInstanceId = message.metadata?.chainToInstanceId;
+    const targetInstanceId = message.metadata?.agentChainToInstanceId;
     if (!targetInstanceId) return { success: false, error: 'No chain target', timestamp: Date.now() };
 
     await this.emitMessageReceived({
@@ -427,11 +427,11 @@ async function maybeChainToNextAgent(
     to: context.chatId,
     content: { type: 'text', text: result.parts.join('\n\n') },
     metadata: {
-      chainToInstanceId: chainInstanceId,
+      agentChainToInstanceId: chainInstanceId,
       hopDepth,
       senderAgentId: instance.agentId,
       conversationId: context.conversationId,
-      chainMode: instance.chainMode ?? 'replace',
+      chainMode: instance.chainMode ?? 'off',
     },
   });
 }
@@ -440,8 +440,8 @@ async function maybeChainToNextAgent(
 ### New Instance fields
 ```typescript
 // instances table (new migration)
-chainToInstanceId: uuid('chain_to_instance_id').references(() => instances.id),
-chainMode: varchar('chain_mode', { length: 20 }).default('replace'), // 'replace' | 'parallel'
+agentChainToInstanceId: uuid('agent_chain_to_instance_id').references(() => instances.id),
+chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'), // 'off' | 'forward' | 'bidirectional'
 ```
 
 ---

@@ -7,24 +7,18 @@
 
 import type { A2AAgentCard, A2ASkill } from './types';
 
-/**
- * Build an A2A Agent Card for a given Omni instance/agent.
- */
-export function buildAgentCard(params: {
-  instanceId: string;
-  instanceName: string;
-  agentName: string;
-  capabilities: string[];
-  /** Stored override fields from agents.agentCard (optional) */
-  agentCardOverride?: Record<string, unknown> | null;
-  baseUrl: string;
-}): A2AAgentCard {
-  const { instanceId, instanceName, agentName, capabilities, agentCardOverride, baseUrl } = params;
+/** Safely extract a string override value from an unknown field. */
+function strOverride(val: unknown): string | undefined {
+  return typeof val === 'string' ? val : undefined;
+}
 
-  const baseCard = normalizeBaseUrl(baseUrl);
-  const agentUrl = `${baseCard}/a2a/${instanceId}`;
+/** Safely extract object-shaped capabilities override. */
+function capabilitiesOverride(val: unknown): object | undefined {
+  return val !== null && typeof val === 'object' && !Array.isArray(val) ? (val as object) : undefined;
+}
 
-  // Build default skills from capabilities
+/** Build default A2ASkill list from capability strings. */
+function buildDefaultSkills(capabilities: string[]): A2ASkill[] {
   const skills: A2ASkill[] = [
     {
       id: 'messaging',
@@ -58,29 +52,52 @@ export function buildAgentCard(params: {
     });
   }
 
+  return skills;
+}
+
+/**
+ * Build an A2A Agent Card for a given Omni instance/agent.
+ */
+export function buildAgentCard(params: {
+  instanceId: string;
+  instanceName: string;
+  agentName: string;
+  capabilities: string[];
+  /** Stored override fields from agents.agentCard (optional) */
+  agentCardOverride?: Record<string, unknown> | null;
+  baseUrl: string;
+}): A2AAgentCard {
+  const { instanceId, instanceName, agentName, capabilities, agentCardOverride, baseUrl } = params;
+
+  const baseCard = normalizeBaseUrl(baseUrl);
+  const agentUrl = `${baseCard}/a2a/${instanceId}`;
+  const skills = buildDefaultSkills(capabilities);
+
+  const overrideSkills = Array.isArray(agentCardOverride?.skills)
+    ? (agentCardOverride.skills as A2ASkill[])
+    : undefined;
+
   const card: A2AAgentCard = {
-    name: (agentCardOverride?.name as string | undefined) ?? agentName ?? instanceName,
-    description:
-      (agentCardOverride?.description as string | undefined) ?? `Omni agent ${agentName} on instance ${instanceName}`,
+    name: strOverride(agentCardOverride?.name) ?? agentName ?? instanceName,
+    description: strOverride(agentCardOverride?.description) ?? `Omni agent ${agentName} on instance ${instanceName}`,
     url: agentUrl,
-    version: (agentCardOverride?.version as string | undefined) ?? '1.0.0',
+    version: strOverride(agentCardOverride?.version) ?? '1.0.0',
     capabilities: {
       streaming: true,
       pushNotifications: false,
       stateTransitionHistory: false,
-      ...((agentCardOverride?.capabilities as object | undefined) ?? {}),
+      ...(capabilitiesOverride(agentCardOverride?.capabilities) ?? {}),
     },
     defaultInputModes: ['text'],
     defaultOutputModes: ['text'],
-    skills: (agentCardOverride?.skills as A2ASkill[] | undefined) ?? skills,
+    skills: overrideSkills ?? skills,
   };
 
-  if (agentCardOverride?.iconUrl) {
-    card.iconUrl = agentCardOverride.iconUrl as string;
-  }
-  if (agentCardOverride?.documentationUrl) {
-    card.documentationUrl = agentCardOverride.documentationUrl as string;
-  }
+  const iconUrl = strOverride(agentCardOverride?.iconUrl);
+  if (iconUrl) card.iconUrl = iconUrl;
+
+  const documentationUrl = strOverride(agentCardOverride?.documentationUrl);
+  if (documentationUrl) card.documentationUrl = documentationUrl;
 
   return card;
 }

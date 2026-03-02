@@ -81,12 +81,14 @@ function createMockDb(instanceRows: unknown[] = [], messageRows: unknown[] = [])
         })),
       };
     }
-    // messages query chain: select → from → innerJoin → where → orderBy
+    // messages query chain: select → from → innerJoin → where → orderBy → limit
     return {
       from: mock(() => ({
         innerJoin: mock(() => ({
           where: mock(() => ({
-            orderBy: mock(() => Promise.resolve(messageRows)),
+            orderBy: mock(() => ({
+              limit: mock(() => Promise.resolve(messageRows)),
+            })),
           })),
         })),
       })),
@@ -109,7 +111,9 @@ function createMessagesOnlyDb(messageRows: unknown[] = []) {
     from: mock(() => ({
       innerJoin: mock(() => ({
         where: mock(() => ({
-          orderBy: mock(() => Promise.resolve(messageRows)),
+          orderBy: mock(() => ({
+            limit: mock(() => Promise.resolve(messageRows)),
+          })),
         })),
       })),
     })),
@@ -213,7 +217,9 @@ describe('AgentReplayService', () => {
           from: mock(() => ({
             innerJoin: mock(() => ({
               where: mock(() => ({
-                orderBy: mock(() => Promise.reject(new Error('DB connection lost'))),
+                orderBy: mock(() => ({
+                  limit: mock(() => Promise.reject(new Error('DB connection lost'))),
+                })),
               })),
             })),
           })),
