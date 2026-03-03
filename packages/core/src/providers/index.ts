@@ -42,6 +42,10 @@ export { AgnoClient, createAgnoClient } from './agno-client';
 export { ClaudeCodeClient, createClaudeCodeClient } from './claude-code-client';
 export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamRunMetrics } from './claude-code-client';
 
+// Genie Team Inbox Client
+export { GenieClient, createGenieClient } from './genie-client';
+export type { GenieClientConfig } from './genie-client';
+
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';
 export { ClaudeCodeAgentProvider } from './claude-code-provider';
@@ -57,6 +61,8 @@ export {
 export type { DeviceKeypair, OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
 export { AgUiAgentProvider, createAgUiProvider } from './ag-ui-provider';
 export { A2AAgentProvider, createA2AProvider } from './a2a-provider';
+export { GenieAgentProvider } from './genie-provider';
+export type { GenieProviderConfig } from './genie-provider';
 
 // Factory
 export {
