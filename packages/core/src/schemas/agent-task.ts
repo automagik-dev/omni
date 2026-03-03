@@ -69,11 +69,11 @@ export const CreateAgentTaskSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().optional(),
 
-  status: AgentTaskStatusSchema.default('pending').optional(),
-  progress: z.number().int().min(0).max(100).default(0).optional(),
-  priority: z.number().int().default(0).optional(),
+  status: AgentTaskStatusSchema.optional().default('pending'),
+  progress: z.number().int().min(0).max(100).optional().default(0),
+  priority: z.number().int().optional().default(0),
 
-  metadata: MetadataSchema.default({}).optional(),
+  metadata: MetadataSchema.optional().default({}),
   result: MetadataSchema.optional(),
   error: z.string().optional(),
 
@@ -109,7 +109,7 @@ export const ListAgentTasksQuerySchema = z.object({
   type: z.string().max(100).optional(),
   parentTaskId: UuidSchema.optional(),
   limit: z.number().int().positive().max(200).default(50),
-  cursor: z.string().optional(),
+  cursor: z.string().uuid().optional(),
 });
 
 export type ListAgentTasksQuery = z.infer<typeof ListAgentTasksQuerySchema>;

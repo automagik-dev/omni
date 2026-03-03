@@ -14,8 +14,9 @@ import type { ApiKeyData, AppVariables } from '../types';
  * Looks up the key in the database and validates its status, expiration, and scopes.
  */
 export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-  // Get API key from header or query
-  const apiKey = c.req.header('x-api-key') ?? c.req.query('api_key');
+  // Get API key from header, query, or Bearer token
+  const bearer = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
+  const apiKey = c.req.header('x-api-key') ?? c.req.query('api_key') ?? bearer;
 
   if (!apiKey) {
     return c.json(

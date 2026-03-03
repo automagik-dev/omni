@@ -164,8 +164,10 @@ batchJobsRoutes.post('/estimate', zValidator('json', estimateSchema), async (c) 
  *
  * Returns full job record with all fields.
  */
-batchJobsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+const idParamSchema = z.object({ id: z.string().uuid() });
+
+batchJobsRoutes.get('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const job = await services.batchJobs.getById(id);
@@ -184,8 +186,8 @@ batchJobsRoutes.get('/:id', async (c) => {
  * Returns progress snapshot optimized for polling.
  * Poll this endpoint every 2-3 seconds for real-time updates.
  */
-batchJobsRoutes.get('/:id/status', async (c) => {
-  const id = c.req.param('id');
+batchJobsRoutes.get('/:id/status', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const status = await services.batchJobs.getStatus(id);
@@ -215,8 +217,8 @@ batchJobsRoutes.get('/:id/status', async (c) => {
  * Gracefully stops a running job. The job will complete the current item
  * before stopping. Returns 409 if job is already completed/cancelled/failed.
  */
-batchJobsRoutes.post('/:id/cancel', async (c) => {
-  const id = c.req.param('id');
+batchJobsRoutes.post('/:id/cancel', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   try {

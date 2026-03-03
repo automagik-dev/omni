@@ -287,6 +287,9 @@ export class AgentStateService {
 
     const watcher = await kv.watch();
 
+    const onAbort = () => watcher.stop();
+    signal?.addEventListener('abort', onAbort);
+
     try {
       for await (const entry of watcher) {
         if (signal?.aborted) break;
@@ -299,6 +302,7 @@ export class AgentStateService {
         yield state;
       }
     } finally {
+      signal?.removeEventListener('abort', onAbort);
       watcher.stop();
     }
   }

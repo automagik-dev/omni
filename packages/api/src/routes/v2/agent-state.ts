@@ -42,6 +42,15 @@ const updateStateSchema = z.object({
 });
 
 // ──────────────────────────────────────────────────────────────
+// Path param schemas
+// ──────────────────────────────────────────────────────────────
+
+const stateParamSchema = z.object({
+  agentId: z.string().uuid(),
+  chatId: z.string().uuid(),
+});
+
+// ──────────────────────────────────────────────────────────────
 // Routes
 // ──────────────────────────────────────────────────────────────
 
@@ -114,9 +123,8 @@ agentStateRoutes.get('/stream', zValidator('query', streamQuerySchema), (c) => {
  * One-shot: return the current state for an (agentId, chatId) pair.
  * Returns 404 if no state exists.
  */
-agentStateRoutes.get('/:agentId/:chatId', async (c) => {
-  const agentId = c.req.param('agentId');
-  const chatId = c.req.param('chatId');
+agentStateRoutes.get('/:agentId/:chatId', zValidator('param', stateParamSchema), async (c) => {
+  const { agentId, chatId } = c.req.valid('param');
   const services = c.get('services');
 
   const state = await services.agentState.getState(agentId, chatId);
@@ -137,13 +145,17 @@ agentStateRoutes.get('/:agentId/:chatId', async (c) => {
  * Update agent state. Called by the agent (or dispatcher) to transition
  * the state machine.
  */
-agentStateRoutes.put('/:agentId/:chatId', zValidator('json', updateStateSchema), async (c) => {
-  const agentId = c.req.param('agentId');
-  const chatId = c.req.param('chatId');
-  const { status, statusMeta, conversationId } = c.req.valid('json');
-  const services = c.get('services');
+agentStateRoutes.put(
+  '/:agentId/:chatId',
+  zValidator('param', stateParamSchema),
+  zValidator('json', updateStateSchema),
+  async (c) => {
+    const { agentId, chatId } = c.req.valid('param');
+    const { status, statusMeta, conversationId } = c.req.valid('json');
+    const services = c.get('services');
 
-  const state = await services.agentState.setState(agentId, chatId, status, statusMeta, conversationId ?? null);
+    const state = await services.agentState.setState(agentId, chatId, status, statusMeta, conversationId ?? null);
 
-  return c.json({ data: state });
-});
+    return c.json({ data: state });
+  },
+);

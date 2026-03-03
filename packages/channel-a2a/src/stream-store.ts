@@ -49,10 +49,11 @@ export class A2AStreamStore {
     const key = this.streamKey(instanceId, taskId);
     const store = this;
 
-    // Clear any existing stream's idle timer before replacing it
+    // Close any existing stream before replacing it
     const existing = this.streams.get(key);
-    if (existing?.closeTimer !== undefined) {
-      clearTimeout(existing.closeTimer);
+    if (existing) {
+      if (existing.closeTimer !== undefined) clearTimeout(existing.closeTimer);
+      existing.close();
     }
 
     let entryRef: StreamEntry;

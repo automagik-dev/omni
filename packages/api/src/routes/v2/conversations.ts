@@ -11,7 +11,7 @@ const conversationsRoutes = new Hono<{ Variables: AppVariables }>();
 
 // List query schema
 const listQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(200).default(50).optional(),
+  limit: z.coerce.number().int().positive().max(200).optional().default(50),
 });
 
 const idParamSchema = z.object({

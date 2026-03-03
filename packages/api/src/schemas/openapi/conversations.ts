@@ -47,7 +47,14 @@ export function registerConversationSchemas(registry: OpenAPIRegistry): void {
     description: 'Get all conversations ordered by most recently updated.',
     request: {
       query: z.object({
-        limit: z.number().int().optional().openapi({ description: 'Max results (default 50)' }),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(200)
+          .default(50)
+          .optional()
+          .openapi({ description: 'Max results (default 50, max 200)' }),
       }),
     },
     responses: {

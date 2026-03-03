@@ -11,7 +11,7 @@ export const ProviderSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Provider UUID' }),
   name: z.string().openapi({ description: 'Provider name' }),
   schema: z
-    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code'])
+    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a'])
     .openapi({ description: 'Provider schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
@@ -49,7 +49,7 @@ export const ProviderSchema = z.object({
 export const CreateProviderSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Provider name' }),
   schema: z
-    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code'])
+    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a'])
     .default('agno')
     .openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),

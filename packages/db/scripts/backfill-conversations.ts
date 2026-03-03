@@ -47,23 +47,26 @@ async function backfillConversations() {
       continue;
     }
 
-    // Create one Conversation per Chat, preserving timestamps
-    const [conv] = await db
-      .insert(conversations)
-      .values({
-        title: chat.name ?? null,
-        createdAt: chat.createdAt,
-        updatedAt: chat.updatedAt,
-      })
-      .returning({ id: conversations.id });
+    // Create Conversation + link Chat atomically
+    try {
+      await db.transaction(async (tx) => {
+        const [conv] = await tx
+          .insert(conversations)
+          .values({
+            title: chat.name ?? null,
+            createdAt: chat.createdAt,
+            updatedAt: chat.updatedAt,
+          })
+          .returning({ id: conversations.id });
 
-    if (!conv) {
-      console.error(`  Failed to create conversation for chat ${chat.id}`);
+        if (!conv) throw new Error('insert failed');
+
+        await tx.update(chats).set({ conversationId: conv.id }).where(eq(chats.id, chat.id));
+      });
+    } catch (err) {
+      console.error(`  Failed to create conversation for chat ${chat.id}: ${err}`);
       continue;
     }
-
-    // Link the chat to the new conversation
-    await db.update(chats).set({ conversationId: conv.id }).where(eq(chats.id, chat.id));
 
     created++;
 

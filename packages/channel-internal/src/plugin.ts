@@ -65,7 +65,7 @@ export class InternalChannelPlugin extends BaseChannelPlugin {
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sourceInstanceId = (message.metadata?.sourceInstanceId as string | undefined) ?? instanceId;
-    const hopCount = (message.metadata?.hopCount as number | undefined) ?? 0;
+    const hopCount = Number(message.metadata?.hopCount) || 0;
     const text = message.content.text ?? '';
 
     if (!text) {

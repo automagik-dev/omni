@@ -60,6 +60,11 @@ export class A2AAgentProvider implements IAgentProvider {
     log.info('Triggering A2A agent', { agentId: this.config.agentId, traceId: context.traceId });
 
     const response = await this.client.run(request);
+
+    if (response.status === 'failed') {
+      throw new Error(`A2A agent failed: ${response.content || 'unknown'}`);
+    }
+
     const durationMs = Date.now() - startTime;
 
     const parts =

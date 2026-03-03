@@ -155,7 +155,11 @@ async function handleMessageSend(
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
-  await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+  try {
+    await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+  } catch {
+    return jsonResponse(jsonRpcError(id, -32603, 'Internal error'), 500);
+  }
 
   // Return a terminal state so A2A clients don't attempt to poll tasks/get.
   // Omni processes messages asynchronously via event bus — the actual response

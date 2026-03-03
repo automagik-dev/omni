@@ -57,6 +57,10 @@ export class A2AClient implements IAgentClient {
     const task = taskResult?.task as Record<string, unknown> | undefined;
     const taskId = (task?.id ?? '') as string;
 
+    if (!taskId) {
+      throw new ProviderError('A2A response missing task.id', 'INVALID_RESPONSE');
+    }
+
     // If state is already terminal, return immediately
     const state = (task?.status as Record<string, unknown> | undefined)?.state as string | undefined;
     if (state === 'completed' || state === 'failed') {
@@ -293,7 +297,13 @@ export class A2AClient implements IAgentClient {
       }
       const result = (await response.json()) as Record<string, unknown>;
 
-      if (result.error) break; // Unexpected error — return empty
+      if (result.error) {
+        const err = result.error as { message?: string; code?: number };
+        throw new ProviderError(err.message ?? 'A2A task failed', 'SERVER_ERROR', undefined, {
+          code: err.code,
+          taskId,
+        });
+      }
 
       const taskResult = result.result as Record<string, unknown> | undefined;
       const task = taskResult?.task as Record<string, unknown> | undefined;

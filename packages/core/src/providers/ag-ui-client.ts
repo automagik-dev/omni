@@ -243,8 +243,8 @@ export class AgUiClient implements IAgentClient {
 
   /** Parses a single SSE data line into a StreamChunk or null. */
   private parseAgUiLine(line: string, currentRunId: string): StreamChunk | null {
-    if (!line.startsWith('data: ')) return null;
-    const data = line.slice(6).trim();
+    if (!line.startsWith('data:')) return null;
+    const data = line.slice(line.startsWith('data: ') ? 6 : 5).trim();
     if (!data || data === '[DONE]') return null;
     try {
       const event = JSON.parse(data) as AgUiEvent;

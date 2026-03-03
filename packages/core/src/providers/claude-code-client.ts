@@ -374,7 +374,8 @@ function handleResult(
   if (msg.subtype === 'success') {
     let resultContent = (msg.result as string) ?? '';
     const totalCost = (msg.total_cost_usd as number) ?? 0;
-    const usage = (msg.usage as Record<string, number>) ?? {};
+    const usage = msg.usage as SDKUsage | undefined;
+    const tokens = extractTokens(usage);
     const sid = (msg.session_id as string) ?? currentSessionId;
 
     // Safety net: strip leaked <thinking> tags from final content
@@ -390,8 +391,8 @@ function handleResult(
         thinkingDurationMs: acc.thinkingDurationMs,
       },
       metrics: {
-        inputTokens: usage.input_tokens ?? 0,
-        outputTokens: usage.output_tokens ?? 0,
+        inputTokens: tokens.input,
+        outputTokens: tokens.output,
         costUsd: totalCost,
         durationMs,
       },
