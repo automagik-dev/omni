@@ -41,7 +41,7 @@ function getAllowedOrigins(): string[] | '*' {
   return envOrigins.split(',').map((origin) => origin.trim());
 }
 
-import { authMiddleware } from './middleware/auth';
+import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
 
 import { createContextMiddleware } from './middleware/context';
@@ -126,6 +126,43 @@ export function createApp(
 
   // OpenAPI spec and Swagger UI (no auth required)
   app.route('/api/v2', openapiRoutes);
+
+  // ── A2A protocol endpoints — feature-flagged, disabled by default ───────────
+  if (process.env.A2A_ENABLED === 'true') {
+    // Agent Card: GET /.well-known/agent.json?instanceId={id}
+    app.get('/.well-known/agent.json', async (c) => {
+      const channelRegistry = c.get('channelRegistry');
+      const plugin = channelRegistry?.get('a2a');
+      if (!plugin?.handleWebhook) {
+        return c.json({ error: 'A2A channel not available' }, 503);
+      }
+      return plugin.handleWebhook(c.req.raw);
+    });
+
+    // A2A JSON-RPC: POST /a2a/:instanceId (requires auth + instance-level access)
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    app.post(
+      '/a2a/:instanceId',
+      authMiddleware,
+      requireInstanceAccess((c) => c.req.param('instanceId')),
+      rateLimitMiddleware,
+      async (c) => {
+        const instanceId = c.req.param('instanceId');
+        if (!UUID_REGEX.test(instanceId)) {
+          return c.json({ error: 'Invalid instance ID format' }, 400);
+        }
+        const channelRegistry = c.get('channelRegistry');
+        const plugin = channelRegistry?.get('a2a');
+        if (!plugin?.handleWebhook) {
+          return c.json({ error: 'A2A channel not available' }, 503);
+        }
+        return plugin.handleWebhook(c.req.raw);
+      },
+    );
+  } else {
+    app.all('/a2a/*', (c) => c.json({ error: 'A2A channel not enabled. Set A2A_ENABLED=true.' }, 503));
+    app.get('/.well-known/agent.json', (c) => c.json({ error: 'A2A not enabled' }, 503));
+  }
 
   // Public Telegram webhook endpoint — auth-exempt, verified by X-Telegram-Bot-Api-Secret-Token.
   // Must be mounted before protectedApp so Telegram's servers (which send no x-api-key) can reach it.

@@ -1,0 +1,1 @@
+ALTER TABLE "instances" ADD CONSTRAINT "instances_chain_mode_check" CHECK ("instances"."chain_mode" IN ('off', 'forward', 'bidirectional'));

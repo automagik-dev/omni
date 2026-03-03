@@ -374,7 +374,8 @@ function handleResult(
   if (msg.subtype === 'success') {
     let resultContent = (msg.result as string) ?? '';
     const totalCost = (msg.total_cost_usd as number) ?? 0;
-    const usage = (msg.usage as Record<string, number>) ?? {};
+    const usage = msg.usage as SDKUsage | undefined;
+    const tokens = extractTokens(usage);
     const sid = (msg.session_id as string) ?? currentSessionId;
 
     // Safety net: strip leaked <thinking> tags from final content
@@ -390,8 +391,8 @@ function handleResult(
         thinkingDurationMs: acc.thinkingDurationMs,
       },
       metrics: {
-        inputTokens: usage.input_tokens ?? 0,
-        outputTokens: usage.output_tokens ?? 0,
+        inputTokens: tokens.input,
+        outputTokens: tokens.output,
         costUsd: totalCost,
         durationMs,
       },
@@ -467,6 +468,20 @@ interface RunAccumulator {
   outputTokens: number;
 }
 
+type SDKUsage =
+  | { input_tokens?: number; output_tokens?: number }
+  | { total_tokens: number; tool_uses: number; duration_ms: number };
+
+function extractTokens(usage: SDKUsage | undefined): { input: number; output: number } {
+  if (!usage) return { input: 0, output: 0 };
+  if ('total_tokens' in usage) {
+    // { total_tokens } branch — split evenly between input and output
+    const half = Math.floor(usage.total_tokens / 2);
+    return { input: half, output: usage.total_tokens - half };
+  }
+  return { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0 };
+}
+
 /** Process a single SDK message during run(), returning a failed ProviderResponse for errors or null to continue */
 function processRunMessage(
   message: {
@@ -476,7 +491,7 @@ function processRunMessage(
     result?: string;
     errors?: string[];
     total_cost_usd?: number;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: SDKUsage;
   },
   acc: RunAccumulator,
   startTime: number,
@@ -491,8 +506,9 @@ function processRunMessage(
   if (message.subtype === 'success') {
     acc.content = message.result ?? '';
     acc.costUsd = message.total_cost_usd ?? 0;
-    acc.inputTokens = message.usage?.input_tokens ?? 0;
-    acc.outputTokens = message.usage?.output_tokens ?? 0;
+    const tokens = extractTokens(message.usage);
+    acc.inputTokens = tokens.input;
+    acc.outputTokens = tokens.output;
     return null;
   }
 

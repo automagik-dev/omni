@@ -9,6 +9,7 @@ import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { AgentReplayService } from '../services/agent-replay';
 import { sanitizeText } from '../utils/utf8';
 import { clearQrCode } from './qr-store';
 
@@ -20,9 +21,13 @@ const lidLog = createLogger('lid-mapping');
  * Set up event listener for connection events
  * - Clears QR codes on connect
  * - Updates database with connection info (isActive, ownerIdentifier, profile)
- * - Handles disconnection (only marks inactive on explicit logout)
+ * - Triggers agent replay for missed messages on reconnect
+ * - Handles disconnection (only marks inactive on explicit logout, updates lastSeenAt)
  */
 export async function setupConnectionListener(eventBus: EventBus, db?: Database): Promise<void> {
+  // Create replay service if db is available
+  const replayService = db ? new AgentReplayService(db, eventBus) : null;
+
   try {
     await eventBus.subscribe('instance.connected', async (event) => {
       const { instanceId, channelType, profileName, profilePicUrl, ownerIdentifier } = event.payload;
@@ -49,6 +54,13 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
       }
 
       instanceLog.info('Connected', { instanceId, channel: channelType, profileName: profileName || 'unknown' });
+
+      // Trigger agent replay for missed messages (fire-and-forget)
+      if (replayService) {
+        replayService.onInstanceConnect(instanceId).catch((err) => {
+          instanceLog.warn('Agent replay failed', { instanceId, error: String(err) });
+        });
+      }
     });
 
     // Handle disconnection events
@@ -73,6 +85,13 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         } catch (dbError) {
           instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
         }
+      }
+
+      // Update lastSeenAt on any disconnect so the next replay window is accurate
+      if (replayService) {
+        replayService.updateLastSeenAt(instanceId).catch((err) => {
+          instanceLog.warn('Failed to update lastSeenAt on disconnect', { instanceId, error: String(err) });
+        });
       }
 
       instanceLog.info('Disconnected', {

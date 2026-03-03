@@ -240,7 +240,6 @@ describe('executeHooks', () => {
     test('metadata must use string values', async () => {
       registry.register('inst-1', {
         event: 'before_message_write',
-        // biome-ignore lint/suspicious/noExplicitAny: testing runtime schema rejection
         handler: async (ctx) => ({ ...ctx, metadata: { key: 42 } }) as any,
         id: 'bad-metadata',
       });

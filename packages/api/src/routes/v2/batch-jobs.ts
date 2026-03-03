@@ -164,8 +164,10 @@ batchJobsRoutes.post('/estimate', zValidator('json', estimateSchema), async (c) 
  *
  * Returns full job record with all fields.
  */
-batchJobsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+const idParamSchema = z.object({ id: z.string().uuid() });
+
+batchJobsRoutes.get('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const job = await services.batchJobs.getById(id);
@@ -173,7 +175,7 @@ batchJobsRoutes.get('/:id', async (c) => {
   return c.json({
     data: {
       ...job,
-      totalCostUsd: (job.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
+      totalCostUsd: Number(job.totalCostUsd ?? 0), // USD decimal from DB
     },
   });
 });
@@ -184,8 +186,8 @@ batchJobsRoutes.get('/:id', async (c) => {
  * Returns progress snapshot optimized for polling.
  * Poll this endpoint every 2-3 seconds for real-time updates.
  */
-batchJobsRoutes.get('/:id/status', async (c) => {
-  const id = c.req.param('id');
+batchJobsRoutes.get('/:id/status', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const status = await services.batchJobs.getStatus(id);
@@ -200,7 +202,7 @@ batchJobsRoutes.get('/:id/status', async (c) => {
       skippedItems: status.skippedItems,
       progressPercent: status.progressPercent,
       currentItem: status.currentItem,
-      totalCostUsd: (status.totalCostUsd ?? 0) / 100, // stored as cents, return as USD
+      totalCostUsd: Number(status.totalCostUsd ?? 0), // USD decimal from DB
       totalTokens: status.totalTokens,
       estimatedCompletion: status.estimatedCompletion?.toISOString(),
       startedAt: status.startedAt?.toISOString(),
@@ -215,8 +217,8 @@ batchJobsRoutes.get('/:id/status', async (c) => {
  * Gracefully stops a running job. The job will complete the current item
  * before stopping. Returns 409 if job is already completed/cancelled/failed.
  */
-batchJobsRoutes.post('/:id/cancel', async (c) => {
-  const id = c.req.param('id');
+batchJobsRoutes.post('/:id/cancel', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   try {

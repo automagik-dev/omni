@@ -13,7 +13,6 @@ import { ClaudeCodeClient, type ClaudeCodeConfig } from '../claude-code-client';
 import { ClaudeCodeAgentProvider } from '../claude-code-provider';
 import type { AgentTrigger } from '../types';
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper to access private buildOptions method
 type AnyRecord = Record<string, any>;
 
 /** Access the private buildOptions method for testing */

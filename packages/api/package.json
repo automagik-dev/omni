@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260227.1",
+  "version": "2.260228.1",
   "type": "module",
   "exports": {
     ".": {
@@ -33,10 +33,12 @@
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
+    "nats": "^2.29.3",
     "pgserve": "^1.1.6",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@omni/channel-a2a": "workspace:*",
     "@asteasolutions/zod-to-openapi": "7.3.4",
     "@types/qrcode-terminal": "^0.12.2",
     "bun-types": "^1.1.42",

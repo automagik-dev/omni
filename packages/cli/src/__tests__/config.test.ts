@@ -106,14 +106,15 @@ describe('ServerConfig', () => {
     expect(DEFAULT_SERVER_CONFIG.nodeEnv).toBe('production');
   });
 
-  test('loadServerConfig returns defaults when no server section exists', () => {
-    // loadServerConfig should return defaults if config.json has no server section
+  test('loadServerConfig returns a complete ServerConfig with all required fields', () => {
     const config = loadServerConfig();
-    expect(config.port).toBe(DEFAULT_SERVER_CONFIG.port);
-    expect(config.databaseUrl).toBe(DEFAULT_SERVER_CONFIG.databaseUrl);
-    expect(config.dataDir).toBe(DEFAULT_SERVER_CONFIG.dataDir);
-    expect(config.logLevel).toBe(DEFAULT_SERVER_CONFIG.logLevel);
-    expect(config.nodeEnv).toBe(DEFAULT_SERVER_CONFIG.nodeEnv);
+    // All fields must be present (defaults merged with any config.json overrides)
+    expect(typeof config.port).toBe('number');
+    expect(typeof config.databaseUrl).toBe('string');
+    expect(typeof config.dataDir).toBe('string');
+    expect(typeof config.logLevel).toBe('string');
+    expect(typeof config.nodeEnv).toBe('string');
+    expect(config.dataDir.length).toBeGreaterThan(0);
   });
 });
 

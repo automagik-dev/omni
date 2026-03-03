@@ -5,6 +5,21 @@
 import { z } from 'zod';
 import { MetadataSchema, UuidSchema } from './common';
 
+/**
+ * Minimal structural validation for A2A agent card objects.
+ * Uses passthrough() to allow additional provider-specific fields.
+ */
+export const AgentCardSchema = z
+  .object({
+    name: z.string(),
+    url: z.string().optional(),
+    version: z.string().optional(),
+    skills: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+
+export type AgentCard = z.infer<typeof AgentCardSchema>;
+
 export const AgentSystemSchema = z.enum(['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal']);
 export type AgentSystem = z.infer<typeof AgentSystemSchema>;
 
@@ -27,6 +42,7 @@ export const AgentSchema = z.object({
   isInternal: z.boolean(),
   isActive: z.boolean(),
   metadata: MetadataSchema.nullable(),
+  agentCard: AgentCardSchema.nullable().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

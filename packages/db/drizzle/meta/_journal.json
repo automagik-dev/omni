@@ -15,6 +15,48 @@
       "when": 1772230610233,
       "tag": "0001_colossal_carmella_unuscione",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772236798535,
+      "tag": "0002_brief_titania",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1772464938620,
+      "tag": "0003_real_marvel_zombies",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1772465159677,
+      "tag": "0004_solid_gladiator",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1772465552017,
+      "tag": "0005_premium_jazinda",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1772484244070,
+      "tag": "0006_pr164_review_fixes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1772485979658,
+      "tag": "0007_clumsy_nick_fury",
+      "breakpoints": true
     }
   ]
 }

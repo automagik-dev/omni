@@ -11,7 +11,6 @@ import { Hono } from 'hono';
 import { journeysRoutes } from '../routes/v2/journeys';
 import type { AppVariables } from '../types';
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper for JSON responses
 async function json(res: Response): Promise<any> {
   return res.json();
 }

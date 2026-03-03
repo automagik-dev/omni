@@ -105,7 +105,7 @@ export interface ListBatchJobsOptions {
 interface JobProcessingState {
   processedItems: number;
   failedItems: number;
-  totalCostCents: number;
+  totalCostUsd: number;
   totalTokens: number;
   errors: Array<{ itemId: string; error: string }>;
 }
@@ -178,7 +178,7 @@ export class BatchJobService {
       processedItems: 0,
       failedItems: 0,
       progressPercent: 0,
-      totalCostUsd: 0,
+      totalCostUsd: '0',
       totalTokens: 0,
       errors: [],
     };
@@ -501,7 +501,7 @@ export class BatchJobService {
     return {
       processedItems: job.processedItems,
       failedItems: job.failedItems,
-      totalCostCents: job.totalCostUsd ?? 0,
+      totalCostUsd: Number(job.totalCostUsd ?? 0),
       totalTokens: job.totalTokens ?? 0,
       errors: (job.errors as Array<{ itemId: string; error: string }>) ?? [],
     };
@@ -580,7 +580,7 @@ export class BatchJobService {
       const result = await this.processItem(instanceId, item, jobId);
       if (result.success) {
         state.processedItems++;
-        state.totalCostCents += result.costCents;
+        state.totalCostUsd += (result.costCents ?? 0) / 100;
         state.totalTokens += (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
       } else {
         state.failedItems++;
@@ -619,7 +619,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent,
-        totalCostUsd: Math.round(state.totalCostCents),
+        totalCostUsd: String(state.totalCostUsd),
         totalTokens: state.totalTokens,
         errors: state.errors,
       })
@@ -638,7 +638,7 @@ export class BatchJobService {
             skippedItems,
             currentItem: currentItemId,
             progressPercent,
-            totalCostCents: state.totalCostCents,
+            totalCostCents: Math.round(state.totalCostUsd * 100),
             totalTokens: state.totalTokens,
           },
         },
@@ -676,7 +676,7 @@ export class BatchJobService {
         processedItems: state.processedItems,
         failedItems: state.failedItems,
         progressPercent: 100,
-        totalCostUsd: Math.round(state.totalCostCents),
+        totalCostUsd: String(state.totalCostUsd),
         totalTokens: state.totalTokens,
         errors: state.errors,
         currentItem: null,
@@ -703,7 +703,7 @@ export class BatchJobService {
             failedItems: state.failedItems,
             skippedItems,
             progressPercent: 100,
-            totalCostCents: state.totalCostCents,
+            totalCostCents: Math.round(state.totalCostUsd * 100),
             totalTokens: state.totalTokens,
           },
           durationMs,
@@ -819,7 +819,7 @@ export class BatchJobService {
       language: result.language,
       duration: result.duration,
       tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-      costUsd: result.costCents,
+      costUsd: result.costCents != null ? String(result.costCents / 100) : null,
       processingTimeMs: result.processingTimeMs,
       batchJobId,
     });
@@ -950,7 +950,7 @@ export class BatchJobService {
       skippedItems: 0, // Not stored in DB
       currentItem: job.currentItem ?? undefined,
       progressPercent: job.progressPercent,
-      totalCostCents: job.totalCostUsd ?? 0,
+      totalCostCents: Math.round(Number(job.totalCostUsd ?? 0) * 100),
       totalTokens: job.totalTokens ?? 0,
     };
   }

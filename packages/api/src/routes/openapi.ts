@@ -27,6 +27,7 @@ import { registerAgentSchemas } from '../schemas/openapi/agents';
 import { registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerCommonSchemas } from '../schemas/openapi/common';
+import { registerConversationSchemas } from '../schemas/openapi/conversations';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
 import { registerEventOpsSchemas } from '../schemas/openapi/event-ops';
 import { registerEventSchemas } from '../schemas/openapi/events';
@@ -63,6 +64,7 @@ registerMetricsSchemas(registry);
 registerAutomationSchemas(registry);
 registerPayloadSchemas(registry);
 registerJourneySchemas(registry);
+registerConversationSchemas(registry);
 
 const openapiRoutes = new Hono<{ Variables: AppVariables }>();
 

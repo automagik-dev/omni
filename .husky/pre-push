@@ -1,3 +1,5 @@
+set -e
+
 # Block force pushes to main/master (pre-push receives: remote url on $1 $2, refs on stdin)
 remote="$1"
 while read local_ref local_oid remote_ref remote_oid; do
@@ -15,3 +17,5 @@ if [ ! -d packages/sdk/dist ]; then
 fi
 
 make typecheck
+
+bun test

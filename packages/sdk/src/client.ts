@@ -79,7 +79,7 @@ export interface ChatParticipant {
 }
 
 // Channel type enum
-export type Channel = 'whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack' | 'telegram';
+export type Channel = 'whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack' | 'telegram' | 'a2a' | 'internal';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
@@ -322,8 +322,9 @@ export interface ListProvidersParams {
  * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
+ * - a2a: Agent-to-Agent protocol provider
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code';
+export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a';
 
 /**
  * Body for creating a provider

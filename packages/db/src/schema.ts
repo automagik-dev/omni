@@ -12,12 +12,14 @@
 import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   boolean,
   check,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -30,7 +32,15 @@ import {
 // ENUMS
 // ============================================================================
 
-export const channelTypes = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'] as const;
+export const channelTypes = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'a2a',
+  'internal',
+] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
 export const agentTypes = ['agent', 'team', 'workflow'] as const;
@@ -225,6 +235,7 @@ export const providerSchemas = [
   'openclaw',
   'ag-ui',
   'claude-code',
+  'a2a',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 
@@ -308,6 +319,7 @@ export const agents = pgTable(
     isInternal: boolean('is_internal').notNull().default(false),
     isActive: boolean('is_active').notNull().default(true),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -346,13 +358,8 @@ export const agentRoutes = pgTable(
     personId: uuid('person_id').references(() => persons.id, { onDelete: 'cascade' }),
 
     // ---- Target: which agent handles it? ----
-    agentProviderId: uuid('agent_provider_id')
-      .notNull()
-      .references(() => agentProviders.id, { onDelete: 'cascade' }),
-    agentId: varchar('agent_id', { length: 255 }).notNull(),
-    agentType: varchar('agent_type', { length: 20 }).notNull().default('agent').$type<AgentType>(),
-    /** Proper FK to agents table. Preferred over legacy agentId varchar + agentProviderId combo. */
-    agentFkId: uuid('agent_fk_id').references(() => agents.id, { onDelete: 'set null' }),
+    /** FK to agents table (replaces legacy agentProviderId + agentId varchar + agentType). */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Behavior overrides (NULL = inherit from instance) ----
     agentTimeout: integer('agent_timeout'),
@@ -390,7 +397,7 @@ export const agentRoutes = pgTable(
     chatIdx: index('agent_routes_chat_idx').on(table.chatId),
     personIdx: index('agent_routes_person_idx').on(table.personId),
     activeIdx: index('agent_routes_active_idx').on(table.instanceId, table.isActive),
-    agentFkIdx: index('agent_routes_agent_fk_idx').on(table.agentFkId),
+    agentIdIdx: index('agent_routes_agent_id_idx').on(table.agentId),
   }),
 );
 
@@ -735,6 +742,20 @@ export const instances = pgTable(
     /** Timestamp of last processed message (for reconnect gap detection) */
     lastMessageAt: timestamp('last_message_at'),
 
+    // ---- Agent Replay ----
+    /** When true (default), automatically replay missed messages on reconnect */
+    replayEnabled: boolean('replay_enabled').notNull().default(true),
+    /** Timestamp of when the instance was last seen connected (used as replay window start) */
+    lastSeenAt: timestamp('last_seen_at'),
+
+    // ---- Agent Chaining ----
+    /** Target instance for agent-to-agent chaining */
+    agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {
+      onDelete: 'set null',
+    }),
+    /** Chain mode: 'off' | 'forward' | 'bidirectional' */
+    chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -745,6 +766,7 @@ export const instances = pgTable(
     isActiveIdx: index('instances_is_active_idx').on(table.isActive),
     isDefaultIdx: index('instances_is_default_idx').on(table.isDefault),
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
+    chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );
 
@@ -830,6 +852,34 @@ export const platformIdentities = pgTable(
 );
 
 // ============================================================================
+// CONVERSATIONS
+// ============================================================================
+
+/**
+ * Channel-agnostic conversation container.
+ * Groups multiple Chats (across channels) into a single thread of continuity.
+ * @see docs/architecture/actor-model.md — omni-233
+ */
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: varchar('title', { length: 500 }),
+    summary: text('summary'),
+    state: jsonb('state').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
+    updatedAtIdx: index('conversations_updated_at_idx').on(table.updatedAt),
+  }),
+);
+
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+
+// ============================================================================
 // CHATS (Unified Chat Model)
 // ============================================================================
 
@@ -877,6 +927,9 @@ export const chats = pgTable(
     // ---- Platform metadata ----
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
+    // ---- Conversation ----
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -894,6 +947,7 @@ export const chats = pgTable(
     channelIdx: index('chats_channel_idx').on(table.channel),
     parentIdx: index('chats_parent_idx').on(table.parentChatId),
     lastMessageIdx: index('chats_last_message_idx').on(table.lastMessageAt),
+    conversationIdx: index('chats_conversation_id_idx').on(table.conversationId),
   }),
 );
 
@@ -1177,7 +1231,7 @@ export const omniEvents = pgTable(
     canonicalChatId: varchar('canonical_chat_id', { length: 255 }), // Resolved @lid → phone
     chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
-    conversationId: uuid('conversation_id'), // no FK yet — conversations table pending
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1352,7 +1406,7 @@ export const batchJobs = pgTable(
     progressPercent: integer('progress_percent').notNull().default(0),
 
     // ---- Cost Tracking ----
-    totalCostUsd: integer('total_cost_usd'), // Stored as cents
+    totalCostUsd: numeric('total_cost_usd', { precision: 15, scale: 6 }),
     totalTokens: integer('total_tokens'),
 
     // ---- Error Handling ----
@@ -1464,7 +1518,7 @@ export const mediaContent = pgTable(
     language: varchar('language', { length: 10 }),
     duration: integer('duration'), // For audio/video
     tokensUsed: integer('tokens_used'),
-    costUsd: integer('cost_usd'), // Stored as cents
+    costUsd: numeric('cost_usd', { precision: 15, scale: 6 }),
 
     // ---- Source Info ----
     batchJobId: uuid('batch_job_id').references(() => batchJobs.id, { onDelete: 'set null' }),
@@ -1599,10 +1653,19 @@ export const platformIdentitiesRelations = relations(platformIdentities, ({ one,
   sentMessages: many(messages),
 }));
 
+export const conversationsRelations = relations(conversations, ({ many }) => ({
+  chats: many(chats),
+  omniEvents: many(omniEvents),
+}));
+
 export const chatsRelations = relations(chats, ({ one, many }) => ({
   instance: one(instances, {
     fields: [chats.instanceId],
     references: [instances.id],
+  }),
+  conversation: one(conversations, {
+    fields: [chats.conversationId],
+    references: [conversations.id],
   }),
   parentChat: one(chats, {
     fields: [chats.parentChatId],
@@ -1688,6 +1751,10 @@ export const omniEventsRelations = relations(omniEvents, ({ one, many }) => ({
   agent: one(agents, {
     fields: [omniEvents.agentId],
     references: [agents.id],
+  }),
+  conversation: one(conversations, {
+    fields: [omniEvents.conversationId],
+    references: [conversations.id],
   }),
   mediaContent: many(mediaContent),
 }));
@@ -2299,8 +2366,112 @@ export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
 
 export const agentRoutesRelations = relations(agentRoutes, ({ one, many }) => ({
   agent: one(agents, {
-    fields: [agentRoutes.agentFkId],
+    fields: [agentRoutes.agentId],
     references: [agents.id],
   }),
   triggerLogs: many(triggerLogs),
+}));
+
+// ============================================================================
+// AGENT TASKS
+// ============================================================================
+
+export const agentTaskStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled', 'waiting_input'] as const;
+export type AgentTaskStatus = (typeof agentTaskStatuses)[number];
+
+/**
+ * Persistent task history for agents.
+ * Each row represents a discrete unit of work performed by an agent
+ * (e.g. web search, code execution, API call, sub-agent delegation).
+ *
+ * @see docs/architecture/actor-model.md — "Agent Task (persistent)"
+ */
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // ---- Core FKs ----
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+    /** The message that triggered this task (null for programmatically created tasks) */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+
+    // ---- Classification ----
+    /** Task type: 'web_search' | 'code_exec' | 'api_call' | 'sub_agent' | 'media_process' | 'custom.*' */
+    type: varchar('type', { length: 100 }).notNull(),
+    /** Human-readable title: "Searching for X" */
+    title: varchar('title', { length: 500 }).notNull(),
+    description: text('description'),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<AgentTaskStatus>(),
+    /** Progress percentage 0-100 */
+    progress: integer('progress').notNull().default(0),
+    priority: integer('priority').notNull().default(0),
+
+    // ---- Payload ----
+    /** Open per-task-type metadata — no migration needed for new fields */
+    metadata: jsonb('metadata').notNull().default({}).$type<Record<string, unknown>>(),
+    result: jsonb('result').$type<Record<string, unknown>>(),
+    error: text('error'),
+
+    // ---- Subtask nesting ----
+    parentTaskId: uuid('parent_task_id').references(
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      (): AnyPgColumn => agentTasks.id,
+      { onDelete: 'set null' },
+    ),
+    subtaskCount: integer('subtask_count').notNull().default(0),
+    completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
+    chatIdIdx: index('agent_tasks_chat_id_idx').on(table.chatId),
+    conversationIdIdx: index('agent_tasks_conversation_id_idx').on(table.conversationId),
+    parentTaskIdIdx: index('agent_tasks_parent_task_id_idx').on(table.parentTaskId),
+    statusIdx: index('agent_tasks_status_idx').on(table.status),
+    agentChatIdx: index('agent_tasks_agent_chat_idx').on(table.agentId, table.chatId),
+    agentStatusIdx: index('agent_tasks_agent_status_idx').on(table.agentId, table.status),
+  }),
+);
+
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type NewAgentTask = typeof agentTasks.$inferInsert;
+
+export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
+  agent: one(agents, {
+    fields: [agentTasks.agentId],
+    references: [agents.id],
+  }),
+  chat: one(chats, {
+    fields: [agentTasks.chatId],
+    references: [chats.id],
+  }),
+  conversation: one(conversations, {
+    fields: [agentTasks.conversationId],
+    references: [conversations.id],
+  }),
+  message: one(messages, {
+    fields: [agentTasks.messageId],
+    references: [messages.id],
+  }),
+  parentTask: one(agentTasks, {
+    fields: [agentTasks.parentTaskId],
+    references: [agentTasks.id],
+    relationName: 'parentChild',
+  }),
+  subtasks: many(agentTasks, {
+    relationName: 'parentChild',
+  }),
 }));

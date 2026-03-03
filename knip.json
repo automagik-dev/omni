@@ -20,11 +20,12 @@
     "packages/api": {
       "entry": ["src/schemas/openapi/*.ts"],
       "project": ["src/**/*.ts"],
-      "ignore": ["src/plugins/agent-responder.ts"],
-      "ignoreDependencies": []
+      "ignore": ["src/plugins/agent-responder.ts", "src/trpc/**"],
+      "ignoreDependencies": ["@trpc/server"]
     },
     "packages/core": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/logger/adapters/baileys.ts"]
     },
     "packages/channel-sdk": {
       "entry": ["src/index.ts"],
@@ -43,7 +44,7 @@
       "project": ["src/**/*.ts"]
     },
     "packages/cli": {
-      "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
+      "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts", "src/index.ts"],
       "project": ["src/**/*.ts"],
       "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk"]
     },
