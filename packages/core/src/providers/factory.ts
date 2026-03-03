@@ -90,6 +90,16 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
       });
     }
 
+    case 'genie':
+      // Genie providers are created via GenieAgentProvider directly,
+      // not through the legacy createProviderClient factory.
+      throw new ProviderError(
+        'Genie providers should be created via GenieAgentProvider, not createProviderClient',
+        'NOT_FOUND',
+        400,
+        { schema: 'genie', hint: 'Use new GenieAgentProvider(id, name, client, config) instead' },
+      );
+
     default:
       throw new ProviderError(`Unknown provider schema: ${config.schema}`, 'NOT_FOUND', 400, {
         schema: config.schema,
@@ -107,7 +117,8 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
     schema === 'openclaw' ||
     schema === 'claude-code' ||
     schema === 'ag-ui' ||
-    schema === 'a2a'
+    schema === 'a2a' ||
+    schema === 'genie'
   );
 }
 
@@ -115,5 +126,5 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a'];
+  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a', 'genie'];
 }

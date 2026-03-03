@@ -66,6 +66,12 @@ export interface ProviderRequest {
     participantCount?: number;
   };
 
+  /** External/platform message ID (for reply-to and reactions) */
+  messageId?: string;
+
+  /** External ID of the message being replied to */
+  replyToMessageId?: string;
+
   /** Optional file attachments */
   files?: ProviderFile[];
   /** Request timeout in milliseconds */
