@@ -145,7 +145,7 @@ async function poll(): Promise<void> {
       continue;
     }
 
-    const sent = await sendToOmni(parsed.instance, parsed.chat, parsed.cleanText, parsed.msg);
+    const sent = await sendToOmni(parsed.instance, parsed.chat, parsed.cleanText, parsed.replyTo);
     if (sent) {
       msg.read = true;
       changed = true;
