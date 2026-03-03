@@ -13,6 +13,7 @@
         "scripts/verify-*.ts",
         "scripts/redownload-*.ts",
         "scripts/test-pgboss.ts",
+        "scripts/inbox-bridge.ts",
         "scripts/perf/**"
       ],
       "ignoreDependencies": ["@openapitools/openapi-generator-cli"]
