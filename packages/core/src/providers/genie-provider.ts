@@ -49,6 +49,8 @@ export class GenieAgentProvider implements IAgentProvider {
       stream: false,
       sessionId: context.sessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
+      messageId: context.source.messageId || undefined,
+      replyToMessageId: context.content.referencedMessageId || undefined,
       sender: {
         displayName: context.sender.displayName,
         platformUsername: context.sender.platformUserId,
@@ -59,7 +61,7 @@ export class GenieAgentProvider implements IAgentProvider {
         instanceId: context.source.instanceId,
       },
       chat: {
-        type: 'dm',
+        type: context.type === 'dm' ? 'dm' : 'group',
         id: context.source.chatId,
       },
       files: context.content.files,

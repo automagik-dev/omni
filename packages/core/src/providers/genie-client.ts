@@ -48,6 +48,21 @@ export class GenieClient implements IAgentClient {
     this.inboxPath = join(this.inboxDir, `${this.targetAgent}.json`);
   }
 
+  /** Build single-bracket metadata header from request context */
+  private buildMetadataHeader(request: ProviderRequest): string {
+    const tags: string[] = [];
+    if (request.platform) {
+      tags.push(`channel:${request.platform.channel}`);
+      tags.push(`instance:${request.platform.instanceId}`);
+    }
+    if (request.chat?.id) tags.push(`chat:${request.chat.id}`);
+    if (request.messageId) tags.push(`msg:${request.messageId}`);
+    if (request.sender?.displayName) tags.push(`from:${request.sender.displayName}`);
+    if (request.chat?.type) tags.push(`type:${request.chat.type}`);
+    if (request.replyToMessageId) tags.push(`replyTo:${request.replyToMessageId}`);
+    return tags.length > 0 ? `[${tags.join(' ')}]` : '';
+  }
+
   /**
    * Fire-and-forget: append message to agent's team inbox.
    * Returns immediately — the agent replies independently via omni send.
@@ -55,26 +70,11 @@ export class GenieClient implements IAgentClient {
   async run(request: ProviderRequest): Promise<ProviderResponse> {
     const startMs = Date.now();
 
-    // Build the message text with context
-    const parts: string[] = [];
-    if (request.platform) {
-      parts.push(`[channel:${request.platform.channel}]`);
-      parts.push(`[instance:${request.platform.instanceId}]`);
-    }
-    if (request.chat?.id) {
-      parts.push(`[chat:${request.chat.id}]`);
-    }
-    if (request.sender?.displayName) {
-      parts.push(`[from:${request.sender.displayName}]`);
-    }
-    parts.push(request.message);
-
-    // Priority instruction: agent must reply before doing anything else
-    parts.push(
-      `\n⚡ REPLY NOW via SendMessage to "${this.agentName}". Do not proceed with other tasks until you respond.`,
-    );
-
-    const text = parts.join(' ');
+    const header = this.buildMetadataHeader(request);
+    const replyInstruction = `⚡ REPLY NOW via SendMessage to "${this.agentName}". Do not proceed with other tasks until you respond.`;
+    const text = header
+      ? `${header}\n${request.message}\n${replyInstruction}`
+      : `${request.message}\n${replyInstruction}`;
     const summary = request.message.length > 50 ? `${request.message.substring(0, 50)}...` : request.message;
 
     const inboxMessage: TeamInboxMessage = {

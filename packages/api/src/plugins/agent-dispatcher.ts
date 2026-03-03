@@ -711,7 +711,7 @@ async function resolveQuotedMessage(
     const quoted = await services.messages.getByExternalId(chat.id, replyToId);
     if (!quoted) return null;
 
-    const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? 'unknown';
+    const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
     const time = quoted.platformTimestamp
       ? new Date(quoted.platformTimestamp).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
       : '';
@@ -1320,6 +1320,48 @@ async function executeBeforeMessageWriteHooks(instanceId: string, chatId: string
   return result.context.content;
 }
 
+/** Build an AgentTrigger for a message dispatch (shared by streaming and non-streaming paths) */
+function buildMessageTrigger(
+  traceId: string,
+  triggerType: AgentTriggerType,
+  rawEvent: AgentTrigger['event'],
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  senderId: string,
+  personId: string | undefined,
+  senderName: string | undefined,
+  messages: BufferedMessage[],
+  messageTexts: string[],
+  triggerFiles: ProviderFile[] | undefined,
+  sessionId: string,
+  allContextMessages: string[],
+): AgentTrigger {
+  return {
+    traceId,
+    type: triggerType,
+    event: rawEvent,
+    source: {
+      channelType: channel,
+      instanceId: instance.id,
+      chatId,
+      messageId: messages[0]?.payload.externalId ?? '',
+    },
+    sender: {
+      platformUserId: senderId,
+      personId,
+      displayName: senderName,
+    },
+    content: {
+      text: messageTexts.join('\n'),
+      files: triggerFiles,
+      referencedMessageId: messages[0]?.payload.replyToId || undefined,
+    },
+    sessionId,
+    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
+  };
+}
+
 /**
  * Try streaming dispatch: provider.triggerStream() → StreamSender.
  * Returns true if handled via streaming, false to fall back to accumulate.
@@ -1372,28 +1414,22 @@ async function dispatchViaStreamingProvider(
   // TODO: before_message_write for streaming — batch after stream completes
   // (per-segment hooks would add latency; batch transform is the right approach)
 
-  const trigger: AgentTrigger = {
+  const trigger = buildMessageTrigger(
     traceId,
-    type: triggerType,
-    event: rawEvent,
-    source: {
-      channelType: channel,
-      instanceId: instance.id,
-      chatId,
-      messageId: messages[0]?.payload.externalId ?? '',
-    },
-    sender: {
-      platformUserId: senderId,
-      personId,
-      displayName: senderName,
-    },
-    content: {
-      text: messageTexts.join('\n'),
-      files: triggerFiles,
-    },
+    triggerType,
+    rawEvent,
+    channel,
+    instance,
+    chatId,
+    senderId,
+    personId,
+    senderName,
+    messages,
+    messageTexts,
+    triggerFiles,
     sessionId,
-    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
-  };
+    allContextMessages,
+  );
 
   const chatType = determineChatType(chatId, channel, rawPl);
   const formatMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
@@ -1644,28 +1680,22 @@ async function dispatchViaProvider(
     triggerFiles,
   );
 
-  const trigger: AgentTrigger = {
+  const trigger = buildMessageTrigger(
     traceId,
-    type: triggerType,
-    event: rawEvent,
-    source: {
-      channelType: channel,
-      instanceId: instance.id,
-      chatId,
-      messageId: messages[0]?.payload.externalId ?? '',
-    },
-    sender: {
-      platformUserId: senderId,
-      personId,
-      displayName: senderName,
-    },
-    content: {
-      text: messageTexts.join('\n'),
-      files: triggerFiles,
-    },
+    triggerType,
+    rawEvent,
+    channel,
+    instance,
+    chatId,
+    senderId,
+    personId,
+    senderName,
+    messages,
+    messageTexts,
+    triggerFiles,
     sessionId,
-    contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
-  };
+    allContextMessages,
+  );
 
   const correlationId = messages[0]?.metadata.correlationId;
   const result = await provider.trigger(trigger);
