@@ -33,6 +33,7 @@ import {
   type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
+  GenieAgentProvider,
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
@@ -47,6 +48,7 @@ import {
   type StreamDelta,
   WebhookAgentProvider,
   checkSessionReset,
+  createGenieClient,
   createLogger,
   createProviderClient,
   executeHooks,
@@ -2621,6 +2623,29 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
   });
 }
 
+/** Create a Genie agent provider (delivers to Claude Code team inbox) */
+function createGenieProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+  const schemaConfig = (
+    typeof provider.schemaConfig === 'object' && provider.schemaConfig !== null ? provider.schemaConfig : {}
+  ) as Record<string, unknown>;
+
+  const agentName = typeof schemaConfig.agentName === 'string' ? schemaConfig.agentName : '';
+  const targetAgent = typeof schemaConfig.targetAgent === 'string' ? schemaConfig.targetAgent : '';
+
+  if (!agentName || !targetAgent) {
+    log.error('Genie provider missing agentName or targetAgent in schemaConfig', { providerId: provider.id });
+    return null;
+  }
+
+  const teamName = typeof schemaConfig.teamName === 'string' ? schemaConfig.teamName : 'genie';
+
+  const client = createGenieClient({ teamName, agentName, targetAgent });
+
+  return new GenieAgentProvider(provider.id, provider.name, client, {
+    prefixSenderName: instance.agentPrefixSenderName ?? true,
+  });
+}
+
 /**
  * Resolve an IAgentProvider from a DB provider record + instance config.
  * Returns null if the schema is not supported for the new provider abstraction.
@@ -2656,6 +2681,9 @@ export function resolveProvider(
       break;
     case 'a2a':
       agentProvider = createA2AProviderInstance(provider, instance);
+      break;
+    case 'genie':
+      agentProvider = createGenieProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {

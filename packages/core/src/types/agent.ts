@@ -5,7 +5,7 @@
 export const AGENT_TYPES = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a'] as const;
+export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'genie'] as const;
 export type ProviderSchema = (typeof PROVIDER_SCHEMAS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -20,7 +20,7 @@ export interface AgentProviderConfig {
   schema: ProviderSchema;
   baseUrl: string;
   apiKey?: string;
-  schemaConfig?: AgnoConfig | OpenClawConfig | Record<string, unknown>;
+  schemaConfig?: AgnoConfig | OpenClawConfig | GenieConfig | Record<string, unknown>;
   defaultStream: boolean;
   defaultTimeout: number;
   capabilities: AgentCapabilities;
@@ -46,6 +46,15 @@ export interface OpenClawConfig {
   agentTimeoutMs?: number;
   /** Origin header for WS connection */
   origin?: string;
+}
+
+export interface GenieConfig {
+  /** Identity of the omni agent in the team (used as 'from' field) */
+  agentName: string;
+  /** Which team member inbox to deliver messages to */
+  targetAgent: string;
+  /** Claude Code team name (default: 'genie') */
+  teamName?: string;
 }
 
 /**
