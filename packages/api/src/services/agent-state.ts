@@ -83,6 +83,7 @@ export class AgentStateService {
       });
       log.info('AgentStateService: KV bucket ready', { bucket: AGENT_STATE_KV_BUCKET });
     } catch (err) {
+      this.initPromise = null; // Allow retry on next ensureKv() call
       log.error('AgentStateService: failed to open KV bucket', { error: String(err) });
     }
   }
@@ -181,6 +182,25 @@ export class AgentStateService {
       const kv = await this.ensureKv();
       const key = agentStateKey(agentId, chatId);
       await kv.delete(key);
+
+      // Publish event for consistency with setState
+      if (this.eventBus) {
+        this.eventBus
+          .publish('agent.state.changed', {
+            agentId,
+            chatId,
+            conversationId: null,
+            status: 'idle',
+            updatedAt: Date.now(),
+          })
+          .catch((err) => {
+            log.warn('AgentStateService: failed to publish clearState event', {
+              agentId,
+              chatId,
+              error: String(err),
+            });
+          });
+      }
     } catch (err) {
       log.warn('AgentStateService: failed to clear state from KV', {
         agentId,
@@ -289,7 +309,14 @@ export class AgentStateService {
   private parseWatchEntry(entry: { operation: 'PUT' | 'DEL' | 'PURGE'; value: Uint8Array }): AgentChatState | null {
     if (entry.operation === 'DEL' || entry.operation === 'PURGE') return null;
 
-    const raw = JSON.parse(sc.decode(entry.value));
+    let raw: unknown;
+    try {
+      raw = JSON.parse(sc.decode(entry.value));
+    } catch {
+      log.warn('AgentStateService: failed to parse KV entry', { operation: entry.operation });
+      return null;
+    }
+
     const parsed = AgentChatStateSchema.safeParse(raw);
 
     return parsed.success ? parsed.data : null;

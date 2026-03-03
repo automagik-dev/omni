@@ -2,13 +2,18 @@
  * Conversation service - manages channel-agnostic conversation containers
  */
 
-import { NotFoundError } from '@omni/core';
+import { type EventBus, NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type Chat, type Conversation, type NewConversation, chats, conversations } from '@omni/db';
 import { desc, eq } from 'drizzle-orm';
 
+const log = createLogger('services:conversations');
+
 export class ConversationService {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private eventBus: EventBus | null = null,
+  ) {}
 
   /**
    * List conversations ordered by most recently updated
@@ -42,6 +47,16 @@ export class ConversationService {
       throw new Error('Failed to create conversation');
     }
 
+    if (this.eventBus) {
+      this.eventBus
+        .publish(
+          'conversation.created',
+          { conversationId: created.id, title: created.title },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish conversation.created', { error: String(err) }));
+    }
+
     return created;
   }
 
@@ -59,6 +74,16 @@ export class ConversationService {
       throw new NotFoundError('Conversation', id);
     }
 
+    if (this.eventBus) {
+      this.eventBus
+        .publish(
+          'conversation.updated',
+          { conversationId: updated.id, title: updated.title },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish conversation.updated', { error: String(err) }));
+    }
+
     return updated;
   }
 
@@ -73,6 +98,12 @@ export class ConversationService {
 
     if (!deleted) {
       throw new NotFoundError('Conversation', id);
+    }
+
+    if (this.eventBus) {
+      this.eventBus
+        .publish('conversation.deleted', { conversationId: deleted.id }, { instanceId: undefined })
+        .catch((err) => log.warn('Failed to publish conversation.deleted', { error: String(err) }));
     }
   }
 

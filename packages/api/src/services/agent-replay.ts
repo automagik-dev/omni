@@ -193,7 +193,7 @@ export class AgentReplayService {
       if (rows.length < PAGE_SIZE) break;
     }
 
-    return { instanceId, replayed: totalReplayed, skipped: totalSkipped, since, until: cursorTimestamp };
+    return { instanceId, replayed: totalReplayed, skipped: totalSkipped, since, until: now };
   }
 
   /**

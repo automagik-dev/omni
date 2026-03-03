@@ -50,7 +50,6 @@ export const AgentTaskSchema = z.object({
   createdAt: z.date(),
   startedAt: z.date().nullable(),
   completedAt: z.date().nullable(),
-  updatedAt: z.date(),
 });
 
 export type AgentTask = z.infer<typeof AgentTaskSchema>;

@@ -2340,7 +2340,9 @@ const replaySchema = z.object({
   since: z
     .string()
     .refine(
-      (v) => /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(v),
+      (v) =>
+        /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(v) &&
+        !Number.isNaN(new Date(v).getTime()),
       'Invalid ISO 8601 timestamp (expected YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ)',
     )
     .optional()

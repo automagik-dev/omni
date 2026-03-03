@@ -77,6 +77,10 @@ export const CORE_EVENT_TYPES = [
   'agent.a2a.task_failed',
   // Internal agent-to-agent routing
   'agent.internal.forwarded',
+  // Conversation lifecycle
+  'conversation.created',
+  'conversation.updated',
+  'conversation.deleted',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -671,6 +675,9 @@ export interface EventPayloadMap {
   'agent.a2a.task_completed': Record<string, unknown>;
   'agent.a2a.task_failed': Record<string, unknown>;
   'agent.internal.forwarded': Record<string, unknown>;
+  'conversation.created': { conversationId: string; title: string | null };
+  'conversation.updated': { conversationId: string; title: string | null };
+  'conversation.deleted': { conversationId: string };
 }
 
 /**

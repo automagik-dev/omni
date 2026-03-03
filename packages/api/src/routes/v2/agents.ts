@@ -55,8 +55,8 @@ agentsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 /**
  * GET /agents/:id - Get agent by ID
  */
-agentsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+agentsRoutes.get('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   const agent = await services.agents.getById(id);
@@ -79,8 +79,8 @@ agentsRoutes.post('/', zValidator('json', createAgentSchema), async (c) => {
 /**
  * PATCH /agents/:id - Update agent
  */
-agentsRoutes.patch('/:id', zValidator('json', updateAgentSchema), async (c) => {
-  const id = c.req.param('id');
+agentsRoutes.patch('/:id', zValidator('param', idParamSchema), zValidator('json', updateAgentSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const data = c.req.valid('json');
   const services = c.get('services');
 
@@ -92,8 +92,8 @@ agentsRoutes.patch('/:id', zValidator('json', updateAgentSchema), async (c) => {
 /**
  * DELETE /agents/:id - Soft-delete agent (sets isActive = false)
  */
-agentsRoutes.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+agentsRoutes.delete('/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   await services.agents.delete(id);
@@ -104,8 +104,8 @@ agentsRoutes.delete('/:id', async (c) => {
 /**
  * GET /agents/:id/identities - List platform identities for this agent
  */
-agentsRoutes.get('/:id/identities', async (c) => {
-  const id = c.req.param('id');
+agentsRoutes.get('/:id/identities', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
   const services = c.get('services');
 
   await services.agents.getById(id);
@@ -118,21 +118,26 @@ agentsRoutes.get('/:id/identities', async (c) => {
 /**
  * POST /agents/:id/identities/link - Link a platform identity to this agent
  */
-agentsRoutes.post('/:id/identities/link', zValidator('json', LinkIdentityToAgentSchema), async (c) => {
-  const id = c.req.param('id');
-  const data = c.req.valid('json');
-  const services = c.get('services');
+agentsRoutes.post(
+  '/:id/identities/link',
+  zValidator('param', idParamSchema),
+  zValidator('json', LinkIdentityToAgentSchema),
+  async (c) => {
+    const { id } = c.req.valid('param');
+    const data = c.req.valid('json');
+    const services = c.get('services');
 
-  await services.agents.getById(id);
+    await services.agents.getById(id);
 
-  const identity = await services.persons.linkIdentityToAgent(data.platformIdentityId, id, {
-    linkedBy: data.linkedBy,
-    confidence: data.confidence,
-    linkReason: data.linkReason,
-  });
+    const identity = await services.persons.linkIdentityToAgent(data.platformIdentityId, id, {
+      linkedBy: data.linkedBy,
+      confidence: data.confidence,
+      linkReason: data.linkReason,
+    });
 
-  return c.json({ data: identity }, 201);
-});
+    return c.json({ data: identity }, 201);
+  },
+);
 
 /**
  * GET /agents/:id/tasks - List tasks for this agent (shortcut)

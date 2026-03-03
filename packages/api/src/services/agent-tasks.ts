@@ -5,8 +5,10 @@
  */
 
 import type { EventBus } from '@omni/core';
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+
+const log = createLogger('services:agent-tasks');
 import { type AgentTask, type AgentTaskStatus, type NewAgentTask, agentTasks } from '@omni/db';
 import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 
@@ -47,19 +49,21 @@ export class AgentTaskService {
     }
 
     if (this.eventBus) {
-      await this.eventBus.publish(
-        'agent.task.created',
-        {
-          taskId: created.id,
-          agentId: created.agentId,
-          chatId: created.chatId,
-          conversationId: created.conversationId ?? null,
-          type: created.type,
-          title: created.title,
-          status: created.status,
-        },
-        { instanceId: undefined },
-      );
+      this.eventBus
+        .publish(
+          'agent.task.created',
+          {
+            taskId: created.id,
+            agentId: created.agentId,
+            chatId: created.chatId,
+            conversationId: created.conversationId ?? null,
+            type: created.type,
+            title: created.title,
+            status: created.status,
+          },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish agent.task.created', { error: String(err) }));
     }
 
     return created;
@@ -76,6 +80,21 @@ export class AgentTaskService {
     }
 
     return result;
+  }
+
+  /** Check that a cursor task belongs to the same filter scope — prevents cross-scope pagination leaks */
+  private cursorMatchesFilters(cursorTask: AgentTask, options: ListAgentTasksOptions): boolean {
+    const { agentId, chatId, conversationId, status, type, parentTaskId } = options;
+    if (agentId && cursorTask.agentId !== agentId) return false;
+    if (chatId && cursorTask.chatId !== chatId) return false;
+    if (conversationId && cursorTask.conversationId !== conversationId) return false;
+    if (type && cursorTask.type !== type) return false;
+    if (parentTaskId && cursorTask.parentTaskId !== parentTaskId) return false;
+    if (status) {
+      const statusList = Array.isArray(status) ? status : [status];
+      if (!statusList.includes(cursorTask.status)) return false;
+    }
+    return true;
   }
 
   /**
@@ -113,16 +132,19 @@ export class AgentTaskService {
 
     if (cursor) {
       const cursorTask = await this.getById(cursor);
-      // Composite keyset pagination: avoid duplicates when multiple rows share the same createdAt.
-      // Order is (createdAt DESC, id DESC), so the next page starts after rows where either:
-      //   - createdAt is strictly older, OR
-      //   - createdAt is the same but id is strictly smaller
-      conditions.push(
-        or(
-          lt(agentTasks.createdAt, cursorTask.createdAt),
-          and(eq(agentTasks.createdAt, cursorTask.createdAt), lt(agentTasks.id, cursorTask.id)),
-        ),
-      );
+      if (this.cursorMatchesFilters(cursorTask, options)) {
+        // Composite keyset pagination: avoid duplicates when multiple rows share the same createdAt.
+        // Order is (createdAt DESC, id DESC), so the next page starts after rows where either:
+        //   - createdAt is strictly older, OR
+        //   - createdAt is the same but id is strictly smaller
+        conditions.push(
+          or(
+            lt(agentTasks.createdAt, cursorTask.createdAt),
+            and(eq(agentTasks.createdAt, cursorTask.createdAt), lt(agentTasks.id, cursorTask.id)),
+          ),
+        );
+      }
+      // If cursor doesn't match filters, silently ignore it and return first page
     }
 
     let query = this.db.select().from(agentTasks).$dynamic();
@@ -158,17 +180,19 @@ export class AgentTaskService {
     }
 
     if (this.eventBus) {
-      await this.eventBus.publish(
-        'agent.task.updated',
-        {
-          taskId: updated.id,
-          agentId: updated.agentId,
-          chatId: updated.chatId,
-          status: updated.status,
-          progress: updated.progress,
-        },
-        { instanceId: undefined },
-      );
+      this.eventBus
+        .publish(
+          'agent.task.updated',
+          {
+            taskId: updated.id,
+            agentId: updated.agentId,
+            chatId: updated.chatId,
+            status: updated.status,
+            progress: updated.progress,
+          },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish agent.task.updated', { error: String(err) }));
     }
 
     return updated;
@@ -216,16 +240,18 @@ export class AgentTaskService {
     }
 
     if (this.eventBus) {
-      await this.eventBus.publish(
-        'agent.task.completed',
-        {
-          taskId: updated.id,
-          agentId: updated.agentId,
-          chatId: updated.chatId,
-          result: (updated.result as Record<string, unknown> | null) ?? null,
-        },
-        { instanceId: undefined },
-      );
+      this.eventBus
+        .publish(
+          'agent.task.completed',
+          {
+            taskId: updated.id,
+            agentId: updated.agentId,
+            chatId: updated.chatId,
+            result: (updated.result as Record<string, unknown> | null) ?? null,
+          },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish agent.task.completed', { error: String(err) }));
     }
 
     return updated;
@@ -250,16 +276,18 @@ export class AgentTaskService {
     }
 
     if (this.eventBus) {
-      await this.eventBus.publish(
-        'agent.task.failed',
-        {
-          taskId: updated.id,
-          agentId: updated.agentId,
-          chatId: updated.chatId,
-          error,
-        },
-        { instanceId: undefined },
-      );
+      this.eventBus
+        .publish(
+          'agent.task.failed',
+          {
+            taskId: updated.id,
+            agentId: updated.agentId,
+            chatId: updated.chatId,
+            error,
+          },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish agent.task.failed', { error: String(err) }));
     }
 
     return updated;
@@ -283,15 +311,17 @@ export class AgentTaskService {
     }
 
     if (this.eventBus) {
-      await this.eventBus.publish(
-        'agent.task.cancelled',
-        {
-          taskId: updated.id,
-          agentId: updated.agentId,
-          chatId: updated.chatId,
-        },
-        { instanceId: undefined },
-      );
+      this.eventBus
+        .publish(
+          'agent.task.cancelled',
+          {
+            taskId: updated.id,
+            agentId: updated.agentId,
+            chatId: updated.chatId,
+          },
+          { instanceId: undefined },
+        )
+        .catch((err) => log.warn('Failed to publish agent.task.cancelled', { error: String(err) }));
     }
 
     return updated;

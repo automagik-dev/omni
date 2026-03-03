@@ -146,6 +146,12 @@ async function handleMessageSend(
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
   const sendParams = parseResult.data as MessageSendParams;
+
+  const text = extractText(sendParams.message);
+  if (!text.trim()) {
+    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, 'Only text parts are currently supported'), 400);
+  }
+
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
@@ -175,14 +181,25 @@ async function handleMessageStream(
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
   const sendParams = parseResult.data as MessageSendParams;
+
+  const text = extractText(sendParams.message);
+  if (!text.trim()) {
+    return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, 'Only text parts are currently supported'), 400);
+  }
+
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
   // Create pending SSE stream BEFORE emitting event so the dispatcher can write to it
   const sseStream = ctx.streamStore.createPendingStream(ctx.instanceId, taskId);
 
-  // Emit message.received to trigger the dispatcher (fire-and-forget)
-  await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+  // Emit message.received to trigger the dispatcher
+  try {
+    await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+  } catch {
+    ctx.streamStore.closeStream(ctx.instanceId, taskId, 'failed');
+    return jsonResponse(jsonRpcError(id, -32603, 'Internal error'), 500);
+  }
 
   return new Response(sseStream, {
     status: 200,

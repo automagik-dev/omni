@@ -305,14 +305,39 @@ describe('AgentReplayService', () => {
       const db = createMessagesOnlyDb([]);
       const service = new AgentReplayService(db, eventBus);
 
+      const before = Date.now();
       const result = await service.replayMissedMessages({
         instanceId: 'inst-1',
         since: new Date(),
       });
+      const after = Date.now();
 
       expect(result.replayed).toBe(0);
       expect(result.skipped).toBe(0);
       expect(eventBus.publish).not.toHaveBeenCalled();
+      // until must be now (query upper bound), not since — prevents zero-row stall
+      expect(result.until.getTime()).toBeGreaterThanOrEqual(before);
+      expect(result.until.getTime()).toBeLessThanOrEqual(after);
+    });
+
+    test('non-zero-row replay returns until=now, not last-row platformTimestamp', async () => {
+      const pastTimestamp = new Date('2026-01-01T10:30:00Z');
+      const msg = createMockMessageRow({ platformTimestamp: pastTimestamp });
+      const db = createMessagesOnlyDb([msg]);
+      const service = new AgentReplayService(db, eventBus);
+
+      const before = Date.now();
+      const result = await service.replayMissedMessages({
+        instanceId: 'inst-1',
+        since: new Date('2026-01-01T10:00:00Z'),
+      });
+      const after = Date.now();
+
+      expect(result.replayed).toBe(1);
+      // until should be now, not the message's platformTimestamp
+      expect(result.until.getTime()).toBeGreaterThan(pastTimestamp.getTime());
+      expect(result.until.getTime()).toBeGreaterThanOrEqual(before);
+      expect(result.until.getTime()).toBeLessThanOrEqual(after);
     });
 
     test('paginates when first page is full — replays all messages across pages', async () => {
@@ -371,8 +396,8 @@ describe('AgentReplayService', () => {
       expect(mockSelect).toHaveBeenCalledTimes(2);
       // Event bus received all 1003 publish calls
       expect(eventBus.publish).toHaveBeenCalledTimes(1003);
-      // until should be the last page's timestamp, not now
-      expect(result.until).toBe(page2Timestamp);
+      // until should be now (the query upper bound), not last-row timestamp
+      expect(result.until.getTime()).toBeGreaterThan(page2Timestamp.getTime());
     });
 
     test('uses cutoff when since is undefined', async () => {

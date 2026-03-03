@@ -1,11 +1,11 @@
 /**
  * Unit tests for ConversationService
  *
- * Tests CRUD operations and chat retrieval with mocked database.
- * ConversationService does not publish events — no eventBus dependency.
+ * Tests CRUD operations, chat retrieval, and event publishing with mocked database.
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { ConversationService } from '../conversations';
 
@@ -54,13 +54,21 @@ function createMockDatabase() {
   } as unknown as Database;
 }
 
+function createMockEventBus() {
+  return { publish: mock(() => Promise.resolve()) } as unknown as EventBus & {
+    publish: ReturnType<typeof mock>;
+  };
+}
+
 describe('ConversationService', () => {
   let service: ConversationService;
   let mockDb: ReturnType<typeof createMockDatabase>;
+  let eventBus: ReturnType<typeof createMockEventBus>;
 
   beforeEach(() => {
     mockDb = createMockDatabase();
-    service = new ConversationService(mockDb as unknown as Database);
+    eventBus = createMockEventBus();
+    service = new ConversationService(mockDb as unknown as Database, eventBus);
   });
 
   describe('list()', () => {
@@ -131,7 +139,7 @@ describe('ConversationService', () => {
       expect(mockDb.insert).toHaveBeenCalled();
     });
 
-    test('does NOT publish any events (no eventBus dependency)', async () => {
+    test('publishes conversation.created event', async () => {
       const created = mockConversation();
       mockDb.insert = mock(() => ({
         values: mock(() => ({
@@ -139,8 +147,11 @@ describe('ConversationService', () => {
         })),
       })) as unknown as typeof mockDb.insert;
 
-      // ConversationService has no eventBus — create should succeed without any event publishing
-      await expect(service.create({ title: 'Silent' } as any)).resolves.toMatchObject({ id: 'conv-123' });
+      await service.create({ title: 'New' } as any);
+
+      expect(eventBus.publish).toHaveBeenCalledTimes(1);
+      const calls = eventBus.publish.mock.calls as unknown[][];
+      expect(calls[0]?.[0]).toBe('conversation.created');
     });
   });
 
@@ -161,6 +172,23 @@ describe('ConversationService', () => {
       expect(mockDb.update).toHaveBeenCalled();
     });
 
+    test('publishes conversation.updated event', async () => {
+      const updated = mockConversation({ id: 'conv-789', title: 'Updated' });
+      mockDb.update = mock(() => ({
+        set: mock(() => ({
+          where: mock(() => ({
+            returning: mock(() => Promise.resolve([updated])),
+          })),
+        })),
+      })) as unknown as typeof mockDb.update;
+
+      await service.update('conv-789', { title: 'Updated' } as any);
+
+      expect(eventBus.publish).toHaveBeenCalledTimes(1);
+      const calls = eventBus.publish.mock.calls as unknown[][];
+      expect(calls[0]?.[0]).toBe('conversation.updated');
+    });
+
     test('throws NotFoundError when empty returning', async () => {
       await expect(service.update('missing', { title: 'X' } as any)).rejects.toThrow('Conversation');
     });
@@ -176,6 +204,20 @@ describe('ConversationService', () => {
 
       await expect(service.delete('conv-del')).resolves.toBeUndefined();
       expect(mockDb.delete).toHaveBeenCalled();
+    });
+
+    test('publishes conversation.deleted event', async () => {
+      mockDb.delete = mock(() => ({
+        where: mock(() => ({
+          returning: mock(() => Promise.resolve([{ id: 'conv-del' }])),
+        })),
+      })) as unknown as typeof mockDb.delete;
+
+      await service.delete('conv-del');
+
+      expect(eventBus.publish).toHaveBeenCalledTimes(1);
+      const calls = eventBus.publish.mock.calls as unknown[][];
+      expect(calls[0]?.[0]).toBe('conversation.deleted');
     });
 
     test('throws NotFoundError when empty returning', async () => {
