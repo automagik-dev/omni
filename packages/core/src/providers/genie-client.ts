@@ -63,6 +63,38 @@ export class GenieClient implements IAgentClient {
     return tags.length > 0 ? `[${tags.join(' ')}]` : '';
   }
 
+  /** Acquire file lock with stale lock recovery (30s threshold) */
+  private async acquireLock(lockPath: string): Promise<Awaited<ReturnType<typeof open>>> {
+    try {
+      return await open(lockPath, 'wx');
+    } catch {
+      // Lock exists — wait briefly and retry once
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    try {
+      return await open(lockPath, 'wx');
+    } catch {
+      // Still locked — check if stale from a crashed process
+    }
+
+    try {
+      const lockStat = await stat(lockPath);
+      const ageMs = Date.now() - lockStat.mtimeMs;
+      if (ageMs > 30_000) {
+        log.warn('Removing stale lock file', { lockPath, ageMs });
+        await unlink(lockPath);
+        return await open(lockPath, 'wx');
+      }
+      log.error('Lock file is fresh, another process is active', { lockPath, ageMs });
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      log.error('Could not recover from lock contention', { lockPath, error });
+    }
+
+    throw new ProviderError('Failed to acquire lock on team inbox, message not delivered', 'SERVER_ERROR');
+  }
+
   /**
    * Fire-and-forget: append message to agent's team inbox.
    * Returns immediately — the agent replies independently via omni send.
@@ -90,20 +122,7 @@ export class GenieClient implements IAgentClient {
 
     // Locked read-modify-write to prevent concurrent message loss
     const lockPath = `${this.inboxPath}.lock`;
-    let lockFd: Awaited<ReturnType<typeof open>> | null = null;
-    try {
-      lockFd = await open(lockPath, 'wx');
-    } catch {
-      // Lock exists — wait briefly and retry once
-      await new Promise((r) => setTimeout(r, 100));
-      try {
-        lockFd = await open(lockPath, 'wx');
-      } catch (error) {
-        // Still couldn't acquire lock, fail to prevent data loss
-        log.error('Could not acquire inbox lock after retry, aborting message delivery', { lockPath, error });
-        throw new ProviderError('Failed to acquire lock on team inbox, message not delivered', 'SERVER_ERROR');
-      }
-    }
+    const lockFd = await this.acquireLock(lockPath);
 
     try {
       // Read existing inbox, append, write back
@@ -125,12 +144,10 @@ export class GenieClient implements IAgentClient {
       await rename(tmpPath, this.inboxPath);
     } finally {
       // Release lock
-      if (lockFd) {
-        await lockFd.close();
-        try {
-          await unlink(lockPath);
-        } catch {}
-      }
+      await lockFd.close();
+      try {
+        await unlink(lockPath);
+      } catch {}
     }
 
     const durationMs = Date.now() - startMs;

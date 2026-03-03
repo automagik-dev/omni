@@ -18,6 +18,7 @@ const API_KEY = process.env.OMNI_API_KEY ?? '';
 const POLL_MS = Number(process.env.BRIDGE_POLL_MS ?? '2000');
 
 const inboxPath = join(homedir(), '.claude', 'teams', TEAM_NAME, 'inboxes', `${AGENT_NAME}.json`);
+let isPolling = false;
 
 interface InboxMessage {
   from: string;
@@ -115,45 +116,52 @@ async function sendToOmni(instanceId: string, chatId: string, text: string, repl
 
 /** Read inbox, process unread messages, mark as read */
 async function poll(): Promise<void> {
-  let inbox: InboxMessage[];
+  if (isPolling) return;
+  isPolling = true;
+
   try {
-    const raw = await readFile(inboxPath, 'utf-8');
-    inbox = JSON.parse(raw);
-    if (!Array.isArray(inbox)) return;
-  } catch {
-    return; // File doesn't exist or invalid
-  }
-
-  let changed = false;
-
-  for (const msg of inbox) {
-    if (msg.read) continue;
-    if (msg.from === AGENT_NAME) continue; // Skip messages FROM omni-telegram itself
-
-    const parsed = parseMetadata(msg.text);
-
-    if (!parsed.instance || !parsed.chat) {
-      console.log(`[bridge] Skipping message from ${msg.from} — no instance/chat metadata`);
-      msg.read = true;
-      changed = true;
-      continue;
+    let inbox: InboxMessage[];
+    try {
+      const raw = await readFile(inboxPath, 'utf-8');
+      inbox = JSON.parse(raw);
+      if (!Array.isArray(inbox)) return;
+    } catch {
+      return; // File doesn't exist or invalid
     }
 
-    if (!parsed.cleanText) {
-      msg.read = true;
-      changed = true;
-      continue;
+    let changed = false;
+
+    for (const msg of inbox) {
+      if (msg.read) continue;
+      if (msg.from === AGENT_NAME) continue; // Skip messages FROM omni-telegram itself
+
+      const parsed = parseMetadata(msg.text);
+
+      if (!parsed.instance || !parsed.chat) {
+        console.log(`[bridge] Skipping message from ${msg.from} — no instance/chat metadata`);
+        msg.read = true;
+        changed = true;
+        continue;
+      }
+
+      if (!parsed.cleanText) {
+        msg.read = true;
+        changed = true;
+        continue;
+      }
+
+      const sent = await sendToOmni(parsed.instance, parsed.chat, parsed.cleanText, parsed.replyTo);
+      if (sent) {
+        msg.read = true;
+        changed = true;
+      }
     }
 
-    const sent = await sendToOmni(parsed.instance, parsed.chat, parsed.cleanText, parsed.replyTo);
-    if (sent) {
-      msg.read = true;
-      changed = true;
+    if (changed) {
+      await writeFile(inboxPath, JSON.stringify(inbox, null, 2), 'utf-8');
     }
-  }
-
-  if (changed) {
-    await writeFile(inboxPath, JSON.stringify(inbox, null, 2), 'utf-8');
+  } finally {
+    isPolling = false;
   }
 }
 
