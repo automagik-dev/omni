@@ -6,8 +6,7 @@
  * No outbox, no polling.
  */
 
-import { existsSync } from 'node:fs';
-import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '../logger';
@@ -42,9 +41,9 @@ export class GenieClient implements IAgentClient {
   private readonly inboxPath: string;
 
   constructor(config: GenieClientConfig) {
-    this.teamName = config.teamName ?? 'genie';
-    this.agentName = config.agentName;
-    this.targetAgent = config.targetAgent;
+    this.teamName = (config.teamName ?? 'genie').replace(/[^a-zA-Z0-9_-]/g, '');
+    this.agentName = config.agentName.replace(/[^a-zA-Z0-9_-]/g, '');
+    this.targetAgent = config.targetAgent.replace(/[^a-zA-Z0-9_-]/g, '');
     this.inboxDir = join(homedir(), '.claude', 'teams', this.teamName, 'inboxes');
     this.inboxPath = join(this.inboxDir, `${this.targetAgent}.json`);
   }
@@ -99,9 +98,10 @@ export class GenieClient implements IAgentClient {
       await new Promise((r) => setTimeout(r, 100));
       try {
         lockFd = await open(lockPath, 'wx');
-      } catch {
-        // Proceed without lock (stale lock or high contention)
-        log.warn('Could not acquire inbox lock, proceeding without lock');
+      } catch (error) {
+        // Still couldn't acquire lock, fail to prevent data loss
+        log.error('Could not acquire inbox lock after retry, aborting message delivery', { lockPath, error });
+        throw new ProviderError('Failed to acquire lock on team inbox, message not delivered', 'SERVER_ERROR');
       }
     }
 
@@ -167,7 +167,9 @@ export class GenieClient implements IAgentClient {
     try {
       // Check team directory exists
       const teamDir = join(homedir(), '.claude', 'teams', this.teamName);
-      if (!existsSync(teamDir)) {
+      try {
+        await stat(teamDir);
+      } catch {
         return {
           healthy: false,
           latencyMs: Date.now() - startMs,
@@ -176,7 +178,9 @@ export class GenieClient implements IAgentClient {
       }
 
       // Check inbox directory exists
-      if (!existsSync(this.inboxDir)) {
+      try {
+        await stat(this.inboxDir);
+      } catch {
         return {
           healthy: false,
           latencyMs: Date.now() - startMs,
