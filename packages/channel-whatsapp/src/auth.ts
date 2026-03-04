@@ -211,7 +211,7 @@ export async function createStorageAuthState(
       log.warn('Blocked phone-JID sender key (LID-first enforced)', {
         instanceId,
         group: parts[0]?.slice(-20),
-        participant: parts[1],
+        participant: parts[1]?.replace(/\d(?=\d{4})/g, '*'),
       });
       return;
     }

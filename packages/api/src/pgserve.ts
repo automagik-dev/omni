@@ -11,6 +11,7 @@
  *   PGSERVE_DATA      — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -96,6 +97,23 @@ async function killOrphanedPostgres(dataDir: string): Promise<void> {
     process.kill(pid, 0); // throws ESRCH if not running — nothing to do
   } catch {
     return; // process not running or file unreadable — clean state
+  }
+
+  // Validate the PID actually belongs to a postgres process to avoid killing
+  // an unrelated process if the OS recycled the PID after a crash/reboot.
+  try {
+    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf-8' }).trim();
+    if (!/\bpostgres\b/i.test(cmd)) {
+      log.warn('PID from postmaster.pid is not a postgres process, skipping kill', {
+        pid,
+        dataDir,
+        cmd: cmd.slice(0, 80),
+      });
+      return;
+    }
+  } catch {
+    // ps failed — process may have just exited, safe to return
+    return;
   }
 
   log.info('Killing orphaned postgres from previous run', { pid, dataDir });
