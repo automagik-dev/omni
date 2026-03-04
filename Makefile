@@ -312,7 +312,7 @@ stop:
 	@$(MAKE) kill-ghosts
 
 restart:
-	pm2 restart all
+	pm2 restart omni-v2-api omni-v2-nats --update-env
 
 logs:
 	pm2 logs
@@ -328,10 +328,10 @@ status:
 
 # Individual service control
 restart-api:
-	pm2 restart omni-v2-api
+	pm2 restart omni-v2-api --update-env
 
 restart-nats:
-	pm2 restart omni-v2-nats
+	pm2 restart omni-v2-nats --update-env
 
 restart-pgserve:
 	@echo "pgserve is embedded in the API server — restarting API..."
