@@ -130,7 +130,7 @@ async function discoverAgentNames(services: Services): Promise<Set<string>> {
       typeof provider.schemaConfig === 'object' && provider.schemaConfig !== null
         ? (provider.schemaConfig as Record<string, unknown>)
         : {};
-    const agentName = typeof config.agentName === 'string' ? config.agentName : null;
+    const agentName = typeof config.agentName === 'string' ? config.agentName.replace(/[^a-zA-Z0-9_-]/g, '') : null;
     if (agentName) names.add(agentName);
   }
 
