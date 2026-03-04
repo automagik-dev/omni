@@ -292,6 +292,72 @@ describe('Auth key store write-behind cache (#70)', () => {
     });
   });
 
+  describe('LID-first guardrail — blocks phone-JID sender keys', () => {
+    it('skips sender-key writes where participant matches bot phone number', async () => {
+      const storage = createFastStorage();
+      const { state } = await createStorageAuthState(storage, instanceId);
+
+      // Simulate creds.me.id being set after connection (phone-based format)
+      (state.creds as { me: { id: string } }).me = { id: '551151999885:4@s.whatsapp.net' };
+
+      // Write both phone-JID and LID-based sender keys
+      await state.keys.set({
+        'sender-key': {
+          // Phone JID for bot's own number → should be BLOCKED
+          'group@g.us::551151999885::4': { key: 'phone-based' } as never,
+          // LID for bot → should be ALLOWED
+          'group@g.us::225671238410292_1::4': { key: 'lid-based' } as never,
+          // Other participant phone → should be ALLOWED (not the bot)
+          'group@g.us::5511888887777::0': { key: 'other-participant' } as never,
+        },
+      });
+
+      // Phone-JID key should NOT be in cache
+      const phoneResult = await state.keys.get('sender-key', ['group@g.us::551151999885::4']);
+      expect(phoneResult['group@g.us::551151999885::4']).toBeUndefined();
+
+      // LID key should be in cache
+      const lidResult = await state.keys.get('sender-key', ['group@g.us::225671238410292_1::4']);
+      expect(lidResult['group@g.us::225671238410292_1::4']).toBeTruthy();
+
+      // Other participant's key should be in cache
+      const otherResult = await state.keys.get('sender-key', ['group@g.us::5511888887777::0']);
+      expect(otherResult['group@g.us::5511888887777::0']).toBeTruthy();
+    });
+
+    it('allows phone-JID sender keys when creds.me is not yet set', async () => {
+      const storage = createFastStorage();
+      const { state } = await createStorageAuthState(storage, instanceId);
+
+      // creds.me is not set (pre-authentication) — all keys should pass through
+      await state.keys.set({
+        'sender-key': {
+          'group@g.us::551151999885::4': { key: 'allowed-pre-auth' } as never,
+        },
+      });
+
+      const result = await state.keys.get('sender-key', ['group@g.us::551151999885::4']);
+      expect(result['group@g.us::551151999885::4']).toBeTruthy();
+    });
+
+    it('does not block non-sender-key types', async () => {
+      const storage = createFastStorage();
+      const { state } = await createStorageAuthState(storage, instanceId);
+
+      (state.creds as { me: { id: string } }).me = { id: '551151999885:4@s.whatsapp.net' };
+
+      // session keys with bot phone should NOT be blocked
+      await state.keys.set({
+        session: {
+          '551151999885:4': { session: 'data' } as never,
+        },
+      });
+
+      const result = await state.keys.get('session', ['551151999885:4']);
+      expect(result['551151999885:4']).toBeTruthy();
+    });
+  });
+
   describe('clearSenderKeys', () => {
     it('removes only sender-key entries for the target instance', async () => {
       const storage = createFastStorage();

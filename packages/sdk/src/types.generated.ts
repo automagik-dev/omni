@@ -4,6 +4,58 @@
  */
 
 export interface paths {
+    "/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List agents
+         * @description Get all agent entities with optional filters.
+         */
+        get: operations["listAgents"];
+        put?: never;
+        /**
+         * Create agent
+         * @description Register a new agent entity.
+         */
+        post: operations["createAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent
+         * @description Get details of a specific agent.
+         */
+        get: operations["getAgent"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete agent
+         * @description Soft-delete an agent (sets isActive = false).
+         */
+        delete: operations["deleteAgent"];
+        options?: never;
+        head?: never;
+        /**
+         * Update agent
+         * @description Update an existing agent.
+         */
+        patch: operations["updateAgent"];
+        trace?: never;
+    };
     "/api/v2/auth/validate": {
         parameters: {
             query?: never;
@@ -1864,10 +1916,183 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List conversations
+         * @description Get all conversations ordered by most recently updated.
+         */
+        get: operations["listConversations"];
+        put?: never;
+        /**
+         * Create conversation
+         * @description Create a new cross-channel conversation container.
+         */
+        post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/conversations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get conversation
+         * @description Get details of a specific conversation.
+         */
+        get: operations["getConversation"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete conversation
+         * @description Delete a conversation. Linked chats will have their conversationId set to null.
+         */
+        delete: operations["deleteConversation"];
+        options?: never;
+        head?: never;
+        /**
+         * Update conversation
+         * @description Update an existing conversation.
+         */
+        patch: operations["updateConversation"];
+        trace?: never;
+    };
+    "/conversations/{id}/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get chats in conversation
+         * @description List all chats belonging to a conversation.
+         */
+        get: operations["getConversationChats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        Agent: {
+            /**
+             * Format: uuid
+             * @description Agent UUID
+             */
+            id: string;
+            /** @description Agent name */
+            name: string;
+            /**
+             * @description AI system powering the agent
+             * @enum {string}
+             */
+            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+            /** @description Model identifier (optional) */
+            model: string | null;
+            /**
+             * @description Role of the agent entity
+             * @enum {string}
+             */
+            agentType: "assistant" | "workflow" | "team" | "tool";
+            /** @description Agent capabilities */
+            capabilities: string[];
+            /**
+             * Format: uuid
+             * @description Owner person UUID
+             */
+            ownerId: string | null;
+            /**
+             * Format: uuid
+             * @description Linked agent provider UUID
+             */
+            agentProviderId: string | null;
+            /** @description Path to agent config file */
+            configPath: string | null;
+            /** @description Whether this is an internal system agent */
+            isInternal: boolean;
+            /** @description Whether agent is active */
+            isActive: boolean;
+            /** @description Arbitrary metadata */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateAgentRequest: {
+            /** @description Agent name */
+            name: string;
+            /**
+             * @description AI system powering the agent
+             * @enum {string}
+             */
+            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+            /** @description Model identifier */
+            model?: string;
+            /**
+             * @description Role of the agent entity
+             * @default assistant
+             * @enum {string}
+             */
+            agentType: "assistant" | "workflow" | "team" | "tool";
+            /**
+             * @description Agent capabilities
+             * @default []
+             */
+            capabilities: string[];
+            /**
+             * Format: uuid
+             * @description Owner person UUID
+             */
+            ownerId?: string;
+            /**
+             * Format: uuid
+             * @description Linked agent provider UUID
+             */
+            agentProviderId?: string;
+            /** @description Path to agent config file */
+            configPath?: string;
+            /**
+             * @description Whether this is an internal system agent
+             * @default false
+             */
+            isInternal: boolean;
+            /**
+             * @description Whether agent is active
+             * @default true
+             */
+            isActive: boolean;
+            /** @description Arbitrary metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         Error: {
             error: {
                 /**
@@ -2032,7 +2257,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2045,11 +2270,9 @@ export interface components {
             ownerIdentifier: string | null;
             /**
              * Format: uuid
-             * @description Agent provider UUID
+             * @description Agent UUID (agents table)
              */
-            agentProviderId: string | null;
-            /** @description Agent ID */
-            agentId: string | null;
+            agentId?: string | null;
             /** @description Agent timeout in seconds */
             agentTimeout: number;
             /** @description Whether streaming is enabled */
@@ -2072,17 +2295,12 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
             /**
              * Format: uuid
-             * @description Reference to agent provider
+             * @description Agent UUID (agents table)
              */
-            agentProviderId?: string;
-            /**
-             * @description Agent ID within the provider
-             * @default default
-             */
-            agentId: string;
+            agentId?: string | null;
             /**
              * @description Agent timeout in seconds
              * @default 60
@@ -2172,7 +2390,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -2528,6 +2746,21 @@ export interface components {
             /** @description Image description */
             imageDescription: string | null;
             /**
+             * Format: uuid
+             * @description Chat UUID (FK → chats.id)
+             */
+            chatUuid: string | null;
+            /**
+             * Format: uuid
+             * @description Agent UUID (FK → agents.id)
+             */
+            agentId: string | null;
+            /**
+             * Format: uuid
+             * @description Conversation UUID (FK → conversations.id)
+             */
+            conversationId: string | null;
+            /**
              * Format: date-time
              * @description When event was received
              */
@@ -2658,7 +2891,12 @@ export interface components {
              * Format: uuid
              * @description Person UUID
              */
-            personId: string;
+            personId: string | null;
+            /**
+             * Format: uuid
+             * @description Agent UUID
+             */
+            agentId: string | null;
             /** @description Channel type */
             channel: string;
             /** @description Platform user ID */
@@ -2738,7 +2976,12 @@ export interface components {
                  * Format: uuid
                  * @description Person UUID
                  */
-                personId: string;
+                personId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Agent UUID
+                 */
+                agentId: string | null;
                 /** @description Channel type */
                 channel: string;
                 /** @description Platform user ID */
@@ -2773,7 +3016,12 @@ export interface components {
                          * Format: uuid
                          * @description Person UUID
                          */
-                        personId: string;
+                        personId: string | null;
+                        /**
+                         * Format: uuid
+                         * @description Agent UUID
+                         */
+                        agentId: string | null;
                         /** @description Channel type */
                         channel: string;
                         /** @description Platform user ID */
@@ -3134,7 +3382,7 @@ export interface components {
              * @description Provider schema type
              * @enum {string}
              */
-            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
             /**
              * Format: uri
              * @description Base URL
@@ -3145,10 +3393,18 @@ export interface components {
             /**
              * @description Schema-specific configuration. Shape depends on schema type:
              *     - **agno**: `{ agentId, teamId?, timeout? }`
-             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
+             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
+             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
+             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
+             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
              *     - **webhook**: `{ mode?, retries? }`
+             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+             *       - `targetAgent`: which team member inbox to deliver to
+             *       - Optional: `teamName` (default "genie")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -3195,7 +3451,7 @@ export interface components {
              * @default agno
              * @enum {string}
              */
-            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
             /**
              * Format: uri
              * @description Base URL
@@ -3206,10 +3462,19 @@ export interface components {
             /**
              * @description Schema-specific configuration. Required fields vary by schema:
              *     - **agno**: `{ agentId }` (required)
-             *     - **openclaw**: `{ defaultAgentId }` (required)
+             *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
+             *       - `agentTimeoutMs?`, `origin?`
+             *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
+             *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
+             *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
+             *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
              *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
              *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
              *     - **webhook**: optional `{ mode, retries }`
+             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+             *       - `targetAgent`: which team member inbox to deliver to
+             *       - Optional: `teamName` (default "genie")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -4229,6 +4494,41 @@ export interface components {
             /** @description 99th percentile (ms) */
             p99: number;
         };
+        Conversation: {
+            /**
+             * Format: uuid
+             * @description Conversation UUID
+             */
+            id: string;
+            /** @description Conversation title */
+            title: string | null;
+            /** @description Conversation summary */
+            summary: string | null;
+            /** @description Arbitrary state object */
+            state: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateConversationRequest: {
+            /** @description Conversation title */
+            title?: string | null;
+            /** @description Conversation summary */
+            summary?: string | null;
+            /** @description Arbitrary state object */
+            state?: {
+                [key: string]: unknown;
+            } | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -4238,6 +4538,524 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAgents: {
+        parameters: {
+            query?: {
+                ownerId?: string;
+                provider?: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                isActive?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of agents */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID
+                             */
+                            id: string;
+                            /** @description Agent name */
+                            name: string;
+                            /**
+                             * @description AI system powering the agent
+                             * @enum {string}
+                             */
+                            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                            /** @description Model identifier (optional) */
+                            model: string | null;
+                            /**
+                             * @description Role of the agent entity
+                             * @enum {string}
+                             */
+                            agentType: "assistant" | "workflow" | "team" | "tool";
+                            /** @description Agent capabilities */
+                            capabilities: string[];
+                            /**
+                             * Format: uuid
+                             * @description Owner person UUID
+                             */
+                            ownerId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Linked agent provider UUID
+                             */
+                            agentProviderId: string | null;
+                            /** @description Path to agent config file */
+                            configPath: string | null;
+                            /** @description Whether this is an internal system agent */
+                            isInternal: boolean;
+                            /** @description Whether agent is active */
+                            isActive: boolean;
+                            /** @description Arbitrary metadata */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Agent name */
+                    name: string;
+                    /**
+                     * @description AI system powering the agent
+                     * @enum {string}
+                     */
+                    provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                    /** @description Model identifier */
+                    model?: string;
+                    /**
+                     * @description Role of the agent entity
+                     * @default assistant
+                     * @enum {string}
+                     */
+                    agentType?: "assistant" | "workflow" | "team" | "tool";
+                    /**
+                     * @description Agent capabilities
+                     * @default []
+                     */
+                    capabilities?: string[];
+                    /**
+                     * Format: uuid
+                     * @description Owner person UUID
+                     */
+                    ownerId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Linked agent provider UUID
+                     */
+                    agentProviderId?: string;
+                    /** @description Path to agent config file */
+                    configPath?: string;
+                    /**
+                     * @description Whether this is an internal system agent
+                     * @default false
+                     */
+                    isInternal?: boolean;
+                    /**
+                     * @description Whether agent is active
+                     * @default true
+                     */
+                    isActive?: boolean;
+                    /** @description Arbitrary metadata */
+                    metadata?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Agent created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID
+                             */
+                            id: string;
+                            /** @description Agent name */
+                            name: string;
+                            /**
+                             * @description AI system powering the agent
+                             * @enum {string}
+                             */
+                            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                            /** @description Model identifier (optional) */
+                            model: string | null;
+                            /**
+                             * @description Role of the agent entity
+                             * @enum {string}
+                             */
+                            agentType: "assistant" | "workflow" | "team" | "tool";
+                            /** @description Agent capabilities */
+                            capabilities: string[];
+                            /**
+                             * Format: uuid
+                             * @description Owner person UUID
+                             */
+                            ownerId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Linked agent provider UUID
+                             */
+                            agentProviderId: string | null;
+                            /** @description Path to agent config file */
+                            configPath: string | null;
+                            /** @description Whether this is an internal system agent */
+                            isInternal: boolean;
+                            /** @description Whether agent is active */
+                            isActive: boolean;
+                            /** @description Arbitrary metadata */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID
+                             */
+                            id: string;
+                            /** @description Agent name */
+                            name: string;
+                            /**
+                             * @description AI system powering the agent
+                             * @enum {string}
+                             */
+                            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                            /** @description Model identifier (optional) */
+                            model: string | null;
+                            /**
+                             * @description Role of the agent entity
+                             * @enum {string}
+                             */
+                            agentType: "assistant" | "workflow" | "team" | "tool";
+                            /** @description Agent capabilities */
+                            capabilities: string[];
+                            /**
+                             * Format: uuid
+                             * @description Owner person UUID
+                             */
+                            ownerId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Linked agent provider UUID
+                             */
+                            agentProviderId: string | null;
+                            /** @description Path to agent config file */
+                            configPath: string | null;
+                            /** @description Whether this is an internal system agent */
+                            isInternal: boolean;
+                            /** @description Whether agent is active */
+                            isActive: boolean;
+                            /** @description Arbitrary metadata */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Agent name */
+                    name?: string;
+                    /**
+                     * @description AI system powering the agent
+                     * @enum {string}
+                     */
+                    provider?: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                    /** @description Model identifier */
+                    model?: string;
+                    /**
+                     * @description Role of the agent entity
+                     * @default assistant
+                     * @enum {string}
+                     */
+                    agentType?: "assistant" | "workflow" | "team" | "tool";
+                    /**
+                     * @description Agent capabilities
+                     * @default []
+                     */
+                    capabilities?: string[];
+                    /**
+                     * Format: uuid
+                     * @description Owner person UUID
+                     */
+                    ownerId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Linked agent provider UUID
+                     */
+                    agentProviderId?: string;
+                    /** @description Path to agent config file */
+                    configPath?: string;
+                    /**
+                     * @description Whether this is an internal system agent
+                     * @default false
+                     */
+                    isInternal?: boolean;
+                    /**
+                     * @description Whether agent is active
+                     * @default true
+                     */
+                    isActive?: boolean;
+                    /** @description Arbitrary metadata */
+                    metadata?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Agent updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID
+                             */
+                            id: string;
+                            /** @description Agent name */
+                            name: string;
+                            /**
+                             * @description AI system powering the agent
+                             * @enum {string}
+                             */
+                            provider: "claude" | "agno" | "openai" | "gemini" | "custom" | "omni-internal";
+                            /** @description Model identifier (optional) */
+                            model: string | null;
+                            /**
+                             * @description Role of the agent entity
+                             * @enum {string}
+                             */
+                            agentType: "assistant" | "workflow" | "team" | "tool";
+                            /** @description Agent capabilities */
+                            capabilities: string[];
+                            /**
+                             * Format: uuid
+                             * @description Owner person UUID
+                             */
+                            ownerId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Linked agent provider UUID
+                             */
+                            agentProviderId: string | null;
+                            /** @description Path to agent config file */
+                            configPath: string | null;
+                            /** @description Whether this is an internal system agent */
+                            isInternal: boolean;
+                            /** @description Whether agent is active */
+                            isActive: boolean;
+                            /** @description Arbitrary metadata */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     validateApiKey: {
         parameters: {
             query?: never;
@@ -4539,7 +5357,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -4552,11 +5370,9 @@ export interface operations {
                             ownerIdentifier: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (agents table)
                              */
-                            agentProviderId: string | null;
-                            /** @description Agent ID */
-                            agentId: string | null;
+                            agentId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -4599,17 +5415,12 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                     /**
                      * Format: uuid
-                     * @description Reference to agent provider
+                     * @description Agent UUID (agents table)
                      */
-                    agentProviderId?: string;
-                    /**
-                     * @description Agent ID within the provider
-                     * @default default
-                     */
-                    agentId?: string;
+                    agentId?: string | null;
                     /**
                      * @description Agent timeout in seconds
                      * @default 60
@@ -4650,7 +5461,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -4663,11 +5474,9 @@ export interface operations {
                             ownerIdentifier: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (agents table)
                              */
-                            agentProviderId: string | null;
-                            /** @description Agent ID */
-                            agentId: string | null;
+                            agentId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -4730,7 +5539,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -4779,7 +5588,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -4792,11 +5601,9 @@ export interface operations {
                             ownerIdentifier: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (agents table)
                              */
-                            agentProviderId: string | null;
-                            /** @description Agent ID */
-                            agentId: string | null;
+                            agentId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -4904,17 +5711,12 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                     /**
                      * Format: uuid
-                     * @description Reference to agent provider
+                     * @description Agent UUID (agents table)
                      */
-                    agentProviderId?: string;
-                    /**
-                     * @description Agent ID within the provider
-                     * @default default
-                     */
-                    agentId?: string;
+                    agentId?: string | null;
                     /**
                      * @description Agent timeout in seconds
                      * @default 60
@@ -4955,7 +5757,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -4968,11 +5770,9 @@ export interface operations {
                             ownerIdentifier: string | null;
                             /**
                              * Format: uuid
-                             * @description Agent provider UUID
+                             * @description Agent UUID (agents table)
                              */
-                            agentProviderId: string | null;
-                            /** @description Agent ID */
-                            agentId: string | null;
+                            agentId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -7027,6 +7827,21 @@ export interface operations {
                             /** @description Image description */
                             imageDescription: string | null;
                             /**
+                             * Format: uuid
+                             * @description Chat UUID (FK → chats.id)
+                             */
+                            chatUuid: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID (FK → agents.id)
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID (FK → conversations.id)
+                             */
+                            conversationId: string | null;
+                            /**
                              * Format: date-time
                              * @description When event was received
                              */
@@ -7176,6 +7991,21 @@ export interface operations {
                             /** @description Image description */
                             imageDescription: string | null;
                             /**
+                             * Format: uuid
+                             * @description Chat UUID (FK → chats.id)
+                             */
+                            chatUuid: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID (FK → agents.id)
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID (FK → conversations.id)
+                             */
+                            conversationId: string | null;
+                            /**
                              * Format: date-time
                              * @description When event was received
                              */
@@ -7296,6 +8126,21 @@ export interface operations {
                             /** @description Image description */
                             imageDescription: string | null;
                             /**
+                             * Format: uuid
+                             * @description Chat UUID (FK → chats.id)
+                             */
+                            chatUuid: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID (FK → agents.id)
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID (FK → conversations.id)
+                             */
+                            conversationId: string | null;
+                            /**
                              * Format: date-time
                              * @description When event was received
                              */
@@ -7368,6 +8213,21 @@ export interface operations {
                             transcription: string | null;
                             /** @description Image description */
                             imageDescription: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (FK → chats.id)
+                             */
+                            chatUuid: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID (FK → agents.id)
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID (FK → conversations.id)
+                             */
+                            conversationId: string | null;
                             /**
                              * Format: date-time
                              * @description When event was received
@@ -7457,6 +8317,21 @@ export interface operations {
                             transcription: string | null;
                             /** @description Image description */
                             imageDescription: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID (FK → chats.id)
+                             */
+                            chatUuid: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Agent UUID (FK → agents.id)
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID (FK → conversations.id)
+                             */
+                            conversationId: string | null;
                             /**
                              * Format: date-time
                              * @description When event was received
@@ -7652,7 +8527,12 @@ export interface operations {
                                  * Format: uuid
                                  * @description Person UUID
                                  */
-                                personId: string;
+                                personId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID
+                                 */
+                                agentId: string | null;
                                 /** @description Channel type */
                                 channel: string;
                                 /** @description Platform user ID */
@@ -7687,7 +8567,12 @@ export interface operations {
                                          * Format: uuid
                                          * @description Person UUID
                                          */
-                                        personId: string;
+                                        personId: string | null;
+                                        /**
+                                         * Format: uuid
+                                         * @description Agent UUID
+                                         */
+                                        agentId: string | null;
                                         /** @description Channel type */
                                         channel: string;
                                         /** @description Platform user ID */
@@ -7920,7 +8805,12 @@ export interface operations {
                                  * Format: uuid
                                  * @description Person UUID
                                  */
-                                personId: string;
+                                personId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID
+                                 */
+                                agentId: string | null;
                                 /** @description Channel type */
                                 channel: string;
                                 /** @description Platform user ID */
@@ -9456,7 +10346,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9467,10 +10357,18 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
+                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
+                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
+                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
+                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
+                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                             *       - `targetAgent`: which team member inbox to deliver to
+                             *       - Optional: `teamName` (default "genie")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -9531,7 +10429,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9542,10 +10440,19 @@ export interface operations {
                     /**
                      * @description Schema-specific configuration. Required fields vary by schema:
                      *     - **agno**: `{ agentId }` (required)
-                     *     - **openclaw**: `{ defaultAgentId }` (required)
+                     *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
+                     *       - `agentTimeoutMs?`, `origin?`
+                     *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
+                     *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
+                     *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
+                     *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
+                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                     *       - `targetAgent`: which team member inbox to deliver to
+                     *       - Optional: `teamName` (default "genie")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -9612,7 +10519,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9623,10 +10530,18 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
+                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
+                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
+                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
+                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
+                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                             *       - `targetAgent`: which team member inbox to deliver to
+                             *       - Optional: `teamName` (default "genie")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -9721,7 +10636,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9732,10 +10647,18 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
+                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
+                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
+                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
+                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
+                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                             *       - `targetAgent`: which team member inbox to deliver to
+                             *       - Optional: `teamName` (default "genie")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -9867,7 +10790,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -9878,10 +10801,19 @@ export interface operations {
                     /**
                      * @description Schema-specific configuration. Required fields vary by schema:
                      *     - **agno**: `{ agentId }` (required)
-                     *     - **openclaw**: `{ defaultAgentId }` (required)
+                     *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
+                     *       - `agentTimeoutMs?`, `origin?`
+                     *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
+                     *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
+                     *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
+                     *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
+                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                     *       - `targetAgent`: which team member inbox to deliver to
+                     *       - Optional: `teamName` (default "genie")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -9948,7 +10880,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -9959,10 +10891,18 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId, agentTimeoutMs?, origin? }`
+                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
+                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
+                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
+                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
+                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
+                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
+                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
+                             *       - `targetAgent`: which team member inbox to deliver to
+                             *       - Optional: `teamName` (default "genie")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -14106,6 +15046,408 @@ export interface operations {
                         error: {
                             code: string;
                             message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listConversations: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of conversations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID
+                             */
+                            id: string;
+                            /** @description Conversation title */
+                            title: string | null;
+                            /** @description Conversation summary */
+                            summary: string | null;
+                            /** @description Arbitrary state object */
+                            state: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Conversation title */
+                    title?: string | null;
+                    /** @description Conversation summary */
+                    summary?: string | null;
+                    /** @description Arbitrary state object */
+                    state?: {
+                        [key: string]: unknown;
+                    } | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Conversation created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID
+                             */
+                            id: string;
+                            /** @description Conversation title */
+                            title: string | null;
+                            /** @description Conversation summary */
+                            summary: string | null;
+                            /** @description Arbitrary state object */
+                            state: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conversation details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID
+                             */
+                            id: string;
+                            /** @description Conversation title */
+                            title: string | null;
+                            /** @description Conversation summary */
+                            summary: string | null;
+                            /** @description Arbitrary state object */
+                            state: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conversation deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Conversation title */
+                    title?: string | null;
+                    /** @description Conversation summary */
+                    summary?: string | null;
+                    /** @description Arbitrary state object */
+                    state?: {
+                        [key: string]: unknown;
+                    } | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Conversation updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Conversation UUID
+                             */
+                            id: string;
+                            /** @description Conversation title */
+                            title: string | null;
+                            /** @description Conversation summary */
+                            summary: string | null;
+                            /** @description Arbitrary state object */
+                            state: {
+                                [key: string]: unknown;
+                            } | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getConversationChats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of chats */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Chat UUID
+                             */
+                            id: string;
+                            /** @description Chat name */
+                            name: string | null;
+                            /** @description Chat type (dm, group, etc.) */
+                            chatType: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId: string;
+                            /**
+                             * Format: uuid
+                             * @description Parent conversation UUID
+                             */
+                            conversationId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };

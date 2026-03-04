@@ -1156,7 +1156,7 @@ export function createOmniClient(config: OmniClientConfig) {
        * Create a new instance
        */
       async create(body: CreateInstanceBody): Promise<Instance> {
-        const { data, error, response } = await client.POST('/instances', { body });
+        const { data, error, response } = await client.POST('/instances', { body: body as never });
         throwIfError(response, error);
         if (!data?.data)
           throw new OmniApiError('Failed to create instance', 'CREATE_FAILED', undefined, response.status);
