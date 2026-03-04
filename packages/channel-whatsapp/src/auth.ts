@@ -206,6 +206,7 @@ export async function createStorageAuthState(
 
   /** Process a single signal key entry: check block, update cache, schedule persist. */
   function processSignalKeyEntry(type: string, id: string, value: unknown, botPhone: string | undefined): void {
+    const key = `${keyPrefix}:${type}:${id}`;
     if (isBlockedPhoneSenderKey(type, id, value, botPhone)) {
       const parts = id.split('::');
       log.warn('Blocked phone-JID sender key (LID-first enforced)', {
@@ -213,9 +214,11 @@ export async function createStorageAuthState(
         group: parts[0]?.slice(-20),
         participant: parts[1]?.replace(/\d(?=\d{4})/g, '*'),
       });
+      // Tombstone cache + delete from storage so stale pre-auth keys are purged
+      setCachedValue(key, DELETED);
+      backgroundPersist(type, id, key, null);
       return;
     }
-    const key = `${keyPrefix}:${type}:${id}`;
     setCachedValue(key, value !== null && value !== undefined ? value : DELETED);
     backgroundPersist(type, id, key, value);
   }
