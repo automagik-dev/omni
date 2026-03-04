@@ -83,6 +83,27 @@ function getReactionConfig(plugin: TelegramPlugin, instanceId: string): Reaction
 }
 
 /**
+ * Set the ack reaction based on config level. Returns true if ack was set
+ * (meaning caller must remove it after processing).
+ */
+async function applyAckReaction(
+  bot: TelegramBotLike,
+  chatId: string,
+  messageId: number,
+  instanceId: string,
+  reactionConfig: ReactionLevelConfig,
+): Promise<boolean> {
+  const reactionEmoji = shouldReact(instanceId, reactionConfig);
+  if (!reactionEmoji) return false;
+  if (reactionConfig.level === 'ack') {
+    return setAckReaction(bot, chatId, messageId, reactionEmoji);
+  }
+  // minimal/extensive: fire-and-forget, no removal needed
+  setAckReaction(bot, chatId, messageId, reactionEmoji).catch(() => {});
+  return false;
+}
+
+/**
  * Core message processing logic — extracted so it can be used by both
  * direct processing and media group flush callbacks.
  */
@@ -119,7 +140,11 @@ async function processInboundMessage(
     return; // Duplicate — drop silently
   }
 
-  const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+  // In supergroup topics, every message has reply_to_message pointing to the topic root.
+  // That's not a real reply — it's just Telegram's topic structure. Filter it out.
+  const rawReplyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+  const isTopicRootReply = msg.is_topic_message === true && rawReplyToId === String(msg.message_thread_id);
+  const replyToId = isTopicRootReply ? undefined : rawReplyToId;
 
   const botInfo = bot.botInfo;
   const isMention = botInfo?.username ? hasBotMention(msg, botInfo.username) : false;
@@ -137,14 +162,7 @@ async function processInboundMessage(
 
   // --- Reaction levels: set ack reaction before processing ---
   const reactionConfig = getReactionConfig(plugin, instanceId);
-  const reactionEmoji = shouldReact(instanceId, reactionConfig);
-  let didSetAck = false;
-  if (reactionEmoji && reactionConfig.level === 'ack') {
-    didSetAck = await setAckReaction(bot, chatId, msg.message_id, reactionEmoji);
-  } else if (reactionEmoji) {
-    // minimal/extensive: fire-and-forget reaction (no removal needed)
-    setAckReaction(bot, chatId, msg.message_id, reactionEmoji).catch(() => {});
-  }
+  const didSetAck = await applyAckReaction(bot, chatId, msg.message_id, instanceId, reactionConfig);
 
   const local = await downloadIfMedia({ bot, instanceId, externalId, content });
 
@@ -330,7 +348,11 @@ export function setupMessageHandlers(
         localPath: undefined, // Populated in processAlbumResult
         filename: content.filename,
       },
-      replyToId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
+      replyToId: (() => {
+        const raw = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+        const isTopicRoot = msg.is_topic_message === true && raw === String(msg.message_thread_id);
+        return isTopicRoot ? undefined : raw;
+      })(),
       rawPayload: {
         chatType: msg.chat.type,
         username: from.username,

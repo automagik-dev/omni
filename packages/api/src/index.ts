@@ -43,6 +43,7 @@ import {
   setupSessionCleaner,
   setupSyncWorker,
 } from './plugins';
+import { setupInboxBridge } from './plugins/inbox-bridge';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { printStartupBanner } from './utils/startup-banner';
 
@@ -56,6 +57,7 @@ let globalEventBus: EventBus | null = null;
 let globalChannelRegistry: ChannelRegistry | null = null;
 let globalInstanceMonitor: InstanceMonitor | null = null;
 let globalDispatcherCleanup: (() => Promise<void>) | null = null;
+let globalInboxBridgeCleanup: (() => Promise<void>) | null = null;
 
 /**
  * Get the global channel registry
@@ -199,6 +201,11 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         await globalDispatcherCleanup();
       }
 
+      if (globalInboxBridgeCleanup) {
+        shutdownLog.info('Stopping inbox bridge');
+        await globalInboxBridgeCleanup();
+      }
+
       if (globalInstanceMonitor) {
         shutdownLog.info('Stopping instance monitor');
         globalInstanceMonitor.stop();
@@ -267,6 +274,15 @@ async function setupEventBusServices(
     globalDispatcherCleanup = await setupAgentResponder(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
+  }
+
+  // Inbox bridge (polls Claude Code team inboxes, sends replies via channel plugins)
+  if (globalChannelRegistry) {
+    try {
+      globalInboxBridgeCleanup = await setupInboxBridge(services, globalChannelRegistry);
+    } catch (error) {
+      log.error('Failed to set up inbox bridge', { error: String(error) });
+    }
   }
 
   // Session cleaner (clears agent sessions on trash emoji)

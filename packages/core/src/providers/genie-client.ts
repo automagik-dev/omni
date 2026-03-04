@@ -6,6 +6,7 @@
  * No outbox, no polling.
  */
 
+import { exec } from 'node:child_process';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +28,10 @@ export interface GenieClientConfig {
   agentName: string;
   /** Target agent to deliver messages to (which inbox to write) — supports template variables */
   targetAgent: string;
+  /** Auto-spawn team-lead if team doesn't exist yet (default: true) */
+  autoSpawn?: boolean;
+  /** Working directory for auto-spawned team-lead (default: ~/workspace) */
+  autoSpawnDir?: string;
 }
 
 /** Variables available for template interpolation at runtime */
@@ -79,10 +84,19 @@ export class GenieClient implements IAgentClient {
   /** Whether any config value contains template variables */
   private readonly hasTemplates: boolean;
 
+  /** Auto-spawn team-lead when team doesn't exist */
+  private readonly autoSpawn: boolean;
+  private readonly autoSpawnDir: string;
+
+  /** Cache of teams known to exist (avoids repeated filesystem checks) */
+  private readonly knownTeams = new Set<string>();
+
   constructor(config: GenieClientConfig) {
     this.teamNameTemplate = config.teamName ?? 'genie';
     this.agentNameTemplate = config.agentName;
     this.targetAgentTemplate = config.targetAgent;
+    this.autoSpawn = config.autoSpawn ?? true;
+    this.autoSpawnDir = config.autoSpawnDir ?? join(homedir(), 'workspace');
 
     this.hasTemplates =
       /\{\w+\}/.test(this.teamNameTemplate) ||
@@ -119,7 +133,42 @@ export class GenieClient implements IAgentClient {
     return { teamName, agentName, targetAgent, inboxDir, inboxPath };
   }
 
-  /** Build single-bracket metadata header from request context */
+  /**
+   * Fire-and-forget: ensure team-lead exists for the given team.
+   * Checks if ~/.claude/teams/<team>/config.json exists; if not,
+   * spawns `genie team ensure` in background without blocking.
+   */
+  private ensureTeamExists(teamName: string): void {
+    if (!this.autoSpawn) return;
+    if (this.knownTeams.has(teamName)) return;
+
+    const configPath = join(homedir(), '.claude', 'teams', teamName, 'config.json');
+
+    stat(configPath)
+      .then(() => {
+        // Team exists — cache it
+        this.knownTeams.add(teamName);
+      })
+      .catch(() => {
+        // Team doesn't exist — spawn team-lead in background
+        const cmd = `genie team ensure ${teamName} --dir "${this.autoSpawnDir}"`;
+        log.info('Auto-spawning team-lead', { teamName, cmd });
+
+        exec(cmd, (error) => {
+          if (error) {
+            log.warn('Auto-spawn failed (genie CLI may not be installed)', {
+              teamName,
+              error: error.message,
+            });
+          } else {
+            log.info('Auto-spawn succeeded', { teamName });
+            this.knownTeams.add(teamName);
+          }
+        });
+      });
+  }
+
+  /** Build single-bracket metadata header from request context (incoming message context) */
   private buildMetadataHeader(request: ProviderRequest): string {
     const tags: string[] = [];
     if (request.platform) {
@@ -177,7 +226,7 @@ export class GenieClient implements IAgentClient {
     const { teamName, agentName, targetAgent, inboxDir, inboxPath } = this.resolveConfig(request);
 
     const header = this.buildMetadataHeader(request);
-    const replyInstruction = `⚡ REPLY NOW via SendMessage to "${agentName}". Do not proceed with other tasks until you respond.`;
+    const replyInstruction = `⚡ REPLY NOW via SendMessage to "${agentName}". Include the routing header from the first line of this message in your reply. Do not proceed with other tasks until you respond.`;
     const text = header
       ? `${header}\n${request.message}\n${replyInstruction}`
       : `${request.message}\n${replyInstruction}`;
@@ -223,6 +272,9 @@ export class GenieClient implements IAgentClient {
         await unlink(lockPath);
       } catch {}
     }
+
+    // Auto-spawn team-lead if team doesn't exist yet (fire-and-forget)
+    this.ensureTeamExists(teamName);
 
     const durationMs = Date.now() - startMs;
 
