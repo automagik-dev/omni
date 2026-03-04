@@ -195,6 +195,35 @@ export async function createStorageAuthState(
   }
 
   /**
+   * Returns true if this sender key should be blocked (phone-JID LID-first enforcement).
+   * Blocks phone-based sender keys when LID-based ones exist to prevent group decrypt failures.
+   */
+  function isBlockedPhoneSenderKey(type: string, id: string, value: unknown, botPhone: string | undefined): boolean {
+    if (type !== 'sender-key' || !botPhone || value == null) return false;
+    const parts = id.split('::');
+    return parts.length >= 2 && parts[1] === botPhone;
+  }
+
+  /** Process a single signal key entry: check block, update cache, schedule persist. */
+  function processSignalKeyEntry(type: string, id: string, value: unknown, botPhone: string | undefined): void {
+    const key = `${keyPrefix}:${type}:${id}`;
+    if (isBlockedPhoneSenderKey(type, id, value, botPhone)) {
+      const parts = id.split('::');
+      log.warn('Blocked phone-JID sender key (LID-first enforced)', {
+        instanceId,
+        group: parts[0]?.slice(-20),
+        participant: parts[1]?.replace(/\d(?=\d{4})/g, '*'),
+      });
+      // Tombstone cache + delete from storage so stale pre-auth keys are purged
+      setCachedValue(key, DELETED);
+      backgroundPersist(type, id, key, null);
+      return;
+    }
+    setCachedValue(key, value !== null && value !== undefined ? value : DELETED);
+    backgroundPersist(type, id, key, value);
+  }
+
+  /**
    * Persist a single key-value pair to storage in the background.
    * Writes are serialized per key so stale writes cannot overtake newer ones.
    */
@@ -266,14 +295,16 @@ export async function createStorageAuthState(
             };
           },
         ): Promise<void> => {
+          // LID-first guardrail: extract bot's phone number to block phone-JID
+          // sender keys. When both phone and LID sender keys exist for the same
+          // group, recipients can't decrypt — messages are silently dropped.
+          // Only LID-based sender keys must be stored.
+          const botPhone = creds.me?.id?.split(':')[0]?.split('@')[0];
+
           for (const [type, entries] of Object.entries(data)) {
             if (!entries) continue;
             for (const [id, value] of Object.entries(entries)) {
-              const key = `${keyPrefix}:${type}:${id}`;
-              // 1. Update in-memory cache synchronously — instant, never blocks
-              setCachedValue(key, value !== null && value !== undefined ? value : DELETED);
-              // 2. Persist to DB in background — fire-and-forget (#70)
-              backgroundPersist(type, id, key, value);
+              processSignalKeyEntry(type, id, value, botPhone);
             }
           }
         },

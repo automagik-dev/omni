@@ -71,8 +71,12 @@ if (natsManaged) {
 //    to prevent file-change-triggered restarts during deploys.
 // ---------------------------------------------------------------------------
 if (apiManaged) {
-  const isDev = (process.env.NODE_ENV || 'development') !== 'production';
-  const apiArgs = isDev ? '--watch packages/api/src/index.ts' : 'packages/api/src/index.ts';
+  // Never use --watch in PM2-managed processes. Bun's --watch performs
+  // in-process restarts (same OS PID) without triggering SIGTERM, which
+  // leaves the postgres child process alive while pgserve creates a new
+  // socket directory → "Failed to connect" crash loop. Run the dev server
+  // directly in a terminal if you need file-change reloading.
+  const apiArgs = 'packages/api/src/index.ts';
 
   apps.push({
     ...SHARED,
