@@ -2273,6 +2273,11 @@ export interface components {
              * @description Agent UUID (agents table)
              */
             agentId?: string | null;
+            /**
+             * Format: uuid
+             * @description Provider ID (agent provider)
+             */
+            agentProviderId?: string | null;
             /** @description Agent timeout in seconds */
             agentTimeout: number;
             /** @description Whether streaming is enabled */
@@ -5373,6 +5378,11 @@ export interface operations {
                              * @description Agent UUID (agents table)
                              */
                             agentId?: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Provider ID (agent provider)
+                             */
+                            agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -5477,6 +5487,11 @@ export interface operations {
                              * @description Agent UUID (agents table)
                              */
                             agentId?: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Provider ID (agent provider)
+                             */
+                            agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -5604,6 +5619,11 @@ export interface operations {
                              * @description Agent UUID (agents table)
                              */
                             agentId?: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Provider ID (agent provider)
+                             */
+                            agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
@@ -5773,6 +5793,11 @@ export interface operations {
                              * @description Agent UUID (agents table)
                              */
                             agentId?: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Provider ID (agent provider)
+                             */
+                            agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
                             /** @description Whether streaming is enabled */
