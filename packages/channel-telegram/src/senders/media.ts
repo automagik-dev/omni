@@ -4,12 +4,30 @@
  * Includes recursive caption overflow splitting: captions >1024 chars are
  * split at the 1024-char boundary, with remaining text sent as follow-up
  * sendMessage() calls (recursively, so all chunks respect the 1024 limit).
+ *
+ * All media senders accept either a URL string or a Buffer (for base64-sourced
+ * media). When a Buffer is provided, grammy's InputFile is used to upload the
+ * file directly to Telegram.
  */
 
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike } from '../grammy-shim';
 
 const log = createLogger('telegram:sender:media');
+
+/** Resolve a URL string or Buffer into a grammy-compatible file source */
+async function resolveFileSource(source: string | Buffer, filename?: string): Promise<unknown> {
+  if (typeof source === 'string') {
+    return source;
+  }
+  // source is a Buffer — upload directly via InputFile
+  try {
+    const { InputFile } = await import('grammy');
+    return new InputFile(source, filename);
+  } catch (error) {
+    throw new Error(`Failed to load grammy InputFile for buffer upload: ${String(error)}`);
+  }
+}
 
 /** Telegram's caption character limit */
 const CAPTION_MAX_LENGTH = 1024;
@@ -53,17 +71,19 @@ async function sendCaptionOverflow(
 
 /**
  * Send a photo to a Telegram chat, with automatic caption overflow splitting.
+ * Accepts a URL string or a Buffer (uploaded directly via InputFile).
  */
 export async function sendPhoto(
   bot: TelegramBotLike,
   chatId: string,
-  photoUrl: string,
+  photoUrl: string | Buffer,
   caption?: string,
   replyToMessageId?: number,
   options?: Record<string, unknown>,
 ): Promise<number> {
+  const file = await resolveFileSource(photoUrl);
   const { first, overflow } = splitCaption(caption ?? '');
-  const result = await bot.api.sendPhoto(chatId, photoUrl, {
+  const result = await bot.api.sendPhoto(chatId, file as string, {
     ...(first ? { caption: first } : {}),
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     ...(options ?? {}),
@@ -77,17 +97,19 @@ export async function sendPhoto(
 
 /**
  * Send an audio file to a Telegram chat, with automatic caption overflow splitting.
+ * Accepts a URL string or a Buffer (uploaded directly via InputFile).
  */
 export async function sendAudio(
   bot: TelegramBotLike,
   chatId: string,
-  audioUrl: string,
+  audioUrl: string | Buffer,
   caption?: string,
   replyToMessageId?: number,
   options?: Record<string, unknown>,
 ): Promise<number> {
+  const file = await resolveFileSource(audioUrl);
   const { first, overflow } = splitCaption(caption ?? '');
-  const result = await bot.api.sendAudio(chatId, audioUrl, {
+  const result = await bot.api.sendAudio(chatId, file as string, {
     ...(first ? { caption: first } : {}),
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     ...(options ?? {}),
@@ -101,17 +123,19 @@ export async function sendAudio(
 
 /**
  * Send a video to a Telegram chat, with automatic caption overflow splitting.
+ * Accepts a URL string or a Buffer (uploaded directly via InputFile).
  */
 export async function sendVideo(
   bot: TelegramBotLike,
   chatId: string,
-  videoUrl: string,
+  videoUrl: string | Buffer,
   caption?: string,
   replyToMessageId?: number,
   options?: Record<string, unknown>,
 ): Promise<number> {
+  const file = await resolveFileSource(videoUrl);
   const { first, overflow } = splitCaption(caption ?? '');
-  const result = await bot.api.sendVideo(chatId, videoUrl, {
+  const result = await bot.api.sendVideo(chatId, file as string, {
     ...(first ? { caption: first } : {}),
     ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
     ...(options ?? {}),
@@ -178,31 +202,42 @@ export async function sendLocation(
 }
 
 /**
- * Send a document to a Telegram chat
+ * Send a document to a Telegram chat.
+ * Accepts a URL string or a Buffer (uploaded directly via InputFile).
+ * When a Buffer is provided, the file is uploaded directly without fetching a URL.
  */
 export async function sendDocument(
   bot: TelegramBotLike,
   chatId: string,
-  documentUrl: string,
+  documentSource: string | Buffer,
   caption?: string,
   filename?: string,
   replyToMessageId?: number,
   options?: Record<string, unknown>,
 ): Promise<number> {
-  let file: unknown = documentUrl;
-  if (filename) {
-    // Lazy-load to keep this module importable in tests without loading grammy.
-    // If grammy isn't available for some reason, fall back to URL-only.
+  let file: unknown;
+  if (Buffer.isBuffer(documentSource)) {
+    // Upload buffer directly via InputFile
     try {
       const { InputFile } = await import('grammy');
-      file = new InputFile({ url: documentUrl }, filename);
+      file = new InputFile(documentSource, filename);
+    } catch (error) {
+      throw new Error(`Failed to load grammy InputFile for buffer upload: ${String(error)}`);
+    }
+  } else if (filename) {
+    // URL with filename — wrap in InputFile so Telegram uses the provided name
+    try {
+      const { InputFile } = await import('grammy');
+      file = new InputFile({ url: documentSource }, filename);
     } catch (error) {
       log.warn('Failed to load grammy InputFile, falling back to URL-only document send', {
         chatId,
         error: String(error),
       });
-      file = documentUrl;
+      file = documentSource;
     }
+  } else {
+    file = documentSource;
   }
 
   const { first, overflow } = splitCaption(caption ?? '');
