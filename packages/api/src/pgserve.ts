@@ -91,7 +91,7 @@ async function killOrphanedPostgres(dataDir: string): Promise<void> {
 
   let pid: number;
   try {
-    pid = Number.parseInt(readFileSync(pidFile, 'utf-8').trim().split('\n')[0], 10);
+    pid = Number.parseInt(readFileSync(pidFile, 'utf-8').trim().split('\n')[0] ?? '', 10);
     if (Number.isNaN(pid) || pid <= 0) return;
     process.kill(pid, 0); // throws ESRCH if not running — nothing to do
   } catch {
