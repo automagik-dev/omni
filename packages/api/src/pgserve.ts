@@ -11,6 +11,7 @@
  *   PGSERVE_DATA      — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
  */
 
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '@omni/core';
@@ -73,6 +74,54 @@ async function tryStartOnPort(startFn: StartServerFn, port: number, config: Pgse
 }
 
 /**
+ * Kill any orphaned postgres process left over from a previous run.
+ *
+ * When bun crashes hard (OOM, uncaught throw before signal handlers register,
+ * or --watch-triggered internal restart) the postgres child process survives
+ * because it is owned by the OS-level bun process. On the next run pgserve
+ * creates a new socket directory, but postgres is still listening on the old
+ * one → every proxy connection fails with "Failed to connect".
+ *
+ * Reading postmaster.pid from the data directory lets us find and terminate
+ * the orphan before pgserve tries to start a fresh instance.
+ */
+async function killOrphanedPostgres(dataDir: string): Promise<void> {
+  const pidFile = join(dataDir, 'postmaster.pid');
+  if (!existsSync(pidFile)) return;
+
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(pidFile, 'utf-8').trim().split('\n')[0], 10);
+    if (Number.isNaN(pid) || pid <= 0) return;
+    process.kill(pid, 0); // throws ESRCH if not running — nothing to do
+  } catch {
+    return; // process not running or file unreadable — clean state
+  }
+
+  log.info('Killing orphaned postgres from previous run', { pid, dataDir });
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  // Wait up to 5 s for graceful exit, then SIGKILL
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return; // exited cleanly
+    }
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // already dead
+  }
+}
+
+/**
  * Start the embedded pgserve server.
  *
  * Returns the DATABASE_URL to use for connections.
@@ -90,6 +139,12 @@ export async function startEmbeddedPgserve(config: PgserveConfig): Promise<strin
     mode: config.dataDir ? 'persistent' : 'memory',
     dataDir: config.dataDir ?? '(in-memory)',
   });
+
+  // Terminate any orphaned postgres left by a previous unclean shutdown before
+  // pgserve tries to start (avoids the socket-dir mismatch crash loop).
+  if (config.dataDir) {
+    await killOrphanedPostgres(config.dataDir);
+  }
 
   const { startMultiTenantServer } = await import('pgserve');
 
