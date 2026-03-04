@@ -383,6 +383,7 @@ const sendTextSchema = z.object({
   to: z.string().min(1).describe('Recipient (phone number or platform ID)'),
   text: z.string().min(1).describe('Message text'),
   replyTo: z.string().optional().describe('Message ID to reply to'),
+  threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
   mentions: z.array(MentionSchema).optional().describe('Users/roles to mention'),
 });
 
@@ -400,6 +401,7 @@ const sendMediaSchema = z.object({
     .optional()
     .describe('MIME type of the media (e.g. image/gif enables GIF playback for video type)'),
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
+  threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
 });
 
 // Send reaction schema
@@ -857,7 +859,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, text, replyTo, mentions } = parsed.data;
+  const { instanceId, to, text, replyTo, threadId, mentions } = parsed.data;
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
@@ -881,6 +883,7 @@ messagesRoutes.post('/send', async (c) => {
 
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
+    threadId,
     content: { type: 'text', text } as OutgoingContent,
     replyTo,
     metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
@@ -973,6 +976,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
+    threadId: data.threadId,
     content: {
       type: data.type,
       mediaUrl: data.url,

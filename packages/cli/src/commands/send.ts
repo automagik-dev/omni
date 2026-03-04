@@ -45,6 +45,7 @@ interface SendOptions {
   to?: string;
   text?: string;
   replyTo?: string;
+  threadId?: string;
   media?: string;
   caption?: string;
   voice?: boolean;
@@ -86,6 +87,7 @@ const messageSenders = {
       to,
       text,
       replyTo: options.replyTo,
+      threadId: options.threadId,
     });
     output.success('Message sent', result);
   },
@@ -108,6 +110,7 @@ const messageSenders = {
       filename,
       caption: options.caption,
       voiceNote: options.voice,
+      threadId: options.threadId,
     });
     output.success('Media sent', result);
   },
@@ -329,6 +332,7 @@ function buildGroupedSendHelp(): string {
   const textOptions: OptionDef[] = [
     { flags: '--text <text>', description: 'Message content' },
     { flags: '--reply-to <id>', description: 'Reply to specific message' },
+    { flags: '--thread-id <id>', description: 'Thread/topic ID (e.g. Telegram forum topic)' },
   ];
 
   const mediaOptions: OptionDef[] = [
@@ -445,6 +449,7 @@ export function createSendCommand(): Command {
     // Text message
     .option('--text <text>', 'Send text message')
     .option('--reply-to <id>', 'Reply to a message ID')
+    .option('--thread-id <id>', 'Thread/topic ID (Telegram forum topic, etc.)')
     // Media message
     .option('--media <path>', 'Send media file (image, audio, video, document)')
     .option('--caption <text>', 'Caption for media')
