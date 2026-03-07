@@ -81,21 +81,27 @@ async function dispatchMedia(
   content: OutgoingMessage['content'],
   replyParam?: number,
   options?: Record<string, unknown>,
+  metadata?: OutgoingMessage['metadata'],
 ): Promise<number> {
   const caption = content.caption ?? content.text;
-  const url = content.mediaUrl ?? '';
+
+  // Prefer base64 from metadata (local file upload) over a URL reference.
+  // When the CLI sends --media with a local path, the API stores the file data
+  // as base64 in metadata.base64 and leaves content.mediaUrl undefined.
+  const base64 = metadata?.base64 as string | undefined;
+  const mediaSource: string | Buffer = base64 ? Buffer.from(base64, 'base64') : (content.mediaUrl ?? '');
 
   switch (content.type) {
     case 'image':
-      return sendPhoto(bot, chatId, url, caption, replyParam, options);
+      return sendPhoto(bot, chatId, mediaSource, caption, replyParam, options);
     case 'audio':
-      return sendAudio(bot, chatId, url, caption, replyParam, options);
+      return sendAudio(bot, chatId, mediaSource, caption, replyParam, options);
     case 'video':
-      return sendVideo(bot, chatId, url, caption, replyParam, options);
+      return sendVideo(bot, chatId, mediaSource, caption, replyParam, options);
     case 'document':
-      return sendDocument(bot, chatId, url, caption, content.filename, replyParam, options);
+      return sendDocument(bot, chatId, mediaSource, caption, content.filename, replyParam, options);
     case 'sticker':
-      return sendSticker(bot, chatId, url, replyParam, options);
+      return sendSticker(bot, chatId, typeof mediaSource === 'string' ? mediaSource : '', replyParam, options);
     default:
       return sendTextMessage(bot, chatId, content.text ?? '[Unsupported content]', replyParam, undefined, options);
   }
@@ -131,6 +137,7 @@ async function dispatchContent(
   threadId?: string,
   formatMode: 'convert' | 'passthrough' = 'convert',
   chatType?: string,
+  metadata?: OutgoingMessage['metadata'],
 ): Promise<number | null> {
   const threadOptions = threadId ? { message_thread_id: Number(threadId) } : undefined;
   // baseOptions carries only valid Telegram API parameters (e.g. message_thread_id)
@@ -146,7 +153,7 @@ async function dispatchContent(
   if (content.type === 'reaction') return dispatchReaction(bot, chatId, content);
   if (content.type === 'contact') return dispatchContact(bot, chatId, content, replyParam);
   if (content.type === 'location') return dispatchLocation(bot, chatId, content, replyParam);
-  return dispatchMedia(bot, chatId, content, replyParam, baseOptions);
+  return dispatchMedia(bot, chatId, content, replyParam, baseOptions, metadata);
 }
 
 /**
@@ -413,7 +420,16 @@ export class TelegramPlugin extends BaseChannelPlugin {
       const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
       // Pass chatType for button scoping: buttons with scope 'dm'/'group' are filtered at send time
       const chatType = message.metadata?.chatType as string | undefined;
-      const messageId = await dispatchContent(bot, chatId, content, replyParam, message.threadId, formatMode, chatType);
+      const messageId = await dispatchContent(
+        bot,
+        chatId,
+        content,
+        replyParam,
+        message.threadId,
+        formatMode,
+        chatType,
+        message.metadata,
+      );
 
       // Journey timing: T11 (platformDeliveredAt) after Telegram API responds
       if (correlationId) this.captureT11(correlationId);

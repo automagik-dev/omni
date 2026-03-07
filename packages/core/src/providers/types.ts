@@ -64,6 +64,8 @@ export interface ProviderRequest {
     name?: string;
     /** For group chats */
     participantCount?: number;
+    /** Thread/topic identifier (e.g. Telegram forum topic, Slack thread) */
+    threadId?: string;
   };
 
   /** External/platform message ID (for reply-to and reactions) */
@@ -308,6 +310,8 @@ export interface AgentTrigger {
     instanceId: string;
     chatId: string;
     messageId: string;
+    /** Thread/topic identifier (e.g. Telegram forum topic, Slack thread) */
+    threadId?: string;
   };
   /** Sender information */
   sender: {

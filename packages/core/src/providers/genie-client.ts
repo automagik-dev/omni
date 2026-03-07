@@ -6,6 +6,7 @@
  * No outbox, no polling.
  */
 
+import { exec } from 'node:child_process';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -15,13 +16,54 @@ import type { AgentHealthResult, IAgentClient, ProviderRequest, ProviderResponse
 
 const log = createLogger('providers:genie-client');
 
+/** Sanitize a string for use in file paths (team/agent names) */
+function sanitize(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 export interface GenieClientConfig {
-  /** Claude Code team name (default: 'genie') */
+  /** Claude Code team name — supports template variables like "genie-{thread_id}" (default: 'genie') */
   teamName?: string;
-  /** This agent's identity in the team (used as 'from' field) */
+  /** This agent's identity in the team (used as 'from' field) — supports template variables */
   agentName: string;
-  /** Target agent to deliver messages to (which inbox to write) */
+  /** Target agent to deliver messages to (which inbox to write) — supports template variables */
   targetAgent: string;
+  /** Auto-spawn team-lead if team doesn't exist yet (default: true) */
+  autoSpawn?: boolean;
+  /** Working directory for auto-spawned team-lead (default: ~/workspace) */
+  autoSpawnDir?: string;
+}
+
+/** Variables available for template interpolation at runtime */
+export interface TemplateVars {
+  thread_id?: string;
+  chat_id?: string;
+  sender_id?: string;
+  channel?: string;
+  instance_id?: string;
+}
+
+/**
+ * Interpolate template variables in a string.
+ * Replaces `{var_name}` with the corresponding value from vars.
+ * Missing variables are replaced with empty string.
+ */
+export function interpolateTemplate(template: string, vars: TemplateVars): string {
+  return template.replace(/\{(\w+)\}/g, (_match, key: string) => {
+    const value = vars[key as keyof TemplateVars];
+    return value ?? '';
+  });
+}
+
+/** Extract template variables from a ProviderRequest */
+function extractTemplateVars(request: ProviderRequest): TemplateVars {
+  return {
+    thread_id: request.chat?.threadId,
+    chat_id: request.chat?.id,
+    sender_id: request.userId,
+    channel: request.platform?.channel,
+    instance_id: request.platform?.instanceId,
+  };
 }
 
 /** Claude Code native team inbox message format */
@@ -34,21 +76,99 @@ interface TeamInboxMessage {
 }
 
 export class GenieClient implements IAgentClient {
-  private readonly teamName: string;
-  private readonly agentName: string;
-  private readonly targetAgent: string;
-  private readonly inboxDir: string;
-  private readonly inboxPath: string;
+  /** Raw template values (may contain {var} placeholders) */
+  private readonly teamNameTemplate: string;
+  private readonly agentNameTemplate: string;
+  private readonly targetAgentTemplate: string;
+
+  /** Whether any config value contains template variables */
+  private readonly hasTemplates: boolean;
+
+  /** Auto-spawn team-lead when team doesn't exist */
+  private readonly autoSpawn: boolean;
+  private readonly autoSpawnDir: string;
+
+  /** Cache of teams known to exist (avoids repeated filesystem checks) */
+  private readonly knownTeams = new Set<string>();
 
   constructor(config: GenieClientConfig) {
-    this.teamName = (config.teamName ?? 'genie').replace(/[^a-zA-Z0-9_-]/g, '');
-    this.agentName = config.agentName.replace(/[^a-zA-Z0-9_-]/g, '');
-    this.targetAgent = config.targetAgent.replace(/[^a-zA-Z0-9_-]/g, '');
-    this.inboxDir = join(homedir(), '.claude', 'teams', this.teamName, 'inboxes');
-    this.inboxPath = join(this.inboxDir, `${this.targetAgent}.json`);
+    this.teamNameTemplate = config.teamName ?? 'genie';
+    this.agentNameTemplate = config.agentName;
+    this.targetAgentTemplate = config.targetAgent;
+    this.autoSpawn = config.autoSpawn ?? true;
+    this.autoSpawnDir = config.autoSpawnDir ?? join(homedir(), 'workspace');
+
+    this.hasTemplates =
+      /\{\w+\}/.test(this.teamNameTemplate) ||
+      /\{\w+\}/.test(this.agentNameTemplate) ||
+      /\{\w+\}/.test(this.targetAgentTemplate);
   }
 
-  /** Build single-bracket metadata header from request context */
+  /** Resolve config values, interpolating templates if needed */
+  private resolveConfig(request: ProviderRequest): {
+    teamName: string;
+    agentName: string;
+    targetAgent: string;
+    inboxDir: string;
+    inboxPath: string;
+  } {
+    let teamName: string;
+    let agentName: string;
+    let targetAgent: string;
+
+    if (this.hasTemplates) {
+      const vars = extractTemplateVars(request);
+      teamName = sanitize(interpolateTemplate(this.teamNameTemplate, vars));
+      agentName = sanitize(interpolateTemplate(this.agentNameTemplate, vars));
+      targetAgent = sanitize(interpolateTemplate(this.targetAgentTemplate, vars));
+    } else {
+      teamName = sanitize(this.teamNameTemplate);
+      agentName = sanitize(this.agentNameTemplate);
+      targetAgent = sanitize(this.targetAgentTemplate);
+    }
+
+    const inboxDir = join(homedir(), '.claude', 'teams', teamName, 'inboxes');
+    const inboxPath = join(inboxDir, `${targetAgent}.json`);
+
+    return { teamName, agentName, targetAgent, inboxDir, inboxPath };
+  }
+
+  /**
+   * Fire-and-forget: ensure team-lead exists for the given team.
+   * Checks if ~/.claude/teams/<team>/config.json exists; if not,
+   * spawns `genie team ensure` in background without blocking.
+   */
+  private ensureTeamExists(teamName: string): void {
+    if (!this.autoSpawn) return;
+    if (this.knownTeams.has(teamName)) return;
+
+    const configPath = join(homedir(), '.claude', 'teams', teamName, 'config.json');
+
+    stat(configPath)
+      .then(() => {
+        // Team exists — cache it
+        this.knownTeams.add(teamName);
+      })
+      .catch(() => {
+        // Team doesn't exist — spawn team-lead in background
+        const cmd = `genie team ensure ${teamName} --dir "${this.autoSpawnDir}"`;
+        log.info('Auto-spawning team-lead', { teamName, cmd });
+
+        exec(cmd, (error) => {
+          if (error) {
+            log.warn('Auto-spawn failed (genie CLI may not be installed)', {
+              teamName,
+              error: error.message,
+            });
+          } else {
+            log.info('Auto-spawn succeeded', { teamName });
+            this.knownTeams.add(teamName);
+          }
+        });
+      });
+  }
+
+  /** Build single-bracket metadata header from request context (incoming message context) */
   private buildMetadataHeader(request: ProviderRequest): string {
     const tags: string[] = [];
     if (request.platform) {
@@ -56,6 +176,7 @@ export class GenieClient implements IAgentClient {
       tags.push(`instance:${request.platform.instanceId}`);
     }
     if (request.chat?.id) tags.push(`chat:${request.chat.id}`);
+    if (request.chat?.threadId) tags.push(`thread:${request.chat.threadId}`);
     if (request.messageId) tags.push(`msg:${request.messageId}`);
     if (request.sender?.displayName) tags.push(`from:${request.sender.displayName}`);
     if (request.chat?.type) tags.push(`type:${request.chat.type}`);
@@ -102,15 +223,17 @@ export class GenieClient implements IAgentClient {
   async run(request: ProviderRequest): Promise<ProviderResponse> {
     const startMs = Date.now();
 
+    const { teamName, agentName, targetAgent, inboxDir, inboxPath } = this.resolveConfig(request);
+
     const header = this.buildMetadataHeader(request);
-    const replyInstruction = `⚡ REPLY NOW via SendMessage to "${this.agentName}". Do not proceed with other tasks until you respond.`;
+    const replyInstruction = `⚡ REPLY NOW via SendMessage to "${agentName}". Include the routing header from the first line of this message in your reply. Do not proceed with other tasks until you respond.`;
     const text = header
       ? `${header}\n${request.message}\n${replyInstruction}`
       : `${request.message}\n${replyInstruction}`;
     const summary = request.message.length > 50 ? `${request.message.substring(0, 50)}...` : request.message;
 
     const inboxMessage: TeamInboxMessage = {
-      from: this.agentName,
+      from: agentName,
       text,
       summary,
       timestamp: new Date().toISOString(),
@@ -118,17 +241,17 @@ export class GenieClient implements IAgentClient {
     };
 
     // Ensure inbox directory exists
-    await mkdir(this.inboxDir, { recursive: true });
+    await mkdir(inboxDir, { recursive: true });
 
     // Locked read-modify-write to prevent concurrent message loss
-    const lockPath = `${this.inboxPath}.lock`;
+    const lockPath = `${inboxPath}.lock`;
     const lockFd = await this.acquireLock(lockPath);
 
     try {
       // Read existing inbox, append, write back
       let inbox: TeamInboxMessage[] = [];
       try {
-        const data = await readFile(this.inboxPath, 'utf-8');
+        const data = await readFile(inboxPath, 'utf-8');
         inbox = JSON.parse(data);
         if (!Array.isArray(inbox)) inbox = [];
       } catch {
@@ -139,9 +262,9 @@ export class GenieClient implements IAgentClient {
       inbox.push(inboxMessage);
 
       // Atomic write
-      const tmpPath = `${this.inboxPath}.tmp`;
+      const tmpPath = `${inboxPath}.tmp`;
       await writeFile(tmpPath, JSON.stringify(inbox, null, 2), 'utf-8');
-      await rename(tmpPath, this.inboxPath);
+      await rename(tmpPath, inboxPath);
     } finally {
       // Release lock
       await lockFd.close();
@@ -150,19 +273,24 @@ export class GenieClient implements IAgentClient {
       } catch {}
     }
 
+    // Auto-spawn team-lead if team doesn't exist yet (fire-and-forget)
+    this.ensureTeamExists(teamName);
+
     const durationMs = Date.now() - startMs;
 
     log.info('Message delivered to team inbox', {
-      agent: this.agentName,
-      team: this.teamName,
+      agent: agentName,
+      team: teamName,
+      target: targetAgent,
       messageLength: text.length,
       durationMs,
+      hasTemplates: this.hasTemplates,
     });
 
     // Fire-and-forget: return empty content (agent replies independently)
     return {
       content: '',
-      runId: `genie-${this.agentName}-${Date.now()}`,
+      runId: `genie-${agentName}-${Date.now()}`,
       sessionId: request.sessionId ?? '',
       status: 'completed',
       metrics: {
@@ -181,9 +309,13 @@ export class GenieClient implements IAgentClient {
   async checkHealth(): Promise<AgentHealthResult> {
     const startMs = Date.now();
 
+    // For templated configs, check against the base (un-interpolated) team name.
+    // Health check is a best-effort signal; the actual inbox is resolved per-request.
+    const teamName = sanitize(this.teamNameTemplate);
+    const teamDir = join(homedir(), '.claude', 'teams', teamName);
+    const inboxDir = join(teamDir, 'inboxes');
+
     try {
-      // Check team directory exists
-      const teamDir = join(homedir(), '.claude', 'teams', this.teamName);
       try {
         await stat(teamDir);
       } catch {
@@ -194,14 +326,13 @@ export class GenieClient implements IAgentClient {
         };
       }
 
-      // Check inbox directory exists
       try {
-        await stat(this.inboxDir);
+        await stat(inboxDir);
       } catch {
         return {
           healthy: false,
           latencyMs: Date.now() - startMs,
-          error: `Inbox directory does not exist: ${this.inboxDir}`,
+          error: `Inbox directory does not exist: ${inboxDir}`,
         };
       }
 

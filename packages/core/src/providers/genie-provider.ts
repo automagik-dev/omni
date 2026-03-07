@@ -63,6 +63,7 @@ export class GenieAgentProvider implements IAgentProvider {
       chat: {
         type: context.type === 'dm' ? 'dm' : 'group',
         id: context.source.chatId,
+        threadId: context.source.threadId,
       },
       files: context.content.files,
     };

@@ -43,8 +43,8 @@ export { ClaudeCodeClient, createClaudeCodeClient } from './claude-code-client';
 export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamRunMetrics } from './claude-code-client';
 
 // Genie Team Inbox Client
-export { GenieClient, createGenieClient } from './genie-client';
-export type { GenieClientConfig } from './genie-client';
+export { GenieClient, createGenieClient, interpolateTemplate } from './genie-client';
+export type { GenieClientConfig, TemplateVars } from './genie-client';
 
 // AgentProvider implementations
 export { AgnoAgentProvider } from './agno-provider';
