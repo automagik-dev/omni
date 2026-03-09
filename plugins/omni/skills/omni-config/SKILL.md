@@ -39,7 +39,7 @@ omni config unset defaultInstance --json
 
 ## Providers
 
-Available schemas: `agno`, `webhook`, `openclaw`, `claude-code`
+Available schemas: `agno`, `webhook`, `openclaw`, `claude-code`, `genie`, `a2a`, `ag-ui`
 
 ```bash
 omni providers list --json
