@@ -6,7 +6,7 @@
  * No outbox, no polling.
  */
 
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -90,6 +90,8 @@ export class GenieClient implements IAgentClient {
 
   /** Cache of teams known to exist (avoids repeated filesystem checks) */
   private readonly knownTeams = new Set<string>();
+  /** Teams currently being spawned (prevents duplicate exec calls during bursts) */
+  private readonly pendingTeams = new Set<string>();
 
   constructor(config: GenieClientConfig) {
     this.teamNameTemplate = config.teamName ?? 'genie';
@@ -127,6 +129,28 @@ export class GenieClient implements IAgentClient {
       targetAgent = sanitize(this.targetAgentTemplate);
     }
 
+    // Fail fast if template variables resolved to empty strings.
+    // Without this, we'd write to paths like "inboxes/.json" or merge
+    // unrelated conversations into the same inbox file.
+    if (!teamName) {
+      throw new ProviderError(
+        `Team name resolved to empty string (template: "${this.teamNameTemplate}"). Ensure the template variable (e.g. {thread_id}) is populated in the request.`,
+        'INVALID_RESPONSE',
+      );
+    }
+    if (!agentName) {
+      throw new ProviderError(
+        `Agent name resolved to empty string (template: "${this.agentNameTemplate}"). Ensure the template variable is populated in the request.`,
+        'INVALID_RESPONSE',
+      );
+    }
+    if (!targetAgent) {
+      throw new ProviderError(
+        `Target agent resolved to empty string (template: "${this.targetAgentTemplate}"). Ensure the template variable is populated in the request.`,
+        'INVALID_RESPONSE',
+      );
+    }
+
     const inboxDir = join(homedir(), '.claude', 'teams', teamName, 'inboxes');
     const inboxPath = join(inboxDir, `${targetAgent}.json`);
 
@@ -137,24 +161,32 @@ export class GenieClient implements IAgentClient {
    * Fire-and-forget: ensure team-lead exists for the given team.
    * Checks if ~/.claude/teams/<team>/config.json exists; if not,
    * spawns `genie team ensure` in background without blocking.
+   *
+   * Uses pendingTeams set to coalesce concurrent requests for the same team,
+   * preventing process storms during traffic bursts.
    */
   private ensureTeamExists(teamName: string): void {
     if (!this.autoSpawn) return;
     if (this.knownTeams.has(teamName)) return;
+    if (this.pendingTeams.has(teamName)) return; // Already checking/spawning
 
+    this.pendingTeams.add(teamName);
     const configPath = join(homedir(), '.claude', 'teams', teamName, 'config.json');
 
     stat(configPath)
       .then(() => {
         // Team exists — cache it
         this.knownTeams.add(teamName);
+        this.pendingTeams.delete(teamName);
       })
       .catch(() => {
         // Team doesn't exist — spawn team-lead in background
-        const cmd = `genie team ensure ${teamName} --dir "${this.autoSpawnDir}"`;
-        log.info('Auto-spawning team-lead', { teamName, cmd });
+        // Use execFile instead of exec to avoid shell injection via teamName
+        const args = ['team', 'ensure', teamName, '--dir', this.autoSpawnDir];
+        log.info('Auto-spawning team-lead', { teamName, args });
 
-        exec(cmd, (error) => {
+        execFile('genie', args, (error) => {
+          this.pendingTeams.delete(teamName);
           if (error) {
             log.warn('Auto-spawn failed (genie CLI may not be installed)', {
               teamName,

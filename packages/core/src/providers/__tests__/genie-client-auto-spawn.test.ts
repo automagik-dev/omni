@@ -18,8 +18,8 @@ import type { ProviderRequest } from '../types';
 // Mocks
 // ============================================================================
 
-// Mock child_process.exec to capture auto-spawn calls
-const execMock = mock((_cmd: string, cb: (error: Error | null) => void) => {
+// Mock child_process.execFile to capture auto-spawn calls
+const execFileMock = mock((_file: string, _args: string[], cb: (error: Error | null) => void) => {
   cb(null);
 });
 
@@ -27,7 +27,7 @@ const execMock = mock((_cmd: string, cb: (error: Error | null) => void) => {
 const TEST_DIR = '/tmp/genie-client-auto-spawn-test';
 
 mock.module('node:child_process', () => ({
-  exec: execMock,
+  execFile: execFileMock,
 }));
 
 mock.module('node:os', () => ({
@@ -65,7 +65,7 @@ function makeConfig(overrides?: Partial<GenieClientConfig>): GenieClientConfig {
 beforeEach(() => {
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
-  execMock.mockClear();
+  execFileMock.mockClear();
 });
 
 afterEach(() => {
@@ -122,9 +122,13 @@ describe('GenieClient auto-spawn on run()', () => {
     // Give fire-and-forget stat() a tick to resolve
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(execMock).toHaveBeenCalledTimes(1);
-    const cmd = execMock.mock.calls[0]?.[0] as string;
-    expect(cmd).toContain('genie team ensure test-team');
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const file = execFileMock.mock.calls[0]?.[0] as string;
+    const args = execFileMock.mock.calls[0]?.[1] as string[];
+    expect(file).toBe('genie');
+    expect(args).toContain('team');
+    expect(args).toContain('ensure');
+    expect(args).toContain('test-team');
   });
 
   test('includes --dir flag with autoSpawnDir', async () => {
@@ -133,9 +137,10 @@ describe('GenieClient auto-spawn on run()', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(execMock).toHaveBeenCalledTimes(1);
-    const cmd = execMock.mock.calls[0]?.[0] as string;
-    expect(cmd).toContain('--dir "/my/workspace"');
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const args = execFileMock.mock.calls[0]?.[1] as string[];
+    expect(args).toContain('--dir');
+    expect(args).toContain('/my/workspace');
   });
 
   test('does not call exec when team config already exists', async () => {
@@ -149,7 +154,7 @@ describe('GenieClient auto-spawn on run()', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(execMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   test('does not call exec when autoSpawn is disabled', async () => {
@@ -158,7 +163,7 @@ describe('GenieClient auto-spawn on run()', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(execMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   test('caches known teams and skips filesystem check on second call', async () => {
@@ -168,15 +173,15 @@ describe('GenieClient auto-spawn on run()', () => {
     await client.run(makeRequest());
 
     await new Promise((r) => setTimeout(r, 50));
-    expect(execMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
 
-    execMock.mockClear();
+    execFileMock.mockClear();
 
     // Second call: team should be cached (exec succeeded), no new exec
     await client.run(makeRequest('second message'));
 
     await new Promise((r) => setTimeout(r, 50));
-    expect(execMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   test('caches known teams after finding config on disk', async () => {
@@ -198,11 +203,11 @@ describe('GenieClient auto-spawn on run()', () => {
     await client.run(makeRequest('second'));
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(execMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   test('does not block response even if exec fails', async () => {
-    execMock.mockImplementation((_cmd: string, cb: (error: Error | null) => void) => {
+    execFileMock.mockImplementation((_file: string, _args: string[], cb: (error: Error | null) => void) => {
       cb(new Error('genie not found'));
     });
 
