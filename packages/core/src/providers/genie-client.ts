@@ -341,13 +341,34 @@ export class GenieClient implements IAgentClient {
   async checkHealth(): Promise<AgentHealthResult> {
     const startMs = Date.now();
 
-    // For templated configs, check against the base (un-interpolated) team name.
-    // Health check is a best-effort signal; the actual inbox is resolved per-request.
-    const teamName = sanitize(this.teamNameTemplate);
-    const teamDir = join(homedir(), '.claude', 'teams', teamName);
-    const inboxDir = join(teamDir, 'inboxes');
-
     try {
+      if (this.hasTemplates) {
+        // Templated team names resolve to different directories per request
+        // (e.g. "genie-{thread_id}" → "genie-123", "genie-456", ...).
+        // We can't probe a specific team, so just verify the shared teams
+        // root exists — if it does, the infrastructure is in place.
+        const teamsRoot = join(homedir(), '.claude', 'teams');
+        try {
+          await stat(teamsRoot);
+        } catch {
+          return {
+            healthy: false,
+            latencyMs: Date.now() - startMs,
+            error: `Teams root directory does not exist: ${teamsRoot}`,
+          };
+        }
+
+        return {
+          healthy: true,
+          latencyMs: Date.now() - startMs,
+        };
+      }
+
+      // Non-templated: probe the exact team directory and its inboxes
+      const teamName = sanitize(this.teamNameTemplate);
+      const teamDir = join(homedir(), '.claude', 'teams', teamName);
+      const inboxDir = join(teamDir, 'inboxes');
+
       try {
         await stat(teamDir);
       } catch {
