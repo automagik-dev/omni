@@ -1337,6 +1337,7 @@ function buildMessageTrigger(
   sessionId: string,
   allContextMessages: string[],
 ): AgentTrigger {
+  const threadId = extractThreadId(messages);
   return {
     traceId,
     type: triggerType,
@@ -1346,6 +1347,7 @@ function buildMessageTrigger(
       instanceId: instance.id,
       chatId,
       messageId: messages[0]?.payload.externalId ?? '',
+      threadId,
     },
     sender: {
       platformUserId: senderId,

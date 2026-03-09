@@ -28,7 +28,10 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
     const fromId = getFromId(msg);
     const threadId = msg.message_thread_id;
     const content = extractTelegramMessageContent(msg);
-    const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+    // In topics, reply_to_message pointing to topic root is structural, not a real reply
+    const rawReplyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+    const isTopicRootReply = msg.is_topic_message === true && rawReplyToId === String(threadId);
+    const replyToId = isTopicRootReply ? undefined : rawReplyToId;
 
     log.debug('Received channel post', { instanceId, chatId, externalId, threadId });
 
@@ -85,7 +88,10 @@ export function setupChannelPostHandlers(bot: TelegramBotLike, plugin: TelegramP
     const fromId = getFromId(msg);
     const threadId = msg.message_thread_id;
     const content = extractTelegramMessageContent(msg);
-    const replyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+    // In topics, reply_to_message pointing to topic root is structural, not a real reply
+    const rawReplyToId = msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined;
+    const isTopicRootReply = msg.is_topic_message === true && rawReplyToId === String(threadId);
+    const replyToId = isTopicRootReply ? undefined : rawReplyToId;
 
     log.debug('Received edited channel post', { instanceId, chatId, externalId, threadId });
 

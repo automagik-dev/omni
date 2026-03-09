@@ -214,6 +214,7 @@ export interface SendMessageBody {
   to: string;
   text: string;
   replyTo?: string;
+  threadId?: string;
 }
 
 /**
@@ -620,6 +621,7 @@ export interface SendMediaBody {
   filename?: string;
   caption?: string;
   voiceNote?: boolean;
+  threadId?: string;
 }
 
 /**
