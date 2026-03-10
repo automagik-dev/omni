@@ -1535,7 +1535,7 @@ function formatMediaContent(msg: {
 }
 
 /**
- * Build context messages from recent chat history for group conversations
+ * Build context messages from recent chat history for group and DM conversations.
  * Returns messages since the last bot response, formatted as "[Name - time] message"
  */
 async function buildContextMessages(
@@ -1549,10 +1549,9 @@ async function buildContextMessages(
     const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
     if (historyLimit === 0) return [];
 
-    // Only provide context for group chats (not DMs)
     // chatId here is the external JID, not internal UUID
     const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-    if (!chat || chat.chatType !== 'group') {
+    if (!chat) {
       return [];
     }
 
@@ -1680,7 +1679,7 @@ async function dispatchViaProvider(
   const rawThreadId = extractThreadId(messages);
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
-  // Build context messages for group conversations (messages since last bot response)
+  // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
