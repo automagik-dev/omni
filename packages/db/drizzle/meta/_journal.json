@@ -57,6 +57,13 @@
       "when": 1772485979658,
       "tag": "0007_clumsy_nick_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1773108301748,
+      "tag": "0008_abandoned_vance_astro",
+      "breakpoints": true
     }
   ]
 }

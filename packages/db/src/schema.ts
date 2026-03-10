@@ -40,6 +40,7 @@ export const channelTypes = [
   'telegram',
   'a2a',
   'internal',
+  'linkedin',
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
@@ -2474,5 +2475,298 @@ export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
   }),
   subtasks: many(agentTasks, {
     relationName: 'parentChild',
+  }),
+}));
+
+// ============================================================================
+// SOCIAL POSTS
+// ============================================================================
+
+/**
+ * Social post - channel-agnostic representation of a social media post.
+ * Used by LinkedIn, Twitter/X, Instagram, and other social channels.
+ *
+ * @see linkedin-channel wish — Group A
+ */
+export const socialPosts = pgTable(
+  'social_posts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    externalId: varchar('external_id', { length: 255 }).notNull(),
+    channel: varchar('channel', { length: 50 }).notNull().$type<ChannelType>(),
+
+    // ---- Author ----
+    authorPersonId: uuid('author_person_id').references(() => persons.id, { onDelete: 'set null' }),
+    authorPlatformIdentityId: uuid('author_platform_identity_id').references(() => platformIdentities.id, {
+      onDelete: 'set null',
+    }),
+    authorPlatformUserId: varchar('author_platform_user_id', { length: 255 }),
+    authorDisplayName: varchar('author_display_name', { length: 255 }),
+
+    // ---- Content ----
+    postType: varchar('post_type', { length: 50 }).notNull().default('text'), // text, article, image, video, poll, etc.
+    textContent: text('text_content'),
+    mediaUrls: jsonb('media_urls').$type<string[]>(),
+    linkUrl: text('link_url'),
+    linkPreview: jsonb('link_preview').$type<Record<string, unknown>>(),
+
+    // ---- Sharing ----
+    sharedPostId: uuid('shared_post_id').references((): AnyPgColumn => socialPosts.id, { onDelete: 'set null' }),
+    sharedExternalId: varchar('shared_external_id', { length: 255 }),
+
+    // ---- Engagement ----
+    likeCount: integer('like_count').notNull().default(0),
+    commentCount: integer('comment_count').notNull().default(0),
+    repostCount: integer('repost_count').notNull().default(0),
+    impressionCount: integer('impression_count').notNull().default(0),
+    reactions: jsonb('reactions').$type<Record<string, number>>(), // e.g. { like: 10, celebrate: 3 }
+
+    // ---- Meta ----
+    status: varchar('status', { length: 20 }).notNull().default('active'), // active, deleted, hidden
+    visibility: varchar('visibility', { length: 50 }), // public, connections, private
+    isPinned: boolean('is_pinned').notNull().default(false),
+    hashtags: text('hashtags').array(),
+    mentions: jsonb('mentions').$type<Array<{ platformUserId: string; displayName?: string }>>(),
+
+    // ---- Timestamps ----
+    platformTimestamp: timestamp('platform_timestamp'),
+    lastSyncedAt: timestamp('last_synced_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+
+    // ---- Raw ----
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+    platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
+  },
+  (table) => ({
+    instanceIdx: index('social_posts_instance_idx').on(table.instanceId),
+    channelIdx: index('social_posts_channel_idx').on(table.channel),
+    authorPersonIdx: index('social_posts_author_person_idx').on(table.authorPersonId),
+    authorPlatformIdentityIdx: index('social_posts_author_pi_idx').on(table.authorPlatformIdentityId),
+    statusIdx: index('social_posts_status_idx').on(table.status),
+    platformTimestampIdx: index('social_posts_platform_ts_idx').on(table.platformTimestamp),
+    createdAtIdx: index('social_posts_created_at_idx').on(table.createdAt),
+    instanceExternalIdx: uniqueIndex('social_posts_instance_external_idx').on(table.instanceId, table.externalId),
+  }),
+);
+
+export type SocialPost = typeof socialPosts.$inferSelect;
+export type NewSocialPost = typeof socialPosts.$inferInsert;
+
+export const socialPostsRelations = relations(socialPosts, ({ one, many }) => ({
+  instance: one(instances, {
+    fields: [socialPosts.instanceId],
+    references: [instances.id],
+  }),
+  authorPerson: one(persons, {
+    fields: [socialPosts.authorPersonId],
+    references: [persons.id],
+  }),
+  authorPlatformIdentity: one(platformIdentities, {
+    fields: [socialPosts.authorPlatformIdentityId],
+    references: [platformIdentities.id],
+  }),
+  sharedPost: one(socialPosts, {
+    fields: [socialPosts.sharedPostId],
+    references: [socialPosts.id],
+    relationName: 'sharedPosts',
+  }),
+  comments: many(socialComments),
+  engagementSnapshots: many(socialEngagementSnapshots),
+}));
+
+// ============================================================================
+// SOCIAL COMMENTS
+// ============================================================================
+
+/**
+ * Social comment - channel-agnostic representation of a comment on a social post.
+ * Supports threaded replies via parentCommentId self-reference.
+ */
+export const socialComments = pgTable(
+  'social_comments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => socialPosts.id, { onDelete: 'cascade' }),
+    parentCommentId: uuid('parent_comment_id').references((): AnyPgColumn => socialComments.id, {
+      onDelete: 'set null',
+    }),
+    externalId: varchar('external_id', { length: 255 }).notNull(),
+
+    // ---- Author ----
+    authorPersonId: uuid('author_person_id').references(() => persons.id, { onDelete: 'set null' }),
+    authorPlatformIdentityId: uuid('author_platform_identity_id').references(() => platformIdentities.id, {
+      onDelete: 'set null',
+    }),
+    authorPlatformUserId: varchar('author_platform_user_id', { length: 255 }),
+    authorDisplayName: varchar('author_display_name', { length: 255 }),
+
+    // ---- Content ----
+    textContent: text('text_content'),
+    mediaUrl: text('media_url'),
+    mentions: jsonb('mentions').$type<Array<{ platformUserId: string; displayName?: string }>>(),
+
+    // ---- Engagement ----
+    likeCount: integer('like_count').notNull().default(0),
+    replyCount: integer('reply_count').notNull().default(0),
+    reactions: jsonb('reactions').$type<Record<string, number>>(),
+
+    // ---- Meta ----
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+
+    // ---- Timestamps ----
+    platformTimestamp: timestamp('platform_timestamp'),
+    lastSyncedAt: timestamp('last_synced_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+
+    // ---- Raw ----
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+  },
+  (table) => ({
+    postIdx: index('social_comments_post_idx').on(table.postId),
+    parentCommentIdx: index('social_comments_parent_idx').on(table.parentCommentId),
+    authorPersonIdx: index('social_comments_author_person_idx').on(table.authorPersonId),
+    authorPlatformIdentityIdx: index('social_comments_author_pi_idx').on(table.authorPlatformIdentityId),
+    statusIdx: index('social_comments_status_idx').on(table.status),
+    platformTimestampIdx: index('social_comments_platform_ts_idx').on(table.platformTimestamp),
+    postExternalIdx: uniqueIndex('social_comments_post_external_idx').on(table.postId, table.externalId),
+  }),
+);
+
+export type SocialComment = typeof socialComments.$inferSelect;
+export type NewSocialComment = typeof socialComments.$inferInsert;
+
+export const socialCommentsRelations = relations(socialComments, ({ one, many }) => ({
+  post: one(socialPosts, {
+    fields: [socialComments.postId],
+    references: [socialPosts.id],
+  }),
+  parentComment: one(socialComments, {
+    fields: [socialComments.parentCommentId],
+    references: [socialComments.id],
+    relationName: 'commentThreads',
+  }),
+  replies: many(socialComments, {
+    relationName: 'commentThreads',
+  }),
+  authorPerson: one(persons, {
+    fields: [socialComments.authorPersonId],
+    references: [persons.id],
+  }),
+  authorPlatformIdentity: one(platformIdentities, {
+    fields: [socialComments.authorPlatformIdentityId],
+    references: [platformIdentities.id],
+  }),
+}));
+
+// ============================================================================
+// SOCIAL CONNECTIONS
+// ============================================================================
+
+/**
+ * Social connection - represents a connection/follow relationship on a social platform.
+ * Channel-agnostic: works for LinkedIn connections, Twitter follows, Instagram follows, etc.
+ */
+export const socialConnections = pgTable(
+  'social_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+    platformIdentityId: uuid('platform_identity_id').references(() => platformIdentities.id, {
+      onDelete: 'set null',
+    }),
+    platformUserId: varchar('platform_user_id', { length: 255 }).notNull(),
+    displayName: varchar('display_name', { length: 255 }),
+
+    // ---- Connection details ----
+    connectionType: varchar('connection_type', { length: 50 }).notNull(), // connect, follow, etc.
+    status: varchar('status', { length: 20 }).notNull().default('pending'), // pending, accepted, rejected, blocked
+    message: text('message'), // Optional message with connection request
+
+    // ---- Timestamps ----
+    connectedAt: timestamp('connected_at'),
+    requestedAt: timestamp('requested_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    instanceIdx: index('social_connections_instance_idx').on(table.instanceId),
+    personIdx: index('social_connections_person_idx').on(table.personId),
+    platformIdentityIdx: index('social_connections_pi_idx').on(table.platformIdentityId),
+    statusIdx: index('social_connections_status_idx').on(table.status),
+    instancePlatformUserTypeIdx: uniqueIndex('social_connections_instance_user_type_idx').on(
+      table.instanceId,
+      table.platformUserId,
+      table.connectionType,
+    ),
+  }),
+);
+
+export type SocialConnectionRecord = typeof socialConnections.$inferSelect;
+export type NewSocialConnection = typeof socialConnections.$inferInsert;
+
+export const socialConnectionsRelations = relations(socialConnections, ({ one }) => ({
+  instance: one(instances, {
+    fields: [socialConnections.instanceId],
+    references: [instances.id],
+  }),
+  person: one(persons, {
+    fields: [socialConnections.personId],
+    references: [persons.id],
+  }),
+  platformIdentity: one(platformIdentities, {
+    fields: [socialConnections.platformIdentityId],
+    references: [platformIdentities.id],
+  }),
+}));
+
+// ============================================================================
+// SOCIAL ENGAGEMENT SNAPSHOTS
+// ============================================================================
+
+/**
+ * Social engagement snapshot - time-series record of a post's engagement metrics.
+ * Allows tracking how likes, comments, reposts, and impressions change over time.
+ */
+export const socialEngagementSnapshots = pgTable(
+  'social_engagement_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => socialPosts.id, { onDelete: 'cascade' }),
+
+    // ---- Engagement counts ----
+    likeCount: integer('like_count').notNull().default(0),
+    commentCount: integer('comment_count').notNull().default(0),
+    repostCount: integer('repost_count').notNull().default(0),
+    impressionCount: integer('impression_count').notNull().default(0),
+
+    // ---- Timestamp ----
+    snapshotAt: timestamp('snapshot_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    postIdx: index('social_engagement_snapshots_post_idx').on(table.postId),
+    snapshotAtIdx: index('social_engagement_snapshots_at_idx').on(table.snapshotAt),
+    postSnapshotIdx: index('social_engagement_snapshots_post_at_idx').on(table.postId, table.snapshotAt),
+  }),
+);
+
+export type SocialEngagementSnapshot = typeof socialEngagementSnapshots.$inferSelect;
+export type NewSocialEngagementSnapshot = typeof socialEngagementSnapshots.$inferInsert;
+
+export const socialEngagementSnapshotsRelations = relations(socialEngagementSnapshots, ({ one }) => ({
+  post: one(socialPosts, {
+    fields: [socialEngagementSnapshots.postId],
+    references: [socialPosts.id],
   }),
 }));

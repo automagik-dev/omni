@@ -139,6 +139,15 @@ export type {
   InstanceConnectedPayload,
   InstanceDisconnectedPayload,
   InstanceQrCodePayload,
+  PostReceivedPayload,
+  PostCreatedPayload,
+  PostUpdatedPayload,
+  PostDeletedPayload,
+  CommentReceivedPayload,
+  CommentSentPayload,
+  ConnectionReceivedPayload,
+  ConnectionAcceptedPayload,
+  MentionReceivedPayload,
 } from '@omni/core/events';
 
 // Channel types from core

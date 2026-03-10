@@ -81,6 +81,16 @@ export const CORE_EVENT_TYPES = [
   'conversation.created',
   'conversation.updated',
   'conversation.deleted',
+  // Social channel events
+  'post.received',
+  'post.created',
+  'post.updated',
+  'post.deleted',
+  'comment.received',
+  'comment.sent',
+  'connection.received',
+  'connection.accepted',
+  'mention.received',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -623,6 +633,141 @@ export interface AgentTaskCancelledPayload {
   chatId: string;
 }
 
+// ─── Social Channel Events ─────────────────────────────────
+
+/** Canonical event: social post received from platform */
+export interface PostReceivedPayload {
+  /** Platform-assigned post ID */
+  externalId: string;
+  /** Post author (platform user ID) */
+  authorPlatformUserId: string;
+  /** Author display name */
+  authorDisplayName?: string;
+  /** Post type (text, article, image, video, poll, etc.) */
+  postType: string;
+  /** Text content of the post */
+  textContent?: string;
+  /** Media URLs attached to the post */
+  mediaUrls?: string[];
+  /** Link URL if post contains a link */
+  linkUrl?: string;
+  /** Engagement counts at time of receipt */
+  likeCount?: number;
+  commentCount?: number;
+  repostCount?: number;
+  /** Hashtags found in the post */
+  hashtags?: string[];
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/** Canonical event: social post created by us */
+export interface PostCreatedPayload {
+  /** Platform-assigned post ID (after creation) */
+  externalId: string;
+  /** Post type */
+  postType: string;
+  /** Text content */
+  textContent?: string;
+  /** Media URLs attached */
+  mediaUrls?: string[];
+  /** Link URL */
+  linkUrl?: string;
+  /** Visibility setting */
+  visibility?: string;
+}
+
+/** Canonical event: social post updated (content or engagement change) */
+export interface PostUpdatedPayload {
+  /** Platform-assigned post ID */
+  externalId: string;
+  /** Which fields changed */
+  changedFields: string[];
+  /** Updated engagement counts */
+  likeCount?: number;
+  commentCount?: number;
+  repostCount?: number;
+  impressionCount?: number;
+}
+
+/** Canonical event: social post deleted */
+export interface PostDeletedPayload {
+  /** Platform-assigned post ID */
+  externalId: string;
+  /** Reason for deletion (if known) */
+  reason?: string;
+}
+
+/** Canonical event: comment received on a social post */
+export interface CommentReceivedPayload {
+  /** Platform-assigned comment ID */
+  externalId: string;
+  /** Post this comment belongs to (platform post ID) */
+  postExternalId: string;
+  /** Parent comment ID for threaded replies */
+  parentCommentExternalId?: string;
+  /** Comment author (platform user ID) */
+  authorPlatformUserId: string;
+  /** Author display name */
+  authorDisplayName?: string;
+  /** Comment text */
+  textContent: string;
+  /** Media URL if comment has media */
+  mediaUrl?: string;
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/** Canonical event: comment sent by us */
+export interface CommentSentPayload {
+  /** Platform-assigned comment ID */
+  externalId: string;
+  /** Post this comment belongs to */
+  postExternalId: string;
+  /** Parent comment ID for threaded replies */
+  parentCommentExternalId?: string;
+  /** Comment text */
+  textContent: string;
+}
+
+/** Canonical event: connection/follow request received */
+export interface ConnectionReceivedPayload {
+  /** Platform user ID of person who sent the request */
+  platformUserId: string;
+  /** Display name */
+  displayName?: string;
+  /** Connection type (connect, follow, etc.) */
+  connectionType: string;
+  /** Optional message included with the request */
+  message?: string;
+}
+
+/** Canonical event: connection/follow request accepted */
+export interface ConnectionAcceptedPayload {
+  /** Platform user ID of the connection */
+  platformUserId: string;
+  /** Display name */
+  displayName?: string;
+  /** Connection type */
+  connectionType: string;
+}
+
+/** Canonical event: mention received in a post or comment */
+export interface MentionReceivedPayload {
+  /** Where the mention occurred: 'post' or 'comment' */
+  mentionContext: 'post' | 'comment';
+  /** External ID of the post or comment containing the mention */
+  sourceExternalId: string;
+  /** Platform user ID of the person who mentioned us */
+  mentionedByPlatformUserId: string;
+  /** Display name of the person who mentioned us */
+  mentionedByDisplayName?: string;
+  /** Text content of the post/comment containing the mention */
+  textContent?: string;
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -678,6 +823,16 @@ export interface EventPayloadMap {
   'conversation.created': { conversationId: string; title: string | null };
   'conversation.updated': { conversationId: string; title: string | null };
   'conversation.deleted': { conversationId: string };
+  // Social channel events
+  'post.received': PostReceivedPayload;
+  'post.created': PostCreatedPayload;
+  'post.updated': PostUpdatedPayload;
+  'post.deleted': PostDeletedPayload;
+  'comment.received': CommentReceivedPayload;
+  'comment.sent': CommentSentPayload;
+  'connection.received': ConnectionReceivedPayload;
+  'connection.accepted': ConnectionAcceptedPayload;
+  'mention.received': MentionReceivedPayload;
 }
 
 /**

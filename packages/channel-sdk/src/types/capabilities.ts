@@ -98,6 +98,22 @@ export interface ChannelCapabilities {
   canStreamResponse?: boolean;
 
   // ─────────────────────────────────────────────────────────────
+  // Social channel capabilities (LinkedIn, Twitter, Instagram, etc.)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Can create posts on a social feed */
+  canCreatePost?: boolean;
+
+  /** Can read/scrape the social feed */
+  canReadFeed?: boolean;
+
+  /** Can post comments on social posts */
+  canComment?: boolean;
+
+  /** Can handle connection/follow requests */
+  canHandleConnections?: boolean;
+
+  // ─────────────────────────────────────────────────────────────
   // Limits
   // ─────────────────────────────────────────────────────────────
 
@@ -168,6 +184,12 @@ export const DEFAULT_CAPABILITIES: ChannelCapabilities = {
   canCreateWebhooks: false,
   canSendViaWebhook: false,
   canHandleVoice: false,
+
+  // Social (disabled by default)
+  canCreatePost: false,
+  canReadFeed: false,
+  canComment: false,
+  canHandleConnections: false,
 
   // Limits
   maxMessageLength: 0,
