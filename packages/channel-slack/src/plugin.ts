@@ -8,7 +8,12 @@
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BaseChannelPlugin, createInboundDedupeCache, createThreadStarterCache } from '@omni/channel-sdk';
+import {
+  BaseChannelPlugin,
+  createDownloadGuard,
+  createInboundDedupeCache,
+  createThreadStarterCache,
+} from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
@@ -42,6 +47,9 @@ import { createSlackStreamSender } from './senders/stream';
 import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
 import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
+
+/** Download size guard — 50MB default; applied to inbound file metadata before dispatching */
+const downloadGuard = createDownloadGuard();
 
 /**
  * Resolve Slack credentials from config, options, and credentials sources.
@@ -1261,6 +1269,16 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     const fileInfos = extractFileInfo(files);
     for (const fileInfo of fileInfos) {
+      // Guard against oversized files before dispatching the event
+      if (fileInfo.size > 0) {
+        try {
+          downloadGuard.checkSize(fileInfo.size, this.logger, { instanceId, channel: 'slack' });
+        } catch {
+          this.logger.warn('slack_file_too_large_skipped', { instanceId, fileId: fileInfo.id, size: fileInfo.size });
+          continue;
+        }
+      }
+
       const contentType = getContentTypeFromMime(fileInfo.mimeType);
       const mediaUrl = fileInfo.urlPrivateDownload ?? fileInfo.urlPrivate;
 
