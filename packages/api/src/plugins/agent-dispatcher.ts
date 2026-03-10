@@ -1451,7 +1451,7 @@ async function dispatchViaStreamingProvider(
     const streamResult = await consumeStream(generator, sender, instance.id, chatId, traceId);
 
     // Sentry metrics: streaming dispatch count and latency
-    if (sentryEnabled()) {
+    if (streamResult && sentryEnabled()) {
       const streamDurationMs = Date.now() - streamDispatchStart;
       Sentry.metrics.count('agent.dispatch', 1, {
         attributes: { provider_type: resolved.provider.schema },

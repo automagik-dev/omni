@@ -56,7 +56,7 @@ export interface SentryEvent {
 // ---------------------------------------------------------------------------
 
 /** Phone numbers: optional +, 10-15 digits */
-const PHONE_RE = /\+?\d{10,15}/g;
+const PHONE_RE = /\+?\b\d{10,15}\b/g;
 
 /** WhatsApp JIDs: digits@s.whatsapp.net or @c.whatsapp.net */
 const JID_RE = /\d+@[sc]\.whatsapp\.net/g;
@@ -123,7 +123,11 @@ export function scrubEvent(event: SentryEvent): SentryEvent {
 
   if (scrubbed.tags) {
     const { server_name: __, ...cleanTags } = scrubbed.tags;
-    scrubbed.tags = cleanTags;
+    const scrubbedTags: Record<string, string> = {};
+    for (const [k, v] of Object.entries(cleanTags)) {
+      scrubbedTags[k] = scrubPii(v);
+    }
+    scrubbed.tags = scrubbedTags;
   }
 
   // Exception values

@@ -103,6 +103,20 @@ describe('scrubEvent', () => {
     expect(result.tags?.env).toBe('production');
   });
 
+  test('scrubs PII in tag values', () => {
+    const event: SentryEvent = {
+      tags: {
+        'http.url': '/api/v2/messages/5511999998888',
+        server_name: 'prod-01',
+        'error.code': 'CHANNEL_NOT_CONNECTED',
+      },
+    };
+    const result = scrubEvent(event);
+    expect(result.tags?.['http.url']).toBe('/api/v2/messages/[phone]');
+    expect(result.tags?.server_name).toBeUndefined();
+    expect(result.tags?.['error.code']).toBe('CHANNEL_NOT_CONNECTED');
+  });
+
   test('scrubs exception values', () => {
     const event: SentryEvent = {
       exception: {
