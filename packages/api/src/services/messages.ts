@@ -205,11 +205,22 @@ export class MessageService {
    * Count total messages matching filters
    */
   async count(options: Omit<ListMessagesOptions, 'limit' | 'cursor'> = {}): Promise<number> {
-    const { chatId, instanceIds, source, messageType, status, hasMedia, senderPersonId, since, until, search } =
-      options;
+    const {
+      chatId,
+      instanceIds,
+      source,
+      messageType,
+      status,
+      hasMedia,
+      senderPersonId,
+      since,
+      until,
+      search,
+      includeHidden = false,
+    } = options;
 
     const conditions = [];
-    const needsJoin = !!instanceIds?.length;
+    const needsJoin = !!instanceIds?.length || !includeHidden;
 
     if (chatId) {
       conditions.push(eq(messages.chatId, chatId));
@@ -217,6 +228,10 @@ export class MessageService {
 
     if (instanceIds?.length) {
       conditions.push(inArray(chats.instanceId, instanceIds));
+    }
+
+    if (!includeHidden) {
+      conditions.push(eq(chats.visibility, 'visible'));
     }
 
     if (source?.length) {

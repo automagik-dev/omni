@@ -24,6 +24,9 @@ import { sanitizeText } from '../utils/utf8';
 
 const log = createLogger('chats');
 
+/** Label that triggers the "attention" state when present on a chat */
+const ATTENTION_LABEL = 'follow-up';
+
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
 }
@@ -149,7 +152,7 @@ export class ChatService {
       const attentionCondition = or(
         gt(chats.unreadCount, 0),
         eq(chats.lastMessageFromMe, false),
-        sql`'follow-up' = ANY(${chats.labels})`,
+        sql`${ATTENTION_LABEL} = ANY(${chats.labels})`,
       );
       if (attentionCondition) conditions.push(attentionCondition);
     }
@@ -638,7 +641,7 @@ export class ChatService {
     await this.db
       .update(chats)
       .set({
-        labels: sql`array_append(${chats.labels}, ${label})`,
+        labels: sql`array(SELECT DISTINCT unnest(array_append(${chats.labels}, ${label})))`,
         updatedAt: new Date(),
       })
       .where(eq(chats.id, chatId));

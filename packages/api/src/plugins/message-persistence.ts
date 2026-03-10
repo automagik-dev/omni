@@ -808,6 +808,13 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               chatId: chat.id,
             });
           }
+
+          // Update chat recency — marks lastMessageFromMe=true so the chat no longer
+          // shows as pending/attention-needing after we send a reply.
+          services.chats
+            .updateLastMessage(chat.id, sanitizeText(payload.content.text ?? '') ?? '', new Date(event.timestamp), true)
+            .catch((err: unknown) => log.debug('Failed to update chat recency (sent)', { error: String(err) }));
+
           // Track consumer offset after successful processing
           if (metadata.streamSequence) {
             await services.consumerOffsets.updateOffset(
