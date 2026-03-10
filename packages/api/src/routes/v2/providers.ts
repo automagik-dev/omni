@@ -49,7 +49,10 @@ const createProviderSchema = z.object({
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
   defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
   supportsStreaming: z.boolean().default(true).describe('Provider supports streaming'),
-  supportsImages: z.boolean().default(false).describe('Provider supports image inputs'),
+  supportsImages: z
+    .boolean()
+    .optional()
+    .describe('Provider supports image inputs (defaults to true for claude-code, false otherwise)'),
   supportsAudio: z.boolean().default(false).describe('Provider supports audio inputs'),
   supportsDocuments: z.boolean().default(false).describe('Provider supports document inputs'),
   description: z.string().optional().describe('Provider description'),
@@ -103,7 +106,13 @@ providersRoutes.post('/', zValidator('json', createProviderSchema), async (c) =>
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  const provider = await services.providers.create(data);
+  // Apply schema-specific capability defaults (claude-code supports images via vision)
+  const createData = {
+    ...data,
+    supportsImages: data.supportsImages ?? data.schema === 'claude-code',
+  };
+
+  const provider = await services.providers.create(createData);
 
   return c.json(
     {

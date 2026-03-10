@@ -288,6 +288,50 @@ describe('ClaudeCodeAgentProvider', () => {
 
     expect(provider).toBeDefined();
   });
+
+  it('includes attached file paths in message for image forwarding', () => {
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {
+      prefixSenderName: false,
+    });
+
+    const buildMessage = (context: AnyRecord) => (provider as unknown as AnyRecord).buildMessage(context) as string;
+
+    const trigger: AnyRecord = {
+      content: {
+        text: 'Look at this image',
+        files: [
+          { path: '/tmp/uploads/photo.jpg', mimeType: 'image/jpeg' },
+          { path: '/tmp/uploads/doc.pdf', mimeType: 'application/pdf' },
+        ],
+      },
+      sender: { displayName: undefined },
+      source: {},
+    };
+
+    const message = buildMessage(trigger);
+    expect(message).toContain('Look at this image');
+    expect(message).toContain('Attached files:');
+    expect(message).toContain('/tmp/uploads/photo.jpg [image/jpeg]');
+    expect(message).toContain('/tmp/uploads/doc.pdf [application/pdf]');
+  });
+
+  it('does not add attached files section when no files present', () => {
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {
+      prefixSenderName: false,
+    });
+
+    const buildMessage = (context: AnyRecord) => (provider as unknown as AnyRecord).buildMessage(context) as string;
+
+    const trigger: AnyRecord = {
+      content: { text: 'Hello' },
+      sender: { displayName: undefined },
+      source: {},
+    };
+
+    const message = buildMessage(trigger);
+    expect(message).toBe('Hello');
+    expect(message).not.toContain('Attached files');
+  });
 });
 
 describe('createClaudeCodeClient', () => {
