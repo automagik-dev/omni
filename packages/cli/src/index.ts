@@ -12,6 +12,7 @@ import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { createAccessCommand } from './commands/access.js';
 import { createRoutesCommand } from './commands/agent-routes.js';
+import { createAgentsCommand } from './commands/agents.js';
 import { createAuthCommand } from './commands/auth.js';
 import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
@@ -117,6 +118,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Event-driven workflows',
+  },
+  {
+    create: createAgentsCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'AI agent entity management',
   },
   {
     create: createProvidersCommand,
