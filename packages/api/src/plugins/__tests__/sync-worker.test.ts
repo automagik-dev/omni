@@ -388,4 +388,102 @@ describe('setupSyncWorker', () => {
     expect(sinceDate).toBeInstanceOf(Date);
     expect(sinceDate.toISOString()).toBe(sinceStr);
   });
+
+  // -- GH#142: Default sync must discover chats from DB, not just Baileys volatile cache ----
+
+  test('default WhatsApp sync uses DB anchors when database has chat data (GH#142)', async () => {
+    const capturedOptions: Record<string, unknown>[] = [];
+    const mockPlugin = {
+      fetchHistory: mock(async (_id: string, opts: Record<string, unknown>) => {
+        capturedOptions.push(opts);
+      }),
+      fetchContacts: mock(async () => {}),
+      fetchGroups: mock(async () => {}),
+    };
+    registry.get.mockReturnValue(mockPlugin as any);
+
+    // Mock database with two chats that have messages (DB anchor scenario)
+    const mockDb = {
+      execute: mock(async () => [
+        {
+          chat_jid: '5511999999999@s.whatsapp.net',
+          external_id: 'msg-oldest-1',
+          platform_timestamp: new Date('2026-01-01T00:00:00Z'),
+          is_from_me: false,
+          message_key: { id: 'msg-oldest-1', remoteJid: '5511999999999@s.whatsapp.net', fromMe: false },
+        },
+        {
+          chat_jid: '5511888888888@s.whatsapp.net',
+          external_id: 'msg-oldest-2',
+          platform_timestamp: new Date('2026-01-02T00:00:00Z'),
+          is_from_me: true,
+          message_key: { id: 'msg-oldest-2', remoteJid: '5511888888888@s.whatsapp.net', fromMe: true },
+        },
+      ]),
+    };
+
+    // Also mock getAllExternalIds to return the same chats (they're already anchored)
+    (services.chats.getAllExternalIds as ReturnType<typeof mock>).mockResolvedValue([
+      '5511999999999@s.whatsapp.net',
+      '5511888888888@s.whatsapp.net',
+    ]);
+
+    await setupSyncWorker(eventBus as unknown as EventBus, services as any, registry as any, mockDb as any);
+    await eventBus._triggerSync({
+      jobId: 'job-gh142',
+      instanceId: 'inst-1',
+      type: 'messages',
+      config: {},
+    });
+
+    expect(mockPlugin.fetchHistory).toHaveBeenCalledTimes(1);
+    expect(capturedOptions.length).toBe(1);
+
+    // Verify anchors were passed (active fetch, not passive)
+    const anchors = capturedOptions[0]!.anchors as Array<{ chatJid: string }> | undefined;
+    expect(anchors).toBeDefined();
+    expect(anchors!.length).toBe(2);
+    expect(anchors!.map((a) => a.chatJid).sort()).toEqual([
+      '5511888888888@s.whatsapp.net',
+      '5511999999999@s.whatsapp.net',
+    ]);
+
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-gh142');
+  });
+
+  test('default WhatsApp sync falls back to passive when no prior data (fresh instance)', async () => {
+    const capturedOptions: Record<string, unknown>[] = [];
+    const mockPlugin = {
+      fetchHistory: mock(async (_id: string, opts: Record<string, unknown>) => {
+        capturedOptions.push(opts);
+      }),
+      fetchContacts: mock(async () => {}),
+      fetchGroups: mock(async () => {}),
+    };
+    registry.get.mockReturnValue(mockPlugin as any);
+
+    // Mock database with no prior messages
+    const mockDb = {
+      execute: mock(async () => []),
+    };
+
+    // No chats in DB either
+    services.chats.getAllExternalIds.mockResolvedValue([]);
+
+    await setupSyncWorker(eventBus as unknown as EventBus, services as any, registry as any, mockDb as any);
+    await eventBus._triggerSync({
+      jobId: 'job-fresh',
+      instanceId: 'inst-1',
+      type: 'messages',
+      config: {},
+    });
+
+    expect(mockPlugin.fetchHistory).toHaveBeenCalledTimes(1);
+    expect(capturedOptions.length).toBe(1);
+
+    // Fresh instance: no anchors, passive sync
+    expect(capturedOptions[0]!.anchors).toBeUndefined();
+
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-fresh');
+  });
 });

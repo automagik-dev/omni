@@ -8,7 +8,9 @@
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import * as Sentry from '@sentry/bun';
+import { and, eq, sql } from 'drizzle-orm';
+import { sentryEnabled } from '../lib/sentry-scrub';
 import { AgentReplayService } from '../services/agent-replay';
 import { sanitizeText } from '../utils/utf8';
 import { clearQrCode } from './qr-store';
@@ -55,6 +57,11 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
 
       instanceLog.info('Connected', { instanceId, channel: channelType, profileName: profileName || 'unknown' });
 
+      // Sentry metric: emit instance connection gauge
+      if (db && sentryEnabled()) {
+        emitConnectionGauge(db).catch(() => {});
+      }
+
       // Trigger agent replay for missed messages (fire-and-forget)
       if (replayService) {
         replayService.onInstanceConnect(instanceId).catch((err) => {
@@ -100,9 +107,35 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         willReconnect,
         reason: reason || 'unknown',
       });
+
+      // Sentry metric: emit instance connection gauge
+      if (db && sentryEnabled()) {
+        emitConnectionGauge(db).catch(() => {});
+      }
     });
   } catch (error) {
     instanceLog.warn('Failed to set up connection listener', { error: String(error) });
+  }
+}
+
+/**
+ * Count active instances per channel type and emit Sentry gauge metrics.
+ * Called on connect/disconnect events to keep the gauge current.
+ */
+async function emitConnectionGauge(db: Database): Promise<void> {
+  const rows = await db
+    .select({
+      channel: instances.channel,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(instances)
+    .where(eq(instances.isActive, true))
+    .groupBy(instances.channel);
+
+  for (const row of rows) {
+    Sentry.metrics.gauge('instance.connections', row.count, {
+      attributes: { channel_type: row.channel },
+    });
   }
 }
 
