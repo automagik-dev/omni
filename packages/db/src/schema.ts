@@ -915,6 +915,9 @@ export const chats = pgTable(
     // ---- Activity ----
     lastMessageAt: timestamp('last_message_at'),
     lastMessagePreview: text('last_message_preview'),
+    lastMessageFromMe: boolean('last_message_from_me'),
+    visibility: varchar('visibility', { length: 20 }).notNull().default('visible'),
+    labels: text('labels').array().notNull().default(sql`'{}'::text[]`),
 
     // ---- Settings ----
     settings: jsonb('settings').$type<ChatSettings>(),

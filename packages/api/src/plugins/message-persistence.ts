@@ -497,7 +497,8 @@ function maybeUpdateRecency(
   if (rawPayload?.isEdited === true) return;
 
   const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
-  services.chats.updateLastMessage(chatId, preview, platformTimestamp).catch((error) => {
+  const isFromMe = rawPayload?.isFromMe === true;
+  services.chats.updateLastMessage(chatId, preview, platformTimestamp, isFromMe).catch((error) => {
     log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
   });
 
