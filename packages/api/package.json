@@ -29,6 +29,7 @@
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
+    "@sentry/bun": "^10.43.0",
     "@trpc/server": "^11.0.0-rc.608",
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",

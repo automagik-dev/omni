@@ -60,7 +60,9 @@ import type { AgentProvider, Database } from '@omni/db';
 import { agentSessions, agents } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
+import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import {
   type MessageContext,
@@ -1439,13 +1441,28 @@ async function dispatchViaStreamingProvider(
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
+  const streamDispatchStart = Date.now();
   try {
     const generator = resolved.provider.triggerStream(trigger);
 
     // Error deltas (timeout, circuit-breaker) are not exceptions — they just
     // clean up the placeholder.  Return false so the caller falls back to the
     // accumulate-then-reply path and the user still gets a response.
-    return await consumeStream(generator, sender, instance.id, chatId, traceId);
+    const streamResult = await consumeStream(generator, sender, instance.id, chatId, traceId);
+
+    // Sentry metrics: streaming dispatch count and latency
+    if (streamResult && sentryEnabled()) {
+      const streamDurationMs = Date.now() - streamDispatchStart;
+      Sentry.metrics.count('agent.dispatch', 1, {
+        attributes: { provider_type: resolved.provider.schema },
+      });
+      Sentry.metrics.distribution('agent.dispatch.latency', streamDurationMs, {
+        unit: 'millisecond',
+        attributes: { provider_type: resolved.provider.schema },
+      });
+    }
+
+    return streamResult;
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,
@@ -1700,7 +1717,18 @@ async function dispatchViaProvider(
   );
 
   const correlationId = messages[0]?.metadata.correlationId;
+  const dispatchStart = Date.now();
   const result = await provider.trigger(trigger);
+  const dispatchDurationMs = Date.now() - dispatchStart;
+
+  // Sentry metrics: agent dispatch count and latency
+  if (sentryEnabled()) {
+    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
+    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+      unit: 'millisecond',
+      attributes: { provider_type: provider.schema },
+    });
+  }
 
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);

@@ -15,6 +15,8 @@
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
+import * as Sentry from '@sentry/bun';
+import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
@@ -726,6 +728,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             { ...metadata, instanceId: metadata.instanceId },
             event.timestamp,
           );
+          // Sentry metric: message received count by channel
+          if (sentryEnabled()) {
+            Sentry.metrics.count('messages.received', 1, {
+              attributes: { channel_type: metadata.channelType ?? 'whatsapp' },
+            });
+          }
           // Track consumer offset after successful processing
           if (metadata.streamSequence) {
             await services.consumerOffsets.updateOffset(
