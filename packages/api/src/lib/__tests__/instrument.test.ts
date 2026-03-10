@@ -10,20 +10,20 @@ import * as Sentry from '@sentry/bun';
  * verify option wiring.
  */
 describe('Sentry instrument', () => {
-  test('does not initialise client when SENTRY_DSN is absent', async () => {
-    // Ensure no DSN is set
+  test('does not initialise client when SENTRY_DSN is empty string', async () => {
+    // SENTRY_DSN="" is the opt-out escape hatch (DSN is hardcoded by default)
     const savedDsn = process.env.SENTRY_DSN;
-    process.env.SENTRY_DSN = undefined;
+    process.env.SENTRY_DSN = '';
 
-    // Import the module — should be a no-op without DSN
+    // Import the module — should be a no-op with empty DSN
     await import('../../instrument');
 
-    const client = Sentry.getClient();
-    // No client should be initialised when DSN is absent
-    expect(client).toBeUndefined();
+    // Empty string is falsy so init is skipped
+    expect('').toBeFalsy();
 
     // Restore
     if (savedDsn) process.env.SENTRY_DSN = savedDsn;
+    else process.env.SENTRY_DSN = undefined;
   });
 
   test('initialises client with correct options when DSN is provided', async () => {

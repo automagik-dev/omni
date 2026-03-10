@@ -257,14 +257,13 @@ export function scrubSpan(span: SentrySpan): SentrySpan {
 /**
  * Returns true when a Sentry client is initialised and capturing events.
  *
- * Uses dynamic import so the module works even when @sentry/bun is not
- * yet installed (type-only dependency during Group 1).
+ * Uses Bun's global require() for lazy loading — @sentry/bun is always
+ * installed but we avoid a top-level import to prevent circular dependency
+ * with instrument.ts which imports scrub functions from this file.
  */
 export function sentryEnabled(): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Sentry = require('@sentry/bun');
-    return !!Sentry.getClient();
+    return !!require('@sentry/bun').getClient();
   } catch {
     return false;
   }

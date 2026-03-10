@@ -9,7 +9,11 @@
 import * as Sentry from '@sentry/bun';
 import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/sentry-scrub';
 
-const dsn = process.env.SENTRY_DSN;
+/** Hardcoded production DSN — all Omni instances report here. Set SENTRY_DSN="" to disable. */
+const OMNI_SENTRY_DSN =
+  'https://2b2ca6f407e3d13409aa7dd8d12483f2@o4509714066571264.ingest.us.sentry.io/4510982636371968';
+
+const dsn = process.env.SENTRY_DSN ?? OMNI_SENTRY_DSN;
 
 if (dsn) {
   const tracesSampleRate = Number.parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1');
