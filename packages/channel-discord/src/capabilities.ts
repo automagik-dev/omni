@@ -28,6 +28,7 @@ export const DISCORD_CAPABILITIES: ChannelCapabilities = {
   canSendMedia: true,
   canSendReaction: true,
   canSendTyping: true,
+  canStreamResponse: true,
 
   // Receipts - Discord doesn't expose these
   canReceiveReadReceipts: false,

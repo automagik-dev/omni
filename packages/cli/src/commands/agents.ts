@@ -1,9 +1,9 @@
 /**
  * Agents Commands
  *
- * omni agents list [--provider <p>] [--inactive] [--limit <n>]
+ * omni agents list [--provider <p>] [--inactive-only] [--limit <n>]
  * omni agents get <id>
- * omni agents create --name <name> --provider <provider> [--instance <id>] [--model <model>] [--type <type>]
+ * omni agents create --name <name> --provider <provider> [--agent-provider <id>] [--model <model>] [--type <type>]
  * omni agents delete <id>
  */
 
@@ -20,12 +20,12 @@ type AgentType = (typeof VALID_TYPES)[number];
 export function createAgentsCommand(): Command {
   const agents = new Command('agents').description('Manage AI agent entities');
 
-  // omni agents list [--provider <p>] [--inactive] [--limit <n>]
+  // omni agents list [--provider <p>] [--inactive-only] [--limit <n>]
   agents
     .command('list')
     .description('List all agents')
     .option('--provider <provider>', `Filter by provider (${VALID_PROVIDERS.join(', ')})`)
-    .option('--inactive', 'Include inactive agents only')
+    .option('--inactive-only', 'Show only inactive agents')
     .option(
       '--limit <n>',
       'Max results',
@@ -36,7 +36,7 @@ export function createAgentsCommand(): Command {
       },
       50,
     )
-    .action(async (options: { provider?: string; inactive?: boolean; limit?: number }) => {
+    .action(async (options: { provider?: string; inactiveOnly?: boolean; limit?: number }) => {
       const client = getClient();
 
       if (options.provider && !VALID_PROVIDERS.includes(options.provider as AgentProvider)) {
@@ -46,7 +46,7 @@ export function createAgentsCommand(): Command {
       try {
         const { items } = await client.agents.list({
           provider: options.provider as AgentProvider | undefined,
-          isActive: options.inactive ? false : undefined,
+          isActive: options.inactiveOnly ? false : undefined,
           limit: options.limit,
         });
 
@@ -90,14 +90,14 @@ export function createAgentsCommand(): Command {
     .requiredOption('--provider <provider>', `AI provider (${VALID_PROVIDERS.join(', ')})`)
     .option('--model <model>', 'Model identifier (e.g. claude-sonnet-4-6)')
     .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`, 'assistant')
-    .option('--instance <instanceId>', 'Link to an instance (sets agentProviderId)')
+    .option('--agent-provider <agentProviderId>', 'Link to an agent provider configuration')
     .action(
       async (options: {
         name: string;
         provider: string;
         model?: string;
         type?: string;
-        instance?: string;
+        agentProvider?: string;
       }) => {
         const client = getClient();
 
@@ -115,7 +115,7 @@ export function createAgentsCommand(): Command {
             provider: options.provider as AgentProvider,
             model: options.model,
             agentType: (options.type ?? 'assistant') as AgentType,
-            agentProviderId: options.instance,
+            agentProviderId: options.agentProvider,
             capabilities: [],
             isInternal: false,
             isActive: true,
