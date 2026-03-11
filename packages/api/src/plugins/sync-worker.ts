@@ -243,7 +243,12 @@ async function buildWhatsAppAnchors(
   return anchors;
 }
 
-/** WhatsApp message anchor for active history fetching. Mirrors MessageAnchor from channel-whatsapp. */
+/**
+ * WhatsApp message anchor for active history fetching.
+ * Intentionally duplicated from channel-whatsapp's MessageAnchor to avoid
+ * @omni/api depending on a specific channel implementation package.
+ * Keep in sync with: packages/channel-whatsapp/src/plugin.ts → MessageAnchor
+ */
 type WAnchor = {
   chatJid: string;
   messageKey: { remoteJid: string; id: string; fromMe: boolean };
