@@ -39,8 +39,10 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
 import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
+import * as Sentry from '@sentry/bun';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { sentryEnabled } from '../../lib/sentry-scrub';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
@@ -897,6 +899,11 @@ messagesRoutes.post('/send', async (c) => {
   const result = await plugin.sendMessage(instanceId, outgoingMessage);
   handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send message' });
 
+  // Sentry metric: message sent count by channel
+  if (sentryEnabled()) {
+    Sentry.metrics.count('messages.sent', 1, { attributes: { channel_type: instance.channel } });
+  }
+
   // T9: Outbound event published (plugin.sendMessage publishes message.sent to NATS)
   if (correlationId && tracker.isTracking(correlationId)) {
     tracker.recordCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
@@ -1012,6 +1019,11 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       },
       recoverable: result.retryable ?? false,
     });
+  }
+
+  // Sentry metric: message sent count by channel
+  if (sentryEnabled()) {
+    Sentry.metrics.count('messages.sent', 1, { attributes: { channel_type: instance.channel } });
   }
 
   // T9: Outbound event published

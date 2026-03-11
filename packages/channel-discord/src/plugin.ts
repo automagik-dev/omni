@@ -16,6 +16,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  StreamSender,
 } from '@omni/channel-sdk';
 import type { GuildConfigOverride } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
@@ -38,6 +39,7 @@ import {
 import { sendMediaBuffer, sendMediaMessage } from './senders/media';
 import { mediaDedup } from './senders/media-dedup';
 import { addReaction, removeReaction } from './senders/reaction';
+import { DiscordStreamSender } from './senders/stream';
 import { deleteMessage as deleteTextMessage, editTextMessage, sendTextMessage } from './senders/text';
 import type {
   AutocompletePayload,
@@ -520,6 +522,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
     try {
       channelId = await resolveChannelId(client, channelId, this.logger);
 
+      // In Discord, threads are separate channel objects. If threadId is specified,
+      // override the channelId so the message is delivered to the correct thread.
+      if (message.threadId) {
+        channelId = message.threadId;
+      }
+
       // Journey timing: T10 (pluginSentAt) before platform call
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
@@ -600,6 +608,24 @@ export class DiscordPlugin extends BaseChannelPlugin {
     if (channel && 'sendTyping' in channel) {
       await (channel as { sendTyping: () => Promise<void> }).sendTyping();
     }
+  }
+
+  /**
+   * Create a stream sender for progressive response updates.
+   *
+   * Discord supports message editing natively, making it well-suited for
+   * streaming. Each stream sender owns the lifecycle of a single response:
+   * create placeholder → edit progressively → finalize with final content.
+   */
+  createStreamSender(
+    instanceId: string,
+    chatId: string,
+    replyToMessageId?: string,
+    _chatType?: 'dm' | 'group' | 'channel',
+    options?: { formatMode?: 'convert' | 'passthrough' },
+  ): StreamSender {
+    const client = this.getClient(instanceId);
+    return new DiscordStreamSender(client, chatId, replyToMessageId, options?.formatMode ?? 'convert');
   }
 
   /**

@@ -19,9 +19,33 @@ import {
   recordScheduledJob,
   scheduledJobNextRun,
 } from '@omni/core';
+import * as Sentry from '@sentry/bun';
+import { sentryEnabled } from './lib/sentry-scrub';
 import type { Services } from './services';
 
 const log = createLogger('scheduler:setup');
+
+/**
+ * Wrap a scheduled job handler with Sentry cron monitoring.
+ * When Sentry is not configured the handler runs directly.
+ */
+async function withCronMonitor(
+  slug: string,
+  cron: string,
+  checkinMargin: number,
+  maxRuntime: number,
+  handler: () => Promise<void>,
+): Promise<void> {
+  if (sentryEnabled()) {
+    await Sentry.withMonitor(slug, handler, {
+      schedule: { type: 'crontab', value: cron },
+      checkinMargin,
+      maxRuntime,
+    });
+  } else {
+    await handler();
+  }
+}
 
 /**
  * Setup and start the scheduler with all jobs
@@ -35,22 +59,24 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     cron: CronExpressions.EVERY_15_MINUTES,
     runOnStart: false, // Don't run immediately on startup
     handler: async () => {
-      const startTime = Date.now();
-      try {
-        const result = await services.deadLetters.processAutoRetries();
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('dead-letter-auto-retry', 'success', durationSec);
+      await withCronMonitor('dead-letter-auto-retry', '*/15 * * * *', 5, 10, async () => {
+        const startTime = Date.now();
+        try {
+          const result = await services.deadLetters.processAutoRetries();
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('dead-letter-auto-retry', 'success', durationSec);
 
-        // Update metrics
-        const pendingCount = await services.deadLetters.getPendingCount();
-        deadLettersPending.set(pendingCount);
+          // Update metrics
+          const pendingCount = await services.deadLetters.getPendingCount();
+          deadLettersPending.set(pendingCount);
 
-        log.info('Dead letter auto-retry completed', result);
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('dead-letter-auto-retry', 'failure', durationSec);
-        throw err;
-      }
+          log.info('Dead letter auto-retry completed', result);
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('dead-letter-auto-retry', 'failure', durationSec);
+          throw err;
+        }
+      });
     },
   });
 
@@ -60,22 +86,24 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     cron: CronExpressions.DAILY_3AM,
     runOnStart: false,
     handler: async () => {
-      const startTime = Date.now();
-      try {
-        const deleted = await services.payloadStore.cleanupExpired();
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('payload-cleanup', 'success', durationSec);
+      await withCronMonitor('payload-cleanup', '0 3 * * *', 10, 30, async () => {
+        const startTime = Date.now();
+        try {
+          const deleted = await services.payloadStore.cleanupExpired();
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('payload-cleanup', 'success', durationSec);
 
-        // Update storage size metric
-        const stats = await services.payloadStore.getStats();
-        payloadStorageSize.set(stats.totalSizeCompressed);
+          // Update storage size metric
+          const stats = await services.payloadStore.getStats();
+          payloadStorageSize.set(stats.totalSizeCompressed);
 
-        log.info('Payload cleanup completed', { deleted });
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('payload-cleanup', 'failure', durationSec);
-        throw err;
-      }
+          log.info('Payload cleanup completed', { deleted });
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('payload-cleanup', 'failure', durationSec);
+          throw err;
+        }
+      });
     },
   });
 
@@ -85,18 +113,20 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     cron: CronExpressions.DAILY_3AM,
     runOnStart: false,
     handler: async () => {
-      const startTime = Date.now();
-      try {
-        const deleted = await services.deadLetters.cleanupExpired();
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('dead-letter-cleanup', 'success', durationSec);
+      await withCronMonitor('dead-letter-cleanup', '0 3 * * *', 10, 15, async () => {
+        const startTime = Date.now();
+        try {
+          const deleted = await services.deadLetters.cleanupExpired();
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('dead-letter-cleanup', 'success', durationSec);
 
-        log.info('Dead letter cleanup completed', { deleted });
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('dead-letter-cleanup', 'failure', durationSec);
-        throw err;
-      }
+          log.info('Dead letter cleanup completed', { deleted });
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('dead-letter-cleanup', 'failure', durationSec);
+          throw err;
+        }
+      });
     },
   });
 
@@ -106,37 +136,39 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     cron: '0 4 * * *', // 4 AM daily
     runOnStart: false,
     handler: async () => {
-      const startTime = Date.now();
-      try {
-        // Get all active instances and create sync jobs for each
-        const instances = await services.instances.listActive();
-        let jobsCreated = 0;
+      await withCronMonitor('contacts-sync-daily', '0 4 * * *', 15, 60, async () => {
+        const startTime = Date.now();
+        try {
+          // Get all active instances and create sync jobs for each
+          const instances = await services.instances.listActive();
+          let jobsCreated = 0;
 
-        for (const instance of instances) {
-          try {
-            await services.syncJobs.create({
-              instanceId: instance.id,
-              channelType: instance.channel,
-              type: 'contacts',
-              config: {},
-            });
-            jobsCreated++;
-          } catch (err) {
-            log.warn('Failed to create contacts sync job for instance', {
-              instanceId: instance.id,
-              error: String(err),
-            });
+          for (const instance of instances) {
+            try {
+              await services.syncJobs.create({
+                instanceId: instance.id,
+                channelType: instance.channel,
+                type: 'contacts',
+                config: {},
+              });
+              jobsCreated++;
+            } catch (err) {
+              log.warn('Failed to create contacts sync job for instance', {
+                instanceId: instance.id,
+                error: String(err),
+              });
+            }
           }
-        }
 
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('contacts-sync-daily', 'success', durationSec);
-        log.info('Daily contacts sync jobs created', { jobsCreated, instanceCount: instances.length });
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('contacts-sync-daily', 'failure', durationSec);
-        throw err;
-      }
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('contacts-sync-daily', 'success', durationSec);
+          log.info('Daily contacts sync jobs created', { jobsCreated, instanceCount: instances.length });
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('contacts-sync-daily', 'failure', durationSec);
+          throw err;
+        }
+      });
     },
   });
 
@@ -146,37 +178,39 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     cron: '0 5 * * *', // 5 AM daily
     runOnStart: false,
     handler: async () => {
-      const startTime = Date.now();
-      try {
-        // Get all active instances and create sync jobs for each
-        const instances = await services.instances.listActive();
-        let jobsCreated = 0;
+      await withCronMonitor('groups-sync-daily', '0 5 * * *', 15, 60, async () => {
+        const startTime = Date.now();
+        try {
+          // Get all active instances and create sync jobs for each
+          const instances = await services.instances.listActive();
+          let jobsCreated = 0;
 
-        for (const instance of instances) {
-          try {
-            await services.syncJobs.create({
-              instanceId: instance.id,
-              channelType: instance.channel,
-              type: 'groups',
-              config: {},
-            });
-            jobsCreated++;
-          } catch (err) {
-            log.warn('Failed to create groups sync job for instance', {
-              instanceId: instance.id,
-              error: String(err),
-            });
+          for (const instance of instances) {
+            try {
+              await services.syncJobs.create({
+                instanceId: instance.id,
+                channelType: instance.channel,
+                type: 'groups',
+                config: {},
+              });
+              jobsCreated++;
+            } catch (err) {
+              log.warn('Failed to create groups sync job for instance', {
+                instanceId: instance.id,
+                error: String(err),
+              });
+            }
           }
-        }
 
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('groups-sync-daily', 'success', durationSec);
-        log.info('Daily groups sync jobs created', { jobsCreated, instanceCount: instances.length });
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('groups-sync-daily', 'failure', durationSec);
-        throw err;
-      }
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('groups-sync-daily', 'success', durationSec);
+          log.info('Daily groups sync jobs created', { jobsCreated, instanceCount: instances.length });
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('groups-sync-daily', 'failure', durationSec);
+          throw err;
+        }
+      });
     },
   });
 
@@ -190,29 +224,31 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     handler: async () => {
       if (!channelRegistry) return;
 
-      const startTime = Date.now();
-      try {
-        const waPlugin = channelRegistry.get('whatsapp-baileys') as
-          | { refreshUnreadCounts?: (instanceId: string) => void }
-          | undefined;
+      await withCronMonitor('unread-count-refresh', '0 * * * *', 5, 5, async () => {
+        const startTime = Date.now();
+        try {
+          const waPlugin = channelRegistry.get('whatsapp-baileys') as
+            | { refreshUnreadCounts?: (instanceId: string) => void }
+            | undefined;
 
-        if (!waPlugin?.refreshUnreadCounts) return;
+          if (!waPlugin?.refreshUnreadCounts) return;
 
-        const instances = await services.instances.listActive();
-        const waInstances = instances.filter((i) => i.channel === 'whatsapp-baileys');
+          const instances = await services.instances.listActive();
+          const waInstances = instances.filter((i) => i.channel === 'whatsapp-baileys');
 
-        for (const instance of waInstances) {
-          waPlugin.refreshUnreadCounts(instance.id);
+          for (const instance of waInstances) {
+            waPlugin.refreshUnreadCounts(instance.id);
+          }
+
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('unread-count-refresh', 'success', durationSec);
+          log.debug('Refreshed unread counts', { instanceCount: waInstances.length });
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('unread-count-refresh', 'failure', durationSec);
+          throw err;
         }
-
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('unread-count-refresh', 'success', durationSec);
-        log.debug('Refreshed unread counts', { instanceCount: waInstances.length });
-      } catch (err) {
-        const durationSec = (Date.now() - startTime) / 1000;
-        recordScheduledJob('unread-count-refresh', 'failure', durationSec);
-        throw err;
-      }
+      });
     },
   });
 

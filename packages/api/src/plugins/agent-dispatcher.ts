@@ -60,7 +60,9 @@ import type { AgentProvider, Database } from '@omni/db';
 import { agentSessions, agents } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
+import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import {
   type MessageContext,
@@ -1439,13 +1441,28 @@ async function dispatchViaStreamingProvider(
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
+  const streamDispatchStart = Date.now();
   try {
     const generator = resolved.provider.triggerStream(trigger);
 
     // Error deltas (timeout, circuit-breaker) are not exceptions — they just
     // clean up the placeholder.  Return false so the caller falls back to the
     // accumulate-then-reply path and the user still gets a response.
-    return await consumeStream(generator, sender, instance.id, chatId, traceId);
+    const streamResult = await consumeStream(generator, sender, instance.id, chatId, traceId);
+
+    // Sentry metrics: streaming dispatch count and latency
+    if (streamResult && sentryEnabled()) {
+      const streamDurationMs = Date.now() - streamDispatchStart;
+      Sentry.metrics.count('agent.dispatch', 1, {
+        attributes: { provider_type: resolved.provider.schema },
+      });
+      Sentry.metrics.distribution('agent.dispatch.latency', streamDurationMs, {
+        unit: 'millisecond',
+        attributes: { provider_type: resolved.provider.schema },
+      });
+    }
+
+    return streamResult;
   } catch (err) {
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,
@@ -1518,7 +1535,7 @@ function formatMediaContent(msg: {
 }
 
 /**
- * Build context messages from recent chat history for group conversations
+ * Build context messages from recent chat history for group and DM conversations.
  * Returns messages since the last bot response, formatted as "[Name - time] message"
  */
 async function buildContextMessages(
@@ -1532,10 +1549,9 @@ async function buildContextMessages(
     const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
     if (historyLimit === 0) return [];
 
-    // Only provide context for group chats (not DMs)
     // chatId here is the external JID, not internal UUID
     const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-    if (!chat || chat.chatType !== 'group') {
+    if (!chat) {
       return [];
     }
 
@@ -1663,7 +1679,7 @@ async function dispatchViaProvider(
   const rawThreadId = extractThreadId(messages);
   const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
-  // Build context messages for group conversations (messages since last bot response)
+  // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
   const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
@@ -1700,7 +1716,18 @@ async function dispatchViaProvider(
   );
 
   const correlationId = messages[0]?.metadata.correlationId;
+  const dispatchStart = Date.now();
   const result = await provider.trigger(trigger);
+  const dispatchDurationMs = Date.now() - dispatchStart;
+
+  // Sentry metrics: agent dispatch count and latency
+  if (sentryEnabled()) {
+    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
+    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+      unit: 'millisecond',
+      attributes: { provider_type: provider.schema },
+    });
+  }
 
   if (result && result.parts.length > 0) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);

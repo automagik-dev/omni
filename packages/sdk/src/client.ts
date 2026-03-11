@@ -2851,6 +2851,68 @@ export function createOmniClient(config: OmniClientConfig) {
     },
 
     // ========================================================================
+    // AGENTS
+    // ========================================================================
+
+    /**
+     * Agent entity CRUD
+     */
+    agents: {
+      /**
+       * List all agents
+       */
+      async list(params?: {
+        provider?: 'claude' | 'agno' | 'openai' | 'gemini' | 'custom' | 'omni-internal';
+        isActive?: boolean;
+        limit?: number;
+        ownerId?: string;
+      }): Promise<PaginatedResponse<components['schemas']['Agent']>> {
+        const { data, error, response } = await client.GET('/agents', {
+          params: { query: params },
+        });
+        throwIfError(response, error);
+        return {
+          items: data?.items ?? [],
+          meta: ((data as Record<string, unknown>)?.meta as PaginationMeta) ?? { hasMore: false, cursor: null },
+        };
+      },
+
+      /**
+       * Get a single agent by ID
+       */
+      async get(id: string): Promise<components['schemas']['Agent']> {
+        const { data, error, response } = await client.GET('/agents/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Agent not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      /**
+       * Create a new agent
+       */
+      async create(body: components['schemas']['CreateAgentRequest']): Promise<components['schemas']['Agent']> {
+        const { data, error, response } = await client.POST('/agents', {
+          body,
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Failed to create agent', 'CREATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      /**
+       * Delete an agent (soft-delete)
+       */
+      async delete(id: string): Promise<void> {
+        const { error, response } = await client.DELETE('/agents/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+      },
+    },
+
+    // ========================================================================
     // SYSTEM
     // ========================================================================
 

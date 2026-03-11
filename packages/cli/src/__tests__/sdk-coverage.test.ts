@@ -220,6 +220,14 @@ const CLI_COMMANDS: Record<string, string> = {
   'keys.delete': 'keys delete',
 
   // ============================================================================
+  // AGENTS
+  // ============================================================================
+  'agents.list': 'agents list',
+  'agents.get': 'agents get <id>',
+  'agents.create': 'agents create --name <name> --provider <id> --instance <id>',
+  'agents.delete': 'agents delete <id>',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',

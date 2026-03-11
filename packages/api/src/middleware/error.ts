@@ -3,6 +3,7 @@
  */
 
 import { ConflictError, ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import * as Sentry from '@sentry/bun';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
@@ -340,6 +341,25 @@ export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c
       requestId,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
+    });
+
+    // Capture server errors to Sentry with rich context
+    Sentry.withScope((scope) => {
+      scope.setTag('request_id', requestId);
+      scope.setTag('http.method', c.req.method);
+      scope.setTag('http.url', c.req.path);
+
+      const cliVersion = c.req.header('x-omni-cli-version');
+      if (cliVersion) scope.setTag('cli_version', cliVersion);
+
+      if (error instanceof OmniError) {
+        scope.setTag('error.code', error.code);
+        if (error.context) {
+          scope.setExtra('error.context', error.context);
+        }
+      }
+
+      Sentry.captureException(error);
     });
   }
 

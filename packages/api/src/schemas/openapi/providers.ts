@@ -83,7 +83,10 @@ export const CreateProviderSchema = z.object({
   defaultStream: z.boolean().default(true).openapi({ description: 'Default streaming' }),
   defaultTimeout: z.number().int().positive().default(60).openapi({ description: 'Default timeout' }),
   supportsStreaming: z.boolean().default(true).openapi({ description: 'Supports streaming' }),
-  supportsImages: z.boolean().default(false).openapi({ description: 'Supports images' }),
+  supportsImages: z
+    .boolean()
+    .optional()
+    .openapi({ description: 'Supports images (defaults to true for claude-code, false otherwise)' }),
   supportsAudio: z.boolean().default(false).openapi({ description: 'Supports audio' }),
   supportsDocuments: z.boolean().default(false).openapi({ description: 'Supports documents' }),
   description: z.string().optional().openapi({ description: 'Description' }),

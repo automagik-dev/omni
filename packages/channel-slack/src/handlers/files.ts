@@ -7,8 +7,12 @@
  * - Attachment metadata extraction (mime type, size, thumbnail)
  */
 
+import { createDownloadGuard } from '@omni/channel-sdk';
 import type { Logger } from '@omni/channel-sdk';
 import type { SlackFileInfo } from '../types';
+
+/** Download size guard — 50MB default */
+const downloadGuard = createDownloadGuard();
 import { SlackError, SlackErrorCode } from '../types';
 
 /**
@@ -54,6 +58,9 @@ export async function downloadSlackFile(
         `Failed to download file: HTTP ${response.status} ${response.statusText}`,
       );
     }
+
+    // Guard against oversized downloads before reading into memory
+    downloadGuard.checkResponse(response, logger, { channel: 'slack', url: url.substring(0, 50) });
 
     const buffer = Buffer.from(await response.arrayBuffer());
     const mimeType = response.headers.get('content-type') ?? 'application/octet-stream';

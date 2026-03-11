@@ -7,7 +7,7 @@
  * @see history-sync wish
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
@@ -104,9 +104,9 @@ export async function setupSyncWorker(
   channelRegistry: ChannelRegistry,
   database?: Database,
 ): Promise<void> {
-  if (database) {
-    db = database;
-  }
+  // Always update db (including to null) so each call starts with a clean state.
+  // This ensures test isolation when setupSyncWorker is called multiple times.
+  db = database ?? null;
   try {
     // Subscribe to sync.started events
     // Events now include channelType/instanceId metadata, so hierarchical filtering works
@@ -243,10 +243,22 @@ async function buildWhatsAppAnchors(
   return anchors;
 }
 
+/**
+ * WhatsApp message anchor for active history fetching.
+ * Intentionally duplicated from channel-whatsapp's MessageAnchor to avoid
+ * @omni/api depending on a specific channel implementation package.
+ * Keep in sync with: packages/channel-whatsapp/src/plugin.ts → MessageAnchor
+ */
 type WAnchor = {
   chatJid: string;
   messageKey: { remoteJid: string; id: string; fromMe: boolean };
   timestamp: number;
+};
+
+/** WhatsApp-specific sync options (extends canonical FetchHistoryOptions with WA-specific fields). */
+type WhatsAppSyncOptions = FetchHistoryOptions & {
+  count?: number;
+  anchors?: WAnchor[];
 };
 
 /**
@@ -375,9 +387,10 @@ async function processMessageSync(
     since: since?.toISOString(),
   });
 
-  // Build anchors for WhatsApp history fetching
-  // Passive-first: default sync uses NO anchors (WhatsApp controls pace via messaging-history.set)
-  // Active: only used when explicit chatJids are provided (per-chat sync)
+  // Build anchors for active history fetch.
+  // For WhatsApp: always discover from DB + Baileys cache so chats not in volatile
+  // memory (e.g. after restart) are still synced (GH#142).
+  // Falls back to passive sync only when no anchors are found (fresh instance).
   let anchors: WAnchor[] = [];
 
   if (channelType === 'whatsapp-baileys' && config.chatJids?.length) {
@@ -386,11 +399,26 @@ async function processMessageSync(
     anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services);
     log.info('WhatsApp per-chat active sync', { jobId, anchorCount: anchors.length, chatJids: config.chatJids });
   } else if (channelType === 'whatsapp-baileys') {
-    // Default passive sync: no anchors, WhatsApp pushes history via messaging-history.set
-    log.info('WhatsApp passive sync (no active fetching)', { jobId, instanceId });
+    // Default sync: discover all known chats from DB + Baileys volatile cache.
+    // Using DB ensures chats survive restarts even when Baileys cache is empty.
+    const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
+    const discoveredAnchors = await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services);
+    anchors = [...dbAnchors, ...discoveredAnchors];
+    if (anchors.length > 0) {
+      log.info('WhatsApp default sync with DB+cache discovery', {
+        jobId,
+        instanceId,
+        dbAnchorCount: dbAnchors.length,
+        newlyDiscovered: discoveredAnchors.length,
+        totalAnchors: anchors.length,
+      });
+    } else {
+      // Fresh instance: no DB data and no Baileys cache — fall back to passive sync
+      log.info('WhatsApp passive sync (no prior data)', { jobId, instanceId });
+    }
   }
 
-  const fetchOptions: Record<string, unknown> = {
+  const fetchOptions: WhatsAppSyncOptions = {
     since,
     until: new Date(),
     count: 100, // Messages per chat (recursive fetching will get more)
@@ -403,19 +431,9 @@ async function processMessageSync(
         totalEstimated: progress ? Math.round(count / (progress / 100)) : undefined,
       });
     },
-    onMessage: async (message: unknown) => {
+    onMessage: async (msg: HistorySyncMessage) => {
       // Rate limit
       await rateLimiter.wait();
-
-      const msg = message as {
-        externalId: string;
-        chatId: string;
-        from: string;
-        timestamp: Date;
-        content: { type: string; text?: string };
-        isFromMe: boolean;
-        rawPayload: unknown;
-      };
 
       fetched++;
 
