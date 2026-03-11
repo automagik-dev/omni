@@ -12,7 +12,9 @@
  * - Tail window for content > 1800 chars (keeps last 1800 visible)
  * - Short thinking (<2s) is skipped visually
  * - Discord markdown format (blockquote via >, bold via **)
- * - Exponential backoff on 429 errors
+ * - Exponential backoff on 429 errors (2^attempt multiplier)
+ * - All sends/edits use allowedMentions: { parse: [] } to prevent mention injection
+ * - Streaming edits are best-effort (retried on 429); finalization edits use retryOnRateLimit
  */
 
 import type { StreamSender } from '@omni/channel-sdk';
@@ -184,7 +186,10 @@ export class DiscordStreamSender implements StreamSender {
     try {
       if (!this.message) {
         const ch = await this.getOrFetchChannel();
-        const options: Parameters<typeof ch.send>[0] = { content: text };
+        const options: Parameters<typeof ch.send>[0] = {
+          content: text,
+          allowedMentions: { parse: [] },
+        };
         if (this.replyToMessageId) {
           (options as { reply?: { messageReference: string } }).reply = {
             messageReference: this.replyToMessageId,
@@ -192,7 +197,7 @@ export class DiscordStreamSender implements StreamSender {
         }
         this.message = await ch.send(options);
       } else {
-        await this.message.edit({ content: text });
+        await this.message.edit({ content: text, allowedMentions: { parse: [] } });
       }
       this.lastRenderedText = text;
       this.lastEditAt = Date.now();
@@ -200,12 +205,23 @@ export class DiscordStreamSender implements StreamSender {
     } catch (err: unknown) {
       const errStr = String(err);
       if (errStr.includes('429') || errStr.includes('Too Many Requests')) {
-        log.warn('Discord rate limit hit, backing off', {
+        const delay = this.retryDelay;
+        log.warn('Discord rate limit hit, scheduling retry', {
           channelId: this.channelId,
-          retryDelay: this.retryDelay,
+          retryDelay: delay,
         });
         this.retryDelay = Math.min(this.retryDelay * 2, 10000);
-        this.lastEditAt = Date.now() + this.retryDelay;
+        this.lastEditAt = Date.now();
+        // Retry the same edit after backoff instead of dropping it
+        this.clearPendingEdit();
+        this.pendingEditTimer = setTimeout(() => {
+          this.pendingEditTimer = null;
+          if (this.phase !== 'done') {
+            this.doEdit(text).catch((retryErr) => {
+              log.error('Retry after rate limit failed', { channelId: this.channelId, error: String(retryErr) });
+            });
+          }
+        }, delay);
         return;
       }
       if (errStr.includes('Cannot edit a message authored by another user')) return;
@@ -219,7 +235,7 @@ export class DiscordStreamSender implements StreamSender {
 
     try {
       await this.retryOnRateLimit(async () => {
-        await this.message?.edit({ content: firstChunk });
+        await this.message?.edit({ content: firstChunk, allowedMentions: { parse: [] } });
       });
     } catch (err) {
       log.warn('Failed to edit final message, sending as new', {
@@ -239,7 +255,10 @@ export class DiscordStreamSender implements StreamSender {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       if (!chunk) continue;
-      const options: Parameters<typeof ch.send>[0] = { content: chunk };
+      const options: Parameters<typeof ch.send>[0] = {
+        content: chunk,
+        allowedMentions: { parse: [] },
+      };
       if (i === 0 && this.replyToMessageId) {
         (options as { reply?: { messageReference: string } }).reply = {
           messageReference: this.replyToMessageId,
@@ -257,7 +276,7 @@ export class DiscordStreamSender implements StreamSender {
       const chunk = chunks[i];
       if (chunk) {
         await this.retryOnRateLimit(async () => {
-          await ch.send({ content: chunk });
+          await ch.send({ content: chunk, allowedMentions: { parse: [] } });
         });
       }
     }
@@ -288,7 +307,7 @@ export class DiscordStreamSender implements StreamSender {
       } catch (err: unknown) {
         const errStr = String(err);
         if ((errStr.includes('429') || errStr.includes('Too Many Requests')) && attempt < MAX_RETRIES - 1) {
-          const delay = this.retryDelay * (attempt + 1);
+          const delay = this.retryDelay * 2 ** attempt;
           log.warn('Rate limit retry', { channelId: this.channelId, attempt, delay });
           await new Promise((r) => setTimeout(r, delay));
           continue;
