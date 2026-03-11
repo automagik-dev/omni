@@ -1,3 +1,6 @@
+// Sentry must be initialised before all other imports for auto-instrumentation
+import './instrument';
+
 /**
  * @omni/api - HTTP API Server
  *
@@ -9,6 +12,7 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
 import { applyMigrations, closeDb, createDb } from '@omni/db';
+import * as Sentry from '@sentry/bun';
 import { sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
@@ -227,6 +231,9 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
 
       // Stop embedded pgserve last (after all DB consumers are done)
       await stopEmbeddedPgserve();
+
+      // Flush pending Sentry events before exit
+      await Sentry.close(5000);
 
       shutdownLog.info('Graceful shutdown complete');
       clearTimeout(forceExitTimer);

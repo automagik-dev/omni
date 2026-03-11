@@ -2865,6 +2865,7 @@ export function createOmniClient(config: OmniClientConfig) {
         provider?: 'claude' | 'agno' | 'openai' | 'gemini' | 'custom' | 'omni-internal';
         isActive?: boolean;
         limit?: number;
+        ownerId?: string;
       }): Promise<PaginatedResponse<components['schemas']['Agent']>> {
         const { data, error, response } = await client.GET('/agents', {
           params: { query: params },

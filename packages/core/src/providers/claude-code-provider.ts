@@ -102,6 +102,13 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       message = `[${context.sender.displayName}]: ${message}`;
     }
 
+    // Append file path references so Claude Code can read images and documents via its tools.
+    // Claude Sonnet/Haiku support vision — the Read tool can handle image files directly.
+    if (context.content.files && context.content.files.length > 0) {
+      const fileList = context.content.files.map((f) => `- ${f.path} [${f.mimeType}]`).join('\n');
+      message += `\n\nAttached files:\n${fileList}`;
+    }
+
     // Prepend context messages (message history since last bot response)
     if (context.contextMessages && context.contextMessages.length > 0) {
       const boundedContext = boundContextMessages(context.contextMessages);

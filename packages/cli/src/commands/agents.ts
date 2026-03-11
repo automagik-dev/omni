@@ -26,7 +26,16 @@ export function createAgentsCommand(): Command {
     .description('List all agents')
     .option('--provider <provider>', `Filter by provider (${VALID_PROVIDERS.join(', ')})`)
     .option('--inactive-only', 'Show only inactive agents')
-    .option('--limit <n>', 'Max results', (v) => Number.parseInt(v, 10), 50)
+    .option(
+      '--limit <n>',
+      'Max results',
+      (v) => {
+        const n = Number.parseInt(v, 10);
+        if (!Number.isFinite(n) || n < 1) throw new Error(`Invalid limit: ${v}`);
+        return n;
+      },
+      50,
+    )
     .action(async (options: { provider?: string; inactiveOnly?: boolean; limit?: number }) => {
       const client = getClient();
 

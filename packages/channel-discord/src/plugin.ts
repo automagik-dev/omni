@@ -522,6 +522,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
     try {
       channelId = await resolveChannelId(client, channelId, this.logger);
 
+      // In Discord, threads are separate channel objects. If threadId is specified,
+      // override the channelId so the message is delivered to the correct thread.
+      if (message.threadId) {
+        channelId = message.threadId;
+      }
+
       // Journey timing: T10 (pluginSentAt) before platform call
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
