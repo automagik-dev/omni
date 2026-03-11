@@ -7,7 +7,7 @@
  * @see history-sync wish
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
@@ -243,10 +243,17 @@ async function buildWhatsAppAnchors(
   return anchors;
 }
 
+/** WhatsApp message anchor for active history fetching. Mirrors MessageAnchor from channel-whatsapp. */
 type WAnchor = {
   chatJid: string;
   messageKey: { remoteJid: string; id: string; fromMe: boolean };
   timestamp: number;
+};
+
+/** WhatsApp-specific sync options (extends canonical FetchHistoryOptions with WA-specific fields). */
+type WhatsAppSyncOptions = FetchHistoryOptions & {
+  count?: number;
+  anchors?: WAnchor[];
 };
 
 /**
@@ -390,7 +397,7 @@ async function processMessageSync(
     log.info('WhatsApp passive sync (no active fetching)', { jobId, instanceId });
   }
 
-  const fetchOptions: Record<string, unknown> = {
+  const fetchOptions: WhatsAppSyncOptions = {
     since,
     until: new Date(),
     count: 100, // Messages per chat (recursive fetching will get more)
@@ -403,19 +410,9 @@ async function processMessageSync(
         totalEstimated: progress ? Math.round(count / (progress / 100)) : undefined,
       });
     },
-    onMessage: async (message: unknown) => {
+    onMessage: async (msg: HistorySyncMessage) => {
       // Rate limit
       await rateLimiter.wait();
-
-      const msg = message as {
-        externalId: string;
-        chatId: string;
-        from: string;
-        timestamp: Date;
-        content: { type: string; text?: string };
-        isFromMe: boolean;
-        rawPayload: unknown;
-      };
 
       fetched++;
 

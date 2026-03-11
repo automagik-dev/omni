@@ -9,6 +9,7 @@ import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
+  FetchHistoryOptions,
   FetchHistoryResult,
   HistorySyncMessage,
   InstanceConfig,
@@ -40,7 +41,7 @@ import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 // Re-export for external consumers that previously imported from this module
-export type { HistorySyncMessage, FetchHistoryResult };
+export type { FetchHistoryResult, HistorySyncMessage };
 
 /**
  * Anchor point for fetching older messages in a chat
@@ -60,17 +61,9 @@ export interface MessageAnchor {
 
 /**
  * WhatsApp-specific options for fetchHistory method
- * Extends the base FetchHistoryOptions with WhatsApp-specific anchors
+ * Extends the canonical FetchHistoryOptions from channel-sdk with WhatsApp-specific fields.
  */
-export interface FetchHistoryOptions {
-  /** Fetch messages since this date */
-  since?: Date;
-  /** Fetch messages until this date (default: now) */
-  until?: Date;
-  /** Callback for progress updates */
-  onProgress?: (fetched: number, progress?: number) => void;
-  /** Callback for each message synced */
-  onMessage?: (message: HistorySyncMessage) => void;
+export interface WhatsAppFetchHistoryOptions extends FetchHistoryOptions {
   /** Request additional history beyond initial sync */
   fetchMore?: boolean;
   /** Max messages to fetch when using fetchMore */
@@ -1848,7 +1841,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /** Chat tracking data for history fetch */
-  private createMessageTracker(anchors: NonNullable<FetchHistoryOptions['anchors']>) {
+  private createMessageTracker(anchors: NonNullable<WhatsAppFetchHistoryOptions['anchors']>) {
     const messagesPerChat = new Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>();
     for (const anchor of anchors) {
       messagesPerChat.set(anchor.chatJid, { count: 0, oldest: null });
@@ -1860,8 +1853,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private buildNextAnchors(
     messagesPerChat: Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>,
     threshold: number,
-  ): { anchors: NonNullable<FetchHistoryOptions['anchors']>; totalFetched: number } {
-    const newAnchors: NonNullable<FetchHistoryOptions['anchors']> = [];
+  ): { anchors: NonNullable<WhatsAppFetchHistoryOptions['anchors']>; totalFetched: number } {
+    const newAnchors: NonNullable<WhatsAppFetchHistoryOptions['anchors']> = [];
     let totalFetched = 0;
 
     for (const [chatJid, data] of messagesPerChat) {
@@ -1891,7 +1884,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private async fetchAnchorsHistory(
     sock: ReturnType<typeof this.getSocket>,
     instanceId: string,
-    anchors: NonNullable<FetchHistoryOptions['anchors']>,
+    anchors: NonNullable<WhatsAppFetchHistoryOptions['anchors']>,
     count: number,
     depth = 0,
     maxDepth = 50,
@@ -1958,7 +1951,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private async fetchAllAnchors(
     sock: ReturnType<typeof this.getSocket>,
     instanceId: string,
-    anchors: NonNullable<FetchHistoryOptions['anchors']>,
+    anchors: NonNullable<WhatsAppFetchHistoryOptions['anchors']>,
     count: number,
     _depth: number,
     messagesPerChat: Map<string, { count: number; oldest: { key: unknown; timestamp: number } | null }>,
@@ -2009,7 +2002,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Uses Baileys `fetchMessageHistory` to request older messages for specific chats.
    * This triggers `messaging-history.set` events with the older messages.
    */
-  async fetchHistory(instanceId: string, options: FetchHistoryOptions = {}): Promise<FetchHistoryResult> {
+  async fetchHistory(instanceId: string, options: WhatsAppFetchHistoryOptions = {}): Promise<FetchHistoryResult> {
     const sock = this.getSocket(instanceId);
     const messages: HistorySyncMessage[] = [];
     const count = options.count ?? 50;

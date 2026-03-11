@@ -79,7 +79,7 @@ export {
 export type { SocketConfig } from './socket';
 
 // Types
-export type { WhatsAppConfig } from './plugin';
+export type { WhatsAppConfig, WhatsAppFetchHistoryOptions, MessageAnchor } from './plugin';
 
 // Message and event types (derived from actual Baileys payloads)
 export type {
