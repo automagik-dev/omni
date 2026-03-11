@@ -35,7 +35,7 @@ export function createAgentsCommand(): Command {
       }
 
       try {
-        const items = await client.agents.list({
+        const { items } = await client.agents.list({
           provider: options.provider as AgentProvider | undefined,
           isActive: options.inactive ? false : undefined,
           limit: options.limit,

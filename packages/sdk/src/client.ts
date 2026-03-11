@@ -2865,12 +2865,15 @@ export function createOmniClient(config: OmniClientConfig) {
         provider?: 'claude' | 'agno' | 'openai' | 'gemini' | 'custom' | 'omni-internal';
         isActive?: boolean;
         limit?: number;
-      }): Promise<components['schemas']['Agent'][]> {
+      }): Promise<PaginatedResponse<components['schemas']['Agent']>> {
         const { data, error, response } = await client.GET('/agents', {
           params: { query: params },
         });
         throwIfError(response, error);
-        return data?.items ?? [];
+        return {
+          items: data?.items ?? [],
+          meta: ((data as Record<string, unknown>)?.meta as PaginationMeta) ?? { hasMore: false, cursor: null },
+        };
       },
 
       /**
