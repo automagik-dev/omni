@@ -30,6 +30,9 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   canSendText: true,
   canSendMedia: true,
   canSendReaction: true,
+  // Slack typing is thread-only via assistant.threads.setStatus — not a general
+  // typing indicator. The plugin implements sendTyping() for thread contexts but
+  // the capability is false because it cannot show typing in channels/DMs directly.
   canSendTyping: false,
 
   // Receipts

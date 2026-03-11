@@ -361,6 +361,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Per-instance guild config overrides cache: instanceId → (guildId → config) */
   private guildConfigCache = new Map<string, Record<string, GuildConfigOverride>>();
 
+  /** Active typing refresh intervals keyed by `${instanceId}:${channelId}` */
+  private typingIntervals = new Map<
+    string,
+    { refresh: ReturnType<typeof setInterval>; failsafe: ReturnType<typeof setTimeout> }
+  >();
+
   /**
    * Plugin-specific initialization
    */
@@ -372,6 +378,8 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * Plugin-specific cleanup
    */
   protected override async onDestroy(): Promise<void> {
+    // Clear all typing refresh intervals
+    this.clearAllTypingIntervals();
     // Destroy all clients
     for (const [instanceId, client] of this.clients) {
       this.logger.info('Destroying client', { instanceId });
@@ -483,6 +491,13 @@ export class DiscordPlugin extends BaseChannelPlugin {
     const client = this.clients.get(instanceId);
     if (!client) {
       return;
+    }
+
+    // Clear typing intervals for this instance
+    for (const key of [...this.typingIntervals.keys()]) {
+      if (key.startsWith(`${instanceId}:`)) {
+        this.clearTypingInterval(key);
+      }
     }
 
     // Reset connection state
@@ -599,14 +614,63 @@ export class DiscordPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Send typing indicator
+   * Send typing indicator with auto-refresh.
+   *
+   * Discord typing expires after ~10s. When duration > 0, we send an initial
+   * typing indicator then refresh every 8s to keep it visible. A 60s failsafe
+   * prevents leaked intervals. Calling with duration === 0 stops the refresh.
    */
-  async sendTyping(instanceId: string, channelId: string): Promise<void> {
-    const client = this.getClient(instanceId);
-    const channel = await client.channels.fetch(channelId);
+  async sendTyping(instanceId: string, channelId: string, duration?: number): Promise<void> {
+    const key = `${instanceId}:${channelId}`;
 
-    if (channel && 'sendTyping' in channel) {
-      await (channel as { sendTyping: () => Promise<void> }).sendTyping();
+    // Stop existing refresh for this chat
+    this.clearTypingInterval(key);
+
+    // duration === 0 means stop typing — just clear and return
+    if (duration === 0) return;
+
+    const doTyping = async () => {
+      try {
+        const client = this.getClient(instanceId);
+        const channel = await client.channels.fetch(channelId);
+        if (channel && 'sendTyping' in channel) {
+          await (channel as { sendTyping: () => Promise<void> }).sendTyping();
+        }
+      } catch {
+        this.clearTypingInterval(key);
+      }
+    };
+
+    // Send initial typing
+    await doTyping();
+
+    // Set up auto-refresh every 8s
+    const refresh = setInterval(() => {
+      doTyping();
+    }, 8000);
+
+    // Failsafe: auto-clear after 60s to prevent leaked intervals
+    const failsafe = setTimeout(() => {
+      this.clearTypingInterval(key);
+    }, 60000);
+
+    this.typingIntervals.set(key, { refresh, failsafe });
+  }
+
+  /** Clear a typing refresh interval by key */
+  private clearTypingInterval(key: string): void {
+    const entry = this.typingIntervals.get(key);
+    if (entry) {
+      clearInterval(entry.refresh);
+      clearTimeout(entry.failsafe);
+      this.typingIntervals.delete(key);
+    }
+  }
+
+  /** Clear all typing refresh intervals (used during disconnect/destroy) */
+  private clearAllTypingIntervals(): void {
+    for (const key of [...this.typingIntervals.keys()]) {
+      this.clearTypingInterval(key);
     }
   }
 
