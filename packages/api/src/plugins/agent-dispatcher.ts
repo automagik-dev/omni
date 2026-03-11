@@ -3292,6 +3292,7 @@ async function shouldProcessMessage(
 
 /**
  * Check access using primary sender ID, falling back to participantAlt for Baileys LID addressing.
+ * Also tries resolvedSenderPhone annotated by the WhatsApp channel when the sender is a LID.
  * Returns true if access is denied (caller should return null).
  */
 async function checkAccessWithFallback(
@@ -3300,10 +3301,15 @@ async function checkAccessWithFallback(
   payload: { from: string; chatId: string; rawPayload?: unknown },
   channel: ChannelType,
 ): Promise<boolean> {
-  const rawKey = (payload.rawPayload as Record<string, unknown>)?.key as Record<string, unknown> | undefined;
+  const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
+  const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
   const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
   // Validate participantAlt looks like a real phone number (Baileys LID fallback)
   const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
+  // resolvedSenderPhone is annotated by channel-whatsapp when it resolves a LID sender to phone
+  // via participantAlt, remoteJidAlt, or the in-memory LID mapping cache.
+  const rawResolvedPhone = rawPayload?.resolvedSenderPhone as string | undefined;
+  const resolvedSenderPhone = rawResolvedPhone && /^\d{7,15}$/.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
   const primaryId = payload.from ?? '';
 
   let accessResult = await accessService.checkAccess(instance, primaryId, channel);
@@ -3315,6 +3321,20 @@ async function checkAccessWithFallback(
       chatId: payload.chatId,
     });
     accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+  }
+  if (
+    !accessResult.allowed &&
+    resolvedSenderPhone &&
+    resolvedSenderPhone !== primaryId &&
+    resolvedSenderPhone !== participantAlt
+  ) {
+    log.debug('Access fallback to resolvedSenderPhone (LID→phone)', {
+      instanceId: instance.id,
+      primaryId,
+      resolvedSenderPhone,
+      chatId: payload.chatId,
+    });
+    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel);
   }
   if (accessResult.allowed) return false;
 

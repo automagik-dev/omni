@@ -734,6 +734,39 @@ function annotateSenderLidStatus(msg: WAMessage, senderJid: string): void {
 }
 
 /**
+ * Resolve a LID sender to their phone number and annotate the message.
+ *
+ * In LID-first mode, access rules are phone-based but the sender identity is
+ * a LID. This resolves the phone using (1) participantAlt from the message key
+ * (group messages), (2) remoteJidAlt from the message key (DM messages), or
+ * (3) the in-memory LID mapping cache built from prior messages.
+ *
+ * The resolved phone is stored as `resolvedSenderPhone` on the raw message so
+ * it flows through rawPayload to the access check in agent-dispatcher.
+ */
+function annotateSenderResolvedPhone(
+  msg: WAMessage,
+  senderJid: string,
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+): void {
+  if (!isLidJid(senderJid)) return;
+
+  const participantAlt = (msg.key as Record<string, unknown>).participantAlt as string | undefined;
+  const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
+  const lidCache = plugin.getLidMappingCache(instanceId);
+
+  // resolveToPhoneJidLegacy tries: (1) the provided alt JID, then (2) the LID cache
+  const altJid = participantAlt || remoteJidAlt;
+  const resolvedPhoneJid = resolveToPhoneJidLegacy(senderJid, altJid, lidCache);
+
+  if (resolvedPhoneJid !== senderJid && isUserJid(resolvedPhoneJid)) {
+    const { id: resolvedPhone } = fromJid(resolvedPhoneJid);
+    (msg as unknown as Record<string, unknown>).resolvedSenderPhone = resolvedPhone;
+  }
+}
+
+/**
  * Extract platform timestamp (T0) in milliseconds.
  */
 function getPlatformTimestamp(msg: WAMessage): number {
@@ -800,6 +833,11 @@ async function processMessage(
   // but individual participants can still be @lid. Downstream identity resolution
   // uses this flag to skip phone extraction for LID sender IDs.
   annotateSenderLidStatus(msg, senderJid);
+
+  // Resolve LID sender to phone for access rule checks (LID-first mode).
+  // Access rules match phone numbers, so we need the phone even when the
+  // sender is addressed as @lid. Stores resolvedSenderPhone on rawPayload.
+  annotateSenderResolvedPhone(msg, senderJid, plugin, instanceId);
 
   // Extract platform timestamp (T0) — WhatsApp sends seconds since epoch
   const platformTimestamp = getPlatformTimestamp(msg);
