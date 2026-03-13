@@ -68,9 +68,10 @@ function makeRequestWithChat(chatId: string, threadId?: string): ProviderRequest
     chat: {
       id: chatId,
       threadId,
-      type: threadId ? 'thread' : 'dm',
+      type: threadId ? 'group' : 'dm',
     },
     platform: {
+      id: 'user-123',
       channel: 'telegram',
       instanceId: 'inst-telegram-1',
     },
@@ -116,7 +117,8 @@ function handleTmuxMock(
     cb(null, '', '');
   } else if (subcommand === 'new-window') {
     const nameIdx = args.indexOf('-n');
-    if (nameIdx !== -1) spawnedWindows.add(args[nameIdx + 1]);
+    const windowName = nameIdx !== -1 ? args[nameIdx + 1] : undefined;
+    if (windowName) spawnedWindows.add(windowName);
     cb(null, '', '');
   } else if (subcommand === 'list-windows') {
     cb(null, [...spawnedWindows].join('\n'), '');
@@ -463,7 +465,7 @@ describe('concurrent spawn protection', () => {
       const args = callArgs[1] as string[];
 
       if (file === 'genie') {
-        const teamName = args[2];
+        const teamName = args[2] ?? '';
         spawnedTeams.add(teamName);
         cb(null, '', '');
       } else if (file === 'tmux' && args[0] === 'list-windows') {
@@ -570,8 +572,8 @@ describe('inbox message format', () => {
     await client.run(
       makeRequest({
         message: 'Hello world',
-        chat: { id: 'chat-42', threadId: 'thread-7', type: 'thread' },
-        platform: { channel: 'telegram', instanceId: 'inst-1' },
+        chat: { id: 'chat-42', threadId: 'thread-7', type: 'group' },
+        platform: { id: 'user-1', channel: 'telegram', instanceId: 'inst-1' },
         sender: { displayName: 'Alice' },
         messageId: 'msg-99',
       }),
@@ -588,7 +590,7 @@ describe('inbox message format', () => {
     expect(msg.text).toContain('thread:thread-7');
     expect(msg.text).toContain('msg:msg-99');
     expect(msg.text).toContain('from:Alice');
-    expect(msg.text).toContain('type:thread');
+    expect(msg.text).toContain('type:group');
 
     // Core fields
     expect(msg.from).toBe('omni');
