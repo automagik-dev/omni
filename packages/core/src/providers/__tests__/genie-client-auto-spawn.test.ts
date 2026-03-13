@@ -344,7 +344,7 @@ describe('GenieClient direct tmux fallback', () => {
 
     // Verify Claude Code command is sent with correct flags
     const sendKeysArgs = sendKeysCall?.[1] as string[];
-    const claudeCmd = sendKeysArgs[2]; // The command string
+    const claudeCmd = sendKeysArgs[3]; // The command string (after -t <target>)
     expect(claudeCmd).toContain('claude');
     expect(claudeCmd).toContain('--team-name');
     expect(claudeCmd).toContain('--dangerously-skip-permissions');
@@ -430,35 +430,31 @@ describe('GenieClient tmux verification', () => {
   });
 
   test('handles dots in team names (tmux pane separator)', async () => {
-    // Mock to return the sanitized window name (dots replaced with dashes)
+    // sanitize('team.with.dots') strips dots → 'teamwithdots'
+    // sanitizeWindowName('teamwithdots') has no dots → 'teamwithdots'
+    // So tmux window name is 'teamwithdots'
+
+    // Create team config so the fast path is used
+    const teamDir = join(TEAMS_DIR, 'teamwithdots');
+    mkdirSync(teamDir, { recursive: true });
+    writeFileSync(join(teamDir, 'config.json'), '{}');
+
+    // Mock tmux to return the sanitized window name
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
       const file = callArgs[0] as string;
       const args = callArgs[1] as string[];
 
       if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'team-with-dots\n', '');
+        cb(null, 'teamwithdots\n', '');
       } else {
         cb(null, '', '');
       }
     });
 
-    // Team name with dots should match sanitized window name
+    // Config exists + tmux window matches → no genie call needed
     const client = new GenieClient(makeConfig({ teamName: 'team.with.dots' }));
     await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 100));
-
-    // Should recognize the window as active (dots → dashes match)
-    // genie should NOT be called since the sanitized name matches
-    // But we need config.json to exist for the fast path
-    const teamDir = join(TEAMS_DIR, 'teamwithdots');
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{}');
-
-    execFileMock.mockClear();
-    const client2 = new GenieClient(makeConfig({ teamName: 'team.with.dots' }));
-    await client2.run(makeRequest());
     await new Promise((r) => setTimeout(r, 100));
 
     const genieCalls = getCallsFor('genie');
