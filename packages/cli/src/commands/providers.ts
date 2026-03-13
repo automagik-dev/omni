@@ -6,6 +6,8 @@
  * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
  *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
  *   OpenClaw: --default-agent-id <id>
+ *   Genie: --agent-name <name> --target-agent <name> [--team-name <template>]
+ * omni providers update <id> [--name <name>] [--base-url <url>] [--api-key <key>] [--schema-config <json>]
  * omni providers setup openclaw --gateway-url <url> --gateway-token <token> --agent-id <id>
  * omni providers agents <id>
  * omni providers teams <id>
@@ -45,6 +47,8 @@ function validateCreateOptions(options: {
   baseUrl: string;
   defaultAgentId?: string;
   projectPath?: string;
+  agentName?: string;
+  targetAgent?: string;
 }): string | null {
   if (!VALID_SCHEMAS.includes(options.schema)) {
     return `Invalid schema: ${options.schema}. Valid: ${[...VALID_SCHEMAS].join(', ')}`;
@@ -57,11 +61,13 @@ function validateCreateOptions(options: {
   if (options.schema === 'claude-code' && !options.projectPath) {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
   }
+  if (options.schema === 'genie' && (!options.agentName || !options.targetAgent)) {
+    return 'Genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Genie" --schema genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
+  }
   return null;
 }
 
-/** Build schema-specific config from CLI options */
-function buildSchemaConfig(options: {
+interface SchemaConfigOptions {
   schema: string;
   defaultAgentId?: string;
   projectPath?: string;
@@ -69,22 +75,53 @@ function buildSchemaConfig(options: {
   permissionMode?: string;
   model?: string;
   systemPrompt?: string;
-}): Record<string, unknown> | undefined {
-  const config: Record<string, unknown> = {};
+  agentName?: string;
+  targetAgent?: string;
+  teamName?: string;
+}
 
-  if (options.schema === 'openclaw') {
-    if (options.defaultAgentId) config.defaultAgentId = options.defaultAgentId;
-  } else if (options.schema === 'claude-code') {
-    config.projectPath = options.projectPath;
-    if (options.maxTurns) config.maxTurns = options.maxTurns;
-    if (options.permissionMode) config.permissionMode = options.permissionMode;
-    if (options.model) config.model = options.model;
-    if (options.systemPrompt) config.systemPrompt = options.systemPrompt;
-  } else if (options.defaultAgentId) {
-    config.defaultAgentId = options.defaultAgentId;
+function buildOpenClawConfig(options: SchemaConfigOptions): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (options.defaultAgentId) config.defaultAgentId = options.defaultAgentId;
+  return config;
+}
+
+function buildClaudeCodeConfig(options: SchemaConfigOptions): Record<string, unknown> {
+  const config: Record<string, unknown> = { projectPath: options.projectPath };
+  if (options.maxTurns) config.maxTurns = options.maxTurns;
+  if (options.permissionMode) config.permissionMode = options.permissionMode;
+  if (options.model) config.model = options.model;
+  if (options.systemPrompt) config.systemPrompt = options.systemPrompt;
+  return config;
+}
+
+function buildGenieConfig(options: SchemaConfigOptions): Record<string, unknown> {
+  return {
+    agentName: options.agentName,
+    targetAgent: options.targetAgent,
+    teamName: options.teamName ?? 'omni-{chat_id}',
+  };
+}
+
+/** Build schema-specific config from CLI options */
+function buildSchemaConfig(options: SchemaConfigOptions): Record<string, unknown> | undefined {
+  const builders: Record<string, (opts: SchemaConfigOptions) => Record<string, unknown>> = {
+    openclaw: buildOpenClawConfig,
+    'claude-code': buildClaudeCodeConfig,
+    genie: buildGenieConfig,
+  };
+
+  const builder = builders[options.schema];
+  if (builder) {
+    const config = builder(options);
+    return Object.keys(config).length > 0 ? config : undefined;
   }
 
-  return Object.keys(config).length > 0 ? config : undefined;
+  // Fallback for other schemas
+  if (options.defaultAgentId) {
+    return { defaultAgentId: options.defaultAgentId };
+  }
+  return undefined;
 }
 
 /** Get contextual hint for provider health check error */
@@ -104,6 +141,190 @@ function getHealthCheckHint(errorMsg: string): string {
   return '';
 }
 
+/** Copy defined values from source to target, optionally remapping keys */
+function copyDefined(
+  source: Record<string, unknown>,
+  target: Record<string, unknown>,
+  keyMap: Record<string, string>,
+): void {
+  for (const [srcKey, dstKey] of Object.entries(keyMap)) {
+    if (source[srcKey] !== undefined) target[dstKey] = source[srcKey];
+  }
+}
+
+/** Build PATCH body from update command options */
+function buildUpdateBody(options: Record<string, unknown>): Record<string, unknown> | { error: string } {
+  const body: Record<string, unknown> = {};
+
+  // Top-level provider fields
+  copyDefined(options, body, {
+    name: 'name',
+    baseUrl: 'baseUrl',
+    apiKey: 'apiKey',
+    description: 'description',
+    timeout: 'defaultTimeout',
+    stream: 'defaultStream',
+    active: 'isActive',
+  });
+
+  // Schema config: raw JSON takes precedence over individual flags
+  if (options.schemaConfig) {
+    try {
+      body.schemaConfig = JSON.parse(options.schemaConfig as string);
+    } catch {
+      return { error: 'Invalid JSON for --schema-config' };
+    }
+  } else {
+    const schemaFields: Record<string, unknown> = {};
+    copyDefined(options, schemaFields, {
+      agentName: 'agentName',
+      targetAgent: 'targetAgent',
+      teamName: 'teamName',
+      projectPath: 'projectPath',
+      maxTurns: 'maxTurns',
+      permissionMode: 'permissionMode',
+      model: 'model',
+      systemPrompt: 'systemPrompt',
+    });
+    if (Object.keys(schemaFields).length > 0) body.schemaConfig = schemaFields;
+  }
+
+  return body;
+}
+
+async function handleList(options: { active?: boolean }): Promise<void> {
+  const client = getClient();
+  try {
+    const result = await client.providers.list({ active: options.active });
+    const items = result.map((p) => ({
+      id: p.id,
+      name: p.name,
+      schema: p.schema,
+      projectPath: (p.schemaConfig as Record<string, unknown> | null)?.projectPath ?? '-',
+      active: p.isActive ? 'yes' : 'no',
+    }));
+    output.list(items, { emptyMessage: 'No providers found.' });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to list providers: ${message}`);
+  }
+}
+
+async function handleGet(id: string): Promise<void> {
+  const client = getClient();
+  try {
+    const provider = await client.providers.get(id);
+    output.data(provider);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to get provider: ${message}`);
+  }
+}
+
+async function handleCreate(options: {
+  name: string;
+  schema: string;
+  baseUrl: string;
+  apiKey?: string;
+  description?: string;
+  timeout?: number;
+  stream?: boolean;
+  defaultAgentId?: string;
+  projectPath?: string;
+  maxTurns?: number;
+  permissionMode?: string;
+  model?: string;
+  systemPrompt?: string;
+  agentName?: string;
+  targetAgent?: string;
+  teamName?: string;
+}): Promise<void> {
+  const validationError = validateCreateOptions(options);
+  if (validationError) {
+    output.error(validationError);
+    return;
+  }
+
+  const client = getClient();
+  try {
+    const provider = await client.providers.create({
+      name: options.name,
+      schema: options.schema as ProviderSchema,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey,
+      description: options.description,
+      defaultTimeout: options.timeout,
+      defaultStream: options.stream ?? true,
+      schemaConfig: buildSchemaConfig(options),
+    });
+
+    output.success(`Created provider: ${provider.id}`);
+    output.data(provider);
+    output.info('\nNext steps:');
+    output.info(`  1. Test connectivity:  omni providers test ${provider.id}`);
+    output.info(
+      `  2. Assign to instance: omni instances update <instance-id> --agent-provider ${provider.id}${options.defaultAgentId ? ` --agent ${options.defaultAgentId}` : ''}`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to create provider: ${message}`);
+  }
+}
+
+async function handleTest(id: string): Promise<void> {
+  const client = getClient();
+  try {
+    const result = await client.providers.checkHealth(id);
+    if (result.healthy) {
+      output.success(`Provider is healthy (latency: ${result.latency}ms)`);
+    } else {
+      const errorMsg = result.error ?? 'Unknown error';
+      const hint = getHealthCheckHint(errorMsg);
+      output.error(`Provider health check failed: ${errorMsg}${hint}`, { latency: result.latency });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to test provider: ${message}`);
+  }
+}
+
+async function handleUpdate(id: string, options: Record<string, unknown>): Promise<void> {
+  const body = buildUpdateBody(options as Parameters<typeof buildUpdateBody>[0]);
+  if ('error' in body) {
+    output.error(body.error as string);
+    return;
+  }
+  if (Object.keys(body).length === 0) {
+    output.error('No fields to update. Provide at least one option.');
+    return;
+  }
+
+  const client = getClient();
+  try {
+    const provider = await client.providers.update(id, body);
+    output.success(`Updated provider: ${provider.id}`);
+    output.data(provider);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to update provider: ${message}`);
+  }
+}
+
+async function handleDelete(id: string, options: { force?: boolean }): Promise<void> {
+  if (!options.force) {
+    output.warn(`This will delete provider ${id}. Use --force to confirm.`);
+    return;
+  }
+  const client = getClient();
+  try {
+    await client.providers.delete(id);
+    output.success(`Deleted provider: ${id}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`Failed to delete provider: ${message}`);
+  }
+}
+
 export function createProvidersCommand(): Command {
   const providers = new Command('providers').description('Manage AI/agent providers');
 
@@ -115,44 +336,10 @@ export function createProvidersCommand(): Command {
     .command('list')
     .description('List available providers')
     .option('--active', 'Show only active providers')
-    .action(async (options: { active?: boolean }) => {
-      const client = getClient();
-
-      try {
-        const result = await client.providers.list({
-          active: options.active,
-        });
-
-        const items = result.map((p) => ({
-          id: p.id,
-          name: p.name,
-          schema: p.schema,
-          projectPath: (p.schemaConfig as Record<string, unknown> | null)?.projectPath ?? '-',
-          active: p.isActive ? 'yes' : 'no',
-        }));
-
-        output.list(items, { emptyMessage: 'No providers found.' });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to list providers: ${message}`);
-      }
-    });
+    .action(handleList);
 
   // omni providers get <id>
-  providers
-    .command('get <id>')
-    .description('Get provider details')
-    .action(async (id: string) => {
-      const client = getClient();
-
-      try {
-        const provider = await client.providers.get(id);
-        output.data(provider);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to get provider: ${message}`);
-      }
-    });
+  providers.command('get <id>').description('Get provider details').action(handleGet);
 
   // omni providers create
   providers
@@ -173,82 +360,17 @@ export function createProvidersCommand(): Command {
     .option('--permission-mode <mode>', 'Permission mode: default, acceptEdits, bypassPermissions, plan (claude-code)')
     .option('--model <model>', 'Model override (claude-code)')
     .option('--system-prompt <prompt>', 'System prompt prepended to agent (claude-code)')
-    .action(
-      async (options: {
-        name: string;
-        schema: string;
-        baseUrl: string;
-        apiKey?: string;
-        description?: string;
-        timeout?: number;
-        stream?: boolean;
-        defaultAgentId?: string;
-        projectPath?: string;
-        maxTurns?: number;
-        permissionMode?: string;
-        model?: string;
-        systemPrompt?: string;
-      }) => {
-        const validationError = validateCreateOptions(options);
-        if (validationError) {
-          output.error(validationError);
-          return;
-        }
-
-        const client = getClient();
-
-        try {
-          const provider = await client.providers.create({
-            name: options.name,
-            schema: options.schema as ProviderSchema,
-            baseUrl: options.baseUrl,
-            apiKey: options.apiKey,
-            description: options.description,
-            defaultTimeout: options.timeout,
-            defaultStream: options.stream ?? true,
-            schemaConfig: buildSchemaConfig(options),
-          });
-
-          output.success(`Created provider: ${provider.id}`);
-          output.data(provider);
-
-          // Guided next steps
-          output.info('\nNext steps:');
-          output.info(`  1. Test connectivity:  omni providers test ${provider.id}`);
-          output.info(
-            `  2. Assign to instance: omni instances update <instance-id> --agent-provider ${provider.id}${options.defaultAgentId ? ` --agent ${options.defaultAgentId}` : ''}`,
-          );
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to create provider: ${message}`);
-        }
-      },
-    );
+    // Genie options
+    .option('--agent-name <name>', 'Agent identity / "from" field (required for genie)')
+    .option('--target-agent <name>', 'Target agent inbox to deliver to (required for genie)')
+    .option(
+      '--team-name <template>',
+      'Team name template, supports {chat_id}, {thread_id}, {sender_id} (genie, default: omni-{chat_id})',
+    )
+    .action(handleCreate);
 
   // omni providers test <id>
-  providers
-    .command('test <id>')
-    .description('Test provider health')
-    .action(async (id: string) => {
-      const client = getClient();
-
-      try {
-        const result = await client.providers.checkHealth(id);
-
-        if (result.healthy) {
-          output.success(`Provider is healthy (latency: ${result.latency}ms)`);
-        } else {
-          const errorMsg = result.error ?? 'Unknown error';
-          const hint = getHealthCheckHint(errorMsg);
-          output.error(`Provider health check failed: ${errorMsg}${hint}`, {
-            latency: result.latency,
-          });
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to test provider: ${message}`);
-      }
-    });
+  providers.command('test <id>').description('Test provider health').action(handleTest);
 
   // omni providers agents <id>
   providers
@@ -322,27 +444,39 @@ export function createProvidersCommand(): Command {
       }
     });
 
+  // omni providers update <id>
+  providers
+    .command('update <id>')
+    .description('Update a provider')
+    .option('--name <name>', 'Provider name')
+    .option('--base-url <url>', 'API base URL')
+    .option('--api-key <key>', 'API key')
+    .option('--description <desc>', 'Provider description')
+    .option('--timeout <seconds>', 'Default timeout in seconds', Number.parseInt)
+    .option('--stream', 'Enable streaming by default')
+    .option('--no-stream', 'Disable streaming by default')
+    .option('--active', 'Set provider active')
+    .option('--no-active', 'Set provider inactive')
+    // Schema-specific options (genie)
+    .option('--agent-name <name>', 'Agent identity (genie)')
+    .option('--target-agent <name>', 'Target agent inbox (genie)')
+    .option('--team-name <template>', 'Team name template (genie)')
+    // Schema-specific options (claude-code)
+    .option('--project-path <path>', 'Project directory path (claude-code)')
+    .option('--max-turns <number>', 'Max conversation turns (claude-code)', Number.parseInt)
+    .option('--permission-mode <mode>', 'Permission mode (claude-code)')
+    .option('--model <model>', 'Model override (claude-code)')
+    .option('--system-prompt <prompt>', 'System prompt (claude-code)')
+    // Raw schema config
+    .option('--schema-config <json>', 'Raw schemaConfig as JSON (overrides individual schema flags)')
+    .action(handleUpdate);
+
   // omni providers delete <id>
   providers
     .command('delete <id>')
     .description('Delete a provider')
     .option('--force', 'Skip confirmation')
-    .action(async (id: string, options: { force?: boolean }) => {
-      const client = getClient();
-
-      if (!options.force) {
-        output.warn(`This will delete provider ${id}. Use --force to confirm.`);
-        return;
-      }
-
-      try {
-        await client.providers.delete(id);
-        output.success(`Deleted provider: ${id}`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to delete provider: ${message}`);
-      }
-    });
+    .action(handleDelete);
 
   return providers;
 }
