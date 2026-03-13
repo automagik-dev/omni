@@ -227,3 +227,150 @@ describe('GenieClient auto-spawn on run()', () => {
     expect(response.runId).toContain('genie-omni-');
   });
 });
+
+describe('GenieClient direct tmux fallback', () => {
+  test('falls back to direct tmux when genie CLI fails', async () => {
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
+      const file = callArgs[0] as string;
+      const args = callArgs[1] as string[];
+
+      if (file === 'genie') {
+        cb(new Error('genie not installed'));
+      } else if (file === 'tmux' && args[0] === 'list-windows') {
+        // Return empty initially, but after send-keys we return the window
+        cb(null, '', '');
+      } else {
+        cb(null, '', '');
+      }
+    });
+
+    const client = new GenieClient(makeConfig());
+    await client.run(makeRequest());
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    // genie failed, should have fallen back to tmux
+    const tmuxCalls = getCallsFor('tmux');
+    const hasSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'has-session');
+    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
+
+    expect(hasSessionCall).toBeTruthy();
+    expect(sendKeysCall).toBeTruthy();
+
+    // Verify Claude Code command is sent with correct flags
+    // send-keys args: ['send-keys', '-t', 'genie:test-team', '<claude cmd>', 'Enter']
+    const sendKeysArgs = sendKeysCall?.[1] as string[];
+    const claudeCmd = sendKeysArgs[3]; // The command string (after -t <target>)
+    expect(claudeCmd).toContain('claude');
+    expect(claudeCmd).toContain('--team-name');
+    expect(claudeCmd).toContain('--dangerously-skip-permissions');
+  });
+
+  test('creates tmux session when it does not exist', async () => {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: test mock with many branches
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
+      const file = callArgs[0] as string;
+      const args = callArgs[1] as string[];
+
+      if (file === 'genie') {
+        cb(new Error('genie not installed'));
+      } else if (file === 'tmux' && args[0] === 'has-session') {
+        cb(new Error('session not found'));
+      } else if (file === 'tmux' && args[0] === 'list-windows') {
+        // Return matching window after new-window is called
+        const newWindowCalls = execFileMock.mock.calls.filter(
+          (c) => (c[0] as string) === 'tmux' && (c[1] as string[])[0] === 'new-window',
+        );
+        cb(null, newWindowCalls.length > 0 ? 'test-team\n' : '', '');
+      } else {
+        cb(null, '', '');
+      }
+    });
+
+    const client = new GenieClient(makeConfig());
+    await client.run(makeRequest());
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    const tmuxCalls = getCallsFor('tmux');
+    const newSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'new-session');
+    expect(newSessionCall).toBeTruthy();
+
+    const newSessionArgs = newSessionCall?.[1] as string[];
+    expect(newSessionArgs).toContain('-s');
+    expect(newSessionArgs).toContain('genie');
+  });
+
+  test('uses custom tmuxSession name for direct spawn', async () => {
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
+      const file = callArgs[0] as string;
+      const args = callArgs[1] as string[];
+
+      if (file === 'genie') {
+        cb(new Error('genie not installed'));
+      } else if (file === 'tmux' && args[0] === 'list-windows') {
+        const sendKeysCalls = execFileMock.mock.calls.filter(
+          (c) => (c[0] as string) === 'tmux' && (c[1] as string[])[0] === 'send-keys',
+        );
+        cb(null, sendKeysCalls.length > 0 ? 'test-team\n' : '', '');
+      } else {
+        cb(null, '', '');
+      }
+    });
+
+    const client = new GenieClient(makeConfig({ tmuxSession: 'custom-session' }));
+    await client.run(makeRequest());
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    const tmuxCalls = getCallsFor('tmux');
+    const hasSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'has-session');
+    const hasSessionArgs = hasSessionCall?.[1] as string[];
+    expect(hasSessionArgs).toContain('custom-session');
+  });
+});
+
+describe('GenieClient tmux verification', () => {
+  test('verifies tmux window after genie spawn succeeds', async () => {
+    const client = new GenieClient(makeConfig());
+    await client.run(makeRequest());
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Should have called tmux list-windows for verification
+    const tmuxCalls = getCallsFor('tmux');
+    const listWindowsCalls = tmuxCalls.filter((c) => (c[1] as string[])[0] === 'list-windows');
+    expect(listWindowsCalls.length).toBeGreaterThan(0);
+  });
+
+  test('recognizes dash-sanitized window names in tmux', async () => {
+    // Create config for team "my-team"
+    const teamDir = join(TEAMS_DIR, 'my-team');
+    mkdirSync(teamDir, { recursive: true });
+    writeFileSync(join(teamDir, 'config.json'), '{}');
+
+    // Mock tmux to return the window name
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
+      const file = callArgs[0] as string;
+      const args = callArgs[1] as string[];
+
+      if (file === 'tmux' && args[0] === 'list-windows') {
+        cb(null, 'my-team\n', '');
+      } else {
+        cb(null, '', '');
+      }
+    });
+
+    // Team name matches tmux window → config + window found → no genie call
+    const client = new GenieClient(makeConfig({ teamName: 'my-team' }));
+    await client.run(makeRequest());
+    await new Promise((r) => setTimeout(r, 100));
+
+    const genieCalls = getCallsFor('genie');
+    expect(genieCalls.length).toBe(0);
+  });
+});
