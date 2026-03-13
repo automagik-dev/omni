@@ -125,6 +125,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'providers.list': 'providers list',
   'providers.get': 'providers get <id>',
   'providers.create': 'providers create --name <name> --schema <schema> --base-url <url> --api-key <key>',
+  'providers.update': 'providers update <id> --name <name> --base-url <url>',
   'providers.delete': 'providers delete <id> --force',
   'providers.checkHealth': 'providers test <id>',
   'providers.listAgents': 'providers agents <id>',
