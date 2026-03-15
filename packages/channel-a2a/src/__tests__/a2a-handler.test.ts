@@ -47,6 +47,13 @@ function createMockEventBus() {
   };
 }
 
+function createMockPlugin() {
+  return {
+    inboundTimings: mock((_t0: number) => undefined as Record<string, number> | undefined),
+    recordT2: mock((_correlationId: string, _timings: Record<string, number>) => {}),
+  };
+}
+
 function makeRequest(body: unknown, method = 'POST'): Request {
   return new Request('http://localhost/a2a/inst-1', {
     method,
@@ -61,6 +68,7 @@ function makeCtx(eventBus = createMockEventBus(), streamStore = new A2AStreamSto
     eventBus: eventBus as unknown as EventBus,
     streamStore,
     channelType: 'a2a' as const,
+    plugin: createMockPlugin() as unknown as import('../plugin').A2AChannelPlugin,
   };
 }
 

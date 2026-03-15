@@ -11,6 +11,7 @@
 import { generateCorrelationId } from '@omni/core';
 import type { EventBus } from '@omni/core/events';
 import { z } from 'zod';
+import type { A2AChannelPlugin } from './plugin';
 import type { A2AStreamStore } from './stream-store';
 import type { A2AMessage, A2ATask, JSONRPCRequest, JSONRPCResponse, MessageSendParams } from './types';
 
@@ -90,6 +91,7 @@ export interface A2AHandlerContext {
   eventBus: EventBus;
   streamStore: A2AStreamStore;
   channelType: 'a2a';
+  plugin: A2AChannelPlugin;
 }
 
 /**
@@ -97,6 +99,7 @@ export interface A2AHandlerContext {
  * Returns a JSON response (message/send) or SSE stream (message/stream).
  */
 export async function handleA2ARequest(request: Request, ctx: A2AHandlerContext): Promise<Response> {
+  const t0 = Date.now(); // T0: request arrival time (synthetic — A2A has no platform timestamp)
   let rpcReq: JSONRPCRequest;
 
   try {
@@ -117,10 +120,10 @@ export async function handleA2ARequest(request: Request, ctx: A2AHandlerContext)
 
   switch (method) {
     case 'message/send':
-      return handleMessageSend(id, params as Record<string, unknown> | undefined, ctx);
+      return handleMessageSend(id, params as Record<string, unknown> | undefined, ctx, t0);
 
     case 'message/stream':
-      return handleMessageStream(id, params as Record<string, unknown> | undefined, ctx);
+      return handleMessageStream(id, params as Record<string, unknown> | undefined, ctx, t0);
 
     case 'tasks/get':
     case 'tasks/cancel':
@@ -140,6 +143,7 @@ async function handleMessageSend(
   id: string | number | null,
   params: Record<string, unknown> | undefined,
   ctx: A2AHandlerContext,
+  t0: number,
 ): Promise<Response> {
   const parseResult = MessageSendParamsSchema.safeParse(params);
   if (!parseResult.success) {
@@ -155,8 +159,13 @@ async function handleMessageSend(
   const taskId = generateCorrelationId('a2a');
   const contextId = sendParams.contextId ?? taskId;
 
+  // Journey timing: capture T0 (request arrival) and T1 (plugin received)
+  const timings = ctx.plugin.inboundTimings(t0);
+
   try {
-    await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+    const correlationId = await emitMessageReceived(sendParams.message, taskId, contextId, ctx, timings);
+    // Journey timing: capture T2 (event published)
+    if (timings) ctx.plugin.recordT2(correlationId, timings);
   } catch {
     return jsonResponse(jsonRpcError(id, -32603, 'Internal error'), 500);
   }
@@ -179,6 +188,7 @@ async function handleMessageStream(
   id: string | number | null,
   params: Record<string, unknown> | undefined,
   ctx: A2AHandlerContext,
+  t0: number,
 ): Promise<Response> {
   const parseResult = MessageSendParamsSchema.safeParse(params);
   if (!parseResult.success) {
@@ -197,9 +207,14 @@ async function handleMessageStream(
   // Create pending SSE stream BEFORE emitting event so the dispatcher can write to it
   const sseStream = ctx.streamStore.createPendingStream(ctx.instanceId, taskId);
 
+  // Journey timing: capture T0 (request arrival) and T1 (plugin received)
+  const timings = ctx.plugin.inboundTimings(t0);
+
   // Emit message.received to trigger the dispatcher
   try {
-    await emitMessageReceived(sendParams.message, taskId, contextId, ctx);
+    const correlationId = await emitMessageReceived(sendParams.message, taskId, contextId, ctx, timings);
+    // Journey timing: capture T2 (event published)
+    if (timings) ctx.plugin.recordT2(correlationId, timings);
   } catch {
     ctx.streamStore.closeStream(ctx.instanceId, taskId, 'failed');
     return jsonResponse(jsonRpcError(id, -32603, 'Internal error'), 500);
@@ -223,7 +238,8 @@ async function emitMessageReceived(
   taskId: string,
   contextId: string,
   ctx: A2AHandlerContext,
-): Promise<void> {
+  timings?: Record<string, number>,
+): Promise<string> {
   const text = extractText(message);
   const correlationId = generateCorrelationId('evt');
 
@@ -241,6 +257,9 @@ async function emitMessageReceived(
       instanceId: ctx.instanceId,
       channelType: ctx.channelType,
       source: 'channel:a2a',
+      timings,
     },
   );
+
+  return correlationId;
 }
