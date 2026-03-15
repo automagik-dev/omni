@@ -248,6 +248,12 @@ export class TelegramPlugin extends BaseChannelPlugin {
   /** Per-instance inbound dedup caches */
   private dedupeCaches = new Map<string, DedupeCache>();
 
+  /** Active typing refresh intervals keyed by `${instanceId}:${chatId}` */
+  private typingIntervals = new Map<
+    string,
+    { refresh: ReturnType<typeof setInterval>; failsafe: ReturnType<typeof setTimeout> }
+  >();
+
   // ────────────────────────────────────────────────────────────
   // Lifecycle
   // ────────────────────────────────────────────────────────────
@@ -257,6 +263,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
   }
 
   protected override async onDestroy(): Promise<void> {
+    // Clear all typing refresh intervals
+    this.clearAllTypingIntervals();
     for (const cleanup of this.cleanups.values()) cleanup();
     this.cleanups.clear();
     this.configs.clear();
@@ -369,6 +377,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
   async disconnect(instanceId: string): Promise<void> {
     this.logger.info('Disconnecting Telegram instance', { instanceId });
+
+    // Clear typing intervals for this instance
+    for (const key of [...this.typingIntervals.keys()]) {
+      if (key.startsWith(`${instanceId}:`)) {
+        this.clearTypingInterval(key);
+      }
+    }
 
     // Cancel pending album buffers and deferred flushes before teardown
     this.cleanups.get(instanceId)?.();
@@ -611,14 +626,65 @@ export class TelegramPlugin extends BaseChannelPlugin {
     };
   }
 
-  async sendTyping(instanceId: string, chatId: string): Promise<void> {
-    const bot = getBot(instanceId);
-    if (!bot) return;
+  /**
+   * Send typing indicator with auto-refresh.
+   *
+   * Telegram typing expires after ~5s. When duration > 0, we send an initial
+   * typing action then refresh every 4s to keep it visible. A 60s failsafe
+   * prevents leaked intervals. Calling with duration === 0 stops the refresh.
+   */
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const key = `${instanceId}:${chatId}`;
 
-    try {
-      await bot.api.sendChatAction(chatId, 'typing');
-    } catch (error) {
-      this.logger.debug('Failed to send typing', { instanceId, chatId, error: String(error) });
+    // Stop existing refresh for this chat
+    this.clearTypingInterval(key);
+
+    // duration === 0 means stop typing — just clear and return
+    if (duration === 0) return;
+
+    const doTyping = async () => {
+      try {
+        const bot = getBot(instanceId);
+        if (!bot) {
+          this.clearTypingInterval(key);
+          return;
+        }
+        await bot.api.sendChatAction(chatId, 'typing');
+      } catch {
+        this.clearTypingInterval(key);
+      }
+    };
+
+    // Send initial typing
+    await doTyping();
+
+    // Set up auto-refresh every 4s
+    const refresh = setInterval(() => {
+      doTyping();
+    }, 4000);
+
+    // Failsafe: auto-clear after 60s to prevent leaked intervals
+    const failsafe = setTimeout(() => {
+      this.clearTypingInterval(key);
+    }, 60000);
+
+    this.typingIntervals.set(key, { refresh, failsafe });
+  }
+
+  /** Clear a typing refresh interval by key */
+  private clearTypingInterval(key: string): void {
+    const entry = this.typingIntervals.get(key);
+    if (entry) {
+      clearInterval(entry.refresh);
+      clearTimeout(entry.failsafe);
+      this.typingIntervals.delete(key);
+    }
+  }
+
+  /** Clear all typing refresh intervals (used during disconnect/destroy) */
+  private clearAllTypingIntervals(): void {
+    for (const key of [...this.typingIntervals.keys()]) {
+      this.clearTypingInterval(key);
     }
   }
 
