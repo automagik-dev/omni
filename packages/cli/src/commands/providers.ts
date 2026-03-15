@@ -301,6 +301,14 @@ async function handleUpdate(id: string, options: Record<string, unknown>): Promi
 
   const client = getClient();
   try {
+    // If updating individual schemaConfig fields (not raw --schema-config JSON),
+    // merge with the existing config to avoid dropping required fields.
+    if (body.schemaConfig && !options.schemaConfig) {
+      const existing = await client.providers.get(id);
+      const existingConfig = (existing.schemaConfig as Record<string, unknown>) ?? {};
+      body.schemaConfig = { ...existingConfig, ...(body.schemaConfig as Record<string, unknown>) };
+    }
+
     const provider = await client.providers.update(id, body);
     output.success(`Updated provider: ${provider.id}`);
     output.data(provider);

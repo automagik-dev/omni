@@ -663,10 +663,11 @@ export class TelegramPlugin extends BaseChannelPlugin {
       doTyping();
     }, 4000);
 
-    // Failsafe: auto-clear after 60s to prevent leaked intervals
+    // Honor duration: use caller's duration if positive, otherwise 60s failsafe
+    const timeoutMs = duration && duration > 0 ? duration : 60000;
     const failsafe = setTimeout(() => {
       this.clearTypingInterval(key);
-    }, 60000);
+    }, timeoutMs);
 
     this.typingIntervals.set(key, { refresh, failsafe });
   }
