@@ -83,19 +83,11 @@ export const InstanceSchema = z.object({
 
   // Discord config
   discordBotToken: z.string().nullable(),
-  discordClientId: z.string().max(50).nullable(),
-  discordGuildIds: z.array(z.string()).nullable(),
-  discordDefaultChannelId: z.string().max(50).nullable(),
-  discordVoiceEnabled: z.boolean().nullable(),
-  discordSlashCommandsEnabled: z.boolean().nullable(),
-  discordWebhookUrl: z.string().url().nullable(),
-  discordPermissions: z.number().int().nullable(),
 
   // Slack config
   slackBotToken: z.string().nullable(),
   slackAppToken: z.string().nullable(),
   slackSigningSecret: z.string().nullable(),
-  slackTeamId: z.string().max(50).nullable(),
 
   // Telegram config
   telegramBotToken: z.string().nullable(),

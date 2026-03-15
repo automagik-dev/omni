@@ -727,11 +727,6 @@ function transformInstanceToV1(instance: V2Instance): V1Instance {
 
     // Discord fields
     discord_bot_token: instance.discordBotToken,
-    discord_client_id: instance.discordClientId,
-    discord_guild_id: instance.discordGuildIds?.[0],
-    discord_default_channel_id: instance.discordDefaultChannelId,
-    discord_voice_enabled: instance.discordVoiceEnabled,
-    discord_slash_commands_enabled: instance.discordSlashCommandsEnabled,
 
     // Agent fields
     agent_provider_id: instance.agentProviderId,
@@ -770,11 +765,6 @@ function transformInstanceFromV1(v1: Partial<V1Instance>): Partial<V2Instance> {
 
     // Discord
     discordBotToken: v1.discord_bot_token,
-    discordClientId: v1.discord_client_id,
-    discordGuildIds: v1.discord_guild_id ? [v1.discord_guild_id] : undefined,
-    discordDefaultChannelId: v1.discord_default_channel_id,
-    discordVoiceEnabled: v1.discord_voice_enabled,
-    discordSlashCommandsEnabled: v1.discord_slash_commands_enabled,
 
     // Agent
     agentProviderId: v1.agent_provider_id,
