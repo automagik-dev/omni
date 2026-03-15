@@ -494,6 +494,95 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.run).not.toHaveBeenCalled();
     });
 
+    it('allows LID sender when resolvedSenderPhone matches allowlist rule', async () => {
+      const eventBus = createMockEventBus();
+      // Access check: deny LID ID but allow phone number (simulates allowlist with phone rule)
+      const checkAccess = mock(async (_instance: unknown, id: string) => {
+        if (id === '5511999000001') return { allowed: true, reason: 'Phone matched allowlist' };
+        return { allowed: false, reason: 'No rule matched', mode: 'allowlist' };
+      });
+      const services = createMockServices({
+        access: { checkAccess, requestPairing: mock(async () => {}) },
+      });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      // LID sender with resolvedSenderPhone annotated by channel-whatsapp
+      const event = createMessageEvent({
+        payload: {
+          externalId: 'ext-lid-allowlist',
+          chatId: '100000001@lid',
+          from: '100000001', // LID ID — no rule matches this
+          content: { type: 'text', text: 'Hello from LID sender' },
+          rawPayload: { resolvedSenderPhone: '5511999000001' }, // phone resolved from LID cache
+        },
+      });
+
+      await eventBus.fire('message.received', event);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Should have been called 3 times: once for LID, once fallback (no participantAlt), once for resolvedSenderPhone
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '100000001', expect.anything());
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000001', expect.anything());
+      // Message should have reached agent (allowed via phone number)
+      expect(services.agentRunner.getSenderName).toHaveBeenCalled();
+    });
+
+    it('denies LID sender when resolvedSenderPhone is also not in allowlist', async () => {
+      const eventBus = createMockEventBus();
+      const checkAccess = mock(async () => ({ allowed: false, reason: 'No rule matched', mode: 'allowlist' }));
+      const services = createMockServices({
+        access: { checkAccess, requestPairing: mock(async () => {}) },
+      });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      const event = createMessageEvent({
+        payload: {
+          externalId: 'ext-lid-denied',
+          chatId: '100000002@lid',
+          from: '100000002',
+          content: { type: 'text', text: 'Hello, blocked' },
+          rawPayload: { resolvedSenderPhone: '5511999000002' },
+        },
+      });
+
+      await eventBus.fire('message.received', event);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(services.agentRunner.run).not.toHaveBeenCalled();
+    });
+
+    it('allows LID group sender via participantAlt when resolvedSenderPhone is absent', async () => {
+      const eventBus = createMockEventBus();
+      const checkAccess = mock(async (_instance: unknown, id: string) => {
+        if (id === '5511999000003') return { allowed: true, reason: 'Phone matched allowlist' };
+        return { allowed: false, reason: 'No rule matched', mode: 'allowlist' };
+      });
+      const services = createMockServices({
+        access: { checkAccess, requestPairing: mock(async () => {}) },
+      });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      // Group message: participantAlt in key (existing fallback path), no resolvedSenderPhone
+      const event = createMessageEvent({
+        payload: {
+          externalId: 'ext-group-lid',
+          chatId: '5511group@g.us',
+          from: '100000003',
+          content: { type: 'text', text: 'Group msg from LID sender' },
+          rawPayload: { key: { participantAlt: '5511999000003@s.whatsapp.net' } },
+        },
+      });
+
+      await eventBus.fire('message.received', event);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000003', expect.anything());
+      expect(services.agentRunner.getSenderName).toHaveBeenCalled();
+    });
+
     it('rate limits when too many messages from same user', async () => {
       const eventBus = createMockEventBus();
       // Instance with rate limit of 2
