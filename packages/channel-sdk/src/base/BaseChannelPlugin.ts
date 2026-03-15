@@ -9,7 +9,7 @@
  */
 
 import { generateCorrelationId } from '@omni/core';
-import type { EventBus } from '@omni/core/events';
+import type { CoreEventType, EventBus, EventPayloadMap } from '@omni/core/events';
 import { JOURNEY_STAGES, getJourneyTracker } from '@omni/core/tracing';
 import type { ChannelType } from '@omni/core/types';
 import type {
@@ -33,6 +33,20 @@ import type { OutgoingMessage, SendResult } from '../types/messaging';
 import type { ChannelPlugin, HealthCheck, HealthStatus } from '../types/plugin';
 import { aggregateHealthChecks } from './HealthChecker';
 import { InstanceManager } from './InstanceManager';
+
+/** Events that should NOT trigger instance activity recording */
+const NO_ACTIVITY_EVENTS = new Set<string>([
+  'instance.connected',
+  'instance.disconnected',
+  'instance.qr_code',
+  'message.failed',
+]);
+
+/** Options for the internal event publisher */
+interface PublishEventInternalOptions {
+  timings?: Record<string, number>;
+  ingestMode?: 'realtime' | 'history-sync';
+}
 
 /**
  * Abstract base class for channel plugins
@@ -238,9 +252,9 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Normalize a platform timestamp to Unix milliseconds (T0).
    *
    * Platform normalization:
-   * - WhatsApp: `messageTimestamp` is seconds since epoch → × 1000
-   * - Discord: `message.createdTimestamp` is already milliseconds → no conversion
-   * - Telegram: `message.date` is seconds since epoch → × 1000
+   * - WhatsApp: `messageTimestamp` is seconds since epoch -> x 1000
+   * - Discord: `message.createdTimestamp` is already milliseconds -> no conversion
+   * - Telegram: `message.date` is seconds since epoch -> x 1000
    *
    * @param platformTimestamp - Raw timestamp from the platform
    * @param isSeconds - Whether the timestamp is in seconds (true for WhatsApp/Telegram)
@@ -252,7 +266,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
 
   /**
    * Build a timings map with T0 and T1 checkpoints for inbound messages.
-   * Checks sampling rate — returns undefined if this message should not be tracked.
+   * Checks sampling rate -- returns undefined if this message should not be tracked.
    *
    * @param platformTimestamp - Normalized T0 timestamp (Unix ms)
    * @returns Timings map with platformReceivedAt and pluginReceivedAt, or undefined if not sampled
@@ -308,6 +322,40 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Internal Event Publisher
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Shared event publishing logic used by all emit* facades.
+   *
+   * Generates a correlationId, publishes the event, optionally records
+   * instance activity, and logs at debug level.
+   */
+  private async publishEventInternal<K extends CoreEventType>(
+    type: K,
+    payload: EventPayloadMap[K],
+    instanceId: string,
+    options?: PublishEventInternalOptions,
+  ): Promise<string> {
+    const correlationId = generateCorrelationId('evt');
+
+    await this.eventBus.publish(type, payload, {
+      correlationId,
+      instanceId,
+      channelType: this.id,
+      source: `channel:${this.id}`,
+      ...options,
+    });
+
+    if (!NO_ACTIVITY_EVENTS.has(type)) {
+      this.instances.recordActivity(instanceId);
+    }
+
+    this.logger.debug(`Published ${type}`, { instanceId, correlationId });
+    return correlationId;
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Event Emission Helpers
   // ─────────────────────────────────────────────────────────────
 
@@ -324,131 +372,44 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * });
    */
   protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<string> {
-    const correlationId = generateCorrelationId('evt');
-
-    await this.eventBus.publish(
-      'message.received',
-      {
-        externalId: params.externalId,
-        chatId: params.chatId,
-        threadId: params.threadId,
-        from: params.from,
-        content: params.content,
-        replyToId: params.replyToId,
-        rawPayload: params.rawPayload,
-      },
-      {
-        correlationId,
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-        ingestMode: params.isHistorySync ? 'history-sync' : 'realtime',
-        timings: params.timings,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted message.received', { instanceId: params.instanceId, externalId: params.externalId });
-    return correlationId;
+    const { instanceId, timings, isHistorySync, ...payload } = params;
+    return this.publishEventInternal('message.received', payload, instanceId, {
+      timings,
+      ingestMode: isHistorySync ? 'history-sync' : 'realtime',
+    });
   }
 
   /**
    * Emit message.sent event with hierarchical subject
    */
   protected async emitMessageSent(params: EmitMessageSentParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.sent',
-      {
-        externalId: params.externalId,
-        chatId: params.chatId,
-        threadId: params.threadId,
-        to: params.to,
-        content: params.content,
-        replyToId: params.replyToId,
-        senderAgentId: params.senderAgentId,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted message.sent', { instanceId: params.instanceId, externalId: params.externalId });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.sent', payload, instanceId);
   }
 
   /**
    * Emit message.failed event
    */
   protected async emitMessageFailed(params: EmitMessageFailedParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.failed',
-      {
-        externalId: params.externalId,
-        chatId: params.chatId,
-        error: params.error,
-        errorCode: params.errorCode,
-        retryable: params.retryable,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.logger.warn('Emitted message.failed', {
-      instanceId: params.instanceId,
-      error: params.error,
-      retryable: params.retryable,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.failed', payload, instanceId);
+    this.logger.warn('Message failed', { instanceId, error: params.error, retryable: params.retryable });
   }
 
   /**
    * Emit message.delivered event
    */
   protected async emitMessageDelivered(params: EmitMessageDeliveredParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.delivered',
-      {
-        externalId: params.externalId,
-        chatId: params.chatId,
-        deliveredAt: params.deliveredAt,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.delivered', payload, instanceId);
   }
 
   /**
    * Emit message.read event
    */
   protected async emitMessageRead(params: EmitMessageReadParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.read',
-      {
-        externalId: params.externalId,
-        chatId: params.chatId,
-        readAt: params.readAt,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.read', payload, instanceId);
   }
 
   /**
@@ -460,163 +421,51 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    *   messageId: 'msg_123',
    *   chatId: 'channel_456',
    *   from: 'user_789',
-   *   emoji: '🐙',
+   *   emoji: '\u{1F419}',
    * });
    */
   protected async emitReactionReceived(params: EmitReactionReceivedParams): Promise<void> {
-    await this.eventBus.publish(
-      'reaction.received',
-      {
-        messageId: params.messageId,
-        chatId: params.chatId,
-        from: params.from,
-        emoji: params.emoji,
-        emojiName: params.emojiName,
-        isCustomEmoji: params.isCustomEmoji,
-        rawPayload: params.rawPayload,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted reaction.received', {
-      instanceId: params.instanceId,
-      messageId: params.messageId,
-      emoji: params.emoji,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('reaction.received', payload, instanceId);
   }
 
   /**
    * Emit reaction.removed event
    */
   protected async emitReactionRemoved(params: EmitReactionRemovedParams): Promise<void> {
-    await this.eventBus.publish(
-      'reaction.removed',
-      {
-        messageId: params.messageId,
-        chatId: params.chatId,
-        from: params.from,
-        emoji: params.emoji,
-        emojiName: params.emojiName,
-        isCustomEmoji: params.isCustomEmoji,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted reaction.removed', {
-      instanceId: params.instanceId,
-      messageId: params.messageId,
-      emoji: params.emoji,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('reaction.removed', payload, instanceId);
   }
 
   /**
    * Emit message.button_click event
    */
   protected async emitButtonClick(params: EmitButtonClickParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.button_click',
-      {
-        callbackQueryId: params.callbackQueryId,
-        messageId: params.messageId,
-        chatId: params.chatId,
-        from: params.from,
-        text: params.text,
-        data: params.data,
-        rawPayload: params.rawPayload,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted message.button_click', {
-      instanceId: params.instanceId,
-      messageId: params.messageId,
-      data: params.data,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.button_click', payload, instanceId);
   }
 
   /**
    * Emit message.poll event
    */
   protected async emitPoll(params: EmitPollParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.poll',
-      {
-        pollId: params.pollId,
-        chatId: params.chatId,
-        from: params.from,
-        question: params.question,
-        options: params.options,
-        multiSelect: params.multiSelect,
-        rawPayload: params.rawPayload,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted message.poll', {
-      instanceId: params.instanceId,
-      pollId: params.pollId,
-      question: params.question,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.poll', payload, instanceId);
   }
 
   /**
    * Emit message.poll_vote event
    */
   protected async emitPollVote(params: EmitPollVoteParams): Promise<void> {
-    await this.eventBus.publish(
-      'message.poll_vote',
-      {
-        pollId: params.pollId,
-        chatId: params.chatId,
-        from: params.from,
-        optionIds: params.optionIds,
-        rawPayload: params.rawPayload,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted message.poll_vote', {
-      instanceId: params.instanceId,
-      pollId: params.pollId,
-      optionIds: params.optionIds,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.poll_vote', payload, instanceId);
   }
 
   /**
    * Emit instance.connected event
    */
   protected async emitInstanceConnected(instanceId: string, metadata?: InstanceConnectedMetadata): Promise<void> {
-    await this.eventBus.publish(
+    await this.publishEventInternal(
       'instance.connected',
       {
         instanceId,
@@ -625,14 +474,8 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         profilePicUrl: metadata?.profilePicUrl,
         ownerIdentifier: metadata?.ownerIdentifier,
       },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
+      instanceId,
     );
-
     this.logger.info('Instance connected', { instanceId, ...metadata });
   }
 
@@ -640,7 +483,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit instance.disconnected event
    */
   protected async emitInstanceDisconnected(instanceId: string, reason?: string, willReconnect = false): Promise<void> {
-    await this.eventBus.publish(
+    await this.publishEventInternal(
       'instance.disconnected',
       {
         instanceId,
@@ -648,14 +491,8 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         reason,
         willReconnect,
       },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
+      instanceId,
     );
-
     this.logger.info('Instance disconnected', { instanceId, reason, willReconnect });
   }
 
@@ -663,7 +500,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * Emit instance.qr_code event
    */
   protected async emitQrCode(instanceId: string, qrCode: string, expiresAt: Date): Promise<void> {
-    await this.eventBus.publish(
+    await this.publishEventInternal(
       'instance.qr_code',
       {
         instanceId,
@@ -671,45 +508,16 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         qrCode,
         expiresAt: expiresAt.getTime(),
       },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
+      instanceId,
     );
-
-    this.logger.debug('QR code generated', { instanceId, expiresAt: expiresAt.toISOString() });
   }
 
   /**
    * Emit media.received event
    */
   protected async emitMediaReceived(params: EmitMediaReceivedParams): Promise<void> {
-    await this.eventBus.publish(
-      'media.received',
-      {
-        eventId: params.eventId,
-        mediaId: params.mediaId,
-        mimeType: params.mimeType,
-        size: params.size,
-        url: params.url,
-        duration: params.duration,
-      },
-      {
-        correlationId: generateCorrelationId('evt'),
-        instanceId: params.instanceId,
-        channelType: this.id,
-        source: `channel:${this.id}`,
-      },
-    );
-
-    this.instances.recordActivity(params.instanceId);
-    this.logger.debug('Emitted media.received', {
-      instanceId: params.instanceId,
-      mediaId: params.mediaId,
-      mimeType: params.mimeType,
-    });
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('media.received', payload, instanceId);
   }
 
   // ─────────────────────────────────────────────────────────────
