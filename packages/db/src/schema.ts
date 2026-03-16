@@ -585,13 +585,6 @@ export const instances = pgTable(
 
     // ---- Discord Configuration ----
     discordBotToken: text('discord_bot_token'),
-    discordClientId: varchar('discord_client_id', { length: 50 }),
-    discordGuildIds: text('discord_guild_ids').array(), // Multi-server support
-    discordDefaultChannelId: varchar('discord_default_channel_id', { length: 50 }),
-    discordVoiceEnabled: boolean('discord_voice_enabled').default(false),
-    discordSlashCommandsEnabled: boolean('discord_slash_commands_enabled').default(true),
-    discordWebhookUrl: text('discord_webhook_url'),
-    discordPermissions: integer('discord_permissions'),
     /** Per-guild configuration overrides: Record<guildId, GuildConfigOverride> */
     guildConfigOverrides: jsonb('guild_config_overrides').$type<Record<string, unknown>>(),
     /** Persisted bot presence: survives reconnects by being passed as options.presence on connect */
@@ -605,7 +598,6 @@ export const instances = pgTable(
     slackBotToken: text('slack_bot_token'),
     slackAppToken: text('slack_app_token'),
     slackSigningSecret: text('slack_signing_secret'),
-    slackTeamId: varchar('slack_team_id', { length: 50 }),
 
     // ---- Telegram Configuration ----
     telegramBotToken: text('telegram_bot_token'),

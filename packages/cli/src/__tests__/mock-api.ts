@@ -15,6 +15,99 @@
 
 export const MOCK_API_KEY = 'test-mock-api-key-12345';
 
+/** Providers created during test run (mutable state for create/delete/update cycle) */
+let dynamicProviders: Array<{
+  id: string;
+  name: string;
+  schema: string;
+  baseUrl: string;
+  apiKey: string | null;
+  isActive: boolean;
+  schemaConfig: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}> = [];
+
+function makeProvider(
+  id: string,
+  name: string,
+  schema: string,
+  baseUrl: string,
+  schemaConfig?: Record<string, unknown> | null,
+  apiKey?: string | null,
+) {
+  return {
+    id,
+    name,
+    schema,
+    baseUrl,
+    apiKey: apiKey ?? null,
+    isActive: true,
+    schemaConfig: schemaConfig ?? null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function handleCreateProvider(req: Request): Promise<Response> {
+  const body = (await req.json()) as {
+    name?: string;
+    schema?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    schemaConfig?: Record<string, unknown>;
+  };
+  const id = crypto.randomUUID();
+  const provider = makeProvider(
+    id,
+    body.name ?? 'unnamed',
+    body.schema ?? 'genie',
+    body.baseUrl ?? '',
+    body.schemaConfig,
+    body.apiKey,
+  );
+  dynamicProviders.push(provider);
+  return json({ data: provider }, 201);
+}
+
+function handleGetProvider(path: string): Response {
+  const match = path.match(/^\/api\/v2\/providers\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicProviders.find((p) => p.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Provider not found' } }, 404);
+  return json({ data: found });
+}
+
+async function handleUpdateProvider(req: Request, path: string): Promise<Response> {
+  const match = path.match(/^\/api\/v2\/providers\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicProviders.find((p) => p.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Provider not found' } }, 404);
+  const body = (await req.json()) as Record<string, unknown>;
+  if (body.name !== undefined) found.name = body.name as string;
+  if (body.baseUrl !== undefined) found.baseUrl = body.baseUrl as string;
+  if (body.apiKey !== undefined) found.apiKey = body.apiKey as string | null;
+  if (body.isActive !== undefined) found.isActive = body.isActive as boolean;
+  if (body.schemaConfig !== undefined) found.schemaConfig = body.schemaConfig as Record<string, unknown> | null;
+  found.updatedAt = new Date().toISOString();
+  return json({ data: found });
+}
+
+function handleDeleteProvider(path: string): Response {
+  const match = path.match(/^\/api\/v2\/providers\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  dynamicProviders = dynamicProviders.filter((p) => p.id !== id);
+  return json({ success: true });
+}
+
+function handleProviderHealth(path: string): Response {
+  const match = path.match(/^\/api\/v2\/providers\/([^/]+)\/health$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicProviders.find((p) => p.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Provider not found' } }, 404);
+  return json({ healthy: true, latency: 42, error: null });
+}
+
 /** Instances created during test run (mutable state for create/delete cycle) */
 let dynamicInstances: Array<{
   id: string;
@@ -142,7 +235,8 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'GET /api/v2/persons': () => json(EMPTY_ITEMS),
   'GET /api/v2/persons/search': () => json(EMPTY_ITEMS),
   'GET /api/v2/settings': () => json(EMPTY_ITEMS),
-  'GET /api/v2/providers': () => json(EMPTY_ITEMS),
+  'GET /api/v2/providers': () => json({ items: dynamicProviders }),
+  'POST /api/v2/providers': handleCreateProvider,
   'GET /api/v2/access/rules': () => json(EMPTY_ITEMS),
 };
 
@@ -159,6 +253,24 @@ const patternRoutes: Array<{
   },
   { method: 'GET', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleGetInstance(path) },
   { method: 'DELETE', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleDeleteInstance(path) },
+  // Provider routes
+  {
+    method: 'GET',
+    pattern: /^\/api\/v2\/providers\/[^/]+\/health$/,
+    handler: (_req, path) => handleProviderHealth(path),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/api\/v2\/providers\/[^/]+\/health$/,
+    handler: (_req, path) => handleProviderHealth(path),
+  },
+  { method: 'GET', pattern: /^\/api\/v2\/providers\/[^/]+$/, handler: (_req, path) => handleGetProvider(path) },
+  {
+    method: 'PATCH',
+    pattern: /^\/api\/v2\/providers\/[^/]+$/,
+    handler: (req, path) => handleUpdateProvider(req, path),
+  },
+  { method: 'DELETE', pattern: /^\/api\/v2\/providers\/[^/]+$/, handler: (_req, path) => handleDeleteProvider(path) },
 ];
 
 async function handleRequest(req: Request): Promise<Response> {
@@ -204,6 +316,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
 
   // Reset state
   dynamicInstances = [];
+  dynamicProviders = [];
 
   const server = Bun.serve({
     port: 0, // OS-assigned random port
@@ -219,6 +332,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
       server.stop(true);
       handle = null;
       dynamicInstances = [];
+      dynamicProviders = [];
     },
   };
 

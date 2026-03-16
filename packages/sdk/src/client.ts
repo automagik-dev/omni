@@ -2044,6 +2044,28 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       /**
+       * Update a provider
+       */
+      async update(id: string, body: Record<string, unknown>): Promise<Provider> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/providers/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+          const errorData = await resp.json().catch(() => ({}));
+          throw new OmniApiError(
+            (errorData as { error?: string }).error ?? resp.statusText,
+            'UPDATE_FAILED',
+            undefined,
+            resp.status,
+          );
+        }
+        const data = (await resp.json()) as { data: Provider };
+        return data.data;
+      },
+
+      /**
        * Delete a provider
        */
       async delete(id: string): Promise<void> {

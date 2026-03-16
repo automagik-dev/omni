@@ -449,10 +449,14 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Send typing indicator via assistant.threads.setStatus.
    *
-   * Thread-only: no-op when no active thread is tracked for the channel.
-   * Failures are swallowed gracefully — typing never blocks message processing.
+   * **Thread-only / no-op for channels and DMs.** Slack's typing API is only
+   * available inside assistant threads (via `assistant.threads.setStatus`).
+   * There is no general "user is typing" indicator for channels or DMs —
+   * hence `canSendTyping: false` in capabilities. This method exists for the
+   * thread context but silently no-ops when no active thread is tracked.
    *
-   * When duration === 0, clears the typing indicator instead of setting it.
+   * No auto-refresh needed: the status persists until explicitly cleared
+   * (duration === 0) or the assistant replies.
    */
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
     const connection = this.connections.get(instanceId);

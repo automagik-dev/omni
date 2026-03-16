@@ -83,6 +83,18 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
     }
   }
 
+  // ─── Journey Timing (public wrappers for a2a-handler) ────────
+
+  /** Public wrapper for journey timing — used by a2a-handler */
+  inboundTimings(platformTimestamp: number) {
+    return this.captureInboundTimings(platformTimestamp);
+  }
+
+  /** Public wrapper for journey timing — used by a2a-handler */
+  recordT2(correlationId: string, timings: Record<string, number>) {
+    this.captureT2(correlationId, timings);
+  }
+
   // ─── Webhook ──────────────────────────────────────────────────
 
   async handleWebhook(request: Request): Promise<Response> {
@@ -103,6 +115,7 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
         eventBus: this.eventBus,
         streamStore: this.streamStore,
         channelType: 'a2a',
+        plugin: this,
       });
     }
 

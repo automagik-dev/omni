@@ -25,8 +25,7 @@
       "ignoreDependencies": ["@trpc/server"]
     },
     "packages/core": {
-      "project": ["src/**/*.ts"],
-      "ignore": ["src/logger/adapters/baileys.ts"]
+      "project": ["src/**/*.ts"]
     },
     "packages/channel-sdk": {
       "entry": ["src/index.ts"],

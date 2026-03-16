@@ -26,19 +26,9 @@ export { createStorageAuthState, clearAuthState, clearSenderKeys } from './auth'
 export { toJid, toGroupJid, fromJid, isGroupJid, isUserJid, extractPhone, normalizeJid } from './jid';
 export { WhatsAppError, ErrorCode, mapBaileysError, isRetryable } from './utils/errors';
 
-// Presence & typing
+// Presence
 export { PresenceManager, createPresenceManager, setOnline, setOffline } from './presence';
 export type { PresenceType } from './presence';
-export {
-  sendTyping,
-  sendRecording,
-  stopTyping,
-  clearAllTypingTimers,
-  TypingIndicator,
-  createTypingIndicator,
-  DEFAULT_TYPING_DURATION,
-} from './typing';
-export type { TypingState } from './typing';
 
 // Receipts
 export {

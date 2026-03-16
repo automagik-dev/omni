@@ -1,6 +1,6 @@
 {
   "name": "@omni/core",
-  "version": "2.260309.1",
+  "version": "2.260311.1",
   "type": "module",
   "exports": {
     ".": {
@@ -18,10 +18,6 @@
     "./logger": {
       "types": "./src/logger/index.ts",
       "default": "./src/logger/index.ts"
-    },
-    "./logger/adapters/baileys": {
-      "types": "./src/logger/adapters/baileys.ts",
-      "default": "./src/logger/adapters/baileys.ts"
     },
     "./schemas": {
       "types": "./src/schemas/index.ts",
