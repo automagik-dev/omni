@@ -84,7 +84,7 @@ export type Channel = 'whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack
 // Paginated response helper
 export interface PaginatedResponse<T> {
   items: T[];
-  meta: PaginationMeta;
+  meta: PaginationMeta & { total?: number };
 }
 
 // ============================================================================
@@ -1398,7 +1398,7 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('limit', params?.limit);
         setIfDefined('cursor', params?.cursor);
         const resp = await apiFetch(`${baseUrl}/api/v2/chats?${query}`, {});
-        const json = (await resp.json()) as { items?: Chat[]; meta?: PaginationMeta };
+        const json = (await resp.json()) as { items?: Chat[]; meta?: PaginationMeta & { total?: number } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { hasMore: false, cursor: null } };
       },

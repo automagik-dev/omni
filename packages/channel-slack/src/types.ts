@@ -298,6 +298,8 @@ export interface SlackManifest {
   };
 }
 
+import { ChannelError, type ErrorCode as CoreErrorCode, ERROR_CODES } from '@omni/core';
+
 /**
  * Error codes for the Slack plugin
  */
@@ -317,15 +319,31 @@ export const SlackErrorCode = {
 export type SlackErrorCodeType = (typeof SlackErrorCode)[keyof typeof SlackErrorCode];
 
 /**
- * Typed Slack error
+ * Map Slack-specific error codes to core ErrorCode
  */
-export class SlackError extends Error {
-  constructor(
-    public readonly code: SlackErrorCodeType,
-    message: string,
-    public readonly retryable = false,
-  ) {
-    super(message);
+const SLACK_CORE_CODE_MAP: Record<SlackErrorCodeType, CoreErrorCode> = {
+  [SlackErrorCode.NOT_CONNECTED]: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+  [SlackErrorCode.INVALID_TOKEN]: ERROR_CODES.CHANNEL_AUTH_FAILED,
+  [SlackErrorCode.SEND_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [SlackErrorCode.RATE_LIMITED]: ERROR_CODES.CHANNEL_RATE_LIMITED,
+  [SlackErrorCode.FILE_UPLOAD_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [SlackErrorCode.FILE_DOWNLOAD_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [SlackErrorCode.INTERACTION_FAILED]: ERROR_CODES.UNKNOWN,
+  [SlackErrorCode.COMMAND_FAILED]: ERROR_CODES.UNKNOWN,
+  [SlackErrorCode.DM_REJECTED]: ERROR_CODES.FORBIDDEN,
+  [SlackErrorCode.CONNECTION_FAILED]: ERROR_CODES.CHANNEL_CONNECTION_FAILED,
+};
+
+/**
+ * Typed Slack error — extends core ChannelError
+ */
+export class SlackError extends ChannelError {
+  readonly channelCode: SlackErrorCodeType;
+
+  constructor(channelCode: SlackErrorCodeType, message: string, recoverable = false) {
+    const coreCode = SLACK_CORE_CODE_MAP[channelCode] ?? ERROR_CODES.UNKNOWN;
+    super(coreCode, message, 'slack', undefined, { recoverable, context: { channelCode } });
     this.name = 'SlackError';
+    this.channelCode = channelCode;
   }
 }
