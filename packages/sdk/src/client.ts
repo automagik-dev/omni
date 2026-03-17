@@ -405,6 +405,10 @@ export interface ListChatsParams {
   sort?: 'activity' | 'unread' | 'name';
   limit?: number;
   cursor?: string;
+  pendingOnly?: boolean;
+  attentionOnly?: boolean;
+  label?: string;
+  includeHidden?: boolean;
 }
 
 /**
@@ -1397,6 +1401,10 @@ export function createOmniClient(config: OmniClientConfig) {
         setIfDefined('sort', params?.sort);
         setIfDefined('limit', params?.limit);
         setIfDefined('cursor', params?.cursor);
+        setIfDefined('pendingOnly', params?.pendingOnly);
+        setIfDefined('attentionOnly', params?.attentionOnly);
+        setIfDefined('label', params?.label);
+        setIfDefined('includeHidden', params?.includeHidden);
         const resp = await apiFetch(`${baseUrl}/api/v2/chats?${query}`, {});
         const json = (await resp.json()) as { items?: Chat[]; meta?: PaginationMeta & { total?: number } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
@@ -1528,6 +1536,62 @@ export function createOmniClient(config: OmniClientConfig) {
           method: 'DELETE',
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+
+      /**
+       * Hide a chat
+       */
+      async hide(id: string): Promise<Chat> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/hide`, {
+          method: 'POST',
+        });
+        const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Failed to hide chat', 'HIDE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Unhide a chat
+       */
+      async unhide(id: string): Promise<Chat> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/unhide`, {
+          method: 'POST',
+        });
+        const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Failed to unhide chat', 'UNHIDE_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Add a label to a chat
+       */
+      async addLabel(id: string, label: string): Promise<Chat> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/label`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label }),
+        });
+        const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Failed to add label', 'LABEL_FAILED', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Remove a label from a chat
+       */
+      async removeLabel(id: string, label: string): Promise<Chat> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/chats/${id}/label`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label }),
+        });
+        const json = (await resp.json()) as { data?: Chat };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Failed to remove label', 'UNLABEL_FAILED', undefined, resp.status);
+        return json.data;
       },
 
       /**

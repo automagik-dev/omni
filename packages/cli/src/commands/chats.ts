@@ -556,6 +556,40 @@ function effectiveLimit(explicitLimit: number | undefined, chatType: string | un
   return chatType ? 500 : undefined;
 }
 
+function buildListParams(
+  instanceId: string | undefined,
+  options: {
+    channel?: string;
+    search?: string;
+    archived?: boolean;
+    limit?: number;
+    type?: string;
+    unread?: boolean;
+    sort?: string;
+    all?: boolean;
+    pending?: boolean;
+    attention?: boolean;
+    label?: string;
+    hidden?: boolean;
+  },
+) {
+  return {
+    instanceId,
+    channel: options.channel,
+    search: options.search,
+    includeArchived: options.archived,
+    limit: effectiveLimit(options.limit, options.type),
+    chatType: options.type,
+    unreadOnly: options.unread || undefined,
+    sort: (options.sort as 'activity' | 'unread' | 'name') || undefined,
+    excludeChatTypes: options.all ? undefined : 'channel,broadcast',
+    pendingOnly: options.pending || undefined,
+    attentionOnly: options.attention || undefined,
+    label: options.label || undefined,
+    includeHidden: options.hidden || undefined,
+  };
+}
+
 export function createChatsCommand(): Command {
   const chats = new Command('chats').description('Manage chats');
 
@@ -573,6 +607,10 @@ export function createChatsCommand(): Command {
     .option('--type <type>', 'Filter by chat type: dm, group, channel')
     .option('--verbose', 'Show full details (ID, channel, archived)')
     .option('--all', 'Include newsletters and broadcasts')
+    .option('--pending', 'Only show chats pending a reply')
+    .option('--attention', 'Show chats needing attention (unread + pending + follow-up)')
+    .option('--label <name>', 'Filter by label')
+    .option('--hidden', 'Include hidden chats')
     .action(
       async (options: {
         instance?: string;
@@ -585,26 +623,17 @@ export function createChatsCommand(): Command {
         type?: string;
         verbose?: boolean;
         all?: boolean;
+        pending?: boolean;
+        attention?: boolean;
+        label?: string;
+        hidden?: boolean;
       }) => {
         const client = getClient();
 
         try {
           const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
 
-          const limit = effectiveLimit(options.limit, options.type);
-
-          const result = await client.chats.list({
-            instanceId,
-            channel: options.channel,
-            search: options.search,
-            includeArchived: options.archived,
-            limit,
-            chatType: options.type,
-            unreadOnly: options.unread || undefined,
-            sort: (options.sort as 'activity' | 'unread' | 'name') || undefined,
-            // Filter out newsletters and broadcasts server-side (use --all to include)
-            excludeChatTypes: options.all ? undefined : 'channel,broadcast',
-          });
+          const result = await client.chats.list(buildListParams(instanceId, options));
 
           // Cast to extended type to access additional fields
           const chats = result.items as ExtendedChat[];
@@ -802,6 +831,74 @@ export function createChatsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unarchive chat: ${message}`);
+      }
+    });
+
+  // omni chats hide <id>
+  chats
+    .command('hide <id>')
+    .description('Hide a chat')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const chatId = await resolveChatId(id);
+        await client.chats.hide(chatId);
+        output.success(`Chat hidden: ${chatId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to hide chat: ${message}`);
+      }
+    });
+
+  // omni chats unhide <id>
+  chats
+    .command('unhide <id>')
+    .description('Unhide a chat')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const chatId = await resolveChatId(id);
+        await client.chats.unhide(chatId);
+        output.success(`Chat unhidden: ${chatId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to unhide chat: ${message}`);
+      }
+    });
+
+  // omni chats label <id> <label>
+  chats
+    .command('label <id> <label>')
+    .description('Add a label to a chat')
+    .action(async (id: string, label: string) => {
+      const client = getClient();
+
+      try {
+        const chatId = await resolveChatId(id);
+        await client.chats.addLabel(chatId, label);
+        output.success(`Label '${label}' added to chat: ${chatId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to add label: ${message}`);
+      }
+    });
+
+  // omni chats unlabel <id> <label>
+  chats
+    .command('unlabel <id> <label>')
+    .description('Remove a label from a chat')
+    .action(async (id: string, label: string) => {
+      const client = getClient();
+
+      try {
+        const chatId = await resolveChatId(id);
+        await client.chats.removeLabel(chatId, label);
+        output.success(`Label '${label}' removed from chat: ${chatId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to remove label: ${message}`);
       }
     });
 

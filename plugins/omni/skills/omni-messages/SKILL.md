@@ -58,3 +58,4 @@ omni chats messages <chatId> --media-only --search "receipt" --compact --json
 
 - `--type` in search currently supports: `text,image,audio,document`.
 - For edits/deletes/stars, WhatsApp flows commonly require `--chat <chatJid>`.
+- Messages from **hidden chats** are excluded from listings by default. Use `includeHidden=true` query param to include them.

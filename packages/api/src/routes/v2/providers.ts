@@ -30,8 +30,8 @@ const listQuerySchema = z.object({
   active: z.coerce.boolean().optional(),
 });
 
-// Create provider schema
-const createProviderSchema = z.object({
+// Base provider fields (shared between create and update)
+const providerBaseSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique provider name'),
   schema: ProviderSchemaEnum.default('agno').describe('Provider schema type'),
   baseUrl: z.string().url().describe('Base URL for provider API'),
@@ -59,8 +59,21 @@ const createProviderSchema = z.object({
   tags: z.array(z.string()).optional().describe('Tags for categorization'),
 });
 
+// Apply schema-specific defaults: claude-code uses Claude models which support vision
+function applySchemaDefaults<T extends { schema?: string; supportsImages?: boolean }>(
+  data: T,
+): T & { supportsImages: boolean } {
+  return {
+    ...data,
+    supportsImages: data.supportsImages ?? data.schema === 'claude-code',
+  };
+}
+
+// Create provider schema
+const createProviderSchema = providerBaseSchema.transform(applySchemaDefaults);
+
 // Update provider schema
-const updateProviderSchema = createProviderSchema.partial();
+const updateProviderSchema = providerBaseSchema.partial().transform(applySchemaDefaults);
 
 /**
  * GET /providers - List all providers

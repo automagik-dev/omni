@@ -35,6 +35,7 @@ export interface ListMessagesOptions {
   since?: Date;
   until?: Date;
   search?: string;
+  includeHidden?: boolean;
   limit?: number;
   cursor?: string;
 }
@@ -124,11 +125,7 @@ export class MessageService {
   /**
    * List messages with filtering and pagination
    */
-  async list(options: ListMessagesOptions = {}): Promise<{
-    items: Message[];
-    hasMore: boolean;
-    cursor?: string;
-  }> {
+  private buildListConditions(options: ListMessagesOptions) {
     const {
       chatId,
       instanceIds,
@@ -140,49 +137,21 @@ export class MessageService {
       since,
       until,
       search,
-      limit = 50,
+      includeHidden = false,
       cursor,
     } = options;
 
     const conditions = [];
-    const needsJoin = !!instanceIds?.length;
-
-    if (chatId) {
-      conditions.push(eq(messages.chatId, chatId));
-    }
-
-    if (instanceIds?.length) {
-      conditions.push(inArray(chats.instanceId, instanceIds));
-    }
-
-    if (source?.length) {
-      conditions.push(inArray(messages.source, source));
-    }
-
-    if (messageType?.length) {
-      conditions.push(inArray(messages.messageType, messageType));
-    }
-
-    if (status?.length) {
-      conditions.push(inArray(messages.status, status));
-    }
-
-    if (hasMedia !== undefined) {
-      conditions.push(eq(messages.hasMedia, hasMedia));
-    }
-
-    if (senderPersonId) {
-      conditions.push(eq(messages.senderPersonId, senderPersonId));
-    }
-
-    if (since) {
-      conditions.push(gte(messages.platformTimestamp, since));
-    }
-
-    if (until) {
-      conditions.push(lte(messages.platformTimestamp, until));
-    }
-
+    if (chatId) conditions.push(eq(messages.chatId, chatId));
+    if (instanceIds?.length) conditions.push(inArray(chats.instanceId, instanceIds));
+    if (!includeHidden) conditions.push(sql`chats.visibility = 'visible'`);
+    if (source?.length) conditions.push(inArray(messages.source, source));
+    if (messageType?.length) conditions.push(inArray(messages.messageType, messageType));
+    if (status?.length) conditions.push(inArray(messages.status, status));
+    if (hasMedia !== undefined) conditions.push(eq(messages.hasMedia, hasMedia));
+    if (senderPersonId) conditions.push(eq(messages.senderPersonId, senderPersonId));
+    if (since) conditions.push(gte(messages.platformTimestamp, since));
+    if (until) conditions.push(lte(messages.platformTimestamp, until));
     if (search) {
       const searchPattern = `%${search}%`;
       conditions.push(
@@ -194,13 +163,20 @@ export class MessageService {
         ),
       );
     }
-
-    // Exclude deleted messages by default
     conditions.push(sql`${messages.deletedAt} IS NULL`);
+    if (cursor) conditions.push(sql`${messages.platformTimestamp} < ${cursor}`);
 
-    if (cursor) {
-      conditions.push(sql`${messages.platformTimestamp} < ${cursor}`);
-    }
+    return conditions;
+  }
+
+  async list(options: ListMessagesOptions = {}): Promise<{
+    items: Message[];
+    hasMore: boolean;
+    cursor?: string;
+  }> {
+    const { instanceIds, includeHidden = false, limit = 50 } = options;
+    const needsJoin = !!instanceIds?.length || !includeHidden;
+    const conditions = this.buildListConditions(options);
 
     const baseQuery = this.db.select({ messages }).from(messages);
     const query = needsJoin ? baseQuery.innerJoin(chats, eq(messages.chatId, chats.id)) : baseQuery;
@@ -229,11 +205,22 @@ export class MessageService {
    * Count total messages matching filters
    */
   async count(options: Omit<ListMessagesOptions, 'limit' | 'cursor'> = {}): Promise<number> {
-    const { chatId, instanceIds, source, messageType, status, hasMedia, senderPersonId, since, until, search } =
-      options;
+    const {
+      chatId,
+      instanceIds,
+      source,
+      messageType,
+      status,
+      hasMedia,
+      senderPersonId,
+      since,
+      until,
+      search,
+      includeHidden = false,
+    } = options;
 
     const conditions = [];
-    const needsJoin = !!instanceIds?.length;
+    const needsJoin = !!instanceIds?.length || !includeHidden;
 
     if (chatId) {
       conditions.push(eq(messages.chatId, chatId));
@@ -241,6 +228,10 @@ export class MessageService {
 
     if (instanceIds?.length) {
       conditions.push(inArray(chats.instanceId, instanceIds));
+    }
+
+    if (!includeHidden) {
+      conditions.push(eq(chats.visibility, 'visible'));
     }
 
     if (source?.length) {

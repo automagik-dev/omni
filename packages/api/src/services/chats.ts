@@ -24,6 +24,9 @@ import { sanitizeText } from '../utils/utf8';
 
 const log = createLogger('chats');
 
+/** Label that triggers the "attention" state when present on a chat */
+const ATTENTION_LABEL = 'follow-up';
+
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
 }
@@ -36,6 +39,10 @@ export interface ListChatsOptions {
   search?: string;
   includeArchived?: boolean;
   unreadOnly?: boolean;
+  pendingOnly?: boolean;
+  attentionOnly?: boolean;
+  label?: string;
+  includeHidden?: boolean;
   sort?: 'activity' | 'unread' | 'name';
   limit?: number;
   cursor?: string;
@@ -88,15 +95,7 @@ export class ChatService {
     return result ?? null;
   }
 
-  /**
-   * List chats with filtering and pagination
-   */
-  async list(options: ListChatsOptions = {}): Promise<{
-    items: Chat[];
-    hasMore: boolean;
-    cursor?: string;
-    total: number;
-  }> {
+  private buildListConditions(options: ListChatsOptions) {
     const {
       instanceId,
       channel,
@@ -105,24 +104,18 @@ export class ChatService {
       search,
       includeArchived = false,
       unreadOnly = false,
-      sort = 'activity',
-      limit = 50,
+      pendingOnly = false,
+      attentionOnly = false,
+      label,
+      includeHidden = false,
       cursor,
     } = options;
 
     const conditions = [];
 
-    if (instanceId) {
-      conditions.push(eq(chats.instanceId, instanceId));
-    }
-
-    if (channel?.length) {
-      conditions.push(inArray(chats.channel, channel));
-    }
-
-    if (chatType?.length) {
-      conditions.push(inArray(chats.chatType, chatType));
-    }
+    if (instanceId) conditions.push(eq(chats.instanceId, instanceId));
+    if (channel?.length) conditions.push(inArray(chats.channel, channel));
+    if (chatType?.length) conditions.push(inArray(chats.chatType, chatType));
 
     if (excludeChatTypes?.length) {
       conditions.push(
@@ -145,20 +138,42 @@ export class ChatService {
       );
     }
 
-    if (!includeArchived) {
-      conditions.push(sql`${chats.archivedAt} IS NULL`);
-    }
-
+    if (!includeArchived) conditions.push(sql`${chats.archivedAt} IS NULL`);
     conditions.push(sql`${chats.deletedAt} IS NULL`);
+    if (unreadOnly) conditions.push(gt(chats.unreadCount, 0));
+    if (!includeHidden) conditions.push(eq(chats.visibility, 'visible'));
 
-    if (unreadOnly) {
+    if (pendingOnly) {
+      conditions.push(eq(chats.lastMessageFromMe, false));
       conditions.push(gt(chats.unreadCount, 0));
     }
 
-    // Add cursor condition for pagination
-    if (cursor) {
-      conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
+    if (attentionOnly) {
+      const attentionCondition = or(
+        gt(chats.unreadCount, 0),
+        eq(chats.lastMessageFromMe, false),
+        sql`${ATTENTION_LABEL} = ANY(${chats.labels})`,
+      );
+      if (attentionCondition) conditions.push(attentionCondition);
     }
+
+    if (label) conditions.push(sql`${label} = ANY(${chats.labels})`);
+    if (cursor) conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
+
+    return conditions;
+  }
+
+  /**
+   * List chats with filtering and pagination
+   */
+  async list(options: ListChatsOptions = {}): Promise<{
+    items: Chat[];
+    hasMore: boolean;
+    cursor?: string;
+    total: number;
+  }> {
+    const { sort = 'activity', limit = 50 } = options;
+    const conditions = this.buildListConditions(options);
 
     // Determine sort order
     const orderBy =
@@ -322,10 +337,14 @@ export class ChatService {
   /**
    * Get chat by ID
    */
-  async getById(id: string): Promise<Chat> {
+  async getById(id: string, options?: { includeHidden?: boolean }): Promise<Chat> {
     const [result] = await this.db.select().from(chats).where(eq(chats.id, id)).limit(1);
 
     if (!result) {
+      throw new NotFoundError('Chat', id);
+    }
+
+    if (!options?.includeHidden && result.visibility === 'hidden') {
       throw new NotFoundError('Chat', id);
     }
 
@@ -546,7 +565,7 @@ export class ChatService {
   /**
    * Update last message preview
    */
-  async updateLastMessage(chatId: string, preview: string, timestamp: Date): Promise<void> {
+  async updateLastMessage(chatId: string, preview: string, timestamp: Date, isFromMe?: boolean): Promise<void> {
     const safePreview = sanitizeText(preview) ?? preview;
     await this.db
       .update(chats)
@@ -554,6 +573,7 @@ export class ChatService {
         lastMessageAt: timestamp,
         lastMessagePreview: safePreview.substring(0, 500),
         // messageCount increment removed - already incremented in messages.create() transaction
+        ...(isFromMe !== undefined && { lastMessageFromMe: isFromMe }),
         updatedAt: new Date(),
       })
       .where(eq(chats.id, chatId));
@@ -598,6 +618,46 @@ export class ChatService {
     }
 
     return updated;
+  }
+
+  /**
+   * Hide a chat (sets visibility to 'hidden')
+   */
+  async hide(chatId: string): Promise<void> {
+    await this.db.update(chats).set({ visibility: 'hidden', updatedAt: new Date() }).where(eq(chats.id, chatId));
+  }
+
+  /**
+   * Unhide a chat (sets visibility back to 'visible')
+   */
+  async unhide(chatId: string): Promise<void> {
+    await this.db.update(chats).set({ visibility: 'visible', updatedAt: new Date() }).where(eq(chats.id, chatId));
+  }
+
+  /**
+   * Add a label to a chat
+   */
+  async addLabel(chatId: string, label: string): Promise<void> {
+    await this.db
+      .update(chats)
+      .set({
+        labels: sql`array(SELECT DISTINCT unnest(array_append(${chats.labels}, ${label})))`,
+        updatedAt: new Date(),
+      })
+      .where(eq(chats.id, chatId));
+  }
+
+  /**
+   * Remove a label from a chat
+   */
+  async removeLabel(chatId: string, label: string): Promise<void> {
+    await this.db
+      .update(chats)
+      .set({
+        labels: sql`array_remove(${chats.labels}, ${label})`,
+        updatedAt: new Date(),
+      })
+      .where(eq(chats.id, chatId));
   }
 
   /**
