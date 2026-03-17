@@ -155,13 +155,6 @@ export class ChatService {
       conditions.push(gt(chats.unreadCount, 0));
     }
 
-    // Build the base WHERE clause (without cursor — cursor affects page, not total)
-    const baseWhere = conditions.length ? and(...conditions) : undefined;
-
-    // Get total count (without cursor filter)
-    const [countResult] = await this.db.select({ count: sql<number>`count(*)::int` }).from(chats).where(baseWhere);
-    const total = countResult?.count ?? 0;
-
     // Add cursor condition for pagination
     if (cursor) {
       conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
@@ -203,7 +196,7 @@ export class ChatService {
       items,
       hasMore,
       cursor: lastItem?.lastMessageAt?.toISOString(),
-      total,
+      total: items.length + (hasMore ? 1 : 0),
     };
   }
 

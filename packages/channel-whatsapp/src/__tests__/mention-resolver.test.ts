@@ -100,4 +100,10 @@ describe('resolveMentions', () => {
     expect(result.text).toBe('@123456 hello');
     expect(result.mentions).toHaveLength(0);
   });
+
+  it('resolves accented Unicode names like @joão', () => {
+    const result = resolveMentions('@joão check this', nameToJid);
+    expect(result.text).toBe('@5511999990003 check this');
+    expect(result.mentions).toEqual([{ id: '5511999990003', type: 'user' }]);
+  });
 });

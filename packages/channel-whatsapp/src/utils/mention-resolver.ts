@@ -23,7 +23,7 @@ export interface MentionResolution {
  * - Captures alphanumeric names starting with a letter (supports accented characters)
  * - Stops at whitespace or punctuation
  */
-const MENTION_PATTERN = /(?<=^|\s)@([a-zA-ZÀ-ÿ]\w*)/g;
+const MENTION_PATTERN = /(?<=^|\s)@([\p{L}][\p{L}\p{N}_]*)/gu;
 
 /**
  * Resolve @name mentions in text against a name→JID lookup map.

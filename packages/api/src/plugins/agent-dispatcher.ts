@@ -489,8 +489,8 @@ async function sendErrorFeedback(
   error: unknown,
 ): Promise<void> {
   const errorMsg = error instanceof Error ? error.message : String(error);
-  const truncated = errorMsg.length > 200 ? `${errorMsg.slice(0, 200)}…` : errorMsg;
-  const text = `⚠️ Sorry, I encountered an error processing your message: ${truncated}`;
+  log.error('agent_dispatch_error', { channel, instanceId, chatId, error: errorMsg });
+  const text = '⚠️ Sorry, I ran into an issue processing your message. Please try again.';
   await sendTextMessage(channel, instanceId, chatId, text);
 }
 
