@@ -696,6 +696,8 @@ export const instances = pgTable(
     reactionAckEmoji: jsonb('reaction_ack_emoji').$type<Record<string, string>>(),
     /** Timeout in ms before ack is auto-removed (hard cap 30s) */
     ackTimeoutMs: integer('ack_timeout_ms').notNull().default(30000),
+    /** Auto-reply text sent before agent dispatch (null = disabled) */
+    agentAckMessage: text('agent_ack_message'),
 
     // ---- Session Reset ----
     /** Session reset strategies: per chat-type configuration */
