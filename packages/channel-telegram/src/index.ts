@@ -40,6 +40,10 @@ export {
   removeReaction,
 } from './senders';
 
+// Errors
+export { TelegramError, TelegramErrorCode, mapTelegramError, isRetryable } from './utils/errors';
+export type { TelegramErrorCodeType } from './utils/errors';
+
 // Utils
 export { toPlatformUserId, buildDisplayName, getUsername, isPrivateChat, isGroupChat } from './utils/identity';
 export { escapeMarkdownV2, stripHtml, truncateMessage, splitMessage } from './utils/formatting';

@@ -38,6 +38,7 @@ import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
+import { type MentionResolution, resolveMentions } from './utils/mention-resolver';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 // Re-export for external consumers that previously imported from this module
@@ -1068,7 +1069,81 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       processed = { ...processed, content: { ...processed.content, text: converted } };
     }
 
+    // Resolve @name mentions in text to WhatsApp JIDs (GH#209)
+    if (processed.content.text) {
+      const resolved = this.resolveMentionsInText(instanceId, jid, processed.content.text);
+      if (resolved.mentions.length > 0) {
+        const existingMentions = (processed.metadata?.mentions as Array<{ id: string; type: string }>) || [];
+        processed = {
+          ...processed,
+          content: { ...processed.content, text: resolved.text },
+          metadata: {
+            ...processed.metadata,
+            mentions: [...existingMentions, ...resolved.mentions],
+          },
+        };
+      }
+    }
+
     return processed;
+  }
+
+  /**
+   * Resolve @name mentions in text against instance contacts and group participants (GH#209).
+   *
+   * Builds a name→JID lookup from contactsCache, chatNamesCache, and (for groups)
+   * cached group participants. Indexes by full name and first name for flexible matching.
+   */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: mention resolution requires multiple lookup strategies
+  private resolveMentionsInText(instanceId: string, chatJid: string, text: string): MentionResolution {
+    const nameToJid = new Map<string, string>();
+
+    // Helper: index a name → JID mapping (full name + first name)
+    const indexName = (name: string, jid: string) => {
+      const lower = name.toLowerCase();
+      if (!nameToJid.has(lower)) nameToJid.set(lower, jid);
+      const firstName = name.split(' ')[0];
+      if (firstName && firstName !== name) {
+        const firstLower = firstName.toLowerCase();
+        if (!nameToJid.has(firstLower)) nameToJid.set(firstLower, jid);
+      }
+    };
+
+    // 1. From contactsCache
+    const contacts = this.contactsCache.get(instanceId);
+    if (contacts) {
+      for (const [jid, contact] of contacts) {
+        if (contact.name) indexName(contact.name, jid);
+      }
+    }
+
+    // 2. From chatNamesCache (DM display names)
+    const chatNames = this.chatNamesCache.get(instanceId);
+    if (chatNames) {
+      for (const [jid, name] of chatNames) {
+        if (name && !jid.endsWith('@g.us')) indexName(name, jid);
+      }
+    }
+
+    // 3. From cached group participants (if sending to a group)
+    if (chatJid.endsWith('@g.us')) {
+      const entry = this.groupMetadataCache.get(instanceId)?.get(chatJid);
+      if (entry?.metadata?.participants) {
+        for (const participant of entry.metadata.participants) {
+          const cachedContact = contacts?.get(participant.id);
+          const chatName = chatNames?.get(participant.id);
+          // Also try phoneNumber key in caches
+          const phoneJid = (participant as { phoneNumber?: string }).phoneNumber;
+          const phoneContact = phoneJid ? contacts?.get(phoneJid) : undefined;
+          const phoneChatName = phoneJid ? chatNames?.get(phoneJid) : undefined;
+
+          const name = cachedContact?.name || chatName || phoneContact?.name || phoneChatName;
+          if (name) indexName(name, participant.id);
+        }
+      }
+    }
+
+    return resolveMentions(text, nameToJid);
   }
 
   /**
