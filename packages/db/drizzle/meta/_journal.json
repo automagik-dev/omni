@@ -71,6 +71,13 @@
       "when": 1773213455124,
       "tag": "0009_strange_ego",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1773780000000,
+      "tag": "0010_silky_bulldozer",
+      "breakpoints": true
     }
   ]
 }
