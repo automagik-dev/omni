@@ -99,6 +99,29 @@ export async function resolveChatId(input: string): Promise<string> {
 }
 
 /**
+ * Resolve a recipient identifier for the send command.
+ *
+ * If the input looks like a phone number (starts with '+' or all digits) or a JID
+ * (contains '@'), it is passed through as-is — these are external identifiers.
+ *
+ * Otherwise, resolves as a chat identifier (full UUID, UUID prefix, name).
+ * Exits with error if resolution fails.
+ */
+export async function resolveRecipient(input: string): Promise<string> {
+  // Full UUID — pass through
+  if (UUID_RE.test(input)) return input;
+
+  // Phone number — pass through
+  if (/^\+?\d{7,}$/.test(input)) return input;
+
+  // JID or external ID — pass through
+  if (input.includes('@')) return input;
+
+  // Try to resolve as a chat identifier (short ID or name)
+  return resolveChatId(input);
+}
+
+/**
  * Resolve a message identifier to a UUID.
  *
  * Messages don't have names, so this only resolves:

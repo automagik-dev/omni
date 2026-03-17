@@ -17,7 +17,7 @@ import { loadConfig } from '../config.js';
 import { type Example, type OptionDef, formatExamples, formatOptionGroup } from '../help.js';
 import { areColorsEnabled } from '../output.js';
 import * as output from '../output.js';
-import { resolveInstanceId } from '../resolve.js';
+import { resolveInstanceId, resolveRecipient } from '../resolve.js';
 
 /** Get media type from file extension */
 function getMediaType(path: string): 'image' | 'audio' | 'video' | 'document' {
@@ -287,6 +287,11 @@ async function validateSendOptions(options: SendOptions): Promise<string> {
 
   if (!options.to && !options.presence) {
     output.error('--to <recipient> is required');
+  }
+
+  // Resolve --to: supports short chat IDs, names, UUIDs, phone numbers, JIDs
+  if (options.to) {
+    options.to = await resolveRecipient(options.to);
   }
 
   // Resolve instance name/prefix to UUID

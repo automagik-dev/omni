@@ -95,6 +95,7 @@ export class ChatService {
     items: Chat[];
     hasMore: boolean;
     cursor?: string;
+    total: number;
   }> {
     const {
       instanceId,
@@ -154,6 +155,14 @@ export class ChatService {
       conditions.push(gt(chats.unreadCount, 0));
     }
 
+    // Build the base WHERE clause (without cursor — cursor affects page, not total)
+    const baseWhere = conditions.length ? and(...conditions) : undefined;
+
+    // Get total count (without cursor filter)
+    const [countResult] = await this.db.select({ count: sql<number>`count(*)::int` }).from(chats).where(baseWhere);
+    const total = countResult?.count ?? 0;
+
+    // Add cursor condition for pagination
     if (cursor) {
       conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
     }
@@ -166,10 +175,12 @@ export class ChatService {
           ? [asc(chats.name), desc(chats.lastMessageAt)]
           : [desc(chats.lastMessageAt)];
 
+    const whereClause = conditions.length ? and(...conditions) : undefined;
+
     const items = await this.db
       .select()
       .from(chats)
-      .where(conditions.length ? and(...conditions) : undefined)
+      .where(whereClause)
       .orderBy(...orderBy)
       .limit(limit + 1);
 
@@ -192,6 +203,7 @@ export class ChatService {
       items,
       hasMore,
       cursor: lastItem?.lastMessageAt?.toISOString(),
+      total,
     };
   }
 

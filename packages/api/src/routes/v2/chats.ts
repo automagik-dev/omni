@@ -104,7 +104,7 @@ const listQuerySchema = z.object({
   includeArchived: z.coerce.boolean().default(false),
   unreadOnly: z.coerce.boolean().optional(),
   sort: z.enum(['activity', 'unread', 'name']).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
   cursor: z.string().optional(),
 });
 
@@ -163,6 +163,7 @@ chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
     meta: {
       hasMore: result.hasMore,
       cursor: result.cursor,
+      total: result.total,
     },
   });
 });
