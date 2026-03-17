@@ -1,8 +1,12 @@
 /**
  * Error handling utilities for WhatsApp plugin
+ *
+ * Maps Baileys/Boom errors to Omni error format.
+ * WhatsAppError extends core ChannelError for standardized error handling.
  */
 
 import { Boom } from '@hapi/boom';
+import { ChannelError, type ErrorCode as CoreErrorCode, ERROR_CODES } from '@omni/core';
 
 /**
  * Error codes for WhatsApp plugin errors
@@ -22,38 +26,50 @@ export const ErrorCode = {
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 /**
- * WhatsApp plugin error
+ * Map WhatsApp-specific error codes to core ErrorCode
  */
-export class WhatsAppError extends Error {
-  readonly code: ErrorCodeType;
-  readonly retryable: boolean;
-  readonly context?: Record<string, unknown>;
+const CORE_CODE_MAP: Record<ErrorCodeType, CoreErrorCode> = {
+  [ErrorCode.NOT_CONNECTED]: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+  [ErrorCode.SEND_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [ErrorCode.AUTH_FAILED]: ERROR_CODES.CHANNEL_AUTH_FAILED,
+  [ErrorCode.RATE_LIMITED]: ERROR_CODES.CHANNEL_RATE_LIMITED,
+  [ErrorCode.INVALID_JID]: ERROR_CODES.VALIDATION,
+  [ErrorCode.INVALID_PHONE]: ERROR_CODES.VALIDATION,
+  [ErrorCode.PAIRING_FAILED]: ERROR_CODES.CHANNEL_CONNECTION_FAILED,
+  [ErrorCode.MEDIA_UPLOAD_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [ErrorCode.UNKNOWN]: ERROR_CODES.UNKNOWN,
+};
 
-  constructor(code: ErrorCodeType, message: string, retryable = false, context?: Record<string, unknown>) {
-    super(message);
+/**
+ * WhatsApp plugin error — extends core ChannelError
+ */
+export class WhatsAppError extends ChannelError {
+  readonly channelCode: ErrorCodeType;
+
+  constructor(code: ErrorCodeType, message: string, recoverable = false, context?: Record<string, unknown>) {
+    const coreCode = CORE_CODE_MAP[code] ?? ERROR_CODES.UNKNOWN;
+    super(coreCode, message, 'whatsapp', undefined, { recoverable, context: { ...context, channelCode: code } });
     this.name = 'WhatsAppError';
-    this.code = code;
-    this.retryable = retryable;
-    this.context = context;
+    this.channelCode = code;
   }
 }
 
 /**
  * HTTP status code to error mapping
  */
-const statusCodeErrors: Record<number, { code: ErrorCodeType; retryable: boolean }> = {
-  429: { code: ErrorCode.RATE_LIMITED, retryable: true },
-  401: { code: ErrorCode.AUTH_FAILED, retryable: false },
-  403: { code: ErrorCode.AUTH_FAILED, retryable: false },
+const statusCodeErrors: Record<number, { code: ErrorCodeType; recoverable: boolean }> = {
+  429: { code: ErrorCode.RATE_LIMITED, recoverable: true },
+  401: { code: ErrorCode.AUTH_FAILED, recoverable: false },
+  403: { code: ErrorCode.AUTH_FAILED, recoverable: false },
 };
 
 /**
  * Error message patterns to error mapping
  */
-const messagePatterns: Array<{ patterns: string[]; code: ErrorCodeType; retryable: boolean }> = [
-  { patterns: ['rate', 'limit'], code: ErrorCode.RATE_LIMITED, retryable: true },
-  { patterns: ['not connected', 'disconnected'], code: ErrorCode.NOT_CONNECTED, retryable: true },
-  { patterns: ['auth', 'login'], code: ErrorCode.AUTH_FAILED, retryable: false },
+const messagePatterns: Array<{ patterns: string[]; code: ErrorCodeType; recoverable: boolean }> = [
+  { patterns: ['rate', 'limit'], code: ErrorCode.RATE_LIMITED, recoverable: true },
+  { patterns: ['not connected', 'disconnected'], code: ErrorCode.NOT_CONNECTED, recoverable: true },
+  { patterns: ['auth', 'login'], code: ErrorCode.AUTH_FAILED, recoverable: false },
 ];
 
 /**
@@ -64,8 +80,8 @@ function mapBoomError(error: Boom): WhatsAppError {
   const message = error.output?.payload?.message || error.message;
 
   if (statusCode !== undefined && statusCodeErrors[statusCode]) {
-    const { code, retryable } = statusCodeErrors[statusCode];
-    return new WhatsAppError(code, message, retryable);
+    const { code, recoverable } = statusCodeErrors[statusCode];
+    return new WhatsAppError(code, message, recoverable);
   }
 
   return new WhatsAppError(ErrorCode.UNKNOWN, message, statusCode !== undefined && statusCode >= 500);
@@ -77,9 +93,9 @@ function mapBoomError(error: Boom): WhatsAppError {
 function mapGenericError(error: Error): WhatsAppError {
   const message = error.message.toLowerCase();
 
-  for (const { patterns, code, retryable } of messagePatterns) {
+  for (const { patterns, code, recoverable } of messagePatterns) {
     if (patterns.some((pattern) => message.includes(pattern))) {
-      return new WhatsAppError(code, error.message, retryable);
+      return new WhatsAppError(code, error.message, recoverable);
     }
   }
 
@@ -110,7 +126,7 @@ export function mapBaileysError(error: unknown): WhatsAppError {
  */
 export function isRetryable(error: unknown): boolean {
   if (error instanceof WhatsAppError) {
-    return error.retryable;
+    return error.recoverable;
   }
 
   if (error instanceof Boom) {
