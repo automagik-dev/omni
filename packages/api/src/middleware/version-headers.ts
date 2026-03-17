@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMiddleware } from 'hono/factory';
+import pkg from '../../package.json';
 import type { AppVariables } from '../types';
 
 interface VersionFile {
@@ -23,6 +24,13 @@ interface ServerVersionInfo {
   version: string;
   commit: string;
 }
+
+/**
+ * Version embedded at build time from package.json.
+ * In bundled builds, Bun inlines this value so it works regardless of
+ * filesystem layout. Falls back to runtime detection in dev mode.
+ */
+const EMBEDDED_VERSION: string | undefined = pkg?.version;
 
 const LAST_RESORT_VERSION = '2.0.0-dev.1';
 const FALLBACK_COMMIT = 'unknown';
@@ -57,6 +65,8 @@ function loadEnvVersion(): string | undefined {
 }
 
 function resolveFallbackVersion(): string {
+  // Prefer embedded version (works in bundled builds), then filesystem, then env vars
+  if (EMBEDDED_VERSION && EMBEDDED_VERSION !== '0.0.0') return EMBEDDED_VERSION;
   return loadRepoPackageVersion() ?? loadEnvVersion() ?? LAST_RESORT_VERSION;
 }
 
