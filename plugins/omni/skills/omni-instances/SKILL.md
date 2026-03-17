@@ -1,7 +1,7 @@
 ---
 name: omni-instances
 description: |
-  Operate Omni channel instances: lifecycle, QR/pairing, sync jobs, contacts/groups, profile/privacy, and history backfill via resync.
+  Operate Omni channel instances: lifecycle, QR/pairing, sync jobs, contacts/groups, profile/privacy, history backfill via resync, auto-ack, debounce, and agent dispatch options.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
@@ -24,6 +24,90 @@ omni instances disconnect <id> --json
 omni instances restart <id> --force-new-qr --json
 omni instances logout <id> --json
 ```
+
+## Auto-ack (reaction acknowledgement)
+
+Acknowledge incoming messages with a reaction before the agent responds. Gives users instant feedback that their message was received.
+
+```bash
+# Enable reaction ack
+omni instances update <id> --reaction-ack on --json
+
+# Disable reaction ack
+omni instances update <id> --reaction-ack off --json
+
+# Custom per-channel emoji map (JSON object)
+omni instances update <id> --reaction-ack on --reaction-ack-emoji '{"whatsapp":"⏳","discord":"⏳","telegram":"⏳","slack":"eyes"}' --json
+
+# Set ack timeout (ms) — remove reaction after agent responds
+omni instances update <id> --ack-timeout 30000 --json
+```
+
+Flags (available on `create` and `update`):
+- `--reaction-ack <on|off>` — enable/disable reaction acknowledgement
+- `--reaction-ack-emoji <json>` — per-channel emoji map as JSON (e.g., `{"whatsapp":"⏳"}`)
+- `--ack-timeout <ms>` — timeout in milliseconds before ack reaction is removed
+
+The `agentAckMessage` field (set via API) sends a text auto-reply before agent dispatch — e.g., "Thinking..." — as a fire-and-forget pre-dispatch message.
+
+## Agent session strategy
+
+Controls how the agent groups conversation context.
+
+```bash
+# One session per user per chat (default for group chats)
+omni instances update <id> --agent-session-strategy per_user_per_chat --json
+
+# One session per user (across all chats)
+omni instances update <id> --agent-session-strategy per_user --json
+
+# One session per chat (all users share context)
+omni instances update <id> --agent-session-strategy per_chat --json
+```
+
+Flag: `--agent-session-strategy <per_user|per_chat|per_user_per_chat>`
+
+## Message format mode
+
+Controls how messages are formatted before being sent to the agent.
+
+```bash
+# Convert markdown/formatting to channel-native format (default)
+omni instances update <id> --message-format-mode convert --json
+
+# Pass raw message through without conversion
+omni instances update <id> --message-format-mode passthrough --json
+```
+
+Flag: `--message-format-mode <convert|passthrough>`
+
+## Debounce
+
+Group rapid successive messages into a single agent dispatch. Useful for users who send multiple short messages in sequence.
+
+```bash
+# Enable fixed debounce (wait 3s after last message)
+omni instances update <id> --debounce-mode fixed --debounce-min 3000 --json
+
+# Randomized debounce (between min and max)
+omni instances update <id> --debounce-mode randomized --debounce-min 2000 --debounce-max 5000 --json
+
+# Separate debounce for group chats
+omni instances update <id> --debounce-mode fixed --debounce-min 3000 --debounce-group 5000 --json
+
+# Restart debounce timer when user is typing
+omni instances update <id> --debounce-mode fixed --debounce-min 3000 --debounce-restart-on-typing --json
+
+# Disable debounce
+omni instances update <id> --debounce-mode disabled --json
+```
+
+Flags (available on `create` and `update`):
+- `--debounce-mode <disabled|fixed|randomized>` — debounce strategy
+- `--debounce-min <ms>` — minimum debounce delay in milliseconds
+- `--debounce-max <ms>` — maximum debounce delay (for `randomized` mode)
+- `--debounce-group <ms>` — override debounce for group chats (use `"null"` to inherit)
+- `--debounce-restart-on-typing` / `--no-debounce-restart-on-typing` — restart timer on typing indicator
 
 ## WhatsApp connect
 
