@@ -33,7 +33,7 @@ import {
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
-import { sendReaction } from './senders/reaction';
+import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
