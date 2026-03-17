@@ -13,9 +13,39 @@ allowed-tools: Bash(omni *), Bash(jq *)
 omni chats list --instance <id> --limit 50 --json
 omni chats list --instance <id> --unread --sort activity --verbose --json
 omni chats list --channel whatsapp-baileys --type group --json
+omni chats list --instance <id> --search "client name" --json
 omni chats list --instance <id> --all --json
 omni chats get <chatId> --json
 ```
+
+### List flags reference
+
+| Flag | Description |
+|------|-------------|
+| `--instance <id>` | Filter by instance ID |
+| `--channel <type>` | Filter by channel type (whatsapp-baileys, discord, etc.) |
+| `--search <query>` | Search chats by name |
+| `--type <type>` | Filter by chat type: `dm`, `group`, `channel`. When omitted, all types are shown (no filtering). |
+| `--limit <n>` | Limit number of results |
+| `--sort <field>` | Sort by: `activity` (default), `unread`, `name` |
+| `--unread` | Only show chats with unread messages |
+| `--archived` | Include archived chats |
+| `--all` | Include newsletters and broadcasts |
+| `--verbose` | Show full details (ID, channel, archived status) |
+| `--pending` | Only show chats pending a reply (last message is not from me AND has unreads) |
+| `--attention` | Show chats needing attention (combines: unread + pending reply + follow-up labeled) |
+| `--label <name>` | Filter chats by label (e.g., `follow-up`, `todo`, `vip`) |
+| `--hidden` | Include hidden chats in the listing (hidden chats are excluded by default) |
+
+### Pagination
+
+The `list` command displays pagination metadata after the table:
+
+```
+ℹ Showing 3 of 3 chats
+```
+
+When `--limit` truncates results, this shows how many were returned vs. total matching.
 
 ## Attention and pending
 

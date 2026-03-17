@@ -76,8 +76,49 @@ Flags for `media list`: `--instance <id>`, `--chat <chatId>`, `--since <datetime
 
 Flags for `media download`: `--message <uuid>`, `--chat <chatId>`, `--external <externalId>`, `--output <path>`
 
+## Recipient resolution (`--to`)
+
+The `--to` flag supports multiple identifier formats with smart resolution:
+
+```bash
+# Phone number — passed through directly
+omni send --to +5511999887766 --text "Hi" --instance <id> --json
+
+# WhatsApp JID — passed through directly
+omni send --to 5511999887766@s.whatsapp.net --text "Hi" --instance <id> --json
+
+# Full Omni UUID (chat or person)
+omni send --to 550e8400-e29b-41d4-a716-446655440000 --text "Hi" --instance <id> --json
+
+# Short ID prefix — resolves to full UUID (same as omni chats messages)
+omni send --to c14b05ff --text "Hi" --instance <id> --json
+
+# Chat name — resolves by exact or substring match (case-insensitive)
+omni send --to "Felipe" --text "Hi" --instance <id> --json
+```
+
+Short ID resolution: any hex string (2+ chars) that isn't a phone number is treated as a UUID prefix. The CLI fetches the chat list and matches the prefix. If ambiguous (multiple matches), it prints the candidates and exits with an error.
+
+## @name mention auto-resolution (WhatsApp)
+
+When sending text to WhatsApp, `@name` patterns in the message body are automatically resolved to WhatsApp JID mentions. The resolver matches contact names from the instance's contact list.
+
+```bash
+# @Felipe is resolved to the contact's JID and rendered as a clickable mention
+omni send --to <group-jid> --text "Hey @Felipe, check this out" --instance <id> --json
+
+# Multiple mentions
+omni send --to <group-jid> --text "@Ana and @Carlos please review" --instance <id> --json
+```
+
+Resolution rules:
+- Exact match first (case-insensitive): `@felipe` matches contact named "Felipe"
+- Prefix match fallback: `@Fel` matches "Felipe" if no exact match exists
+- Unresolved names are left as literal text (no error)
+- Only works on WhatsApp instances — other channels ignore `@name` syntax
+
 ## Notes
 
-- `--to` accepts phone/JID or Omni UUIDs (chat/person).
+- `--to` accepts phone/JID, Omni UUIDs (chat/person), short ID prefixes, or chat names.
 - `--presence-delay <ms>` on `omni send --tts` simulates a typing/recording presence before delivering the TTS voice note.
 - Add small delays in loops to avoid rate-limit spikes.
