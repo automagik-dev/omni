@@ -734,6 +734,7 @@ interface SetupGenieOptions {
   agentName: string;
   targetAgent: string;
   teamName: string;
+  agentRole: string;
   name: string;
   baseUrl: string;
   instanceId?: string;
@@ -744,6 +745,9 @@ interface SetupGenieOptions {
 async function collectGenieOptions(options: Partial<SetupGenieOptions>): Promise<SetupGenieOptions> {
   const agentName = options.agentName ?? (await promptLine('Agent name (your identity / "from" field): '));
   const targetAgent = options.targetAgent ?? (await promptLine('Target agent (inbox to deliver to): '));
+  const agentRole =
+    options.agentRole ??
+    (await promptLine('Agent role (registered genie dir agent, e.g. "omni-pm") [team-lead]: ', 'team-lead'));
 
   if (!options.teamName) {
     output.info(GENIE_TEMPLATE_VARS);
@@ -762,7 +766,7 @@ async function collectGenieOptions(options: Partial<SetupGenieOptions>): Promise
     instanceId = (await promptLine('Instance ID (Omni instance UUID, leave blank to skip): ')) || undefined;
   }
 
-  return { agentName, targetAgent, teamName, name, baseUrl, instanceId, nonInteractive: options.nonInteractive };
+  return { agentName, targetAgent, teamName, agentRole, name, baseUrl, instanceId, nonInteractive: options.nonInteractive };
 }
 
 /** Main setup flow for Genie provider */
@@ -781,6 +785,7 @@ async function runGenieSetup(opts: SetupGenieOptions): Promise<void> {
         agentName: opts.agentName,
         targetAgent: opts.targetAgent,
         teamName: opts.teamName,
+        agentRole: opts.agentRole,
       },
     });
     spinner.succeed(`Provider created: ${provider.id}`);
@@ -803,6 +808,7 @@ async function runGenieSetup(opts: SetupGenieOptions): Promise<void> {
     output.info(`  Provider name:  ${opts.name}`);
     output.info(`  Agent name:     ${opts.agentName}`);
     output.info(`  Target agent:   ${opts.targetAgent}`);
+    output.info(`  Agent role:     ${opts.agentRole}`);
     output.info(`  Team template:  ${opts.teamName}`);
     output.info(`  Base URL:       ${opts.baseUrl}`);
     output.info('');
@@ -831,6 +837,7 @@ function resolveGenieNonInteractive(options: {
   agentName?: string;
   targetAgent?: string;
   teamName?: string;
+  agentRole?: string;
   name?: string;
   baseUrl?: string;
   instanceId?: string;
@@ -841,6 +848,7 @@ function resolveGenieNonInteractive(options: {
     agentName: options.agentName,
     targetAgent: options.targetAgent,
     teamName: options.teamName ?? `${options.agentName}-{chat_id}`,
+    agentRole: options.agentRole ?? 'team-lead',
     name: options.name ?? `genie-${options.agentName}`,
     baseUrl: options.baseUrl ?? 'file:///home/genie/.claude/teams',
     instanceId: options.instanceId,
@@ -853,6 +861,7 @@ async function handleGenieSetup(options: {
   agentName?: string;
   targetAgent?: string;
   teamName?: string;
+  agentRole?: string;
   name?: string;
   baseUrl?: string;
   instanceId?: string;
@@ -958,6 +967,7 @@ export function createSetupCommand(): Command {
     .option('--agent-name <name>', 'Agent identity / "from" field')
     .option('--target-agent <name>', 'Target agent inbox to deliver messages to')
     .option('--team-name <template>', 'Team name template (supports {chat_id}, {thread_id}, etc.)')
+    .option('--agent-role <role>', 'Registered genie dir agent name (default: team-lead)')
     .option('--name <name>', 'Provider name (default: genie-<agent-name>)')
     .option('--base-url <url>', 'Base URL (default: file:///home/genie/.claude/teams)')
     .option('--instance-id <uuid>', 'Omni instance UUID to auto-assign provider')

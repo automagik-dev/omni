@@ -1,15 +1,14 @@
 /**
  * Tests for GenieClient auto-spawn behavior
  *
- * Tests that the GenieClient triggers `genie team ensure` when writing
- * to a team inbox that doesn't have a config.json yet, verifies tmux
- * window creation, and falls back to direct tmux spawn when genie CLI fails.
+ * Tests that the GenieClient triggers `genie spawn <agentRole> --team <teamName>`
+ * when writing to a team inbox, verifies idempotent caching, and handles spawn failures.
  *
  * Run with: bun test packages/core/src/providers/__tests__/genie-client-auto-spawn.test.ts
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieClient } from '../genie-client';
 import type { GenieClientConfig } from '../genie-client';
@@ -19,23 +18,11 @@ import type { ProviderRequest } from '../types';
 // Mocks
 // ============================================================================
 
-// Mock child_process.execFile to capture auto-spawn calls.
-// Handles both 3-arg (file, args, cb) and 4-arg (file, args, opts, cb) forms.
 const execFileMock = mock((...callArgs: unknown[]) => {
   const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-  const file = callArgs[0] as string;
-  const args = callArgs[1] as string[];
-
-  // Default behavior: tmux list-windows returns the team window name
-  // so hasTmuxWindow passes verification after spawn
-  if (file === 'tmux' && args[0] === 'list-windows') {
-    cb(null, 'test-team\n', '');
-  } else {
-    cb(null, '', '');
-  }
+  cb(null, '', '');
 });
 
-// Mock node:os homedir to use our test directory
 const TEST_DIR = '/tmp/genie-client-auto-spawn-test';
 
 mock.module('node:child_process', () => ({
@@ -66,6 +53,7 @@ function makeConfig(overrides?: Partial<GenieClientConfig>): GenieClientConfig {
     agentName: 'omni',
     targetAgent: 'team-lead',
     teamName: 'test-team',
+    agentRole: 'omni-pm',
     ...overrides,
   };
 }
@@ -83,16 +71,9 @@ beforeEach(() => {
   rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
   execFileMock.mockClear();
-  // Restore default mock implementation
   execFileMock.mockImplementation((...callArgs: unknown[]) => {
     const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-    const file = callArgs[0] as string;
-    const args = callArgs[1] as string[];
-    if (file === 'tmux' && args[0] === 'list-windows') {
-      cb(null, 'test-team\n', '');
-    } else {
-      cb(null, '', '');
-    }
+    cb(null, '', '');
   });
 });
 
@@ -120,28 +101,24 @@ describe('GenieClient auto-spawn config', () => {
     expect(client).toBeTruthy();
   });
 
-  test('tmuxSession can be customized', () => {
-    const client = new GenieClient(makeConfig({ tmuxSession: 'custom-session' }));
-    expect(client).toBeTruthy();
-  });
-
-  test('accepts all config fields including autoSpawn and tmuxSession', () => {
+  test('agentRole is required', () => {
     const config: GenieClientConfig = {
-      teamName: 'my-team',
       agentName: 'omni',
       targetAgent: 'team-lead',
-      autoSpawn: true,
-      autoSpawnDir: '/home/genie/workspace',
-      tmuxSession: 'genie',
+      agentRole: 'cegonha',
     };
     const client = new GenieClient(config);
     expect(client).toBeTruthy();
   });
 
-  test('backward compatible with configs without autoSpawn fields', () => {
+  test('accepts all config fields', () => {
     const config: GenieClientConfig = {
+      teamName: 'my-team',
       agentName: 'omni',
       targetAgent: 'team-lead',
+      agentRole: 'omni-pm',
+      autoSpawn: true,
+      autoSpawnDir: '/home/genie/workspace',
     };
     const client = new GenieClient(config);
     expect(client).toBeTruthy();
@@ -149,22 +126,22 @@ describe('GenieClient auto-spawn config', () => {
 });
 
 describe('GenieClient auto-spawn on run()', () => {
-  test('calls genie team ensure when team config does not exist', async () => {
+  test('calls genie spawn with correct agentRole and team name', async () => {
     const client = new GenieClient(makeConfig());
     await client.run(makeRequest());
 
-    // Give fire-and-forget async spawn a tick to resolve
     await new Promise((r) => setTimeout(r, 100));
 
     const genieCalls = getCallsFor('genie');
     expect(genieCalls.length).toBe(1);
     const args = genieCalls[0]?.[1] as string[];
-    expect(args).toContain('team');
-    expect(args).toContain('ensure');
-    expect(args).toContain('test-team');
+    expect(args[0]).toBe('spawn');
+    expect(args[1]).toBe('omni-pm');
+    expect(args[2]).toBe('--team');
+    expect(args[3]).toBe('test-team');
   });
 
-  test('includes --dir flag with autoSpawnDir', async () => {
+  test('includes --cwd flag with autoSpawnDir', async () => {
     const client = new GenieClient(makeConfig({ autoSpawnDir: '/my/workspace' }));
     await client.run(makeRequest());
 
@@ -173,71 +150,20 @@ describe('GenieClient auto-spawn on run()', () => {
     const genieCalls = getCallsFor('genie');
     expect(genieCalls.length).toBe(1);
     const args = genieCalls[0]?.[1] as string[];
-    expect(args).toContain('--dir');
+    expect(args).toContain('--cwd');
     expect(args).toContain('/my/workspace');
   });
 
-  test('passes GENIE_TMUX_SESSION env to genie CLI', async () => {
-    const client = new GenieClient(makeConfig({ tmuxSession: 'my-session' }));
+  test('uses configured agentRole as spawn target', async () => {
+    const client = new GenieClient(makeConfig({ agentRole: 'cegonha' }));
     await client.run(makeRequest());
 
     await new Promise((r) => setTimeout(r, 100));
 
     const genieCalls = getCallsFor('genie');
-    expect(genieCalls.length).toBe(1);
-    const opts = genieCalls[0]?.[2] as { env?: Record<string, string> };
-    expect(opts?.env?.GENIE_TMUX_SESSION).toBe('my-session');
-  });
-
-  test('does not call genie when config AND tmux window exist', async () => {
-    // Create team config so it looks like team exists
-    const teamDir = join(TEAMS_DIR, 'test-team');
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{}');
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 100));
-
-    // tmux list-windows is called to verify, but genie should NOT be called
-    const genieCalls = getCallsFor('genie');
-    expect(genieCalls.length).toBe(0);
-  });
-
-  test('re-spawns when config exists but tmux window is missing', async () => {
-    // Create team config but make tmux return no matching window
-    const teamDir = join(TEAMS_DIR, 'test-team');
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{}');
-
-    execFileMock.mockImplementation((...callArgs: unknown[]) => {
-      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-
-      if (file === 'tmux' && args[0] === 'list-windows') {
-        // First call: no matching window (triggers re-spawn)
-        // After genie runs, return the window name for verification
-        const previousGenieCalls = execFileMock.mock.calls.filter((c) => (c[0] as string) === 'genie').length;
-        if (previousGenieCalls > 0) {
-          cb(null, 'test-team\n', '');
-        } else {
-          cb(null, 'other-window\n', '');
-        }
-      } else {
-        cb(null, '', '');
-      }
-    });
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 100));
-
-    // Should have called genie to re-spawn since window was missing
-    const genieCalls = getCallsFor('genie');
-    expect(genieCalls.length).toBe(1);
+    const args = genieCalls[0]?.[1] as string[];
+    expect(args[0]).toBe('spawn');
+    expect(args[1]).toBe('cegonha');
   });
 
   test('does not call exec when autoSpawn is disabled', async () => {
@@ -266,30 +192,7 @@ describe('GenieClient auto-spawn on run()', () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  test('caches known teams after finding config + tmux window on disk', async () => {
-    // Create team config
-    const teamDir = join(TEAMS_DIR, 'test-team');
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{}');
-
-    const client = new GenieClient(makeConfig());
-
-    // First call: finds config + tmux window, caches
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 100));
-
-    // Remove config to prove second call uses cache
-    rmSync(teamDir, { recursive: true });
-    execFileMock.mockClear();
-
-    // Second call: should use cache, not check filesystem or tmux
-    await client.run(makeRequest('second'));
-    await new Promise((r) => setTimeout(r, 100));
-
-    expect(execFileMock).not.toHaveBeenCalled();
-  });
-
-  test('does not block response even if exec fails', async () => {
+  test('does not block response even if spawn fails', async () => {
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
       cb(new Error('genie not found'));
@@ -309,155 +212,5 @@ describe('GenieClient auto-spawn on run()', () => {
 
     expect(response.status).toBe('completed');
     expect(response.runId).toContain('genie-omni-');
-  });
-});
-
-describe('GenieClient direct tmux fallback', () => {
-  test('falls back to direct tmux when genie CLI fails', async () => {
-    execFileMock.mockImplementation((...callArgs: unknown[]) => {
-      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-
-      if (file === 'genie') {
-        cb(new Error('genie not installed'));
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        // Return empty initially, but after send-keys we return the window
-        cb(null, '', '');
-      } else {
-        cb(null, '', '');
-      }
-    });
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 150));
-
-    // genie failed, should have fallen back to tmux
-    const tmuxCalls = getCallsFor('tmux');
-    const hasSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'has-session');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-
-    expect(hasSessionCall).toBeTruthy();
-    expect(sendKeysCall).toBeTruthy();
-
-    // Verify Claude Code command is sent with correct flags
-    const sendKeysArgs = sendKeysCall?.[1] as string[];
-    const claudeCmd = sendKeysArgs[3]; // The command string (after -t <target>)
-    expect(claudeCmd).toContain('claude');
-    expect(claudeCmd).toContain('--team-name');
-    expect(claudeCmd).toContain('--dangerously-skip-permissions');
-  });
-
-  test('creates tmux session when it does not exist', async () => {
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: test mock with many branches
-    execFileMock.mockImplementation((...callArgs: unknown[]) => {
-      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-
-      if (file === 'genie') {
-        cb(new Error('genie not installed'));
-      } else if (file === 'tmux' && args[0] === 'has-session') {
-        cb(new Error('session not found'));
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        // Return matching window after new-window is called
-        const newWindowCalls = execFileMock.mock.calls.filter(
-          (c) => (c[0] as string) === 'tmux' && (c[1] as string[])[0] === 'new-window',
-        );
-        cb(null, newWindowCalls.length > 0 ? 'test-team\n' : '', '');
-      } else {
-        cb(null, '', '');
-      }
-    });
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 150));
-
-    const tmuxCalls = getCallsFor('tmux');
-    const newSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'new-session');
-    expect(newSessionCall).toBeTruthy();
-
-    const newSessionArgs = newSessionCall?.[1] as string[];
-    expect(newSessionArgs).toContain('-s');
-    expect(newSessionArgs).toContain('genie');
-  });
-
-  test('uses custom tmuxSession name for direct spawn', async () => {
-    execFileMock.mockImplementation((...callArgs: unknown[]) => {
-      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-
-      if (file === 'genie') {
-        cb(new Error('genie not installed'));
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        const sendKeysCalls = execFileMock.mock.calls.filter(
-          (c) => (c[0] as string) === 'tmux' && (c[1] as string[])[0] === 'send-keys',
-        );
-        cb(null, sendKeysCalls.length > 0 ? 'test-team\n' : '', '');
-      } else {
-        cb(null, '', '');
-      }
-    });
-
-    const client = new GenieClient(makeConfig({ tmuxSession: 'custom-session' }));
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 150));
-
-    const tmuxCalls = getCallsFor('tmux');
-    const hasSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'has-session');
-    const hasSessionArgs = hasSessionCall?.[1] as string[];
-    expect(hasSessionArgs).toContain('custom-session');
-  });
-});
-
-describe('GenieClient tmux verification', () => {
-  test('verifies tmux window after genie spawn succeeds', async () => {
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-
-    await new Promise((r) => setTimeout(r, 100));
-
-    // Should have called tmux list-windows for verification
-    const tmuxCalls = getCallsFor('tmux');
-    const listWindowsCalls = tmuxCalls.filter((c) => (c[1] as string[])[0] === 'list-windows');
-    expect(listWindowsCalls.length).toBeGreaterThan(0);
-  });
-
-  test('handles dots in team names (tmux pane separator)', async () => {
-    // sanitize('team.with.dots') strips dots → 'teamwithdots'
-    // sanitizeWindowName('teamwithdots') has no dots → 'teamwithdots'
-    // So tmux window name is 'teamwithdots'
-
-    // Create team config so the fast path is used
-    const teamDir = join(TEAMS_DIR, 'teamwithdots');
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{}');
-
-    // Mock tmux to return the sanitized window name
-    execFileMock.mockImplementation((...callArgs: unknown[]) => {
-      const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-
-      if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'teamwithdots\n', '');
-      } else {
-        cb(null, '', '');
-      }
-    });
-
-    // Config exists + tmux window matches → no genie call needed
-    const client = new GenieClient(makeConfig({ teamName: 'team.with.dots' }));
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 100));
-
-    const genieCalls = getCallsFor('genie');
-    expect(genieCalls.length).toBe(0);
   });
 });

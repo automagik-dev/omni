@@ -2744,8 +2744,9 @@ function createGenieProviderInstance(provider: AgentProvider, instance: Dispatch
   }
 
   const teamName = typeof schemaConfig.teamName === 'string' ? schemaConfig.teamName : 'genie';
+  const agentRole = typeof schemaConfig.agentRole === 'string' ? schemaConfig.agentRole : 'team-lead';
 
-  const client = createGenieClient({ teamName, agentName, targetAgent });
+  const client = createGenieClient({ teamName, agentName, targetAgent, agentRole });
 
   return new GenieAgentProvider(provider.id, provider.name, client, {
     prefixSenderName: instance.agentPrefixSenderName ?? true,
