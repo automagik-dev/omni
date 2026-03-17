@@ -1,7 +1,7 @@
 ---
 name: omni-chats
 description: |
-  Manage Omni conversations: list/get/create/update, archive/pin/mute, participants, disappearing messages, read state, and message history.
+  Manage Omni conversations: list/get/create/update, archive/pin/mute, hide/unhide, label/unlabel, attention/pending filters, participants, disappearing messages, read state, and message history.
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
@@ -15,6 +15,23 @@ omni chats list --instance <id> --unread --sort activity --verbose --json
 omni chats list --channel whatsapp-baileys --type group --json
 omni chats list --instance <id> --all --json
 omni chats get <chatId> --json
+```
+
+## Attention and pending
+
+```bash
+# Chats needing attention (unread + pending reply + follow-up labeled)
+omni chats list --instance <id> --attention --json
+
+# Only chats where last message is not from me AND has unreads
+omni chats list --instance <id> --pending --json
+
+# Filter by label
+omni chats list --instance <id> --label follow-up --json
+omni chats list --instance <id> --label todo --json
+
+# Include hidden chats in listing
+omni chats list --instance <id> --hidden --json
 ```
 
 ## Create and update
@@ -37,6 +54,28 @@ omni chats unpin <chatId> --instance <id> --json
 omni chats mute <chatId> --instance <id> --duration 28800000 --json
 omni chats unmute <chatId> --instance <id> --json
 omni chats disappearing <chatId> --instance <id> --duration 24h --json
+```
+
+## Visibility (privacy)
+
+```bash
+# Hide chat from agent view (agent won't see it in listings or know it exists)
+omni chats hide <chatId> --json
+
+# Unhide chat
+omni chats unhide <chatId> --json
+```
+
+## Labels
+
+```bash
+# Add a label to a chat
+omni chats label <chatId> follow-up --json
+omni chats label <chatId> todo --json
+omni chats label <chatId> vip --json
+
+# Remove a label
+omni chats unlabel <chatId> follow-up --json
 ```
 
 ## Messages in a chat

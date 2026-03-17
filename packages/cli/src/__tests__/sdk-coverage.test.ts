@@ -88,6 +88,10 @@ const CLI_COMMANDS: Record<string, string> = {
   'chats.addParticipant': 'chats participants --add',
   'chats.removeParticipant': 'chats participants --remove',
   'chats.markRead': 'chats read',
+  'chats.hide': 'chats hide',
+  'chats.unhide': 'chats unhide',
+  'chats.addLabel': 'chats label',
+  'chats.removeLabel': 'chats unlabel',
 
   // ============================================================================
   // EVENTS

@@ -103,6 +103,10 @@ const listQuerySchema = z.object({
   search: z.string().optional(),
   includeArchived: z.coerce.boolean().default(false),
   unreadOnly: z.coerce.boolean().optional(),
+  pendingOnly: z.coerce.boolean().optional(),
+  attentionOnly: z.coerce.boolean().optional(),
+  label: z.string().optional(),
+  includeHidden: z.coerce.boolean().default(false),
   sort: z.enum(['activity', 'unread', 'name']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(50),
   cursor: z.string().optional(),
@@ -355,6 +359,65 @@ chatsRoutes.post('/:id/unarchive', zValidator('json', chatChannelActionSchema), 
       lastMsg,
     );
   }
+
+  return c.json({ data: chat });
+});
+
+// Label body schema
+const labelBodySchema = z.object({
+  label: z.string().min(1).max(50),
+});
+
+/**
+ * POST /chats/:id/hide - Hide a chat
+ */
+chatsRoutes.post('/:id/hide', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  await services.chats.hide(id);
+  const chat = await services.chats.getById(id, { includeHidden: true });
+
+  return c.json({ data: chat });
+});
+
+/**
+ * POST /chats/:id/unhide - Unhide a chat
+ */
+chatsRoutes.post('/:id/unhide', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  await services.chats.unhide(id);
+  const chat = await services.chats.getById(id);
+
+  return c.json({ data: chat });
+});
+
+/**
+ * POST /chats/:id/label - Add a label to a chat
+ */
+chatsRoutes.post('/:id/label', zValidator('json', labelBodySchema), async (c) => {
+  const id = c.req.param('id');
+  const { label } = c.req.valid('json');
+  const services = c.get('services');
+
+  await services.chats.addLabel(id, label);
+  const chat = await services.chats.getById(id, { includeHidden: true });
+
+  return c.json({ data: chat });
+});
+
+/**
+ * DELETE /chats/:id/label - Remove a label from a chat
+ */
+chatsRoutes.delete('/:id/label', zValidator('json', labelBodySchema), async (c) => {
+  const id = c.req.param('id');
+  const { label } = c.req.valid('json');
+  const services = c.get('services');
+
+  await services.chats.removeLabel(id, label);
+  const chat = await services.chats.getById(id, { includeHidden: true });
 
   return c.json({ data: chat });
 });

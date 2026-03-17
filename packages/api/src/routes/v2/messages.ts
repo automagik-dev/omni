@@ -287,6 +287,7 @@ const listQuerySchema = z.object({
     .optional()
     .transform((v) => (v ? new Date(v) : undefined)),
   search: z.string().optional(),
+  includeHidden: z.coerce.boolean().default(false),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().optional(),
 });
