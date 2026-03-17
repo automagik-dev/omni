@@ -350,7 +350,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = error instanceof SlackError ? error.code : SlackErrorCode.SEND_FAILED;
-      const retryable = error instanceof SlackError ? error.retryable : false;
+      const retryable = error instanceof SlackError ? error.recoverable : false;
 
       // Clear typing indicator on error too
       await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
