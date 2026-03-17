@@ -16,14 +16,19 @@ import type { AgentHealthResult, IAgentClient, ProviderRequest, ProviderResponse
 
 const log = createLogger('providers:genie-client');
 
-/** Sanitize a string for use in file paths (team/agent names) */
+/** Cache TTL in milliseconds (5 minutes) — expired entries trigger re-verification via tmux has-session */
+const CACHE_TTL_MS = 5 * 60 * 1000;
+/** Maximum entries in the knownTeams cache to prevent unbounded growth */
+const CACHE_MAX_SIZE = 100;
+
+/** Sanitize a string for use in file paths (team/agent names), stripping trailing dashes */
 function sanitize(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '');
+  return value.replace(/[^a-zA-Z0-9_-]/g, '').replace(/-+$/, '');
 }
 
-/** Sanitize team name for tmux window (dots are pane separators in tmux) */
+/** Sanitize team name for tmux window (dots are pane separators in tmux), stripping trailing dashes */
 function sanitizeWindowName(name: string): string {
-  return name.replace(/\./g, '-');
+  return name.replace(/\./g, '-').replace(/-+$/, '');
 }
 
 /** Promisified execFile for async/await usage in auto-spawn logic */
@@ -106,8 +111,8 @@ export class GenieClient implements IAgentClient {
   private readonly autoSpawnDir: string;
   private readonly tmuxSession: string;
 
-  /** Cache of teams known to exist (avoids repeated filesystem checks) */
-  private readonly knownTeams = new Set<string>();
+  /** Cache of teams known to exist — maps team name to timestamp for TTL expiry */
+  private readonly knownTeams = new Map<string, number>();
   /** Teams currently being spawned (prevents duplicate exec calls during bursts) */
   private readonly pendingTeams = new Set<string>();
 
@@ -123,6 +128,26 @@ export class GenieClient implements IAgentClient {
       /\{\w+\}/.test(this.teamNameTemplate) ||
       /\{\w+\}/.test(this.agentNameTemplate) ||
       /\{\w+\}/.test(this.targetAgentTemplate);
+  }
+
+  /** Check if a team is in the cache and not expired (TTL: 5 minutes) */
+  private isTeamKnown(teamName: string): boolean {
+    const cachedAt = this.knownTeams.get(teamName);
+    if (cachedAt === undefined) return false;
+    if (Date.now() - cachedAt > CACHE_TTL_MS) {
+      this.knownTeams.delete(teamName);
+      return false;
+    }
+    return true;
+  }
+
+  /** Mark a team as known with current timestamp, evicting oldest if at capacity */
+  private markTeamKnown(teamName: string): void {
+    if (this.knownTeams.size >= CACHE_MAX_SIZE && !this.knownTeams.has(teamName)) {
+      const oldest = this.knownTeams.keys().next().value;
+      if (oldest !== undefined) this.knownTeams.delete(oldest);
+    }
+    this.knownTeams.set(teamName, Date.now());
   }
 
   /** Resolve config values, interpolating templates if needed */
@@ -193,7 +218,7 @@ export class GenieClient implements IAgentClient {
    */
   private ensureTeamExists(teamName: string): void {
     if (!this.autoSpawn) return;
-    if (this.knownTeams.has(teamName)) return;
+    if (this.isTeamKnown(teamName)) return;
     if (this.pendingTeams.has(teamName)) return; // Already checking/spawning
 
     this.pendingTeams.add(teamName);
@@ -207,22 +232,34 @@ export class GenieClient implements IAgentClient {
   }
 
   /**
-   * Check if team is fully active (config + tmux window) and spawn if not.
+   * Check if team is fully active (config + tmux window + non-pending session) and spawn if not.
    */
   private async checkAndSpawnTeam(teamName: string): Promise<void> {
     const configPath = join(homedir(), '.claude', 'teams', teamName, 'config.json');
-    const configExists = await stat(configPath)
-      .then(() => true)
-      .catch(() => false);
+    let configExists = false;
+    let leadSessionPending = false;
 
-    if (configExists) {
+    try {
+      const configData = await readFile(configPath, 'utf-8');
+      configExists = true;
+      const config = JSON.parse(configData);
+      if (config.leadSessionId === 'pending') {
+        leadSessionPending = true;
+      }
+    } catch {
+      configExists = false;
+    }
+
+    if (configExists && !leadSessionPending) {
       const windowActive = await this.hasTmuxWindow(teamName);
       if (windowActive) {
-        this.knownTeams.add(teamName);
+        this.markTeamKnown(teamName);
         this.pendingTeams.delete(teamName);
         return;
       }
       log.info('Team config exists but no tmux window — re-spawning', { teamName });
+    } else if (leadSessionPending) {
+      log.info('Team config has pending leadSessionId — re-spawning', { teamName });
     }
 
     await this.spawnTeamLead(teamName);
@@ -244,9 +281,10 @@ export class GenieClient implements IAgentClient {
 
   /**
    * Spawn a team-lead via genie CLI (primary) with direct tmux fallback.
+   * Passes --tmux-session explicitly so genie works from non-tmux contexts (PM2).
    */
   private async spawnTeamLead(teamName: string): Promise<void> {
-    const args = ['team', 'ensure', teamName, '--dir', this.autoSpawnDir];
+    const args = ['team', 'ensure', teamName, '--dir', this.autoSpawnDir, '--tmux-session', this.tmuxSession];
     const env = { ...process.env, GENIE_TMUX_SESSION: this.tmuxSession };
 
     log.info('Auto-spawning team-lead', { teamName, tmuxSession: this.tmuxSession, args });
@@ -257,8 +295,22 @@ export class GenieClient implements IAgentClient {
       // Verify tmux window was actually created
       const active = await this.hasTmuxWindow(teamName);
       if (active) {
+        // Also verify leadSessionId is not stuck at "pending"
+        const configPath = join(homedir(), '.claude', 'teams', teamName, 'config.json');
+        try {
+          const configData = await readFile(configPath, 'utf-8');
+          const config = JSON.parse(configData);
+          if (config.leadSessionId === 'pending') {
+            log.warn('Spawn created tmux window but leadSessionId is still pending', { teamName });
+            this.pendingTeams.delete(teamName);
+            return;
+          }
+        } catch {
+          // Config read failed — window exists, treat as success
+        }
+
         log.info('Auto-spawn succeeded (tmux window verified)', { teamName });
-        this.knownTeams.add(teamName);
+        this.markTeamKnown(teamName);
         this.pendingTeams.delete(teamName);
         return;
       }
@@ -284,22 +336,22 @@ export class GenieClient implements IAgentClient {
 
   /**
    * Direct tmux fallback: create session/window and launch Claude Code.
-   * Used when genie CLI is unavailable or fails to create the tmux window
-   * (e.g. called from PM2 without tmux env context).
+   * Uses explicit tmux session targeting instead of relying on TMUX env var,
+   * so it works from non-tmux processes like PM2.
    */
   private async spawnViaTmux(teamName: string): Promise<void> {
     const session = this.tmuxSession;
     const windowName = sanitizeWindowName(teamName);
     const target = `${session}:${windowName}`;
 
-    // Ensure tmux session exists
+    // Ensure tmux session exists (uses has-session to check without relying on TMUX env var)
     try {
       await execFilePromise('tmux', ['has-session', '-t', session]);
     } catch {
       await execFilePromise('tmux', ['new-session', '-d', '-s', session]);
     }
 
-    // Create window (skip if already exists)
+    // Create window via tmux new-window -t <session> (works from non-tmux processes like PM2)
     if (!(await this.hasTmuxWindow(teamName))) {
       await execFilePromise('tmux', ['new-window', '-t', session, '-n', windowName, '-d', '-c', this.autoSpawnDir]);
     }
@@ -321,7 +373,7 @@ export class GenieClient implements IAgentClient {
     await execFilePromise('tmux', ['send-keys', '-t', target, claudeCmd, 'Enter']);
 
     log.info('Direct tmux spawn succeeded', { teamName, session, window: windowName });
-    this.knownTeams.add(teamName);
+    this.markTeamKnown(teamName);
     this.pendingTeams.delete(teamName);
   }
 
