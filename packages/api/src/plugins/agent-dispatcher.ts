@@ -482,7 +482,6 @@ async function sendTextMessage(
  * Send error feedback to user when agent dispatch fails.
  * Fire-and-forget — errors during feedback delivery are silently swallowed.
  */
-// biome-ignore lint/correctness/noUnusedVariables: will be wired in Group 3 auto-ack feature
 async function sendErrorFeedback(
   channel: ChannelType,
   instanceId: string,
@@ -2359,6 +2358,7 @@ async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): 
   return instance.agentId ?? undefined;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: agent response processing has many format branches
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2425,6 +2425,14 @@ async function processAgentResponse(
   });
 
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
+
+  // ── Auto-ack text message (pre-dispatch, fire-and-forget) ──
+  const agentAckMessage = (inst.agentAckMessage as string) ?? null;
+  if (agentAckMessage) {
+    sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
+      log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
+    });
+  }
 
   // ── Per-thread lazy init ──
   // On the first trigger in a per_thread session: fetch thread history, process media,
@@ -2525,6 +2533,8 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
+    // ── Error feedback: notify user when agent dispatch fails ──
+    sendErrorFeedback(channel, instance.id, chatId, error).catch(() => {});
   } finally {
     // ── Remove Ack (post-processing) ──
     ackHandle.remove();

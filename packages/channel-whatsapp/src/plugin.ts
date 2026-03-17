@@ -1422,6 +1422,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }, duration);
   }
 
+  /**
+   * Add a reaction emoji to a message (implements ChannelPlugin.react)
+   */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+    await sendReaction(sock, jid, messageId, emoji, false);
+  }
+
+  /**
+   * Remove a reaction emoji from a message (implements ChannelPlugin.unreact)
+   */
+  async unreact(instanceId: string, chatId: string, messageId: string, _emoji: string): Promise<void> {
+    const sock = this.getSocket(instanceId);
+    const jid = toJid(chatId);
+    await removeReaction(sock, jid, messageId, false);
+  }
+
   /** Resolve a message key for read receipts, with cache fallback and LID mapping */
   private resolveMessageKey(
     instanceId: string,
