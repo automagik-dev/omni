@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { existsSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieClient, interpolateTemplate } from '../genie-client';
 import type { GenieClientConfig } from '../genie-client';
@@ -112,7 +112,7 @@ describe('genie spawn command', () => {
     const genieCalls = getCallsFor('genie');
     expect(genieCalls.length).toBe(1);
 
-    const args = genieCalls[0][1] as string[];
+    const args = genieCalls[0]![1] as string[];
     expect(args[0]).toBe('spawn');
     expect(args[1]).toBe('omni-pm');
     expect(args[2]).toBe('--team');
@@ -125,7 +125,7 @@ describe('genie spawn command', () => {
     await new Promise((r) => setTimeout(r, 150));
 
     const genieCalls = getCallsFor('genie');
-    const args = genieCalls[0][1] as string[];
+    const args = genieCalls[0]![1] as string[];
 
     expect(args).toContain('--cwd');
     expect(args[args.indexOf('--cwd') + 1]).toBe('/my/workspace');
@@ -137,7 +137,7 @@ describe('genie spawn command', () => {
     await new Promise((r) => setTimeout(r, 150));
 
     const genieCalls = getCallsFor('genie');
-    const args = genieCalls[0][1] as string[];
+    const args = genieCalls[0]![1] as string[];
 
     expect(args[0]).toBe('spawn');
     expect(args[1]).toBe('cegonha');
@@ -333,7 +333,7 @@ describe('concurrent spawn protection', () => {
       if (file === 'genie') {
         // Extract team name from: genie spawn <agent> --team <teamName>
         const teamIdx = args.indexOf('--team');
-        const teamName = teamIdx !== -1 ? args[teamIdx + 1] : '';
+        const teamName = teamIdx !== -1 ? (args[teamIdx + 1] ?? '') : '';
         spawnedTeams.add(teamName);
         cb(null, '', '');
       } else {

@@ -37,7 +37,7 @@ mock.module('node:os', () => ({
 // Test helpers
 // ============================================================================
 
-const TEAMS_DIR = join(TEST_DIR, '.claude', 'teams');
+const _TEAMS_DIR = join(TEST_DIR, '.claude', 'teams');
 
 function makeRequest(message = 'test message'): ProviderRequest {
   return {

@@ -766,7 +766,16 @@ async function collectGenieOptions(options: Partial<SetupGenieOptions>): Promise
     instanceId = (await promptLine('Instance ID (Omni instance UUID, leave blank to skip): ')) || undefined;
   }
 
-  return { agentName, targetAgent, teamName, agentRole, name, baseUrl, instanceId, nonInteractive: options.nonInteractive };
+  return {
+    agentName,
+    targetAgent,
+    teamName,
+    agentRole,
+    name,
+    baseUrl,
+    instanceId,
+    nonInteractive: options.nonInteractive,
+  };
 }
 
 /** Main setup flow for Genie provider */
