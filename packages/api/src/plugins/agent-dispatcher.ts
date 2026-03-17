@@ -79,6 +79,29 @@ import { createSessionStorage } from './session-storage';
 const log = createLogger('agent-dispatcher');
 
 // ============================================================================
+// Plugin → AckProvider adapter
+// ============================================================================
+
+/**
+ * Wrap a ChannelPlugin's optional react/unreact methods as an AckProvider.
+ * Returns null if the plugin doesn't support reactions.
+ */
+function createPluginAckProvider(
+  plugin: {
+    react?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
+    unreact?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
+  } | null,
+): AckProvider | null {
+  if (!plugin?.react || !plugin?.unreact) return null;
+  const reactFn = plugin.react.bind(plugin);
+  const unreactFn = plugin.unreact.bind(plugin);
+  return {
+    ack: (instanceId, chatId, messageId, emoji) => reactFn(instanceId, chatId, messageId, emoji),
+    removeAck: (instanceId, chatId, messageId, emoji) => unreactFn(instanceId, chatId, messageId, emoji),
+  };
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -453,6 +476,23 @@ async function sendTextMessage(
     replyTo,
     metadata: { messageFormatMode, correlationId, senderAgentId },
   });
+}
+
+/**
+ * Send error feedback to user when agent dispatch fails.
+ * Fire-and-forget — errors during feedback delivery are silently swallowed.
+ */
+// biome-ignore lint/correctness/noUnusedVariables: will be wired in Group 3 auto-ack feature
+async function sendErrorFeedback(
+  channel: ChannelType,
+  instanceId: string,
+  chatId: string,
+  error: unknown,
+): Promise<void> {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  const truncated = errorMsg.length > 200 ? `${errorMsg.slice(0, 200)}…` : errorMsg;
+  const text = `⚠️ Sorry, I encountered an error processing your message: ${truncated}`;
+  await sendTextMessage(channel, instanceId, chatId, text);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2343,10 +2383,7 @@ async function processAgentResponse(
     ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
   };
   const plugin = (await getPlugin(channel)) ?? null;
-  // AckProvider: channels that support reactions can expose ack/removeAck
-  // For now we pass null — channel-specific ack providers will be added
-  // when channel parity wishes (D, 7, 8) implement the AckProvider interface
-  const ackProvider: AckProvider | null = null;
+  const ackProvider = createPluginAckProvider(plugin);
   const messageId = firstMessage.payload.externalId ?? '';
   const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
 
@@ -3118,7 +3155,7 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
  * LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
  * check DB for LID→phone mappings to detect if any @lid mention maps to the owner.
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID resolution requires multiple fallback paths
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID resolution with multiple DB fallback paths
 async function resolveLidMentionBot(
   chatsService: Services['chats'],
   instanceId: string,
@@ -3129,8 +3166,18 @@ async function resolveLidMentionBot(
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
 
+  const ownerIsLid = ownerIdentifier.endsWith('@lid');
   const ownerPhone = extractPhoneFromJid(ownerIdentifier);
+
   for (const lidJid of lidMentions) {
+    // Direct LID match: when ownerIdentifier is itself a LID, compare directly
+    if (ownerIsLid && extractPhoneFromJid(lidJid) === ownerPhone) {
+      messageContext.mentionsBot = true;
+      log.debug('LID mention matches owner LID directly', { lidJid, ownerIdentifier });
+      break;
+    }
+
+    // DB resolution: resolve LID -> phone JID, then compare with owner phone
     try {
       const mapping = await chatsService.findLidMapping(instanceId, lidJid);
       if (mapping) {
@@ -3139,6 +3186,15 @@ async function resolveLidMentionBot(
           messageContext.mentionsBot = true;
           log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
           break;
+        }
+        // Reverse check: when owner is LID, also look up the owner's phone mapping
+        if (ownerIsLid) {
+          const ownerMapping = await chatsService.findLidMapping(instanceId, ownerIdentifier);
+          if (ownerMapping && extractPhoneFromJid(ownerMapping) === resolvedPhone) {
+            messageContext.mentionsBot = true;
+            log.debug('LID resolved to owner via reverse mapping', { lidJid, resolvedPhone, ownerIdentifier });
+            break;
+          }
         }
       }
     } catch {

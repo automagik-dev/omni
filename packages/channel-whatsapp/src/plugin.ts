@@ -1202,15 +1202,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         instanceId,
         chatId: jid,
         error: waError.message,
-        errorCode: waError.code,
-        retryable: waError.retryable || isRateLimitError(error),
+        errorCode: waError.channelCode,
+        retryable: waError.recoverable || isRateLimitError(error),
       });
 
       return {
         success: false,
         error: waError.message,
-        errorCode: waError.code,
-        retryable: waError.retryable || isRateLimitError(error),
+        errorCode: waError.channelCode,
+        retryable: waError.recoverable || isRateLimitError(error),
         timestamp: Date.now(),
       };
     }

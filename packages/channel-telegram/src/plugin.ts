@@ -970,15 +970,4 @@ export class TelegramPlugin extends BaseChannelPlugin {
   getWebhookSecret(instanceId: string): string | undefined {
     return this.configs.get(instanceId)?.webhookSecret;
   }
-
-  private isRetryableError(error: unknown): boolean {
-    if (error instanceof Error) {
-      const msg = error.message.toLowerCase();
-      // Telegram rate limit or server errors
-      if (msg.includes('429') || msg.includes('too many requests')) return true;
-      if (msg.includes('500') || msg.includes('502') || msg.includes('503')) return true;
-      if (msg.includes('timeout') || msg.includes('econnreset')) return true;
-    }
-    return false;
-  }
 }
