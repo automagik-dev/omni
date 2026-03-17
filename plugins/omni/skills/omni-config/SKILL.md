@@ -37,24 +37,33 @@ omni config set format json --json
 omni config unset defaultInstance --json
 ```
 
-## Providers
+## Provider schemas (quick reference)
 
 Available schemas: `agno`, `webhook`, `openclaw`, `claude-code`, `genie`, `a2a`, `ag-ui`
 
+> For full provider management (list, get, create, update, delete, setup, test), see the **omni-providers** skill.
+
+### genie
+
+Connects Omni to a Claude Code team inbox (Automagik Genie orchestrator).
+
 ```bash
-omni providers list --json
-omni providers get <id> --json
-
-# openclaw provider
 omni providers create \
-  --name "openclaw-prod" \
-  --schema openclaw \
-  --base-url wss://gateway.example/ws \
-  --api-key <key> \
-  --default-agent-id <agentId> \
+  --name "genie-prod" \
+  --schema genie \
+  --agent-name "omni-agent" \
+  --target-agent "team-lead" \
+  --team-name "omni-{chat_id}" \
   --json
+```
 
-# claude-code provider (runs Claude Code SDK locally)
+Flags: `--agent-name` (required), `--target-agent` (required), `--team-name` (template with `{chat_id}`, `{thread_id}`, `{sender_id}`; default: `omni-{chat_id}`)
+
+### claude-code
+
+Runs Claude Code SDK locally as an agent backend.
+
+```bash
 omni providers create \
   --name "claude-dev" \
   --schema claude-code \
@@ -64,15 +73,45 @@ omni providers create \
   --model claude-opus-4-5 \
   --system-prompt "You are a helpful assistant." \
   --json
+```
 
-# agno / webhook providers (use --base-url and --api-key as needed)
+Flags: `--project-path` (required), `--max-turns`, `--permission-mode` (default|acceptEdits|bypassPermissions|plan), `--model`, `--system-prompt`
+
+### a2a
+
+Agent-to-Agent protocol provider (Google A2A standard).
+
+```bash
+omni providers create \
+  --name "a2a-agent" \
+  --schema a2a \
+  --base-url https://a2a-server.example/api \
+  --api-key <key> \
+  --json
+```
+
+### ag-ui
+
+Agent-UI protocol provider (CopilotKit AG-UI standard).
+
+```bash
+omni providers create \
+  --name "agui-agent" \
+  --schema ag-ui \
+  --base-url https://agui-server.example/api \
+  --api-key <key> \
+  --json
+```
+
+### openclaw / agno / webhook
+
+```bash
+# openclaw (WebSocket gateway)
+omni providers create --name "openclaw-prod" --schema openclaw \
+  --base-url wss://gateway.example/ws --api-key <key> --default-agent-id <agentId> --json
+
+# agno / webhook (HTTP API)
 omni providers create --name "agno-prod" --schema agno --base-url https://api.agno.com --api-key <key> --json
-
-omni providers test <id> --json
-omni providers agents <id> --json
-omni providers teams <id> --json
-omni providers workflows <id> --json
-omni providers delete <id> --force --json
 ```
 
 ## API keys

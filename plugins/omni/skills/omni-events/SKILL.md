@@ -28,7 +28,9 @@ omni events analytics --since 7d --json
 omni events analytics --instance <id> --all-time --json
 ```
 
-## Replay sessions
+## Replay sessions (event replay)
+
+Re-process historical events through the event pipeline. Useful for rerunning automations or backfilling analytics.
 
 ```bash
 # Start
@@ -43,6 +45,22 @@ omni events replay --status <sessionId> --json
 omni events replay --cancel <sessionId> --json
 ```
 
+## Message replay (standalone command)
+
+`omni replay` is a **separate, standalone command** (not under `omni events`). It replays missed inbound messages for a specific agent instance — useful when an agent was offline and needs to catch up.
+
+```bash
+# Replay missed messages since instance's lastSeenAt (default, max 24h)
+omni replay <instanceId>
+
+# Replay messages received after a specific timestamp
+omni replay wa-main --since 2026-02-27T10:00:00Z
+```
+
+Flags: `--since <timestamp>` (ISO 8601; default: instance's `lastSeenAt`, max 24h ago)
+
+> **Key difference:** `omni events replay` re-processes events through the event bus (analytics, automations). `omni replay` re-delivers missed inbound messages to an agent instance.
+
 ## Journey tracing
 
 ```bash
@@ -55,4 +73,5 @@ omni journey summary --since 24h --json
 - `events list` supports `--chat-id <id>` and `--until <time>` for precise time-range filtering.
 - `events replay --start` supports `--until <time>` and `--instance <id>`.
 - `events search` supports `--since` and `--limit` (no `--type` flag there).
-- Replay management is all through `omni events replay` flags.
+- Event replay management is all through `omni events replay` flags.
+- For replaying missed agent messages, use `omni replay <instanceId>` (standalone command).
