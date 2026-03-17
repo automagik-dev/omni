@@ -367,10 +367,15 @@ export class AutomationEngine {
     queue.activeCount++;
 
     try {
-      // Evaluate conditions
+      // Evaluate conditions — merge metadata so conditions can reference
+      // fields like instanceId, channelType, correlationId etc.
+      const conditionPayload = {
+        ...(event.metadata as unknown as Record<string, unknown>),
+        ...(event.payload as Record<string, unknown>),
+      };
       const conditionResult = evaluateConditionsWithDetails(
         automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
-        event.payload as Record<string, unknown>,
+        conditionPayload,
         automation.conditionLogic ?? 'and',
       );
 

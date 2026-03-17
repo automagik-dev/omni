@@ -19,6 +19,8 @@ export const ERROR_CODES = {
   CHANNEL_CONNECTION_FAILED: 'CHANNEL_CONNECTION_FAILED',
   CHANNEL_SEND_FAILED: 'CHANNEL_SEND_FAILED',
   CHANNEL_TIMEOUT: 'CHANNEL_TIMEOUT',
+  CHANNEL_RATE_LIMITED: 'CHANNEL_RATE_LIMITED',
+  CHANNEL_AUTH_FAILED: 'CHANNEL_AUTH_FAILED',
 
   // Agent errors
   AGENT_UNAVAILABLE: 'AGENT_UNAVAILABLE',
@@ -161,12 +163,12 @@ export class ChannelError extends OmniError {
     message: string,
     channelType: string,
     instanceId?: string,
-    options?: { cause?: Error; recoverable?: boolean },
+    options?: { cause?: Error; recoverable?: boolean; context?: Record<string, unknown> },
   ) {
     super({
       code,
       message,
-      context: { channelType, instanceId },
+      context: { channelType, instanceId, ...options?.context },
       cause: options?.cause,
       recoverable: options?.recoverable ?? true,
     });

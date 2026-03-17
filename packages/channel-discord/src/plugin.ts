@@ -574,14 +574,14 @@ export class DiscordPlugin extends BaseChannelPlugin {
         instanceId,
         chatId: channelId,
         error: discordError.message,
-        errorCode: discordError.code,
-        retryable: discordError.retryable,
+        errorCode: discordError.channelCode,
+        retryable: discordError.recoverable,
       });
       return {
         success: false,
         error: discordError.message,
-        errorCode: discordError.code,
-        retryable: discordError.retryable,
+        errorCode: discordError.channelCode,
+        retryable: discordError.recoverable,
         timestamp: Date.now(),
       };
     }

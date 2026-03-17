@@ -1,0 +1,1 @@
+ALTER TABLE "instances" ADD COLUMN "agent_ack_message" text;

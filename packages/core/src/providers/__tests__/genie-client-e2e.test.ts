@@ -350,7 +350,7 @@ describe('template variable resolution', () => {
       const file = callArgs[0] as string;
       const args = callArgs[1] as string[];
       if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'cegonha-chat789-\n', '');
+        cb(null, 'cegonha-chat789\n', '');
       } else {
         cb(null, '', '');
       }
@@ -361,9 +361,9 @@ describe('template variable resolution', () => {
     await client.run(makeRequestWithChat('chat789'));
     await new Promise((r) => setTimeout(r, 100));
 
-    // thread_id resolves to empty → sanitize strips trailing dash? No — sanitize keeps dashes
-    // 'cegonha-chat789-' → sanitize → 'cegonha-chat789-'
-    const inboxPath = join(TEAMS_DIR, 'cegonha-chat789-', 'inboxes', 'team-lead.json');
+    // thread_id resolves to empty → sanitize strips trailing dash
+    // 'cegonha-chat789-' → sanitize → 'cegonha-chat789'
+    const inboxPath = join(TEAMS_DIR, 'cegonha-chat789', 'inboxes', 'team-lead.json');
     expect(existsSync(inboxPath)).toBe(true);
   });
 

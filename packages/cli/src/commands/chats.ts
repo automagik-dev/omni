@@ -370,6 +370,16 @@ function formatStandardMessages(messages: ExtendedMessage[]): {
   }));
 }
 
+/** Show pagination metadata after listing chats */
+function displayPaginationInfo(shown: number, meta: { total?: number; hasMore: boolean }): void {
+  if (meta.total !== undefined) {
+    output.info(`Showing ${shown} of ${meta.total} chats`);
+  }
+  if (meta.hasMore) {
+    output.warn('Results truncated. Use --limit <n> to see more (max 500).');
+  }
+}
+
 /** Display chat list in verbose or compact format */
 function displayChatList(
   chatItems: ExtendedChat[],
@@ -540,6 +550,12 @@ async function setDisappearingMessages(
   }
 }
 
+/** Compute effective limit for chats list: when --type is set without explicit --limit, fetch all (up to 500) */
+function effectiveLimit(explicitLimit: number | undefined, chatType: string | undefined): number | undefined {
+  if (explicitLimit !== undefined) return explicitLimit;
+  return chatType ? 500 : undefined;
+}
+
 export function createChatsCommand(): Command {
   const chats = new Command('chats').description('Manage chats');
 
@@ -575,12 +591,14 @@ export function createChatsCommand(): Command {
         try {
           const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
 
+          const limit = effectiveLimit(options.limit, options.type);
+
           const result = await client.chats.list({
             instanceId,
             channel: options.channel,
             search: options.search,
             includeArchived: options.archived,
-            limit: options.limit,
+            limit,
             chatType: options.type,
             unreadOnly: options.unread || undefined,
             sort: (options.sort as 'activity' | 'unread' | 'name') || undefined,
@@ -594,6 +612,7 @@ export function createChatsCommand(): Command {
           // Build instance name lookup for multi-instance display
           const instanceNames = options.instance ? new Map<string, string>() : await buildInstanceNameMap(client);
           displayChatList(chats, instanceNames, options);
+          displayPaginationInfo(chats.length, result.meta);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to list chats: ${message}`);

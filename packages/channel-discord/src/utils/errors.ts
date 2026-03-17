@@ -2,8 +2,10 @@
  * Error handling utilities for Discord plugin
  *
  * Maps Discord.js errors to Omni error format.
+ * DiscordError extends core ChannelError for standardized error handling.
  */
 
+import { ChannelError, type ErrorCode as CoreErrorCode, ERROR_CODES } from '@omni/core';
 import { DiscordAPIError, HTTPError, RateLimitError } from 'discord.js';
 
 /**
@@ -27,39 +29,54 @@ export const ErrorCode = {
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 /**
- * Discord plugin error
+ * Map Discord-specific error codes to core ErrorCode
  */
-export class DiscordError extends Error {
-  readonly code: ErrorCodeType;
-  readonly retryable: boolean;
-  readonly context?: Record<string, unknown>;
+const CORE_CODE_MAP: Record<ErrorCodeType, CoreErrorCode> = {
+  [ErrorCode.NOT_CONNECTED]: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+  [ErrorCode.NOT_FOUND]: ERROR_CODES.NOT_FOUND,
+  [ErrorCode.SEND_FAILED]: ERROR_CODES.CHANNEL_SEND_FAILED,
+  [ErrorCode.AUTH_FAILED]: ERROR_CODES.CHANNEL_AUTH_FAILED,
+  [ErrorCode.RATE_LIMITED]: ERROR_CODES.CHANNEL_RATE_LIMITED,
+  [ErrorCode.MISSING_ACCESS]: ERROR_CODES.FORBIDDEN,
+  [ErrorCode.MISSING_PERMISSIONS]: ERROR_CODES.FORBIDDEN,
+  [ErrorCode.UNKNOWN_MESSAGE]: ERROR_CODES.NOT_FOUND,
+  [ErrorCode.UNKNOWN_CHANNEL]: ERROR_CODES.NOT_FOUND,
+  [ErrorCode.UNKNOWN_GUILD]: ERROR_CODES.NOT_FOUND,
+  [ErrorCode.INVALID_TOKEN]: ERROR_CODES.CHANNEL_AUTH_FAILED,
+  [ErrorCode.UNKNOWN]: ERROR_CODES.UNKNOWN,
+};
 
-  constructor(code: ErrorCodeType, message: string, retryable = false, context?: Record<string, unknown>) {
-    super(message);
+/**
+ * Discord plugin error — extends core ChannelError
+ */
+export class DiscordError extends ChannelError {
+  readonly channelCode: ErrorCodeType;
+
+  constructor(code: ErrorCodeType, message: string, recoverable = false, context?: Record<string, unknown>) {
+    const coreCode = CORE_CODE_MAP[code] ?? ERROR_CODES.UNKNOWN;
+    super(coreCode, message, 'discord', undefined, { recoverable, context: { ...context, channelCode: code } });
     this.name = 'DiscordError';
-    this.code = code;
-    this.retryable = retryable;
-    this.context = context;
+    this.channelCode = code;
   }
 }
 
 /**
  * Discord API error code to Omni error mapping
  */
-const apiErrorCodes: Record<number, { code: ErrorCodeType; retryable: boolean }> = {
+const apiErrorCodes: Record<number, { code: ErrorCodeType; recoverable: boolean }> = {
   // Authentication/Permission errors
-  50001: { code: ErrorCode.MISSING_ACCESS, retryable: false },
-  50013: { code: ErrorCode.MISSING_PERMISSIONS, retryable: false },
-  50014: { code: ErrorCode.INVALID_TOKEN, retryable: false },
+  50001: { code: ErrorCode.MISSING_ACCESS, recoverable: false },
+  50013: { code: ErrorCode.MISSING_PERMISSIONS, recoverable: false },
+  50014: { code: ErrorCode.INVALID_TOKEN, recoverable: false },
 
   // Resource not found
-  10003: { code: ErrorCode.UNKNOWN_CHANNEL, retryable: false },
-  10004: { code: ErrorCode.UNKNOWN_GUILD, retryable: false },
-  10008: { code: ErrorCode.UNKNOWN_MESSAGE, retryable: false },
+  10003: { code: ErrorCode.UNKNOWN_CHANNEL, recoverable: false },
+  10004: { code: ErrorCode.UNKNOWN_GUILD, recoverable: false },
+  10008: { code: ErrorCode.UNKNOWN_MESSAGE, recoverable: false },
 
   // Rate limiting (429 status)
   // Note: Discord.js handles 429 via RateLimitError, but some may come through
-  50027: { code: ErrorCode.RATE_LIMITED, retryable: true },
+  50027: { code: ErrorCode.RATE_LIMITED, recoverable: true },
 };
 
 /**
@@ -69,7 +86,7 @@ function handleDiscordAPIError(error: DiscordAPIError): DiscordError {
   // Check for mapped error codes first
   const mapping = apiErrorCodes[error.code as number];
   if (mapping) {
-    return new DiscordError(mapping.code, error.message, mapping.retryable, {
+    return new DiscordError(mapping.code, error.message, mapping.recoverable, {
       discordCode: error.code,
       method: error.method,
       url: error.url,
@@ -149,8 +166,8 @@ export function mapDiscordError(error: unknown): DiscordError {
   }
 
   if (error instanceof HTTPError) {
-    const retryable = error.status >= 500 || error.status === 429;
-    return new DiscordError(ErrorCode.UNKNOWN, error.message, retryable, {
+    const recoverable = error.status >= 500 || error.status === 429;
+    return new DiscordError(ErrorCode.UNKNOWN, error.message, recoverable, {
       status: error.status,
       method: error.method,
     });
@@ -168,7 +185,7 @@ export function mapDiscordError(error: unknown): DiscordError {
  */
 export function isRetryable(error: unknown): boolean {
   if (error instanceof DiscordError) {
-    return error.retryable;
+    return error.recoverable;
   }
 
   if (error instanceof RateLimitError) {

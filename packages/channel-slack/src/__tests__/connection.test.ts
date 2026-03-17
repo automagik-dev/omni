@@ -226,15 +226,15 @@ describe('extractMessageMeta', () => {
 describe('SlackError', () => {
   it('creates error with code and message', () => {
     const error = new SlackError(SlackErrorCode.NOT_CONNECTED, 'Not connected');
-    expect(error.code).toBe('SLACK_NOT_CONNECTED');
+    expect(error.channelCode).toBe(SlackErrorCode.NOT_CONNECTED);
     expect(error.message).toBe('Not connected');
-    expect(error.retryable).toBe(false);
+    expect(error.recoverable).toBe(false);
     expect(error.name).toBe('SlackError');
   });
 
-  it('supports retryable flag', () => {
+  it('supports recoverable flag', () => {
     const error = new SlackError(SlackErrorCode.RATE_LIMITED, 'Rate limited', true);
-    expect(error.retryable).toBe(true);
+    expect(error.recoverable).toBe(true);
   });
 });
 

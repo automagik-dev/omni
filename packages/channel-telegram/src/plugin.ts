@@ -51,6 +51,7 @@ import {
 import { setReaction } from './senders/reaction';
 import { TelegramStreamSender } from './senders/stream';
 import type { TelegramConfig } from './types';
+import { TelegramError, TelegramErrorCode, isRetryable as isTelegramRetryable } from './utils/errors';
 import { splitMessage } from './utils/formatting';
 
 // ============================================================================
@@ -285,7 +286,10 @@ export class TelegramPlugin extends BaseChannelPlugin {
     const webhookSecret = config.options?.webhookSecret as string | undefined;
 
     if (!token) {
-      throw new Error('Telegram bot token is required in credentials.token or options.token');
+      throw new TelegramError(
+        TelegramErrorCode.AUTH_FAILED,
+        'Telegram bot token is required in credentials.token or options.token',
+      );
     }
 
     const commands = (config.options?.commands as TelegramConfig['commands'] | undefined) ?? undefined;
@@ -342,7 +346,10 @@ export class TelegramPlugin extends BaseChannelPlugin {
 
     const botInfo = bot.botInfo;
     if (!botInfo) {
-      throw new Error(`Bot info missing after init for instance ${instanceId}`);
+      throw new TelegramError(
+        TelegramErrorCode.NOT_CONNECTED,
+        `Bot info missing after init for instance ${instanceId}`,
+      );
     }
     this.logger.info('Bot initialized', {
       instanceId,
@@ -416,7 +423,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
       return {
         success: false,
         error: 'Bot not connected',
-        errorCode: 'NOT_CONNECTED',
+        errorCode: TelegramErrorCode.NOT_CONNECTED,
         retryable: false,
         timestamp: Date.now(),
       };
@@ -479,13 +486,13 @@ export class TelegramPlugin extends BaseChannelPlugin {
         instanceId,
         chatId: message.to,
         error: errorMessage,
-        retryable: this.isRetryableError(error),
+        retryable: isTelegramRetryable(error),
       });
 
       return {
         success: false,
         error: errorMessage,
-        retryable: this.isRetryableError(error),
+        retryable: isTelegramRetryable(error),
         timestamp: Date.now(),
       };
     }
@@ -504,7 +511,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
   ): StreamSender {
     const bot = getBot(instanceId);
     if (!bot) {
-      throw new Error(`No bot for instance ${instanceId}`);
+      throw new TelegramError(TelegramErrorCode.NOT_CONNECTED, `No bot for instance ${instanceId}`);
     }
 
     // Stream mode toggle: when 'off', return a no-op stream sender that
@@ -526,14 +533,14 @@ export class TelegramPlugin extends BaseChannelPlugin {
    */
   async exportChatInviteLink(instanceId: string, chatId: string): Promise<string> {
     const bot = getBot(instanceId);
-    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+    if (!bot) throw new TelegramError(TelegramErrorCode.NOT_CONNECTED, `No bot for instance ${instanceId}`);
 
     return bot.api.exportChatInviteLink(chatId);
   }
 
   async forwardMessage(instanceId: string, fromChatId: string, toChatId: string, messageId: string): Promise<string> {
     const bot = getBot(instanceId);
-    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+    if (!bot) throw new TelegramError(TelegramErrorCode.NOT_CONNECTED, `No bot for instance ${instanceId}`);
 
     const result = await bot.api.forwardMessage(toChatId, fromChatId, Number(messageId));
     return String(result.message_id);
@@ -550,7 +557,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
     platformMetadata: Record<string, unknown>;
   }> {
     const bot = getBot(instanceId);
-    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+    if (!bot) throw new TelegramError(TelegramErrorCode.NOT_CONNECTED, `No bot for instance ${instanceId}`);
 
     const me = await bot.api.getMe();
     let avatarUrl: string | undefined;
@@ -594,7 +601,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
     platformData?: Record<string, unknown>;
   }> {
     const bot = getBot(instanceId);
-    if (!bot) throw new Error(`No bot for instance ${instanceId}`);
+    if (!bot) throw new TelegramError(TelegramErrorCode.NOT_CONNECTED, `No bot for instance ${instanceId}`);
 
     const chat = await bot.api.getChat(userId);
     let avatarUrl: string | undefined;
@@ -902,7 +909,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // See: https://grammy.dev/guide/deployment-types#webhooks
     //
     // For now, use polling mode (mode: 'polling' or omit mode entirely).
-    throw new Error(
+    throw new TelegramError(
+      TelegramErrorCode.WEBHOOK_FAILED,
       `Webhook mode is not yet supported for Telegram instance ${instanceId}. Use polling mode instead (set mode: "polling" in instance config). Webhook support requires an HTTP endpoint to receive Telegram updates.`,
     );
   }
@@ -969,16 +977,5 @@ export class TelegramPlugin extends BaseChannelPlugin {
    */
   getWebhookSecret(instanceId: string): string | undefined {
     return this.configs.get(instanceId)?.webhookSecret;
-  }
-
-  private isRetryableError(error: unknown): boolean {
-    if (error instanceof Error) {
-      const msg = error.message.toLowerCase();
-      // Telegram rate limit or server errors
-      if (msg.includes('429') || msg.includes('too many requests')) return true;
-      if (msg.includes('500') || msg.includes('502') || msg.includes('503')) return true;
-      if (msg.includes('timeout') || msg.includes('econnreset')) return true;
-    }
-    return false;
   }
 }
