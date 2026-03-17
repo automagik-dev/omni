@@ -292,6 +292,13 @@ async function setupEventBusServices(
     }
   }
 
+  // Automation engine (subscribes to NATS events and evaluates rules)
+  try {
+    await services.automations.startEngine({});
+  } catch (error) {
+    log.error('Failed to start automation engine', { error: String(error) });
+  }
+
   // Session cleaner (clears agent sessions on trash emoji)
   try {
     await setupSessionCleaner(eventBus, services, db);
