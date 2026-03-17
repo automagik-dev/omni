@@ -1,15 +1,15 @@
 /**
  * E2E-style tests for GenieClient auto-spawn behavior
  *
- * Covers scenarios closer to real-world: PM2 process context, concurrent
- * messages, session recovery, template variable resolution, and Claude Code
+ * Covers scenarios closer to real-world: spawn via genie CLI, concurrent
+ * messages, session recovery, template variable resolution, and genie spawn
  * command correctness.
  *
  * Run with: bun test packages/core/src/providers/__tests__/genie-client-e2e.test.ts
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieClient, interpolateTemplate } from '../genie-client';
 import type { GenieClientConfig } from '../genie-client';
@@ -45,6 +45,7 @@ function makeConfig(overrides?: Partial<GenieClientConfig>): GenieClientConfig {
     agentName: 'omni',
     targetAgent: 'team-lead',
     teamName: 'test-team',
+    agentRole: 'omni-pm',
     ...overrides,
   };
 }
@@ -82,76 +83,7 @@ function getCallsFor(binary: string): unknown[][] {
   return execFileMock.mock.calls.filter((call) => (call[0] as string) === binary);
 }
 
-function getGenieEnv(callIndex = 0): Record<string, string> | undefined {
-  const genieCalls = getCallsFor('genie');
-  return (genieCalls[callIndex]?.[2] as { env?: Record<string, string> })?.env;
-}
-
 type MockCb = (error: Error | null, stdout?: string, stderr?: string) => void;
-
-function handleGenieMock(args: string[], cb: MockCb, genieAvailable: boolean): void {
-  if (!genieAvailable) {
-    cb(new Error('genie: command not found'));
-    return;
-  }
-  const teamName = args[2]; // team ensure <name>
-  if (teamName) {
-    const teamDir = join(TEAMS_DIR, teamName);
-    mkdirSync(teamDir, { recursive: true });
-    writeFileSync(join(teamDir, 'config.json'), '{"leadSessionId":"pending"}');
-  }
-  cb(null, '', '');
-}
-
-function handleTmuxMock(
-  args: string[],
-  cb: MockCb,
-  options: { tmuxSessionExists: boolean },
-  spawnedWindows: Set<string>,
-): void {
-  const subcommand = args[0];
-  if (subcommand === 'has-session') {
-    options.tmuxSessionExists ? cb(null, '', '') : cb(new Error('session not found'));
-  } else if (subcommand === 'new-session') {
-    options.tmuxSessionExists = true;
-    cb(null, '', '');
-  } else if (subcommand === 'new-window') {
-    const nameIdx = args.indexOf('-n');
-    const windowName = nameIdx !== -1 ? args[nameIdx + 1] : undefined;
-    if (windowName) spawnedWindows.add(windowName);
-    cb(null, '', '');
-  } else if (subcommand === 'list-windows') {
-    cb(null, [...spawnedWindows].join('\n'), '');
-  } else if (subcommand === 'send-keys') {
-    const targetArg = args[args.indexOf('-t') + 1];
-    const windowName = targetArg?.split(':')[1];
-    if (windowName) spawnedWindows.add(windowName);
-    cb(null, '', '');
-  } else {
-    cb(null, '', '');
-  }
-}
-
-/** Set up mock to simulate a PM2 process (no TMUX env, genie may or may not be available) */
-function setupPm2Mock(options: { genieAvailable: boolean; tmuxSessionExists: boolean }) {
-  const spawnedWindows = new Set<string>();
-
-  execFileMock.mockImplementation((...callArgs: unknown[]) => {
-    const cb = callArgs[callArgs.length - 1] as MockCb;
-    const file = callArgs[0] as string;
-    const args = callArgs[1] as string[];
-
-    if (file === 'genie') {
-      handleGenieMock(args, cb, options.genieAvailable);
-    } else if (file === 'tmux') {
-      handleTmuxMock(args, cb, options, spawnedWindows);
-    } else {
-      cb(null, '', '');
-    }
-  });
-
-  return { spawnedWindows };
-}
 
 // ============================================================================
 // Setup / Teardown
@@ -168,132 +100,90 @@ afterEach(() => {
 });
 
 // ============================================================================
-// PM2 Process Context (no TMUX env)
+// Genie Spawn Command
 // ============================================================================
 
-describe('PM2 process context (no TMUX env)', () => {
-  test('spawns via direct tmux when genie CLI is unavailable', async () => {
-    setupPm2Mock({ genieAvailable: false, tmuxSessionExists: true });
-
+describe('genie spawn command', () => {
+  test('calls genie spawn with correct agentRole and --team flag', async () => {
     const client = new GenieClient(makeConfig());
     await client.run(makeRequest());
     await new Promise((r) => setTimeout(r, 150));
 
-    // genie failed, should have used direct tmux commands
-    const tmuxCalls = getCallsFor('tmux');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-    expect(sendKeysCall).toBeTruthy();
+    const genieCalls = getCallsFor('genie');
+    expect(genieCalls.length).toBe(1);
 
-    // Message should still be delivered
+    const args = genieCalls[0]![1] as string[];
+    expect(args[0]).toBe('spawn');
+    expect(args[1]).toBe('omni-pm');
+    expect(args[2]).toBe('--team');
+    expect(args[3]).toBe('test-team');
+  });
+
+  test('passes --cwd flag with autoSpawnDir', async () => {
+    const client = new GenieClient(makeConfig({ autoSpawnDir: '/my/workspace' }));
+    await client.run(makeRequest());
+    await new Promise((r) => setTimeout(r, 150));
+
+    const genieCalls = getCallsFor('genie');
+    const args = genieCalls[0]![1] as string[];
+
+    expect(args).toContain('--cwd');
+    expect(args[args.indexOf('--cwd') + 1]).toBe('/my/workspace');
+  });
+
+  test('uses custom agentRole from config', async () => {
+    const client = new GenieClient(makeConfig({ agentRole: 'cegonha' }));
+    await client.run(makeRequest());
+    await new Promise((r) => setTimeout(r, 150));
+
+    const genieCalls = getCallsFor('genie');
+    const args = genieCalls[0]![1] as string[];
+
+    expect(args[0]).toBe('spawn');
+    expect(args[1]).toBe('cegonha');
+  });
+
+  test('delivers message even when genie spawn fails', async () => {
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as MockCb;
+      const file = callArgs[0] as string;
+
+      if (file === 'genie') {
+        cb(new Error('genie: command not found'));
+      } else {
+        cb(null, '', '');
+      }
+    });
+
+    const client = new GenieClient(makeConfig());
+    const response = await client.run(makeRequest());
+
+    // Message delivery succeeds even when spawn fails
+    expect(response.status).toBe('completed');
+
     const inboxPath = join(TEAMS_DIR, 'test-team', 'inboxes', 'team-lead.json');
     expect(existsSync(inboxPath)).toBe(true);
   });
 
-  test('creates tmux session AND window when neither exist', async () => {
-    setupPm2Mock({ genieAvailable: false, tmuxSessionExists: false });
+  test('no tmux fallback when genie spawn fails', async () => {
+    execFileMock.mockImplementation((...callArgs: unknown[]) => {
+      const cb = callArgs[callArgs.length - 1] as MockCb;
+      const file = callArgs[0] as string;
+
+      if (file === 'genie') {
+        cb(new Error('genie: command not found'));
+      } else {
+        cb(null, '', '');
+      }
+    });
 
     const client = new GenieClient(makeConfig());
     await client.run(makeRequest());
     await new Promise((r) => setTimeout(r, 150));
 
+    // No tmux calls should be made (no fallback)
     const tmuxCalls = getCallsFor('tmux');
-    const newSessionCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'new-session');
-    const newWindowCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'new-window');
-
-    expect(newSessionCall).toBeTruthy();
-    expect(newWindowCall).toBeTruthy();
-  });
-
-  test('falls back to tmux when genie creates config but not window', async () => {
-    setupPm2Mock({ genieAvailable: true, tmuxSessionExists: true });
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 150));
-
-    // genie was called and created config
-    const genieCalls = getCallsFor('genie');
-    expect(genieCalls.length).toBe(1);
-
-    // But since genie didn't create the tmux window, fallback should happen
-    const tmuxCalls = getCallsFor('tmux');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-    expect(sendKeysCall).toBeTruthy();
-  });
-
-  test('passes GENIE_TMUX_SESSION env to genie CLI (no reliance on $TMUX)', async () => {
-    setupPm2Mock({ genieAvailable: true, tmuxSessionExists: true });
-
-    const client = new GenieClient(makeConfig({ tmuxSession: 'my-session' }));
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 150));
-
-    const env = getGenieEnv();
-    expect(env?.GENIE_TMUX_SESSION).toBe('my-session');
-    // Process should NOT have TMUX env (we're simulating PM2)
-    // The genie CLI should use GENIE_TMUX_SESSION instead
-  });
-});
-
-// ============================================================================
-// Claude Code Command Correctness
-// ============================================================================
-
-describe('Claude Code command correctness', () => {
-  test('send-keys command includes all required env vars and flags', async () => {
-    setupPm2Mock({ genieAvailable: false, tmuxSessionExists: true });
-
-    const client = new GenieClient(makeConfig({ teamName: 'my-team' }));
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 150));
-
-    const tmuxCalls = getCallsFor('tmux');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-    const sendKeysArgs = sendKeysCall?.[1] as string[];
-    const claudeCmd = sendKeysArgs[3]; // index 3: after 'send-keys', '-t', target
-
-    // Required env vars
-    expect(claudeCmd).toContain('GENIE_TEAM=');
-    expect(claudeCmd).toContain('GENIE_AGENT_NAME=');
-    expect(claudeCmd).toContain('CLAUDECODE=1');
-    expect(claudeCmd).toContain('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1');
-
-    // Required Claude Code flags
-    expect(claudeCmd).toContain('claude');
-    expect(claudeCmd).toContain('--team-name');
-    expect(claudeCmd).toContain('--agent-name');
-    expect(claudeCmd).toContain('--agent-id');
-    expect(claudeCmd).toContain('--dangerously-skip-permissions');
-  });
-
-  test('send-keys target uses correct session:window format', async () => {
-    setupPm2Mock({ genieAvailable: false, tmuxSessionExists: true });
-
-    const client = new GenieClient(makeConfig({ teamName: 'my-team', tmuxSession: 'genie' }));
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 150));
-
-    const tmuxCalls = getCallsFor('tmux');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-    const sendKeysArgs = sendKeysCall?.[1] as string[];
-
-    // -t flag should be session:window
-    expect(sendKeysArgs[1]).toBe('-t');
-    expect(sendKeysArgs[2]).toBe('genie:my-team');
-  });
-
-  test('command ends with Enter key', async () => {
-    setupPm2Mock({ genieAvailable: false, tmuxSessionExists: true });
-
-    const client = new GenieClient(makeConfig());
-    await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 150));
-
-    const tmuxCalls = getCallsFor('tmux');
-    const sendKeysCall = tmuxCalls.find((c) => (c[1] as string[])[0] === 'send-keys');
-    const sendKeysArgs = sendKeysCall?.[1] as string[];
-
-    expect(sendKeysArgs[sendKeysArgs.length - 1]).toBe('Enter');
+    expect(tmuxCalls.length).toBe(0);
   });
 });
 
@@ -303,16 +193,9 @@ describe('Claude Code command correctness', () => {
 
 describe('template variable resolution', () => {
   test('resolves {chat_id} in team name for per-chat sessions', async () => {
-    // Default mock: everything succeeds
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-      if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'cegonha-chat123\n', '');
-      } else {
-        cb(null, '', '');
-      }
+      cb(null, '', '');
     });
 
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}' }));
@@ -327,13 +210,7 @@ describe('template variable resolution', () => {
   test('resolves {chat_id}-{thread_id} for per-thread sessions', async () => {
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-      if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'cegonha-chat123-thread456\n', '');
-      } else {
-        cb(null, '', '');
-      }
+      cb(null, '', '');
     });
 
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}-{thread_id}' }));
@@ -347,13 +224,7 @@ describe('template variable resolution', () => {
   test('falls back when thread_id is absent (DM without thread)', async () => {
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
-      const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
-      if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, 'cegonha-chat789\n', '');
-      } else {
-        cb(null, '', '');
-      }
+      cb(null, '', '');
     });
 
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}-{thread_id}' }));
@@ -361,8 +232,8 @@ describe('template variable resolution', () => {
     await client.run(makeRequestWithChat('chat789'));
     await new Promise((r) => setTimeout(r, 100));
 
-    // thread_id resolves to empty → sanitize strips trailing dash
-    // 'cegonha-chat789-' → sanitize → 'cegonha-chat789'
+    // thread_id resolves to empty -> sanitize strips trailing dash
+    // 'cegonha-chat789-' -> sanitize -> 'cegonha-chat789'
     const inboxPath = join(TEAMS_DIR, 'cegonha-chat789', 'inboxes', 'team-lead.json');
     expect(existsSync(inboxPath)).toBe(true);
   });
@@ -423,15 +294,11 @@ describe('concurrent spawn protection', () => {
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
       const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
 
       if (file === 'genie') {
         genieCallCount++;
-        // Simulate slow genie — resolve after 100ms
+        // Simulate slow genie -- resolve after 100ms
         setTimeout(() => cb(null, '', ''), 100);
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        // After genie completes, return the window
-        cb(null, genieCallCount > 0 ? 'test-team\n' : '', '');
       } else {
         cb(null, '', '');
       }
@@ -440,7 +307,6 @@ describe('concurrent spawn protection', () => {
     const client = new GenieClient(makeConfig());
 
     // Fire messages sequentially to avoid lock contention on the inbox file
-    // (the lock mechanism is tested separately; here we test spawn coalescing)
     for (const msg of ['msg1', 'msg2', 'msg3', 'msg4', 'msg5']) {
       await client.run(makeRequest({ message: msg }));
     }
@@ -465,11 +331,11 @@ describe('concurrent spawn protection', () => {
       const args = callArgs[1] as string[];
 
       if (file === 'genie') {
-        const teamName = args[2] ?? '';
+        // Extract team name from: genie spawn <agent> --team <teamName>
+        const teamIdx = args.indexOf('--team');
+        const teamName = teamIdx !== -1 ? (args[teamIdx + 1] ?? '') : '';
         spawnedTeams.add(teamName);
         cb(null, '', '');
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, [...spawnedTeams].join('\n'), '');
       } else {
         cb(null, '', '');
       }
@@ -498,20 +364,16 @@ describe('concurrent spawn protection', () => {
 // ============================================================================
 
 describe('session recovery', () => {
-  test('re-spawns when cached team window disappears', async () => {
-    const windowExists = true;
+  test('re-spawns when cache TTL expires', async () => {
     let genieCallCount = 0;
 
     execFileMock.mockImplementation((...callArgs: unknown[]) => {
       const cb = callArgs[callArgs.length - 1] as (error: Error | null, stdout?: string, stderr?: string) => void;
       const file = callArgs[0] as string;
-      const args = callArgs[1] as string[];
 
       if (file === 'genie') {
         genieCallCount++;
         cb(null, '', '');
-      } else if (file === 'tmux' && args[0] === 'list-windows') {
-        cb(null, windowExists ? 'test-team\n' : '', '');
       } else {
         cb(null, '', '');
       }
@@ -524,16 +386,15 @@ describe('session recovery', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(genieCallCount).toBe(1);
 
-    // Team is now cached — second run should skip spawn
+    // Team is now cached -- second run should skip spawn
     genieCallCount = 0;
     await client.run(makeRequest({ message: 'second' }));
     await new Promise((r) => setTimeout(r, 100));
     expect(genieCallCount).toBe(0);
 
     // NOTE: Current implementation does NOT detect session death after caching.
-    // Once a team is in knownTeams, it stays there forever.
-    // This is a known gap — recovery requires client restart or cache eviction.
-    // Documenting this as expected behavior for now.
+    // Once a team is in knownTeams, it stays there until TTL expires.
+    // After TTL, genie spawn is re-called which is idempotent (~2s max).
   });
 
   test('inbox file survives spawn failure (fire-and-forget)', async () => {
