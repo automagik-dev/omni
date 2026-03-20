@@ -56,8 +56,9 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         with:
           config: cliff.toml
-          args: ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
-          output: /tmp/release-notes.md
+          args: >-
+            ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
+            --output /tmp/release-notes.md
         env:
           GITHUB_REPO: ${{ github.repository }}
 
