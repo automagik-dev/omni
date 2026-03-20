@@ -29,7 +29,13 @@
     },
     "packages/channel-sdk": {
       "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": [
+        "@omni/channel-discord",
+        "@omni/channel-slack",
+        "@omni/channel-telegram",
+        "@omni/channel-whatsapp"
+      ]
     },
     "packages/channel-discord": {
       "project": ["src/**/*.ts"]

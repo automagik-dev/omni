@@ -330,22 +330,43 @@ for (const channel of channels) {
     // Group 6: Journey timing
     describe('journey timing', () => {
       it('captures T10 (pluginSentAt) in sendMessage path', () => {
+        // T10 is recorded right before the platform API call.
         const source = readSource(channel.pluginSourcePath);
         expect(sourceContainsCall(source, 'captureT10')).toBe(true);
       });
 
       it('captures T11 (platformDeliveredAt) in sendMessage path', () => {
+        // T11 is recorded right after the platform confirms delivery.
         const source = readSource(channel.pluginSourcePath);
         expect(sourceContainsCall(source, 'captureT11')).toBe(true);
       });
 
       it('captures inbound timing checkpoints (T0/T1/T2)', () => {
+        // Inbound flow: captureInboundTimings() builds T0+T1, then captureT2()
+        // records T2 after the event is published via emitMessageReceived().
         const source = readSource(channel.pluginSourcePath);
-        const hasInboundTimings =
-          sourceContainsCall(source, 'captureInboundTimings') ||
-          sourceContainsCall(source, 'captureT0') ||
-          sourceContainsCall(source, 'captureT2');
-        expect(hasInboundTimings).toBe(true);
+        expect(sourceContainsCall(source, 'captureInboundTimings')).toBe(true);
+        expect(sourceContainsCall(source, 'captureT2')).toBe(true);
+      });
+
+      it('calls T10 before T11 in sendMessage flow', () => {
+        // Verify correct ordering: T10 (before send) must appear before T11 (after send).
+        const source = readSource(channel.pluginSourcePath);
+        const t10Index = source.indexOf('captureT10(');
+        const t11Index = source.indexOf('captureT11(');
+        expect(t10Index).toBeGreaterThan(-1);
+        expect(t11Index).toBeGreaterThan(-1);
+        expect(t10Index).toBeLessThan(t11Index);
+      });
+
+      it('calls captureInboundTimings before captureT2 in inbound flow', () => {
+        // Verify correct ordering: build timings map before recording T2.
+        const source = readSource(channel.pluginSourcePath);
+        const inboundIndex = source.indexOf('captureInboundTimings(');
+        const t2Index = source.indexOf('captureT2(');
+        expect(inboundIndex).toBeGreaterThan(-1);
+        expect(t2Index).toBeGreaterThan(-1);
+        expect(inboundIndex).toBeLessThan(t2Index);
       });
     });
 
