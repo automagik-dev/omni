@@ -411,7 +411,7 @@ for (const channel of channels) {
 // Discovery guard
 
 describe('channel coverage', () => {
-  it('covers all channel-* packages (excluding a2a and internal)', () => {
+  it('covers all channel-* packages (excluding a2a, internal, and linkedin)', () => {
     const entries = readdirSync(packagesRoot, { withFileTypes: true });
     const channelPackages = entries
       .filter(
@@ -420,7 +420,8 @@ describe('channel coverage', () => {
           e.name.startsWith('channel-') &&
           e.name !== 'channel-sdk' &&
           e.name !== 'channel-a2a' &&
-          e.name !== 'channel-internal',
+          e.name !== 'channel-internal' &&
+          e.name !== 'channel-linkedin', // Placeholder package — no source yet
       )
       .map((e) => e.name.replace('channel-', ''));
 
