@@ -53,11 +53,12 @@ jobs:
 
       - name: Generate changelog
         uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
-        id: cliff
         if: steps.exists.outputs.skip != 'true'
         with:
           config: cliff.toml
-          args: ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
+          args: >-
+            ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
+            --output /tmp/release-notes.md
         env:
           GITHUB_REPO: ${{ github.repository }}
 
@@ -65,10 +66,8 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          RELEASE_NOTES: ${{ steps.cliff.outputs.content }}
         run: |
           TAG="v${{ steps.pkg.outputs.version }}"
-          printf '%s' "$RELEASE_NOTES" > /tmp/release-notes.md
           gh release create "${TAG}" \
             --target "${{ github.sha }}" \
             --title "${TAG}" \
