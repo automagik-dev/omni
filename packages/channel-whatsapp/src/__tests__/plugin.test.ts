@@ -104,7 +104,7 @@ describe('WhatsAppPlugin', () => {
 
     function createPluginWithMockSocket() {
       const plugin = new WhatsAppPlugin();
-      const sendMessage = mock(() => Promise.resolve(undefined));
+      const sendMessage = mock((_jid: string, _msg: Record<string, unknown>) => Promise.resolve(undefined));
       const mockSocket = {
         sendMessage,
         user: { id: BOT_JID },
