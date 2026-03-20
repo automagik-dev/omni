@@ -21,6 +21,15 @@ mock.module('../output.js', () => ({
   warn: mock(),
   table: mock(),
   json: mock(),
+  raw: mock(),
+  data: mock(),
+  list: mock(),
+  keyValue: mock(),
+  header: mock(),
+  dim: mock(),
+  disableColors: mock(),
+  areColorsEnabled: () => true,
+  setMaxCellWidth: mock(),
   getCurrentFormat: () => 'human',
 }));
 
