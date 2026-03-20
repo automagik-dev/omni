@@ -484,7 +484,7 @@ export function createMessagesCommand(): Command {
     .requiredOption('--text <text>', 'New text content')
     .action(async (messageId: string, options: { instance: string; chat: string; text: string }) => {
       try {
-        const resolvedMessageId = await resolveMessageId(messageId);
+        const resolvedMessageId = await resolveMessageId(messageId, options.chat);
         const instanceId = await resolveInstanceId(options.instance);
         const _cfg = (await import('../config.js')).loadConfig();
         const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';

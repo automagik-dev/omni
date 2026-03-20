@@ -31,7 +31,7 @@ import {
   setupConnectionHandlers,
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isLidJid, isUserJid, toJid } from './jid';
+import { fromJid, isGroupJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
@@ -3931,11 +3931,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     await this.humanDelay(instanceId);
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatJid);
-    await sock.sendMessage(jid, {
-      edit: { remoteJid: jid, id: messageId, fromMe } as unknown as proto.IMessageKey,
-      text: newText,
-    });
-    this.logger.info('Message edited', { instanceId, chatJid: jid, messageId, fromMe });
+
+    const editKey: proto.IMessageKey = {
+      remoteJid: jid,
+      id: messageId,
+      fromMe,
+    };
+
+    // Group chats require participant to identify the sender
+    if (isGroupJid(jid) && fromMe) {
+      editKey.participant = sock.user?.id;
+    }
+
+    try {
+      const result = await sock.sendMessage(jid, { edit: editKey, text: newText });
+      this.logger.info('Message edited', {
+        instanceId,
+        chatJid: jid,
+        messageId,
+        fromMe,
+        resultKeyId: result?.key?.id,
+      });
+    } catch (error) {
+      this.logger.error('Failed to edit message via Baileys', {
+        instanceId,
+        chatJid: jid,
+        messageId,
+        fromMe,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw mapBaileysError(error);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
