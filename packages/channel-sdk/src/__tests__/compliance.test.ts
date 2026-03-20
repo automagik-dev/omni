@@ -21,21 +21,28 @@ import { dirname, resolve } from 'node:path';
 import { BaseChannelPlugin } from '../base/BaseChannelPlugin';
 import type { ChannelCapabilities } from '../types/capabilities';
 
+import { ChannelError } from '@omni/core';
+// Use relative imports to avoid circular workspace dependencies
+// (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
 import {
   DISCORD_CAPABILITIES,
   DiscordError,
   ErrorCode as DiscordErrorCode,
   DiscordPlugin,
-} from '@omni/channel-discord';
-import { SLACK_CAPABILITIES, SlackError, SlackErrorCode, SlackPlugin } from '@omni/channel-slack';
-import { TELEGRAM_CAPABILITIES, TelegramError, TelegramErrorCode, TelegramPlugin } from '@omni/channel-telegram';
+} from '../../../channel-discord/src/index';
+import { SLACK_CAPABILITIES, SlackError, SlackErrorCode, SlackPlugin } from '../../../channel-slack/src/index';
+import {
+  TELEGRAM_CAPABILITIES,
+  TelegramError,
+  TelegramErrorCode,
+  TelegramPlugin,
+} from '../../../channel-telegram/src/index';
 import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
   ErrorCode as WhatsAppErrorCode,
   WhatsAppPlugin,
-} from '@omni/channel-whatsapp';
-import { ChannelError } from '@omni/core';
+} from '../../../channel-whatsapp/src/index';
 
 interface ChannelDescriptor {
   name: string;
