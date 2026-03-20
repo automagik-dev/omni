@@ -68,10 +68,11 @@ jobs:
           RELEASE_NOTES: ${{ steps.cliff.outputs.content }}
         run: |
           TAG="v${{ steps.pkg.outputs.version }}"
+          printf '%s' "$RELEASE_NOTES" > /tmp/release-notes.md
           gh release create "${TAG}" \
             --target "${{ github.sha }}" \
             --title "${TAG}" \
-            --notes "$RELEASE_NOTES"
+            --notes-file /tmp/release-notes.md
 
       - name: Setup Bun
         if: steps.exists.outputs.skip != 'true'
