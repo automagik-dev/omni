@@ -104,7 +104,8 @@ describe('WhatsAppPlugin', () => {
 
     function createPluginWithMockSocket() {
       const plugin = new WhatsAppPlugin();
-      const sendMessage = mock((_jid: string, _msg: Record<string, unknown>) => Promise.resolve(undefined));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sendMessage = mock((_jid: string, _msg: any) => Promise.resolve(undefined));
       const mockSocket = {
         sendMessage,
         user: { id: BOT_JID },
