@@ -739,7 +739,7 @@ function getMessageContentText(msg: {
  * Resolve a quoted message into formatted text for the agent.
  * Looks up the referenced message and formats its content.
  */
-async function resolveQuotedMessage(
+export async function resolveQuotedMessage(
   services: Services,
   instanceId: string,
   chatId: string,
@@ -761,7 +761,7 @@ async function resolveQuotedMessage(
     if (!content) return null;
 
     // Truncate long quoted content to keep context manageable
-    const maxLen = 500;
+    const maxLen = 4000;
     const truncated = content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
 
     const timeStr = time ? ` at ${time}` : '';
@@ -1594,11 +1594,14 @@ async function buildContextMessages(
       return [];
     }
 
+    // DMs use a smaller context window (cap at 20) to keep context focused
+    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, 20);
+
     // Query recent messages (configurable limit, ordered by timestamp desc by default)
     // Use the internal chat.id (UUID) for the query
     const messagesResult = await services.messages.list({
       chatId: chat.id,
-      limit: historyLimit,
+      limit: effectiveLimit,
     });
 
     const recentMessages = messagesResult.items;
@@ -1607,19 +1610,24 @@ async function buildContextMessages(
       return [];
     }
 
-    // Find the last bot response (isFromMe indicates bot-sent messages)
     const lastBotMessageIndex = recentMessages.findIndex((msg) => msg.isFromMe === true);
-
-    // If no bot response found, or it's the most recent message, no context needed
-    if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
-      return [];
-    }
-
-    // Get all messages between last bot response and current message (exclude current)
     const currentMessageIdSet = new Set(currentMessageIds.filter(Boolean));
-    const contextMsgs = recentMessages
-      .slice(0, lastBotMessageIndex)
-      .filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    let contextMsgs: typeof recentMessages;
+
+    if (chat.chatType !== 'group') {
+      // DMs: include recent messages from BOTH sides (user + bot)
+      // This ensures the agent sees messages sent outside its own session
+      // (e.g., via `omni send` from terminal or other agents)
+      contextMsgs = recentMessages.filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    } else {
+      // Groups: only include messages since last bot response (existing behavior)
+      if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
+        return [];
+      }
+      contextMsgs = recentMessages
+        .slice(0, lastBotMessageIndex)
+        .filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    }
 
     if (contextMsgs.length === 0) {
       return [];
@@ -3971,3 +3979,6 @@ export async function setupAgentDispatcher(
  * @deprecated Use setupAgentDispatcher instead
  */
 export const setupAgentResponder = setupAgentDispatcher;
+
+/** @internal Exported for unit testing only — do not use in production code. */
+export const __test__ = { buildContextMessages };
