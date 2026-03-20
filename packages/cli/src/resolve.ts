@@ -135,11 +135,11 @@ export async function resolveRecipient(input: string): Promise<string> {
 export async function resolveMessageId(input: string, chatId?: string): Promise<string> {
   if (UUID_RE.test(input)) return input;
 
-  // UUID prefix matching requires chat context for now
-  // Without global message search, we can't resolve prefixes
+  const isHex = /^[0-9a-f]{2,}$/i.test(input);
+
+  // Without chat context, we can only validate UUIDs
   if (!chatId) {
-    // If it looks like a UUID prefix, accept it (will fail at API if invalid)
-    if (/^[0-9a-f]{2,}$/i.test(input)) {
+    if (isHex) {
       output.error(
         `Cannot resolve message ID prefix "${input}" without chat context. Provide full UUID or use --chat <id> option.`,
       );
@@ -147,18 +147,27 @@ export async function resolveMessageId(input: string, chatId?: string): Promise<
     output.error(`Invalid message ID: "${input}". Must be a valid UUID.`);
   }
 
-  // With chat context, search within that chat
-  const client = getClient();
-  const messages = await client.chats.getMessages(chatId, { limit: 100 });
-
-  // Partial UUID prefix (at least 2 chars, looks hex-ish)
-  if (/^[0-9a-f]{2,}$/i.test(input)) {
-    const matches = messages.filter((m) => (m as { id: string }).id.toLowerCase().startsWith(input.toLowerCase()));
-    if (matches.length === 1) return (matches[0] as { id: string }).id;
-    if (matches.length > 1) {
-      const ids = matches.map((m) => `  ${(m as { id: string }).id.slice(0, 8)}`).join('\n');
-      output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} messages:\n${ids}`);
+  // With chat context and a hex string, try UUID prefix match first
+  if (isHex) {
+    let messages: Array<{ id: string }> = [];
+    try {
+      const client = getClient();
+      messages = (await client.chats.getMessages(chatId, { limit: 100 })) as Array<{ id: string }>;
+    } catch {
+      // Message search may fail (e.g., chatId is a JID not a UUID) — fall through
     }
+
+    if (messages.length > 0) {
+      const matches = messages.filter((m) => m.id.toLowerCase().startsWith(input.toLowerCase()));
+      if (matches.length === 1) return matches[0].id;
+      if (matches.length > 1) {
+        const ids = matches.map((m) => `  ${m.id.slice(0, 8)}`).join('\n');
+        output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} messages:\n${ids}`);
+      }
+    }
+
+    // No UUID prefix match — pass through as external ID (e.g., WhatsApp message ID like 3EB0A1B2C3D4E5F6)
+    return input;
   }
 
   output.error(`No message found matching "${input}" in chat ${chatId}`);

@@ -2191,14 +2191,37 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
     });
   }
 
-  // Edit via channel plugin
-  await (
-    plugin as { editMessage: (instanceId: string, channelId: string, messageId: string, text: string) => Promise<void> }
-  ).editMessage(instanceId, channelId, messageId, text);
+  // Resolve messageId: if it's an internal UUID, look up the external ID from the database.
+  // Channel plugins (e.g. Baileys) need the platform-native message ID, not the Omni UUID.
+  let resolvedMessageId = messageId;
+  if (isUUID(messageId)) {
+    const message = await services.messages.getById(messageId);
+    resolvedMessageId = message.externalId;
+    log.debug('Resolved internal UUID to external ID', { messageId, externalId: resolvedMessageId });
+  }
+
+  // Edit via channel plugin — catch and surface plugin errors
+  try {
+    await (
+      plugin as {
+        editMessage: (instanceId: string, channelId: string, messageId: string, text: string) => Promise<void>;
+      }
+    ).editMessage(instanceId, channelId, resolvedMessageId, text);
+  } catch (error) {
+    // Re-throw typed errors (WhatsAppError, OmniError) for the global error handler
+    if (error instanceof OmniError) throw error;
+    // Wrap unexpected errors with edit-specific context
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      message: `Failed to edit message: ${error instanceof Error ? error.message : String(error)}`,
+      context: { instanceId, channelType: instance.channel, messageId: resolvedMessageId },
+      recoverable: false,
+    });
+  }
 
   return c.json({
     success: true,
-    data: { messageId, edited: true },
+    data: { messageId, externalId: resolvedMessageId, edited: true },
   });
 });
 
