@@ -102,19 +102,26 @@ describe('WhatsAppPlugin', () => {
     const MESSAGE_ID = '3EB0A1B2C3D4E5F6';
     const NEW_TEXT = 'edited message text';
 
+    type CallArgs = [jid: string, msg: any];
+
     function createPluginWithMockSocket() {
       const plugin = new WhatsAppPlugin();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sendMessage = mock((_jid: string, _msg: any) => Promise.resolve(undefined));
+      const sendMessage = mock((_jid: string, _msg: Record<string, unknown>) => Promise.resolve(undefined));
       const mockSocket = {
         sendMessage,
         user: { id: BOT_JID },
       };
-      // Inject mock socket and logger via private member access
       (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
       (plugin as any).lastActionTime = new Map([[INSTANCE_ID, Date.now()]]);
       (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
       return { plugin, sendMessage };
+    }
+
+    function getCallArgs(
+      sendMessage: ReturnType<typeof createPluginWithMockSocket>['sendMessage'],
+      index = 0,
+    ): CallArgs {
+      return sendMessage.mock.calls[index] as unknown as CallArgs;
     }
 
     it('includes participant in edit key for group chats', async () => {
@@ -124,7 +131,7 @@ describe('WhatsAppPlugin', () => {
       await plugin.editMessage(INSTANCE_ID, groupJid, MESSAGE_ID, NEW_TEXT);
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      const [jid, msg] = sendMessage.mock.calls[0]!;
+      const [jid, msg] = getCallArgs(sendMessage);
       expect(jid).toBe(groupJid);
       expect(msg.edit.participant).toBe(BOT_JID);
       expect(msg.edit.remoteJid).toBe(groupJid);
@@ -140,7 +147,7 @@ describe('WhatsAppPlugin', () => {
       await plugin.editMessage(INSTANCE_ID, dmJid, MESSAGE_ID, NEW_TEXT);
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      const [jid, msg] = sendMessage.mock.calls[0]!;
+      const [jid, msg] = getCallArgs(sendMessage);
       expect(jid).toBe(dmJid);
       expect(msg.edit.participant).toBeUndefined();
       expect(msg.edit.remoteJid).toBe(dmJid);
@@ -154,7 +161,7 @@ describe('WhatsAppPlugin', () => {
 
       await plugin.editMessage(INSTANCE_ID, groupJid, MESSAGE_ID, NEW_TEXT, true);
 
-      const [, msg] = sendMessage.mock.calls[0]!;
+      const [, msg] = getCallArgs(sendMessage);
       expect(msg.edit.participant).toBe(BOT_JID);
       expect(msg.edit.fromMe).toBe(true);
     });
@@ -165,7 +172,7 @@ describe('WhatsAppPlugin', () => {
 
       await plugin.editMessage(INSTANCE_ID, groupJid, MESSAGE_ID, NEW_TEXT, false);
 
-      const [, msg] = sendMessage.mock.calls[0]!;
+      const [, msg] = getCallArgs(sendMessage);
       expect(msg.edit.participant).toBeUndefined();
       expect(msg.edit.fromMe).toBe(false);
     });
