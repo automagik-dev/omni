@@ -26,11 +26,12 @@ interface SentMessage {
   options?: unknown;
 }
 
-function createMockSocket() {
+function createMockSocket(userId = '5511888888888@s.whatsapp.net') {
   const sent: SentMessage[] = [];
   let nextId = 100;
 
   const sock = {
+    user: { id: userId },
     sendMessage: mock(async (jid: string, content: Record<string, unknown>, options?: unknown) => {
       const msg: SentMessage = { jid, content, options };
       sent.push(msg);
@@ -273,9 +274,11 @@ describe('WhatsAppStreamSender (edit mode — opt-in)', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let sender: WhatsAppStreamSender;
 
+  const DM_JID = '5511999999999@s.whatsapp.net';
+
   beforeEach(() => {
     mockSocket = createMockSocket();
-    sender = new WhatsAppStreamSender(() => mockSocket.sock, '5511999999999@s.whatsapp.net', undefined, 'dm', {
+    sender = new WhatsAppStreamSender(() => mockSocket.sock, DM_JID, undefined, 'dm', {
       editMode: true,
       throttleMs: 0, // No throttle for tests
     });
@@ -303,6 +306,16 @@ describe('WhatsAppStreamSender (edit mode — opt-in)', () => {
     expect(mockSocket.sent[1]?.content.edit).toBeDefined();
   });
 
+  test('edit key in DM does NOT include participant', async () => {
+    await sender.onContentDelta({ phase: 'content', content: 'Hello' });
+    await sender.onContentDelta({ phase: 'content', content: 'Hello world' });
+
+    expect(mockSocket.sent.length).toBe(2);
+    const editKey = mockSocket.sent[1]?.content.edit as Record<string, unknown>;
+    expect(editKey).toBeDefined();
+    expect(editKey.participant).toBeUndefined();
+  });
+
   test('onFinal edits placeholder with final content', async () => {
     await sender.onContentDelta({
       phase: 'content',
@@ -319,5 +332,59 @@ describe('WhatsAppStreamSender (edit mode — opt-in)', () => {
     expect(mockSocket.sent.length).toBe(2);
     expect(mockSocket.sent[1]?.content.edit).toBeDefined();
     expect(mockSocket.sent[1]?.content.text).toBe('Done!');
+  });
+
+  test('doEditRaw in DM does NOT include participant', async () => {
+    // Send initial message, then final triggers doEditRaw
+    await sender.onContentDelta({ phase: 'content', content: 'Streaming...' });
+    await sender.onFinal({ phase: 'final', content: 'Final text.' });
+
+    expect(mockSocket.sent.length).toBe(2);
+    const editKey = mockSocket.sent[1]?.content.edit as Record<string, unknown>;
+    expect(editKey).toBeDefined();
+    expect(editKey.participant).toBeUndefined();
+  });
+});
+
+describe('WhatsAppStreamSender (edit mode — group chat)', () => {
+  const GROUP_JID = '120363001234567890@g.us';
+  const BOT_JID = '5511888888888@s.whatsapp.net';
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let sender: WhatsAppStreamSender;
+
+  beforeEach(() => {
+    mockSocket = createMockSocket(BOT_JID);
+    sender = new WhatsAppStreamSender(() => mockSocket.sock, GROUP_JID, undefined, 'group', {
+      editMode: true,
+      throttleMs: 0,
+    });
+  });
+
+  test('edit key in group chat includes participant with bot JID', async () => {
+    // First delta creates the message
+    await sender.onContentDelta({ phase: 'content', content: 'Hello' });
+    expect(mockSocket.sent.length).toBe(1);
+    expect(mockSocket.sent[0]?.content.edit).toBeUndefined();
+
+    // Second delta edits — should include participant
+    await sender.onContentDelta({ phase: 'content', content: 'Hello world' });
+    expect(mockSocket.sent.length).toBe(2);
+
+    const editKey = mockSocket.sent[1]?.content.edit as Record<string, unknown>;
+    expect(editKey).toBeDefined();
+    expect(editKey.remoteJid).toBe(GROUP_JID);
+    expect(editKey.fromMe).toBe(true);
+    expect(editKey.participant).toBe(BOT_JID);
+  });
+
+  test('doEditRaw in group chat includes participant', async () => {
+    // Send initial message via delta, then final triggers doEditRaw
+    await sender.onContentDelta({ phase: 'content', content: 'Streaming...' });
+    await sender.onFinal({ phase: 'final', content: 'Final group text.' });
+
+    expect(mockSocket.sent.length).toBe(2);
+    const editKey = mockSocket.sent[1]?.content.edit as Record<string, unknown>;
+    expect(editKey).toBeDefined();
+    expect(editKey.participant).toBe(BOT_JID);
   });
 });
