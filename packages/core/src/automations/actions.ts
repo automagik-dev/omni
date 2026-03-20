@@ -269,6 +269,23 @@ async function executeLogAction(
 }
 
 /**
+ * Build messages array from context: prefer debounce context (multiple messages),
+ * fall back to single payload.
+ */
+function extractMessages(context: TemplateContext): string[] | { error: string } {
+  if (context.debounce?.messages && context.debounce.messages.length > 0) {
+    const messages = context.debounce.messages.map((m) => m.text).filter((t): t is string => !!t);
+    if (messages.length === 0) {
+      return { error: 'no text content found in debounced messages' };
+    }
+    return messages;
+  }
+  const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
+  if (!messageContent) return { error: 'message content not found in payload' };
+  return [messageContent];
+}
+
+/**
  * Extract agent call context from automation payload
  * Returns extracted context or error string
  */
@@ -294,9 +311,8 @@ function extractAgentCallContext(
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
-  // Get message content from payload
-  const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
-  if (!messageContent) return { error: 'message content not found in payload' };
+  const messagesResult = extractMessages(context);
+  if ('error' in messagesResult) return messagesResult;
 
   // Resolve agentId (may be a template)
   const agentId = substituteTemplate(config.agentId, context);
@@ -309,7 +325,7 @@ function extractAgentCallContext(
       chatId,
       senderId,
       senderName,
-      messages: [messageContent],
+      messages: messagesResult,
     },
   };
 }
