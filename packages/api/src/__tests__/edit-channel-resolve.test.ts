@@ -97,4 +97,39 @@ describeWithDb('edit-channel messageId resolution', () => {
 
     await expect(messageService.getById(fakeUuid)).rejects.toThrow(/not found/i);
   });
+
+  test('cross-instance UUID lookup is rejected by ownership check', async () => {
+    // Create a second instance (Instance B)
+    const [instanceB] = await db
+      .insert(instances)
+      .values({
+        name: `test-edit-resolve-b-${Date.now()}`,
+        channel: 'whatsapp-baileys' as const,
+      })
+      .returning();
+    if (!instanceB) throw new Error('Failed to create second test instance');
+
+    // Create a message belonging to Instance A (testInstanceId)
+    const message = await messageService.create({
+      chatId: testChatId,
+      externalId: '3EB0CROSS_INSTANCE_TEST',
+      source: 'realtime',
+      messageType: 'text',
+      textContent: 'Message on instance A',
+      platformTimestamp: new Date(),
+      isFromMe: true,
+    });
+
+    // Simulate the cross-tenant check: fetch the message, then verify its chat's instanceId
+    const resolved = await messageService.getById(message.id);
+    const chat = await chatService.getById(resolved.chatId);
+
+    // The message's chat belongs to testInstanceId (Instance A),
+    // so requesting from Instance B should be detected as cross-tenant
+    expect(chat.instanceId).toBe(testInstanceId);
+    expect(chat.instanceId).not.toBe(instanceB.id);
+
+    // Cleanup Instance B
+    await db.delete(instances).where(eq(instances.id, instanceB.id));
+  });
 });

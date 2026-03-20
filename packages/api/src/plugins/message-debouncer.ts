@@ -109,8 +109,10 @@ export class MessageDebouncer {
 
   private async flush(chatKey: string): Promise<void> {
     const messages = this.buffers.get(chatKey);
+    const timer = this.timers.get(chatKey);
     this.buffers.delete(chatKey);
     this.timers.delete(chatKey);
+    if (timer) clearTimeout(timer);
 
     if (!messages?.length) return;
 

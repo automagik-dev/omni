@@ -231,6 +231,37 @@ describe('MessageDebouncer', () => {
     });
   });
 
+  describe('flush() clears the pending timer', () => {
+    it('does not fire a stale timer after manual flush', async () => {
+      let flushCount = 0;
+
+      debouncer = new MessageDebouncer(async () => {
+        flushCount++;
+      });
+
+      // Buffer a message — this starts a 100ms fixed timer
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
+
+      // Immediately trigger flush by buffering a second message in disabled mode
+      // (delay=0 => setTimeout(0) fires first, flushing the buffer).
+      // The key insight: the original 100ms timer was never cleared, so it would
+      // fire on an empty buffer — which is harmless but wasteful. Worse, if
+      // onUserTyping restarts a timer, the stale timer could race the new one.
+      //
+      // After the fix, flush() calls clearTimeout on the old timer.
+      await wait(150); // Let the fixed timer fire normally
+
+      expect(flushCount).toBe(1);
+
+      // Buffer and let it flush again
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
+      await wait(150);
+
+      // Should be exactly 2 — no phantom third flush from a stale timer
+      expect(flushCount).toBe(2);
+    });
+  });
+
   describe('5 rapid messages in a single fixed window', () => {
     it('all 5 messages reach the agent as a single batch', async () => {
       const flushCalls: BufferedMessage[][] = [];

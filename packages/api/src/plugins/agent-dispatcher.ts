@@ -84,6 +84,12 @@ import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
 
+/** Maximum characters to include when quoting a replied-to message. */
+const QUOTED_MESSAGE_MAX_CHARS = 4000;
+
+/** Hard cap on history messages fetched for DM conversations. */
+const DM_HISTORY_LIMIT = 20;
+
 // ============================================================================
 // Plugin → AckProvider adapter
 // ============================================================================
@@ -659,8 +665,8 @@ export async function resolveQuotedMessage(
     if (!content) return null;
 
     // Truncate long quoted content to keep context manageable
-    const maxLen = 4000;
-    const truncated = content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
+    const truncated =
+      content.length > QUOTED_MESSAGE_MAX_CHARS ? `${content.slice(0, QUOTED_MESSAGE_MAX_CHARS)}...` : content;
 
     const timeStr = time ? ` at ${time}` : '';
     return `[Quoting ${sender}${timeStr}: ${truncated}]`;
@@ -1493,7 +1499,7 @@ async function buildContextMessages(
     }
 
     // DMs use a smaller context window (cap at 20) to keep context focused
-    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, 20);
+    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
 
     // Query recent messages (configurable limit, ordered by timestamp desc by default)
     // Use the internal chat.id (UUID) for the query

@@ -2141,6 +2141,27 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
 });
 
 /**
+ * Verify that a message (looked up by internal UUID) belongs to the given instance.
+ * Throws FORBIDDEN if the message's chat is owned by a different instance.
+ */
+async function verifyMessageInstanceOwnership(
+  services: Services,
+  message: { chatId: string; externalId: string },
+  instanceId: string,
+): Promise<void> {
+  if (!message.chatId) return;
+  const chat = await services.chats.getById(message.chatId);
+  if (chat && chat.instanceId !== instanceId) {
+    throw new OmniError({
+      code: ERROR_CODES.FORBIDDEN,
+      message: 'Message does not belong to this instance',
+      context: { instanceId, messageInstanceId: chat.instanceId },
+      recoverable: false,
+    });
+  }
+}
+
+/**
  * POST /messages/edit-channel - Edit message via channel plugin
  */
 messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema), async (c) => {
@@ -2196,6 +2217,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
   let resolvedMessageId = messageId;
   if (isUUID(messageId)) {
     const message = await services.messages.getById(messageId);
+    await verifyMessageInstanceOwnership(services, message, instanceId);
     resolvedMessageId = message.externalId;
     log.debug('Resolved internal UUID to external ID', { messageId, externalId: resolvedMessageId });
   }

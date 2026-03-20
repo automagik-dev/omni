@@ -153,8 +153,9 @@ export async function resolveMessageId(input: string, chatId?: string): Promise<
     try {
       const client = getClient();
       messages = (await client.chats.getMessages(chatId, { limit: 100 })) as Array<{ id: string }>;
-    } catch {
+    } catch (err) {
       // Message search may fail (e.g., chatId is a JID not a UUID) — fall through
+      output.warn(`Message search failed for chat "${chatId}": ${String(err)}`);
     }
 
     if (messages.length > 0) {
