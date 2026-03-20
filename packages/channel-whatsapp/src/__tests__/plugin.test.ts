@@ -153,7 +153,7 @@ describe('WhatsAppPlugin', () => {
 
       await plugin.editMessage(INSTANCE_ID, groupJid, MESSAGE_ID, NEW_TEXT, true);
 
-      const [, msg] = sendMessage.mock.calls[0];
+      const [, msg] = sendMessage.mock.calls[0]!;
       expect(msg.edit.participant).toBe(BOT_JID);
       expect(msg.edit.fromMe).toBe(true);
     });
@@ -164,9 +164,62 @@ describe('WhatsAppPlugin', () => {
 
       await plugin.editMessage(INSTANCE_ID, groupJid, MESSAGE_ID, NEW_TEXT, false);
 
-      const [, msg] = sendMessage.mock.calls[0];
+      const [, msg] = sendMessage.mock.calls[0]!;
       expect(msg.edit.participant).toBeUndefined();
       expect(msg.edit.fromMe).toBe(false);
+    });
+
+    it('throws WhatsAppError when Baileys sendMessage fails', async () => {
+      const plugin = new WhatsAppPlugin();
+      const sendMessage = mock(() => Promise.reject(new Error('Connection closed')));
+      const mockSocket = { sendMessage, user: { id: BOT_JID } };
+      (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+      (plugin as any).lastActionTime = new Map([[INSTANCE_ID, Date.now()]]);
+      (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+      const dmJid = '5511888888888@s.whatsapp.net';
+      await expect(plugin.editMessage(INSTANCE_ID, dmJid, MESSAGE_ID, NEW_TEXT)).rejects.toThrow(WhatsAppError);
+    });
+
+    it('logs the result key on successful edit', async () => {
+      const plugin = new WhatsAppPlugin();
+      const resultKey = { id: 'RESULT_KEY_123', remoteJid: '5511888888888@s.whatsapp.net', fromMe: true };
+      const sendMessage = mock(() => Promise.resolve({ key: resultKey, status: 1 }));
+      const mockSocket = { sendMessage, user: { id: BOT_JID } };
+      (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+      (plugin as any).lastActionTime = new Map([[INSTANCE_ID, Date.now()]]);
+      const logInfo = mock();
+      (plugin as any).logger = { info: logInfo, debug: mock(), warn: mock(), error: mock() };
+
+      const dmJid = '5511888888888@s.whatsapp.net';
+      await plugin.editMessage(INSTANCE_ID, dmJid, MESSAGE_ID, NEW_TEXT);
+
+      expect(logInfo).toHaveBeenCalledTimes(1);
+      const logArgs = logInfo.mock.calls[0]!;
+      expect(logArgs[0]).toBe('Message edited');
+      expect(logArgs[1].resultKeyId).toBe('RESULT_KEY_123');
+    });
+
+    it('logs error details when Baileys edit fails', async () => {
+      const plugin = new WhatsAppPlugin();
+      const sendMessage = mock(() => Promise.reject(new Error('rate limit exceeded')));
+      const mockSocket = { sendMessage, user: { id: BOT_JID } };
+      (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+      (plugin as any).lastActionTime = new Map([[INSTANCE_ID, Date.now()]]);
+      const logError = mock();
+      (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: logError };
+
+      const dmJid = '5511888888888@s.whatsapp.net';
+      try {
+        await plugin.editMessage(INSTANCE_ID, dmJid, MESSAGE_ID, NEW_TEXT);
+      } catch {
+        // expected
+      }
+
+      expect(logError).toHaveBeenCalledTimes(1);
+      const logArgs = logError.mock.calls[0]!;
+      expect(logArgs[0]).toBe('Failed to edit message via Baileys');
+      expect(logArgs[1].error).toBe('rate limit exceeded');
     });
   });
 });
