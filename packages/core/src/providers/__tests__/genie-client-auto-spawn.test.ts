@@ -141,6 +141,18 @@ describe('GenieClient auto-spawn on run()', () => {
     expect(args[3]).toBe('test-team');
   });
 
+  test('does not include --cwd when autoSpawnDir is not configured', async () => {
+    const client = new GenieClient(makeConfig());
+    await client.run(makeRequest());
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    const genieCalls = getCallsFor('genie');
+    expect(genieCalls.length).toBe(1);
+    const args = genieCalls[0]?.[1] as string[];
+    expect(args).not.toContain('--cwd');
+  });
+
   test('includes --cwd flag with autoSpawnDir', async () => {
     const client = new GenieClient(makeConfig({ autoSpawnDir: '/my/workspace' }));
     await client.run(makeRequest());
