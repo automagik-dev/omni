@@ -70,9 +70,7 @@ describe('resolveMessageId', () => {
 
   test('short external hex ID passes through with chat context when no UUID match', async () => {
     const externalId = 'DEADBEEF';
-    mockGetMessages.mockResolvedValue([
-      { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
-    ]);
+    mockGetMessages.mockResolvedValue([{ id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }]);
 
     const result = await resolveMessageId(externalId, '120363001234567890@g.us');
     expect(result).toBe(externalId);
@@ -88,10 +86,7 @@ describe('resolveMessageId', () => {
 
   test('UUID prefix resolves to full UUID with chat context', async () => {
     const fullUuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-    mockGetMessages.mockResolvedValue([
-      { id: fullUuid },
-      { id: 'ffffffff-1111-2222-3333-444444444444' },
-    ]);
+    mockGetMessages.mockResolvedValue([{ id: fullUuid }, { id: 'ffffffff-1111-2222-3333-444444444444' }]);
 
     const result = await resolveMessageId('a1b2c3', 'some-chat-id');
     expect(result).toBe(fullUuid);
@@ -107,9 +102,7 @@ describe('resolveMessageId', () => {
   });
 
   test('hex string without chat context errors', async () => {
-    await expect(resolveMessageId('3EB0A1B2C3D4E5F6')).rejects.toThrow(
-      'Cannot resolve message ID prefix',
-    );
+    await expect(resolveMessageId('3EB0A1B2C3D4E5F6')).rejects.toThrow('Cannot resolve message ID prefix');
   });
 
   test('non-hex non-UUID string without chat context errors', async () => {
@@ -117,8 +110,6 @@ describe('resolveMessageId', () => {
   });
 
   test('non-hex non-UUID string with chat context errors', async () => {
-    await expect(resolveMessageId('not-a-valid-id!', 'some-chat-id')).rejects.toThrow(
-      'No message found matching',
-    );
+    await expect(resolveMessageId('not-a-valid-id!', 'some-chat-id')).rejects.toThrow('No message found matching');
   });
 });
