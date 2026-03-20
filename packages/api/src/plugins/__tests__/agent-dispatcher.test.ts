@@ -4,7 +4,7 @@
  * Tests for:
  * - RateLimiter: per-user-per-channel-per-instance rate limiting
  * - ReactionDedup: LRU dedup for emoji+messageId+userId
- * - MessageDebouncer: buffer messages, flush after timeout, restart on typing
+ * - MessageDebouncer: tested separately in message-debouncer.test.ts
  * - resolveProvider / getAgentProvider: provider resolution from DB
  * - setupAgentDispatcher: integration with EventBus subscriptions + cleanup
  * - Text chunking and split point logic
@@ -18,14 +18,13 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // Strategy: re-export internals via a test-only module, or inline-test the
 // exported setupAgentDispatcher by capturing EventBus handler callbacks.
 //
-// Since the internal classes (RateLimiter, ReactionDedup, MessageDebouncer)
-// and helpers are not exported, we test them indirectly through
-// setupAgentDispatcher, and also test them directly by importing the module
-// source and extracting constructors at runtime.
+// RateLimiter and ReactionDedup are still internal to agent-dispatcher.
+// MessageDebouncer is now exported from message-debouncer.ts and tested
+// separately in message-debouncer.test.ts.
 // ---------------------------------------------------------------------------
 
-// Import the only exported symbols
-import { type DispatcherCleanup, setupAgentDispatcher } from '../agent-dispatcher';
+// Import exported symbols
+import { type DispatcherCleanup, __test__, resolveQuotedMessage, setupAgentDispatcher } from '../agent-dispatcher';
 
 // We need to mock the plugin loader to avoid real FS/channel-sdk imports
 mock.module('../loader', () => ({
@@ -1433,6 +1432,322 @@ describe('agent-dispatcher', () => {
 
       // B-1: IAgentProvider handles dispatch; getSenderName proves multi-channel processing works
       expect(agentRunner.getSenderName).toHaveBeenCalled();
+    });
+  });
+
+  // ======================================================================
+  // resolveQuotedMessage — quoted text truncation
+  // ======================================================================
+  describe('resolveQuotedMessage', () => {
+    function createQuotedMessageServices(messageContent: string) {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const messageRow = {
+        externalId: 'quoted-ext-1',
+        senderDisplayName: 'Alice',
+        senderPlatformUserId: 'alice-123',
+        isFromMe: false,
+        platformTimestamp: new Date('2025-01-15T10:30:00Z').getTime(),
+        messageType: 'text',
+        textContent: messageContent,
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+      };
+
+      return {
+        chats: {
+          findByExternalIdSmart: mock(async () => chatRow),
+        },
+        messages: {
+          getByExternalId: mock(async () => messageRow),
+        },
+      } as unknown as import('../../services').Services;
+    }
+
+    it('returns full text when content is under 4000 chars', async () => {
+      const content = 'A'.repeat(3999);
+      const services = createQuotedMessageServices(content);
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).not.toBeNull();
+      expect(result).toContain(content);
+      expect(result).not.toContain('...');
+    });
+
+    it('truncates content over 4000 chars with ... suffix', async () => {
+      const content = 'B'.repeat(5000);
+      const services = createQuotedMessageServices(content);
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).not.toBeNull();
+      // Should contain the first 4000 chars followed by ...
+      expect(result).toContain(`${'B'.repeat(4000)}...`);
+      // Should NOT contain the full 5000-char string
+      expect(result).not.toContain('B'.repeat(4001));
+    });
+
+    it('does not truncate a 1000-char message (old 500-char limit no longer applies)', async () => {
+      const content = 'C'.repeat(1000);
+      const services = createQuotedMessageServices(content);
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).not.toBeNull();
+      expect(result).toContain(content);
+      expect(result).not.toContain('...');
+    });
+
+    it('formats the quoted message with sender name and timestamp', async () => {
+      const services = createQuotedMessageServices('Hello world');
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('[Quoting Alice');
+      expect(result).toContain('Hello world');
+    });
+
+    it('returns null when chat is not found', async () => {
+      const services = {
+        chats: {
+          findByExternalIdSmart: mock(async () => null),
+        },
+        messages: {
+          getByExternalId: mock(async () => null),
+        },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when quoted message is not found', async () => {
+      const services = {
+        chats: {
+          findByExternalIdSmart: mock(async () => ({ id: 'chat-db-1' })),
+        },
+        messages: {
+          getByExternalId: mock(async () => null),
+        },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+      expect(result).toBeNull();
+    });
+  });
+
+  // ======================================================================
+  // buildContextMessages — DM context behavior
+  // ======================================================================
+  describe('buildContextMessages (DM context)', () => {
+    const { buildContextMessages } = __test__;
+
+    function createMsgRow(overrides: Record<string, unknown> = {}) {
+      return {
+        externalId: `ext-${Math.random().toString(36).slice(2, 8)}`,
+        isFromMe: false,
+        senderDisplayName: 'User',
+        senderPlatformUserId: 'user-1',
+        platformTimestamp: Date.now(),
+        messageType: 'text',
+        textContent: 'hello',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+        ...overrides,
+      };
+    }
+
+    function createContextServices(chatType: string, messages: Record<string, unknown>[]) {
+      return {
+        chats: {
+          findByExternalIdSmart: mock(async () => ({
+            id: 'chat-uuid-1',
+            chatType,
+          })),
+        },
+        messages: {
+          list: mock(async () => ({ items: messages, hasMore: false })),
+        },
+      } as unknown as import('../../services').Services;
+    }
+
+    function createContextInstance(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'inst-1',
+        groupHistorySize: 50,
+        ...overrides,
+      } as unknown as Parameters<typeof buildContextMessages>[1];
+    }
+
+    it('DM with bot messages: context includes the bot message', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', isFromMe: false, textContent: 'new question' }),
+        createMsgRow({ externalId: 'bot-1', isFromMe: true, senderDisplayName: 'Bot', textContent: 'previous answer' }),
+        createMsgRow({ externalId: 'user-old', isFromMe: false, textContent: 'old question' }),
+      ];
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      expect(result.length).toBe(2);
+      expect(result.some((r: string) => r.includes('previous answer'))).toBe(true);
+      expect(result.some((r: string) => r.includes('old question'))).toBe(true);
+    });
+
+    it('DM with external messages: context includes bot + omni-send messages', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', isFromMe: false, textContent: 'latest' }),
+        createMsgRow({
+          externalId: 'omni-send',
+          isFromMe: true,
+          senderDisplayName: 'System',
+          textContent: 'injected message',
+        }),
+        createMsgRow({ externalId: 'bot-1', isFromMe: true, senderDisplayName: 'Bot', textContent: 'bot reply' }),
+        createMsgRow({ externalId: 'user-old', isFromMe: false, textContent: 'first message' }),
+      ];
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      expect(result.length).toBe(3);
+      expect(result.some((r: string) => r.includes('injected message'))).toBe(true);
+      expect(result.some((r: string) => r.includes('bot reply'))).toBe(true);
+      expect(result.some((r: string) => r.includes('first message'))).toBe(true);
+    });
+
+    it('DM with only user messages: context includes the first user message', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', isFromMe: false, textContent: 'second msg' }),
+        createMsgRow({ externalId: 'first', isFromMe: false, textContent: 'first msg' }),
+      ];
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      expect(result.length).toBe(1);
+      expect(result[0]).toContain('first msg');
+    });
+
+    it('DM history cap: limits to 20 messages regardless of groupHistorySize', async () => {
+      const msgs = Array.from({ length: 50 }, (_, i) =>
+        createMsgRow({ externalId: `msg-${i}`, textContent: `message ${i}` }),
+      );
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance({ groupHistorySize: 100 });
+
+      await buildContextMessages(services, instance, 'chat-ext-1', ['msg-0']);
+
+      // Verify that list was called with limit=20 (DM cap), not 100
+      const listCall = (services.messages as any).list.mock.calls[0][0];
+      expect(listCall.limit).toBe(20);
+    });
+
+    it('DM with groupHistorySize=0: returns empty (disabled)', async () => {
+      const services = createContextServices('dm', []);
+      const instance = createContextInstance({ groupHistorySize: 0 });
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      expect(result).toEqual([]);
+      // list should not have been called since historyLimit=0 early-returns
+      expect((services.messages as any).list).not.toHaveBeenCalled();
+    });
+
+    it('Group unchanged: messages since last bot response only', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', isFromMe: false, textContent: 'new msg' }),
+        createMsgRow({ externalId: 'user-2', isFromMe: false, textContent: 'user msg 2' }),
+        createMsgRow({ externalId: 'bot-1', isFromMe: true, senderDisplayName: 'Bot', textContent: 'bot reply' }),
+        createMsgRow({ externalId: 'user-1', isFromMe: false, textContent: 'user msg 1' }),
+      ];
+      const services = createContextServices('group', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      // Group behavior: only messages between current and last bot response
+      // Messages at indices 0 (current) and 1 (user-2) are before the bot at index 2
+      // Index 0 is filtered by currentMessageIdSet, so only index 1 remains
+      expect(result.length).toBe(1);
+      expect(result[0]).toContain('user msg 2');
+      // Should NOT include messages after the bot response
+      expect(result.some((r: string) => r.includes('user msg 1'))).toBe(false);
+    });
+
+    it('Group with bot as most recent: returns empty (existing behavior)', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'bot-latest', isFromMe: true, textContent: 'bot response' }),
+        createMsgRow({ externalId: 'user-1', isFromMe: false, textContent: 'user msg' }),
+      ];
+      const services = createContextServices('group', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', []);
+
+      // lastBotMessageIndex === 0, so group path returns []
+      expect(result).toEqual([]);
+    });
+
+    it('Group uses full historyLimit (not capped at 20)', async () => {
+      const msgs = Array.from({ length: 5 }, (_, i) =>
+        createMsgRow({ externalId: `msg-${i}`, textContent: `message ${i}` }),
+      );
+      const services = createContextServices('group', msgs);
+      const instance = createContextInstance({ groupHistorySize: 100 });
+
+      await buildContextMessages(services, instance, 'chat-ext-1', []);
+
+      // Verify that list was called with limit=100 (full groupHistorySize), not 20
+      const listCall = (services.messages as any).list.mock.calls[0][0];
+      expect(listCall.limit).toBe(100);
+    });
+
+    it('DM context messages are returned in chronological order', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', isFromMe: false, textContent: 'latest', platformTimestamp: 3000 }),
+        createMsgRow({
+          externalId: 'mid',
+          isFromMe: true,
+          senderDisplayName: 'Bot',
+          textContent: 'middle',
+          platformTimestamp: 2000,
+        }),
+        createMsgRow({ externalId: 'old', isFromMe: false, textContent: 'oldest', platformTimestamp: 1000 }),
+      ];
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      // Messages should be reversed from desc to asc (chronological)
+      expect(result.length).toBe(2);
+      expect(result[0]).toContain('oldest');
+      expect(result[1]).toContain('middle');
+    });
+
+    it('returns empty when chat is not found', async () => {
+      const services = {
+        chats: {
+          findByExternalIdSmart: mock(async () => null),
+        },
+        messages: {
+          list: mock(async () => ({ items: [], hasMore: false })),
+        },
+      } as unknown as import('../../services').Services;
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', []);
+
+      expect(result).toEqual([]);
     });
   });
 });

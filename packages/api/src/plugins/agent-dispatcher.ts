@@ -74,9 +74,21 @@ import {
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
+import {
+  type BufferedMessage,
+  type DebounceConfig,
+  type DispatchMetadata,
+  MessageDebouncer,
+} from './message-debouncer';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
+
+/** Maximum characters to include when quoting a replied-to message. */
+const QUOTED_MESSAGE_MAX_CHARS = 4000;
+
+/** Hard cap on history messages fetched for DM conversations. */
+const DM_HISTORY_LIMIT = 20;
 
 // ============================================================================
 // Plugin → AckProvider adapter
@@ -104,32 +116,6 @@ function createPluginAckProvider(
 // ============================================================================
 // Types
 // ============================================================================
-
-interface BufferedMessage {
-  payload: MessageReceivedPayload;
-  metadata: DispatchMetadata;
-  timestamp: number;
-}
-
-interface DispatchMetadata {
-  instanceId: string;
-  channelType?: string;
-  personId?: string;
-  platformIdentityId?: string;
-  traceId: string;
-  /** Original NATS event correlationId for journey tracking */
-  correlationId?: string;
-  /** Whether this message is being journey-tracked (has timings) */
-  journeyTracked?: boolean;
-}
-
-interface DebounceConfig {
-  mode: 'disabled' | 'fixed' | 'randomized';
-  minMs: number;
-  maxMs: number;
-  restartOnTyping: boolean;
-  groupMs: number | null;
-}
 
 /**
  * Transient dispatch fields stamped onto an effectiveInstance copy by applyAgentFkOverrides.
@@ -256,88 +242,6 @@ class ReactionDedup {
     }
 
     return false;
-  }
-}
-
-// ============================================================================
-// Message Debouncer (preserved from agent-responder)
-// ============================================================================
-
-class MessageDebouncer {
-  private buffers: Map<string, BufferedMessage[]> = new Map();
-  private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>;
-
-  constructor(onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>) {
-    this.onFlush = onFlush;
-  }
-
-  private getChatKey(instanceId: string, chatId: string): string {
-    return `${instanceId}:${chatId}`;
-  }
-
-  buffer(instanceId: string, chatId: string, message: BufferedMessage, config: DebounceConfig): void {
-    const chatKey = this.getChatKey(instanceId, chatId);
-    const buffer = this.buffers.get(chatKey) ?? [];
-    buffer.push(message);
-    this.buffers.set(chatKey, buffer);
-    this.restartTimer(chatKey, config);
-  }
-
-  onUserTyping(instanceId: string, chatId: string, config: DebounceConfig): void {
-    const chatKey = this.getChatKey(instanceId, chatId);
-    if (config.restartOnTyping && this.buffers.has(chatKey)) {
-      log.debug('Restarting debounce timer on user typing', { chatKey });
-      this.restartTimer(chatKey, config);
-    }
-  }
-
-  private restartTimer(chatKey: string, config: DebounceConfig): void {
-    const existing = this.timers.get(chatKey);
-
-    // In 'fixed' mode, the timer is a fixed collection window from the first
-    // message — do NOT restart it when subsequent messages arrive.
-    if (config.mode === 'fixed' && existing) return;
-
-    if (existing) clearTimeout(existing);
-
-    let delay: number;
-    switch (config.mode) {
-      case 'disabled':
-        delay = 0;
-        break;
-      case 'fixed':
-        delay = config.minMs;
-        break;
-      case 'randomized':
-        delay = config.minMs + Math.random() * (config.maxMs - config.minMs);
-        break;
-      default:
-        delay = 0;
-    }
-
-    const timer = setTimeout(() => this.flush(chatKey), delay);
-    this.timers.set(chatKey, timer);
-  }
-
-  private async flush(chatKey: string): Promise<void> {
-    const messages = this.buffers.get(chatKey);
-    this.buffers.delete(chatKey);
-    this.timers.delete(chatKey);
-
-    if (messages?.length) {
-      try {
-        await this.onFlush(chatKey, messages);
-      } catch (error) {
-        log.error('Error flushing debounced messages', { chatKey, error: String(error) });
-      }
-    }
-  }
-
-  clear(): void {
-    for (const timer of this.timers.values()) clearTimeout(timer);
-    this.buffers.clear();
-    this.timers.clear();
   }
 }
 
@@ -739,7 +643,7 @@ function getMessageContentText(msg: {
  * Resolve a quoted message into formatted text for the agent.
  * Looks up the referenced message and formats its content.
  */
-async function resolveQuotedMessage(
+export async function resolveQuotedMessage(
   services: Services,
   instanceId: string,
   chatId: string,
@@ -761,8 +665,8 @@ async function resolveQuotedMessage(
     if (!content) return null;
 
     // Truncate long quoted content to keep context manageable
-    const maxLen = 500;
-    const truncated = content.length > maxLen ? `${content.slice(0, maxLen)}...` : content;
+    const truncated =
+      content.length > QUOTED_MESSAGE_MAX_CHARS ? `${content.slice(0, QUOTED_MESSAGE_MAX_CHARS)}...` : content;
 
     const timeStr = time ? ` at ${time}` : '';
     return `[Quoting ${sender}${timeStr}: ${truncated}]`;
@@ -1594,11 +1498,14 @@ async function buildContextMessages(
       return [];
     }
 
+    // DMs use a smaller context window (cap at 20) to keep context focused
+    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
+
     // Query recent messages (configurable limit, ordered by timestamp desc by default)
     // Use the internal chat.id (UUID) for the query
     const messagesResult = await services.messages.list({
       chatId: chat.id,
-      limit: historyLimit,
+      limit: effectiveLimit,
     });
 
     const recentMessages = messagesResult.items;
@@ -1607,19 +1514,24 @@ async function buildContextMessages(
       return [];
     }
 
-    // Find the last bot response (isFromMe indicates bot-sent messages)
     const lastBotMessageIndex = recentMessages.findIndex((msg) => msg.isFromMe === true);
-
-    // If no bot response found, or it's the most recent message, no context needed
-    if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
-      return [];
-    }
-
-    // Get all messages between last bot response and current message (exclude current)
     const currentMessageIdSet = new Set(currentMessageIds.filter(Boolean));
-    const contextMsgs = recentMessages
-      .slice(0, lastBotMessageIndex)
-      .filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    let contextMsgs: typeof recentMessages;
+
+    if (chat.chatType !== 'group') {
+      // DMs: include recent messages from BOTH sides (user + bot)
+      // This ensures the agent sees messages sent outside its own session
+      // (e.g., via `omni send` from terminal or other agents)
+      contextMsgs = recentMessages.filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    } else {
+      // Groups: only include messages since last bot response (existing behavior)
+      if (lastBotMessageIndex === -1 || lastBotMessageIndex === 0) {
+        return [];
+      }
+      contextMsgs = recentMessages
+        .slice(0, lastBotMessageIndex)
+        .filter((msg) => !currentMessageIdSet.has(msg.externalId));
+    }
 
     if (contextMsgs.length === 0) {
       return [];
@@ -3971,3 +3883,6 @@ export async function setupAgentDispatcher(
  * @deprecated Use setupAgentDispatcher instead
  */
 export const setupAgentResponder = setupAgentDispatcher;
+
+/** @internal Exported for unit testing only — do not use in production code. */
+export const __test__ = { buildContextMessages };

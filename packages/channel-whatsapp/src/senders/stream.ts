@@ -15,6 +15,7 @@ import { createLogger } from '@omni/core';
 import type { StreamDelta } from '@omni/core';
 import type { WASocket, proto } from 'baileys';
 
+import { isGroupJid } from '../jid';
 import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';
 
@@ -295,14 +296,16 @@ export class WhatsAppStreamSender implements StreamSender {
         this.messageId = result?.key?.id ?? null;
         this.firstMessageSent = true;
       } else {
-        await this.getSock().sendMessage(this.jid, {
-          text,
-          edit: {
-            remoteJid: this.jid,
-            id: this.messageId,
-            fromMe: true,
-          } as unknown as proto.IMessageKey,
-        });
+        const sock = this.getSock();
+        const editKey: proto.IMessageKey = {
+          remoteJid: this.jid,
+          id: this.messageId,
+          fromMe: true,
+        };
+        if (isGroupJid(this.jid)) {
+          editKey.participant = sock.user?.id;
+        }
+        await sock.sendMessage(this.jid, { text, edit: editKey });
       }
       this.lastRenderedText = text;
       this.lastEditAt = Date.now();
@@ -318,14 +321,16 @@ export class WhatsAppStreamSender implements StreamSender {
 
   private async doEditRaw(text: string): Promise<void> {
     if (!this.messageId) throw new Error('No message to edit');
-    await this.getSock().sendMessage(this.jid, {
-      text,
-      edit: {
-        remoteJid: this.jid,
-        id: this.messageId,
-        fromMe: true,
-      } as unknown as proto.IMessageKey,
-    });
+    const sock = this.getSock();
+    const editKey: proto.IMessageKey = {
+      remoteJid: this.jid,
+      id: this.messageId,
+      fromMe: true,
+    };
+    if (isGroupJid(this.jid)) {
+      editKey.participant = sock.user?.id;
+    }
+    await sock.sendMessage(this.jid, { text, edit: editKey });
     this.lastRenderedText = text;
     this.lastEditAt = Date.now();
   }

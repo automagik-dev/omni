@@ -129,7 +129,7 @@ const createInstanceSchema = z.object({
     .max(200)
     .default(50)
     .describe(
-      'Number of context messages to include for group chats when dispatching to agent (0 = disabled, max 200)',
+      'Number of context messages to include when dispatching to agent. Groups use the full value; DMs are capped at 20. (0 = disabled, max 200)',
     ),
   reactionAck: z
     .enum(['on', 'off'])
