@@ -294,9 +294,22 @@ function extractAgentCallContext(
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
-  // Get message content from payload
-  const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
-  if (!messageContent) return { error: 'message content not found in payload' };
+  // Build messages array: prefer debounce context (multiple messages), fall back to single payload
+  let messages: string[];
+  if (context.debounce?.messages && context.debounce.messages.length > 0) {
+    // Debounced path: extract text from all accumulated messages
+    messages = context.debounce.messages
+      .map((m) => m.text)
+      .filter((t): t is string => !!t);
+    if (messages.length === 0) {
+      return { error: 'no text content found in debounced messages' };
+    }
+  } else {
+    // Non-debounced path: single message from payload
+    const messageContent = (context.payload.content as string) ?? (context.payload.text as string) ?? '';
+    if (!messageContent) return { error: 'message content not found in payload' };
+    messages = [messageContent];
+  }
 
   // Resolve agentId (may be a template)
   const agentId = substituteTemplate(config.agentId, context);
@@ -309,7 +322,7 @@ function extractAgentCallContext(
       chatId,
       senderId,
       senderName,
-      messages: [messageContent],
+      messages,
     },
   };
 }
