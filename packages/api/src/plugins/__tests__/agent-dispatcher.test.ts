@@ -4,7 +4,7 @@
  * Tests for:
  * - RateLimiter: per-user-per-channel-per-instance rate limiting
  * - ReactionDedup: LRU dedup for emoji+messageId+userId
- * - MessageDebouncer: buffer messages, flush after timeout, restart on typing
+ * - MessageDebouncer: tested separately in message-debouncer.test.ts
  * - resolveProvider / getAgentProvider: provider resolution from DB
  * - setupAgentDispatcher: integration with EventBus subscriptions + cleanup
  * - Text chunking and split point logic
@@ -18,10 +18,9 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // Strategy: re-export internals via a test-only module, or inline-test the
 // exported setupAgentDispatcher by capturing EventBus handler callbacks.
 //
-// Since the internal classes (RateLimiter, ReactionDedup, MessageDebouncer)
-// and helpers are not exported, we test them indirectly through
-// setupAgentDispatcher, and also test them directly by importing the module
-// source and extracting constructors at runtime.
+// RateLimiter and ReactionDedup are still internal to agent-dispatcher.
+// MessageDebouncer is now exported from message-debouncer.ts and tested
+// separately in message-debouncer.test.ts.
 // ---------------------------------------------------------------------------
 
 // Import the only exported symbols

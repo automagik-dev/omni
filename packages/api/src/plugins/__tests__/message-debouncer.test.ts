@@ -5,18 +5,20 @@
  * duplicating the class.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import {
-  type BufferedMessage,
-  type DebounceConfig,
-  MessageDebouncer,
-} from '../message-debouncer';
+import { type BufferedMessage, type DebounceConfig, MessageDebouncer } from '../message-debouncer';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function makeMessage(text: string): BufferedMessage {
   return {
-    payload: { text, chatId: 'chat-1', from: 'user-1', externalId: `ext-${text}`, content: { type: 'text' as const, text } },
+    payload: {
+      text,
+      chatId: 'chat-1',
+      from: 'user-1',
+      externalId: `ext-${text}`,
+      content: { type: 'text' as const, text },
+    },
     metadata: { instanceId: 'inst-1', traceId: `trace-${text}` },
     timestamp: Date.now(),
   } as BufferedMessage;
@@ -76,7 +78,7 @@ describe('MessageDebouncer', () => {
 
       // First flush should have started
       expect(flushCalls.length).toBe(1);
-      expect(flushCalls[0].messages.length).toBe(2);
+      expect(flushCalls[0]!.messages.length).toBe(2);
 
       // Buffer 2 more messages while first flush is in-flight
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg3'), fixedConfig);
@@ -89,7 +91,7 @@ describe('MessageDebouncer', () => {
 
       // Second flush should have picked up the late arrivals
       expect(flushCalls.length).toBe(2);
-      expect(flushCalls[1].messages.length).toBe(2);
+      expect(flushCalls[1]!.messages.length).toBe(2);
     });
 
     it('messages arriving during in-flight do NOT start a competing timer', async () => {
@@ -156,7 +158,7 @@ describe('MessageDebouncer', () => {
       await wait(50);
 
       expect(flushCalls.length).toBe(1);
-      expect(flushCalls[0].length).toBe(1);
+      expect(flushCalls[0]!.length).toBe(1);
     });
 
     it('each message triggers its own flush when disabled', async () => {
@@ -202,7 +204,7 @@ describe('MessageDebouncer', () => {
 
       // Both messages should arrive in a single flush (timer was restarted)
       expect(flushCalls.length).toBe(1);
-      expect(flushCalls[0].length).toBe(2);
+      expect(flushCalls[0]!.length).toBe(2);
     });
   });
 
@@ -252,7 +254,7 @@ describe('MessageDebouncer', () => {
       await wait(150);
 
       expect(flushCalls.length).toBe(1);
-      expect(flushCalls[0].length).toBe(5);
+      expect(flushCalls[0]!.length).toBe(5);
     });
   });
 
@@ -279,7 +281,7 @@ describe('MessageDebouncer', () => {
       // Wait for fixed timer to fire
       await wait(150);
       expect(flushCalls.length).toBe(1);
-      expect(flushCalls[0].messages.length).toBe(3);
+      expect(flushCalls[0]!.messages.length).toBe(3);
 
       // 2 late-arriving messages during processing
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg4'), fixedConfig);
@@ -291,7 +293,7 @@ describe('MessageDebouncer', () => {
 
       // Second batch should flush automatically
       expect(flushCalls.length).toBe(2);
-      expect(flushCalls[1].messages.length).toBe(2);
+      expect(flushCalls[1]!.messages.length).toBe(2);
     });
   });
 });

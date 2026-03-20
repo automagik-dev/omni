@@ -74,7 +74,12 @@ import {
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import { getPlugin } from './loader';
-import { type BufferedMessage, type DebounceConfig, type DispatchMetadata, MessageDebouncer } from './message-debouncer';
+import {
+  type BufferedMessage,
+  type DebounceConfig,
+  type DispatchMetadata,
+  MessageDebouncer,
+} from './message-debouncer';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
