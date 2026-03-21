@@ -47,7 +47,7 @@ export interface GenieClientConfig {
   agentRole: string;
   /** Auto-spawn agent session if team doesn't exist yet (default: true) */
   autoSpawn?: boolean;
-  /** Working directory for auto-spawned agent session (default: ~/workspace) */
+  /** Working directory for auto-spawned agent session (default: agent's registered dir via genie dir) */
   autoSpawnDir?: string;
 }
 
@@ -118,7 +118,7 @@ export class GenieClient implements IAgentClient {
     this.targetAgentTemplate = config.targetAgent;
     this.agentRole = config.agentRole;
     this.autoSpawn = config.autoSpawn ?? true;
-    this.autoSpawnDir = config.autoSpawnDir ?? join(homedir(), 'workspace');
+    this.autoSpawnDir = config.autoSpawnDir ?? '';
 
     this.hasTemplates =
       /\{\w+\}/.test(this.teamNameTemplate) ||
