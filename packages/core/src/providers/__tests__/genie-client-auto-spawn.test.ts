@@ -218,6 +218,25 @@ describe('GenieClient auto-spawn on run()', () => {
     expect(response.content).toBe('');
   });
 
+  test('does not include --session when sessionName is not configured', async () => {
+    const client = new GenieClient(makeConfig());
+    await client.run(makeRequest());
+    await new Promise((r) => setTimeout(r, 100));
+    const genieCalls = getCallsFor('genie');
+    const args = genieCalls[0]?.[1] as string[];
+    expect(args).not.toContain('--session');
+  });
+
+  test('includes --session flag with sessionName', async () => {
+    const client = new GenieClient(makeConfig({ sessionName: 'claudia-whatsapp' }));
+    await client.run(makeRequest());
+    await new Promise((r) => setTimeout(r, 100));
+    const genieCalls = getCallsFor('genie');
+    const args = genieCalls[0]?.[1] as string[];
+    expect(args).toContain('--session');
+    expect(args).toContain('claudia-whatsapp');
+  });
+
   test('still delivers message to inbox regardless of auto-spawn', async () => {
     const client = new GenieClient(makeConfig());
     const response = await client.run(makeRequest('hello world'));

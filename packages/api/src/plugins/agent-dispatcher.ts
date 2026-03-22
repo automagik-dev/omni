@@ -2659,7 +2659,8 @@ function createGenieProviderInstance(provider: AgentProvider, instance: Dispatch
   const agentRole = typeof schemaConfig.agentRole === 'string' ? schemaConfig.agentRole : 'team-lead';
 
   const autoSpawnDir = typeof schemaConfig.autoSpawnDir === 'string' ? schemaConfig.autoSpawnDir : undefined;
-  const client = createGenieClient({ teamName, agentName, targetAgent, agentRole, autoSpawnDir });
+  const sessionName = typeof schemaConfig.sessionName === 'string' ? schemaConfig.sessionName : undefined;
+  const client = createGenieClient({ teamName, agentName, targetAgent, agentRole, autoSpawnDir, sessionName });
 
   return new GenieAgentProvider(provider.id, provider.name, client, {
     prefixSenderName: instance.agentPrefixSenderName ?? true,
