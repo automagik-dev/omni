@@ -268,6 +268,42 @@ describe('AccessService', () => {
       expect(result.allowed).toBe(false);
     });
 
+    test('JID with @lid suffix matches bare platformUserId', async () => {
+      const rule = createRule({ ruleType: 'deny', platformUserId: '54958418317348@lid' });
+      const db = createMockDb([rule]);
+      const service = new AccessService(db, null);
+
+      const result = await service.checkAccess(createInstance('blocklist'), '54958418317348', 'whatsapp');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('JID with @g.us suffix matches bare platformUserId', async () => {
+      const rule = createRule({ ruleType: 'deny', platformUserId: '120363421396472428@g.us' });
+      const db = createMockDb([rule]);
+      const service = new AccessService(db, null);
+
+      const result = await service.checkAccess(createInstance('blocklist'), '120363421396472428', 'whatsapp');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('JID with @s.whatsapp.net suffix matches bare platformUserId', async () => {
+      const rule = createRule({ ruleType: 'deny', platformUserId: '5512982298888@s.whatsapp.net' });
+      const db = createMockDb([rule]);
+      const service = new AccessService(db, null);
+
+      const result = await service.checkAccess(createInstance('blocklist'), '5512982298888', 'whatsapp');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('bare platformUserId rule matches bare platformUserId', async () => {
+      const rule = createRule({ ruleType: 'deny', platformUserId: '54958418317348' });
+      const db = createMockDb([rule]);
+      const service = new AccessService(db, null);
+
+      const result = await service.checkAccess(createInstance('blocklist'), '54958418317348', 'whatsapp');
+      expect(result.allowed).toBe(false);
+    });
+
     test('non-matching pattern returns false', async () => {
       const rule = createRule({ ruleType: 'deny', phonePattern: '+1*' });
       const db = createMockDb([rule]);

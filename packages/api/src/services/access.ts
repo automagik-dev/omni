@@ -661,9 +661,12 @@ export class AccessService {
    * Check if a rule matches a platform user ID
    */
   private ruleMatches(rule: AccessRule, platformUserId: string): boolean {
-    // Exact match on platformUserId
-    if (rule.platformUserId && rule.platformUserId === platformUserId) {
-      return true;
+    // Exact match on platformUserId (normalize JIDs by stripping @suffix)
+    if (rule.platformUserId) {
+      const normalizeJid = (id: string) => id.replace(/@.*$/, '');
+      if (normalizeJid(rule.platformUserId) === normalizeJid(platformUserId)) {
+        return true;
+      }
     }
 
     // Phone pattern match (supports wildcards)

@@ -2,7 +2,7 @@
  * Tests for MediaProcessingService
  */
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { MediaProcessingService, createMediaProcessingService } from '../src/service';
 
 describe('MediaProcessingService', () => {
@@ -18,6 +18,51 @@ describe('MediaProcessingService', () => {
     it('initializes without API keys', () => {
       const service = new MediaProcessingService({});
       expect(service).toBeDefined();
+    });
+  });
+
+  describe('missing vision API key warning', () => {
+    let stdoutSpy: ReturnType<typeof spyOn>;
+
+    beforeEach(() => {
+      stdoutSpy = spyOn(process.stdout, 'write');
+    });
+
+    afterEach(() => {
+      stdoutSpy.mockRestore();
+    });
+
+    it('logs warning when no vision API keys are configured', () => {
+      new MediaProcessingService({});
+
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
+      expect(output).toContain('No vision API configured');
+      expect(output).toContain('GEMINI_API_KEY');
+      expect(output).toContain('OPENAI_API_KEY');
+    });
+
+    it('does not warn when geminiApiKey is set', () => {
+      new MediaProcessingService({ geminiApiKey: 'test-gemini-key' });
+
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
+      expect(output).not.toContain('No vision API configured');
+    });
+
+    it('does not warn when openaiApiKey is set', () => {
+      new MediaProcessingService({ openaiApiKey: 'test-openai-key' });
+
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
+      expect(output).not.toContain('No vision API configured');
+    });
+
+    it('does not warn when both keys are set', () => {
+      new MediaProcessingService({
+        geminiApiKey: 'test-gemini-key',
+        openaiApiKey: 'test-openai-key',
+      });
+
+      const output = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
+      expect(output).not.toContain('No vision API configured');
     });
   });
 

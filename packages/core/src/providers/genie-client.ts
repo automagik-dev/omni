@@ -49,6 +49,8 @@ export interface GenieClientConfig {
   autoSpawn?: boolean;
   /** Working directory for auto-spawned agent session (default: agent's registered dir via genie dir) */
   autoSpawnDir?: string;
+  /** Tmux session name for spawned agents — groups all chats under one session */
+  sessionName?: string;
 }
 
 /** Variables available for template interpolation at runtime */
@@ -104,6 +106,7 @@ export class GenieClient implements IAgentClient {
   /** Auto-spawn agent session when team doesn't exist */
   private readonly autoSpawn: boolean;
   private readonly autoSpawnDir: string;
+  private readonly sessionName: string;
   /** Registered agent name in genie dir — used as spawn target */
   private readonly agentRole: string;
 
@@ -119,6 +122,7 @@ export class GenieClient implements IAgentClient {
     this.agentRole = config.agentRole;
     this.autoSpawn = config.autoSpawn ?? true;
     this.autoSpawnDir = config.autoSpawnDir ?? '';
+    this.sessionName = config.sessionName ?? '';
 
     this.hasTemplates =
       /\{\w+\}/.test(this.teamNameTemplate) ||
@@ -231,12 +235,15 @@ export class GenieClient implements IAgentClient {
 
   /**
    * Spawn agent session via genie CLI.
-   * Calls: genie spawn <agentRole> --team <teamName> [--cwd <autoSpawnDir>]
+   * Calls: genie spawn <agentRole> --team <teamName> [--cwd <autoSpawnDir>] [--session <sessionName>]
    */
   private async spawnAgentSession(teamName: string): Promise<void> {
     const args = ['spawn', this.agentRole, '--team', teamName];
     if (this.autoSpawnDir) {
       args.push('--cwd', this.autoSpawnDir);
+    }
+    if (this.sessionName) {
+      args.push('--session', this.sessionName);
     }
 
     log.info('Auto-spawning agent session', { teamName, agentRole: this.agentRole, args });
