@@ -14,6 +14,7 @@ import {
   dim,
   disableColors,
   error,
+  flushStdout,
   getCurrentFormat,
   header,
   info,
@@ -70,5 +71,22 @@ describe('getCurrentFormat', () => {
 describe('disableColors', () => {
   test('can be called without error', () => {
     expect(() => disableColors()).not.toThrow();
+  });
+});
+
+describe('flushStdout', () => {
+  test('is exported as a function', () => {
+    expect(typeof flushStdout).toBe('function');
+  });
+
+  test('returns a promise that resolves', async () => {
+    const result = flushStdout();
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  test('resolves after pending writes', async () => {
+    // flushStdout should resolve without error even after writes
+    await expect(flushStdout()).resolves.toBeUndefined();
   });
 });

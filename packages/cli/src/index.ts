@@ -45,7 +45,7 @@ import { createUpdateCommand } from './commands/update.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
-import { areColorsEnabled, disableColors } from './output.js';
+import { areColorsEnabled, disableColors, flushStdout } from './output.js';
 
 // Handle --json flag early (before Commander) so it works anywhere in argv
 if (process.argv.includes('--json')) {
@@ -420,3 +420,6 @@ if (isRootVersionOnly) {
 }
 
 await program.parseAsync(process.argv);
+
+// Flush stdout before exit — prevents truncated JSON when piped (e.g., --json | jq)
+await flushStdout();
