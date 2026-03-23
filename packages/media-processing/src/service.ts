@@ -38,6 +38,13 @@ export class MediaProcessingService {
       hasOpenAI: !!config.openaiApiKey,
       hasGemini: !!config.geminiApiKey,
     });
+
+    // Warn if no vision API keys are configured
+    if (!config.geminiApiKey && !config.openaiApiKey) {
+      log.warn(
+        'No vision API configured — set GEMINI_API_KEY or OPENAI_API_KEY in .env for image/video/document processing',
+      );
+    }
   }
 
   /**
