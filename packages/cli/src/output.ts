@@ -268,3 +268,17 @@ export function raw(text: string): void {
   // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(text);
 }
+
+/**
+ * Flush stdout to ensure all buffered data is written.
+ * When stdout is a pipe (e.g., `--json | jq`), writes are buffered.
+ * Without explicit flushing, the process can exit before all data is written,
+ * causing truncated output.
+ */
+export function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    // Writing an empty string queues behind all pending data.
+    // The callback fires once all prior writes have been flushed.
+    process.stdout.write('', () => resolve());
+  });
+}
