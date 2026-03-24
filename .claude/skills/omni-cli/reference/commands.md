@@ -900,4 +900,614 @@ omni events analytics --since 30d --instance inst_123
 
 ---
 
-This reference continues with all remaining commands. The full document would be quite long - would you like me to continue with the rest, or is this format and level of detail what you're looking for?
+## omni routes
+
+Manage agent routing configuration. Routes override the instance default provider for specific chats or users.
+
+**Resolution order:** chat route > user route > instance default provider.
+
+### Subcommands
+
+#### `list`
+List agent routes for an instance.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--scope <scope>` - Filter by scope: `chat` or `user`
+- `--active` - Show only active routes
+
+**Examples:**
+```bash
+# List all routes for an instance
+omni routes list --instance inst_123
+
+# List only active user-scoped routes
+omni routes list --instance inst_123 --scope user --active
+```
+
+#### `get <routeId>`
+Get agent route details.
+
+**Arguments:**
+- `<routeId>` - Route ID
+
+**Options:**
+- `--instance <id>` - Instance ID
+
+**Example:**
+```bash
+omni routes get route_abc --instance inst_123
+```
+
+#### `create`
+Create a new agent route.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--scope <scope>` - Route scope: `chat` or `user`
+- `--chat <chatId>` - Chat UUID (required when scope=chat)
+- `--person <personId>` - Person UUID (required when scope=user)
+- `--agent <agentId>` - Agent UUID (FK to agents table)
+- `--timeout <seconds>` - Agent timeout in seconds
+- `--stream` / `--no-stream` - Enable/disable streaming responses
+- `--prefix-sender` / `--no-prefix-sender` - Prefix messages with sender name
+- `--wait-media` / `--no-wait-media` - Wait for media processing
+- `--send-media-path` / `--no-send-media-path` - Include file path in media text
+- `--gate` / `--no-gate` - Enable/disable LLM response gate
+- `--gate-model <model>` - Response gate model
+- `--gate-prompt <prompt>` - Response gate prompt
+- `--reply-filter-mode <mode>` - Reply filter: `all` or `filtered`
+- `--label <label>` - Human-readable label for this route
+- `--priority <number>` - Priority (higher = higher priority, default: 0)
+- `--inactive` - Create route as inactive
+
+**Examples:**
+```bash
+# Route a specific user to a dev agent with streaming
+omni routes create --instance inst_123 --scope user --person person_abc \
+  --agent agent_dev --stream --label "Felipe → dev agent"
+
+# Route a chat to a support agent with response gating
+omni routes create --instance inst_123 --scope chat --chat chat_abc \
+  --agent agent_support --gate --gate-prompt "Only allow helpful responses" \
+  --reply-filter-mode filtered --priority 10
+
+# Create an inactive route (for testing before activation)
+omni routes create --instance inst_123 --scope user --person person_xyz \
+  --agent agent_test --inactive --label "Test route"
+```
+
+#### `update <routeId>`
+Update an existing agent route.
+
+**Arguments:**
+- `<routeId>` - Route ID
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--agent <agentId>` - Agent UUID
+- `--timeout <seconds>` - Agent timeout in seconds
+- `--stream` / `--no-stream` - Enable/disable streaming
+- `--prefix-sender` / `--no-prefix-sender` - Prefix messages with sender name
+- `--wait-media` / `--no-wait-media` - Wait for media processing
+- `--send-media-path` / `--no-send-media-path` - Include file path in media text
+- `--gate` / `--no-gate` - Enable/disable response gate
+- `--gate-model <model>` - Response gate model
+- `--gate-prompt <prompt>` - Response gate prompt
+- `--reply-filter-mode <mode>` - Reply filter: `all` or `filtered`
+- `--label <label>` - Route label
+- `--priority <number>` - Priority
+- `--active` / `--inactive` - Activate or deactivate route
+
+**Examples:**
+```bash
+# Activate a route and change its agent
+omni routes update route_abc --instance inst_123 --active --agent agent_prod
+
+# Disable streaming and enable gating
+omni routes update route_abc --no-stream --gate --gate-model "claude-sonnet-4-20250514"
+```
+
+#### `delete <routeId>`
+Delete an agent route.
+
+**Arguments:**
+- `<routeId>` - Route ID
+
+**Options:**
+- `--instance <id>` - Instance ID
+
+**Example:**
+```bash
+omni routes delete route_abc --instance inst_123
+```
+
+#### `test`
+Test route resolution for a given instance, chat, and/or person. Shows which agent would handle a message.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--chat <chatId>` - Chat UUID to test
+- `--person <personId>` - Person UUID to test
+
+**Examples:**
+```bash
+# Test which agent handles a specific user in a specific chat
+omni routes test --instance inst_123 --chat chat_abc --person person_xyz
+
+# Test user-level routing only
+omni routes test --instance inst_123 --person person_abc
+```
+
+#### `metrics`
+View route cache metrics (hit rate, cache size, etc.).
+
+**Example:**
+```bash
+omni routes metrics
+```
+
+---
+
+## omni providers
+
+Manage AI/agent providers. Providers define how Omni connects to agent backends (Agno, Claude Code, Genie, OpenClaw, webhooks, AG-UI, A2A).
+
+### Subcommands
+
+#### `setup`
+Interactive setup wizards for providers. Currently supports OpenClaw and Genie.
+
+##### `setup openclaw`
+Set up an OpenClaw provider (keypair generation + device pairing + provider creation).
+
+**Options:**
+- `--gateway-url <url>` - Gateway WebSocket URL (ws:// or wss://)
+- `--gateway-token <token>` - Gateway authentication token
+- `--agent-id <agentId>` - Default agent ID
+- `--name <name>` - Provider name (default: openclaw-<agent-id>)
+- `--instance-id <uuid>` - Omni instance UUID for the openclaw channel account
+- `--account-name <name>` - Account name in openclaw.json (default: agent-id)
+- `--plugin-path <path>` - Path to omni.ts plugin entry (auto-detected from CWD)
+- `--skip-openclaw-config` - Skip openclaw.json updates entirely
+- `--non-interactive` - Error on missing required flags instead of prompting
+
+**Example:**
+```bash
+# Interactive wizard
+omni providers setup openclaw
+
+# Non-interactive with all flags
+omni providers setup openclaw --gateway-url wss://gateway.openclaw.dev \
+  --gateway-token tok_abc --agent-id my-agent --instance-id inst_123 --non-interactive
+```
+
+##### `setup genie`
+Set up a Genie provider (Claude Code team inbox integration).
+
+**Options:**
+- `--agent-name <name>` - Agent identity / "from" field
+- `--target-agent <name>` - Target agent inbox to deliver messages to
+- `--team-name <template>` - Team name template (supports `{chat_id}`, `{thread_id}`, `{sender_id}`)
+- `--agent-role <role>` - Registered genie dir agent name (default: team-lead)
+- `--name <name>` - Provider name (default: genie-<agent-name>)
+- `--base-url <url>` - Base URL (default: file:///home/genie/.claude/teams)
+- `--instance-id <uuid>` - Omni instance UUID to auto-assign provider
+- `--non-interactive` - Error on missing required flags instead of prompting
+
+**Example:**
+```bash
+# Interactive wizard
+omni providers setup genie
+
+# Non-interactive setup
+omni providers setup genie --agent-name sofia --target-agent sofia \
+  --team-name "omni-{chat_id}" --instance-id inst_123 --non-interactive
+```
+
+#### `list`
+List available providers.
+
+**Options:**
+- `--active` - Show only active providers
+
+**Examples:**
+```bash
+omni providers list
+omni providers list --active
+```
+
+#### `get <id>`
+Get provider details.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Example:**
+```bash
+omni providers get prov_abc
+```
+
+#### `create`
+Create a new AI provider.
+
+**Options:**
+- `--name <name>` - Provider name (unique)
+- `--schema <schema>` - Provider schema: `agno`, `webhook`, `openclaw`, `ag-ui`, `claude-code`, `a2a`, `genie`
+- `--base-url <url>` - API base URL (ws:// or wss:// for openclaw)
+- `--api-key <key>` - API key (optional for claude-code if using env ANTHROPIC_API_KEY)
+- `--description <desc>` - Provider description
+- `--timeout <seconds>` - Default timeout in seconds (default: 60)
+- `--stream` - Enable streaming by default
+- `--default-agent-id <agentId>` - Default agent ID (required for openclaw)
+- `--project-path <path>` - Project directory path (required for claude-code)
+- `--max-turns <number>` - Max conversation turns (claude-code)
+- `--permission-mode <mode>` - Permission mode: `default`, `acceptEdits`, `bypassPermissions`, `plan` (claude-code)
+- `--model <model>` - Model override (claude-code)
+- `--system-prompt <prompt>` - System prompt prepended to agent (claude-code)
+- `--agent-name <name>` - Agent identity / "from" field (required for genie)
+- `--target-agent <name>` - Target agent inbox to deliver to (required for genie)
+- `--team-name <template>` - Team name template, supports `{chat_id}`, `{thread_id}`, `{sender_id}` (genie, default: omni-{chat_id})
+
+**Examples:**
+```bash
+# Create a Genie provider
+omni providers create --name "sofia-genie" --schema genie \
+  --agent-name sofia --target-agent sofia --team-name "omni-{chat_id}"
+
+# Create a Claude Code provider
+omni providers create --name "code-assistant" --schema claude-code \
+  --project-path /home/user/project --model claude-sonnet-4-20250514 \
+  --permission-mode acceptEdits --max-turns 10
+
+# Create an Agno provider
+omni providers create --name "agno-prod" --schema agno \
+  --base-url https://api.agno.dev --api-key sk_abc --stream
+
+# Create a webhook provider
+omni providers create --name "custom-webhook" --schema webhook \
+  --base-url https://my-api.example.com/agent --timeout 120
+```
+
+#### `test <id>`
+Test provider health (connectivity check).
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Example:**
+```bash
+omni providers test prov_abc
+```
+
+#### `agents <id>`
+List agents from an Agno provider.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Example:**
+```bash
+omni providers agents prov_abc
+```
+
+#### `teams <id>`
+List teams from an Agno provider.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Example:**
+```bash
+omni providers teams prov_abc
+```
+
+#### `workflows <id>`
+List workflows from an Agno provider.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Example:**
+```bash
+omni providers workflows prov_abc
+```
+
+#### `update <id>`
+Update a provider.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Options:**
+- `--name <name>` - Provider name
+- `--base-url <url>` - API base URL
+- `--api-key <key>` - API key
+- `--description <desc>` - Provider description
+- `--timeout <seconds>` - Default timeout in seconds
+- `--stream` / `--no-stream` - Enable/disable streaming
+- `--active` / `--no-active` - Set provider active/inactive
+- `--agent-name <name>` - Agent identity (genie)
+- `--target-agent <name>` - Target agent inbox (genie)
+- `--team-name <template>` - Team name template (genie)
+- `--project-path <path>` - Project directory path (claude-code)
+- `--max-turns <number>` - Max conversation turns (claude-code)
+- `--permission-mode <mode>` - Permission mode (claude-code)
+- `--model <model>` - Model override (claude-code)
+- `--system-prompt <prompt>` - System prompt (claude-code)
+- `--schema-config <json>` - Raw schemaConfig as JSON (overrides individual schema flags)
+
+**Examples:**
+```bash
+# Deactivate a provider
+omni providers update prov_abc --no-active
+
+# Update genie provider target
+omni providers update prov_abc --target-agent new-agent --team-name "team-{sender_id}"
+
+# Update claude-code model and timeout
+omni providers update prov_abc --model claude-opus-4-20250514 --timeout 120
+
+# Set raw schemaConfig JSON
+omni providers update prov_abc --schema-config '{"agentName":"bot","targetAgent":"lead"}'
+```
+
+#### `delete <id>`
+Delete a provider.
+
+**Arguments:**
+- `<id>` - Provider ID
+
+**Options:**
+- `--force` - Skip confirmation
+
+**Example:**
+```bash
+omni providers delete prov_abc
+omni providers delete prov_abc --force
+```
+
+---
+
+## omni access
+
+Manage access control rules (allow/deny lists). Controls who can interact with your instances.
+
+### Subcommands
+
+#### `list`
+List access rules.
+
+**Options:**
+- `--instance <id>` - Filter by instance ID
+- `--type <type>` - Filter by rule type: `allow` or `deny`
+
+**Examples:**
+```bash
+# List all rules
+omni access list
+
+# List deny rules for a specific instance
+omni access list --instance inst_123 --type deny
+```
+
+#### `create`
+Create an access rule.
+
+**Options:**
+- `--type <type>` - Rule type: `allow` or `deny`
+- `--instance <id>` - Instance ID (omit for global rule)
+- `--phone <pattern>` - Phone pattern (supports `*` wildcard, e.g., `+55*`)
+- `--user <id>` - Platform user ID (Discord ID, etc.)
+- `--priority <n>` - Rule priority (higher = checked first)
+- `--action <action>` - Action: `block`, `silent_block`, or `allow` (default: `block`)
+- `--reason <text>` - Human-readable reason for the rule
+- `--message <text>` - Custom message to send when blocked
+- `--disabled` - Create rule in disabled state
+
+**Examples:**
+```bash
+# Allow all Brazilian numbers
+omni access create --type allow --instance inst_123 --phone "+55*" \
+  --reason "Brazil office"
+
+# Deny a specific user with a custom message
+omni access create --type deny --instance inst_123 --phone "+15551234567" \
+  --action block --message "Access restricted. Contact support." \
+  --reason "Spam reports"
+
+# Silent block (no message sent to blocked user)
+omni access create --type deny --phone "+1900*" --action silent_block \
+  --reason "Premium number range"
+
+# Global allow rule for a Discord user
+omni access create --type allow --user "discord_user_123" --priority 100
+```
+
+#### `delete <id>`
+Delete an access rule.
+
+**Arguments:**
+- `<id>` - Rule ID
+
+**Example:**
+```bash
+omni access delete rule_abc
+```
+
+#### `mode <instanceId> [mode]`
+Get or set access control mode for an instance. When called without a mode argument, shows the current mode.
+
+**Arguments:**
+- `<instanceId>` - Instance ID
+- `[mode]` - Access mode to set: `open`, `allowlist`, or `denylist`
+
+**Examples:**
+```bash
+# Check current mode
+omni access mode inst_123
+
+# Set to allowlist (only allowed users can interact)
+omni access mode inst_123 allowlist
+
+# Set to open (everyone can interact, deny rules still apply)
+omni access mode inst_123 open
+```
+
+#### `check`
+Check if a user has access to an instance.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--user <id>` - Platform user ID to check
+- `--channel <type>` - Channel type (default: `discord`)
+
+**Example:**
+```bash
+omni access check --instance inst_123 --user "discord_user_456" --channel discord
+```
+
+#### `pending <instanceId>`
+List pending pairing requests for an instance.
+
+**Arguments:**
+- `<instanceId>` - Instance ID
+
+**Example:**
+```bash
+omni access pending inst_123
+```
+
+#### `approve <instanceId> <requestId>`
+Approve a pairing request (adds user to allowlist).
+
+**Arguments:**
+- `<instanceId>` - Instance ID
+- `<requestId>` - Pairing request ID
+
+**Example:**
+```bash
+omni access approve inst_123 req_abc
+```
+
+#### `deny <instanceId> <requestId>`
+Deny a pairing request.
+
+**Arguments:**
+- `<instanceId>` - Instance ID
+- `<requestId>` - Pairing request ID
+
+**Options:**
+- `--reason <text>` - Reason for denial
+
+**Example:**
+```bash
+omni access deny inst_123 req_abc --reason "Unknown user"
+```
+
+---
+
+## omni keys
+
+Manage API keys for authenticating with the Omni API.
+
+### Subcommands
+
+#### `create`
+Create a new API key.
+
+**Options:**
+- `--name <name>` - Key name
+- `--scopes <scopes>` - Comma-separated scopes (e.g., `messages:read,instances:write`)
+- `--instances <ids>` - Comma-separated instance IDs to restrict access
+- `--description <desc>` - Key description
+- `--rate-limit <n>` - Rate limit (requests/minute)
+- `--expires <date>` - Expiration date (ISO 8601)
+
+**Examples:**
+```bash
+# Create a key scoped to specific instances
+omni keys create --name "bot-key" --scopes "messages:read,messages:write" \
+  --instances "inst_123,inst_456" --description "Bot integration key"
+
+# Create a key with rate limit and expiration
+omni keys create --name "temp-key" --rate-limit 60 --expires "2026-12-31T23:59:59Z"
+
+# Create an unrestricted key
+omni keys create --name "admin-key" --description "Full access admin key"
+```
+
+#### `list`
+List API keys.
+
+**Options:**
+- `--status <status>` - Filter by status: `active`, `revoked`, `expired`
+- `--limit <n>` - Max results
+
+**Examples:**
+```bash
+omni keys list
+omni keys list --status active --limit 10
+```
+
+#### `get <id>`
+Get API key details.
+
+**Arguments:**
+- `<id>` - Key ID
+
+**Example:**
+```bash
+omni keys get key_abc
+```
+
+#### `update <id>`
+Update an API key.
+
+**Arguments:**
+- `<id>` - Key ID
+
+**Options:**
+- `--name <name>` - New key name
+- `--description <desc>` - New description
+- `--scopes <scopes>` - New scopes (comma-separated)
+- `--instances <ids>` - New instance IDs (comma-separated, empty string to unrestrict)
+- `--rate-limit <n>` - New rate limit
+- `--expires <date>` - New expiration (ISO 8601, empty string to clear)
+
+**Examples:**
+```bash
+# Restrict key to specific instances
+omni keys update key_abc --instances "inst_123,inst_789"
+
+# Remove instance restriction
+omni keys update key_abc --instances ""
+
+# Update rate limit and expiration
+omni keys update key_abc --rate-limit 120 --expires "2027-06-30T00:00:00Z"
+```
+
+#### `revoke <id>`
+Revoke an API key (soft-delete, key remains in records but stops working).
+
+**Arguments:**
+- `<id>` - Key ID
+
+**Options:**
+- `--reason <reason>` - Reason for revocation
+
+**Example:**
+```bash
+omni keys revoke key_abc --reason "Compromised - rotating keys"
+```
+
+#### `delete <id>`
+Permanently delete an API key (hard-delete, cannot be recovered).
+
+**Arguments:**
+- `<id>` - Key ID
+
+**Example:**
+```bash
+omni keys delete key_abc
+```
