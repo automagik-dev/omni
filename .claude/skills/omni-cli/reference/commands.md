@@ -1511,3 +1511,640 @@ Permanently delete an API key (hard-delete, cannot be recovered).
 ```bash
 omni keys delete key_abc
 ```
+
+---
+
+## omni automations
+
+Manage event-driven automations (workflows). Automations trigger actions in response to platform events.
+
+### Subcommands
+
+#### `list`
+List all automations.
+
+**Options:**
+- `--enabled` - Show only enabled automations
+- `--disabled` - Show only disabled automations
+
+**Examples:**
+```bash
+# List all automations
+omni automations list
+
+# List only enabled automations
+omni automations list --enabled
+```
+
+#### `get <id>`
+Get automation details including trigger, conditions, and action config.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Example:**
+```bash
+omni automations get auto_abc
+```
+
+#### `create`
+Create an automation.
+
+**Options:**
+- `--name <name>` - Automation name
+- `--trigger <event>` - Trigger event type (e.g., `message.received`)
+- `--action <type>` - Action type: `webhook`, `send_message`, `emit_event`, `log`, `call_agent`
+- `--action-config <json>` - Action config as JSON
+- `--condition <json>` - Trigger conditions as JSON array
+- `--condition-logic <logic>` - Condition logic: `and` (all must match) or `or` (any must match)
+- `--description <desc>` - Automation description
+- `--priority <n>` - Priority (higher = runs first)
+- `--disabled` - Create in disabled state
+- `--agent-id <id>` - Agent ID (for `call_agent` action)
+- `--provider-id <id>` - Provider ID (for `call_agent` action)
+- `--response-as <var>` - Store agent response as variable (for `call_agent` action)
+
+**Examples:**
+```bash
+# Log all incoming messages
+omni automations create --name "Log messages" \
+  --trigger message.received --action log \
+  --description "Log every incoming message"
+
+# Webhook on new message from a specific instance
+omni automations create --name "Notify CRM" \
+  --trigger message.received --action webhook \
+  --action-config '{"url":"https://crm.example.com/hook","method":"POST"}' \
+  --condition '[{"field":"payload.instanceId","op":"eq","value":"inst_123"}]'
+
+# Route messages to an AI agent
+omni automations create --name "AI responder" \
+  --trigger message.received --action call_agent \
+  --agent-id agent_abc --provider-id prov_xyz
+```
+
+#### `update <id>`
+Update an automation.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Options:**
+- `--name <name>` - New name
+- `--description <desc>` - New description
+- `--priority <n>` - New priority
+
+**Example:**
+```bash
+omni automations update auto_abc --name "Updated name" --priority 10
+```
+
+#### `delete <id>`
+Delete an automation.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Example:**
+```bash
+omni automations delete auto_abc
+```
+
+#### `enable <id>`
+Enable a disabled automation.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Example:**
+```bash
+omni automations enable auto_abc
+```
+
+#### `disable <id>`
+Disable an automation without deleting it.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Example:**
+```bash
+omni automations disable auto_abc
+```
+
+#### `test <id>`
+Test an automation with a mock event. Does not run actions — only evaluates conditions.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Options:**
+- `--event <json>` - Event JSON (e.g., `'{"type":"message.received","payload":{}}'`)
+
+**Example:**
+```bash
+omni automations test auto_abc \
+  --event '{"type":"message.received","payload":{"chatId":"chat_123","text":"hello"}}'
+```
+
+#### `execute <id>`
+Execute an automation with a provided event. Actually runs the configured action.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Options:**
+- `--event <json>` - Event JSON
+
+**Example:**
+```bash
+omni automations execute auto_abc \
+  --event '{"type":"message.received","payload":{"instanceId":"inst_123","chatId":"chat_456","text":"test"}}'
+```
+
+#### `logs <id>`
+Get automation execution logs.
+
+**Arguments:**
+- `<id>` - Automation ID
+
+**Options:**
+- `--limit <n>` - Limit results (default: 20)
+- `--cursor <cursor>` - Pagination cursor
+
+**Examples:**
+```bash
+# Recent execution logs
+omni automations logs auto_abc
+
+# Paginate through logs
+omni automations logs auto_abc --limit 50 --cursor "next_abc"
+```
+
+---
+
+## omni journey
+
+Message journey tracing — trace a message's lifecycle through the platform with timing.
+
+### Subcommands
+
+#### `show <correlationId>`
+Display the journey timeline with timing bars for a specific correlation ID.
+
+**Arguments:**
+- `<correlationId>` - Correlation ID from a message event
+
+**Example:**
+```bash
+# Trace a message journey (get correlationId from events)
+omni journey show corr_abc123
+
+# Pipe from event lookup
+omni events list --type message.received --limit 1 --json | jq -r '.[0].metadata.correlationId' | xargs omni journey show
+```
+
+#### `summary`
+Display aggregated journey metrics across all messages.
+
+**Options:**
+- `--since <duration>` - Filter by time (e.g., `1h`, `30m`, `24h`, or ISO date)
+
+**Examples:**
+```bash
+# Journey metrics for the last hour
+omni journey summary --since 1h
+
+# Metrics for the last 24 hours
+omni journey summary --since 24h
+```
+
+---
+
+## omni persons
+
+Search and manage contacts in the Omni person directory.
+
+### Subcommands
+
+#### `search <query>`
+Search for persons by name, phone, or identifier.
+
+**Arguments:**
+- `<query>` - Search query (name, phone number, or identifier)
+
+**Options:**
+- `--limit <n>` - Limit results (default: 20)
+
+**Examples:**
+```bash
+# Search by name
+omni persons search "John"
+
+# Search by phone number
+omni persons search "+5511999"
+
+# Limit results
+omni persons search "Maria" --limit 5
+```
+
+#### `get <id>`
+Get detailed person information including linked chats and identifiers.
+
+**Arguments:**
+- `<id>` - Person ID
+
+**Example:**
+```bash
+omni persons get person_abc
+```
+
+#### `presence <id>`
+Get person presence and activity info (online status, last seen).
+
+**Arguments:**
+- `<id>` - Person ID
+
+**Example:**
+```bash
+omni persons presence person_abc
+```
+
+---
+
+## omni media
+
+Browse and download media items (audio, images, video, documents) with their transcriptions and descriptions.
+
+### Subcommands
+
+#### `list`
+List media items with transcriptions/descriptions.
+
+**Options:**
+- `--instance <id>` - Filter by instance UUID
+- `--chat <id>` - Filter by chat UUID
+- `--since <datetime>` - ISO datetime (e.g., `2026-01-01T00:00:00Z`)
+- `--until <datetime>` - ISO datetime
+- `--type <types>` - Comma-separated: `audio`, `image`, `video`, `document`
+- `--limit <n>` - Max results (default: 20, max: 100)
+- `--remote-only` - Only show items not yet downloaded
+- `--cached-only` - Only show items already downloaded
+- `--full` - Show full content without truncation
+
+**Examples:**
+```bash
+# List recent audio files for an instance
+omni media list --instance inst_123 --type audio --limit 10
+
+# List all images from a specific chat
+omni media list --chat chat_abc --type image
+
+# List items not yet downloaded
+omni media list --instance inst_123 --remote-only
+
+# List media since a specific date with full content
+omni media list --since 2026-03-01T00:00:00Z --full
+```
+
+#### `download`
+Download a single media item to disk.
+
+**Options:**
+- `--message <uuid>` - Message ID (UUID)
+- `--chat <uuid>` - Chat ID (UUID, used with `--external`)
+- `--external <id>` - External message ID (used with `--chat`)
+- `--output <path>` - Save file to specific location (absolute or relative path)
+
+**Examples:**
+```bash
+# Download by message ID
+omni media download --message msg_abc123
+
+# Download by external ID within a chat
+omni media download --chat chat_abc --external "3EB0ABC123"
+
+# Download to a specific path
+omni media download --message msg_abc123 --output ./downloads/photo.jpg
+```
+
+---
+
+## omni webhooks
+
+Manage webhook sources for receiving external events into the Omni platform.
+
+### Subcommands
+
+#### `list`
+List webhook sources.
+
+**Options:**
+- `--enabled` - Show only enabled sources
+- `--disabled` - Show only disabled sources
+
+**Examples:**
+```bash
+# List all webhook sources
+omni webhooks list
+
+# List only enabled webhooks
+omni webhooks list --enabled
+```
+
+#### `get <id>`
+Get webhook source details including URL and configuration.
+
+**Arguments:**
+- `<id>` - Webhook source ID
+
+**Example:**
+```bash
+omni webhooks get wh_abc
+```
+
+#### `create`
+Create a webhook source.
+
+**Options:**
+- `--name <name>` - Webhook source name
+- `--description <desc>` - Description
+- `--disabled` - Create in disabled state
+- `--headers <json>` - Expected headers as JSON (e.g., `'{"X-Secret": true}'`)
+
+**Examples:**
+```bash
+# Create a basic webhook source
+omni webhooks create --name "CRM events" --description "Incoming CRM notifications"
+
+# Create with header validation
+omni webhooks create --name "Stripe" --headers '{"X-Stripe-Signature": true}' \
+  --description "Stripe payment webhooks"
+
+# Create disabled (for setup)
+omni webhooks create --name "Test hook" --disabled
+```
+
+#### `update <id>`
+Update a webhook source.
+
+**Arguments:**
+- `<id>` - Webhook source ID
+
+**Options:**
+- `--name <name>` - New name
+- `--description <desc>` - New description
+- `--enable` - Enable the webhook
+- `--disable` - Disable the webhook
+
+**Examples:**
+```bash
+# Rename a webhook
+omni webhooks update wh_abc --name "New CRM hook"
+
+# Disable a webhook
+omni webhooks update wh_abc --disable
+```
+
+#### `delete <id>`
+Delete a webhook source.
+
+**Arguments:**
+- `<id>` - Webhook source ID
+
+**Example:**
+```bash
+omni webhooks delete wh_abc
+```
+
+#### `trigger`
+Trigger a custom event manually (useful for testing automations).
+
+**Options:**
+- `--type <type>` - Event type
+- `--payload <json>` - Event payload as JSON
+- `--instance <id>` - Instance ID
+- `--correlation-id <id>` - Correlation ID
+
+**Examples:**
+```bash
+# Trigger a custom event
+omni webhooks trigger --type "order.completed" \
+  --payload '{"orderId":"ord_123","amount":99.90}' \
+  --instance inst_123
+
+# Trigger with correlation ID for tracing
+omni webhooks trigger --type "test.ping" \
+  --payload '{"message":"hello"}' \
+  --correlation-id "test-run-001"
+```
+
+---
+
+## omni batch
+
+Manage batch media processing jobs for bulk transcription and content extraction.
+
+### Subcommands
+
+#### `list`
+List batch jobs.
+
+**Options:**
+- `--instance <id>` - Filter by instance ID
+- `--status <status>` - Filter by status (comma-separated: `pending`, `running`, `completed`, `failed`, `cancelled`)
+- `--type <type>` - Filter by job type: `targeted_chat_sync`, `time_based_batch`, `media_redownload`
+- `--limit <n>` - Max results
+
+**Examples:**
+```bash
+# List all batch jobs
+omni batch list
+
+# List running jobs for an instance
+omni batch list --instance inst_123 --status running
+
+# List completed media redownload jobs
+omni batch list --type media_redownload --status completed
+```
+
+#### `create`
+Create a batch processing job.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--type <type>` - Job type: `targeted_chat_sync`, `time_based_batch`, or `media_redownload`
+- `--chat <id>` - Chat ID (required for `targeted_chat_sync`)
+- `--days <n>` - Days to look back (required for `time_based_batch` and `media_redownload`)
+- `--limit <n>` - Max items to process
+- `--content-types <types>` - Content types: `audio`, `image`, `video`, `document`
+- `--force` - Re-process items that already have content
+- `--delay-min <ms>` - Min random delay between items in ms (default: 1000)
+- `--delay-max <ms>` - Max random delay between items in ms (default: 3000)
+- `--no-confirm` - Skip confirmation prompt
+
+**Examples:**
+```bash
+# Transcribe all audio from a specific chat
+omni batch create --instance inst_123 --type targeted_chat_sync \
+  --chat chat_abc --content-types audio
+
+# Process all media from the last 7 days
+omni batch create --instance inst_123 --type time_based_batch \
+  --days 7 --content-types audio,image
+
+# Re-download failed media from the last 30 days
+omni batch create --instance inst_123 --type media_redownload \
+  --days 30 --no-confirm
+
+# Force re-process with custom delays
+omni batch create --instance inst_123 --type time_based_batch \
+  --days 3 --force --delay-min 2000 --delay-max 5000
+```
+
+#### `status <jobId>`
+Get job status with progress details.
+
+**Arguments:**
+- `<jobId>` - Batch job ID
+
+**Options:**
+- `--watch` - Watch for updates (live progress)
+- `--interval <ms>` - Poll interval in ms (default: 2000)
+
+**Examples:**
+```bash
+# Check job status
+omni batch status job_abc
+
+# Watch job progress in real time
+omni batch status job_abc --watch
+```
+
+#### `cancel <jobId>`
+Cancel a running job.
+
+**Arguments:**
+- `<jobId>` - Batch job ID
+
+**Example:**
+```bash
+omni batch cancel job_abc
+```
+
+#### `estimate`
+Estimate job scope and cost without creating the job.
+
+**Options:**
+- `--instance <id>` - Instance ID
+- `--type <type>` - Job type: `targeted_chat_sync`, `time_based_batch`, or `media_redownload`
+- `--chat <id>` - Chat ID (required for `targeted_chat_sync`)
+- `--days <n>` - Days to look back (required for `time_based_batch` and `media_redownload`)
+- `--limit <n>` - Max items to process
+- `--content-types <types>` - Content types: `audio`, `image`, `video`, `document`
+
+**Examples:**
+```bash
+# Estimate a time-based batch
+omni batch estimate --instance inst_123 --type time_based_batch \
+  --days 7 --content-types audio,image
+
+# Estimate a chat sync
+omni batch estimate --instance inst_123 --type targeted_chat_sync \
+  --chat chat_abc
+```
+
+---
+
+## omni prompts
+
+Manage LLM prompt overrides for media processing (image description, video analysis, document extraction, gating).
+
+### Subcommands
+
+#### `list`
+List all prompt settings with override status. Shows which prompts are using defaults vs custom overrides.
+
+**Example:**
+```bash
+omni prompts list
+```
+
+#### `get <name>`
+Show the current prompt text for a prompt type.
+
+**Arguments:**
+- `<name>` - Prompt name: `image`, `video`, `document`, or `gate`
+
+**Examples:**
+```bash
+# View the current image description prompt
+omni prompts get image
+
+# View the gating decision prompt
+omni prompts get gate
+```
+
+#### `set <name> [value]`
+Set a prompt override. Reads from stdin if no value is provided (for multiline prompts).
+
+**Arguments:**
+- `<name>` - Prompt name: `image`, `video`, `document`, or `gate`
+- `[value]` - Prompt text (optional — reads stdin if omitted)
+
+**Options:**
+- `--reason <reason>` - Reason for the change
+
+**Examples:**
+```bash
+# Set a simple prompt override
+omni prompts set image "Describe this image in detail, focusing on text content" \
+  --reason "Need OCR-focused descriptions"
+
+# Set a multiline prompt from stdin
+cat <<'EOF' | omni prompts set video --reason "Custom video analysis"
+Analyze this video frame by frame.
+Focus on: people, text, actions.
+Output structured JSON.
+EOF
+```
+
+#### `reset <name>`
+Clear a prompt override and revert to the code default.
+
+**Arguments:**
+- `<name>` - Prompt name: `image`, `video`, `document`, or `gate`
+
+**Example:**
+```bash
+omni prompts reset image
+```
+
+---
+
+## omni resync
+
+Trigger history backfill to recover missed messages. Standalone command (no subcommands).
+
+### Options
+- `-i, --instance <id>` - Instance ID or name to resync
+- `-a, --all` - Resync all connected instances
+- `-s, --since <duration>` - Start time as duration (`2h`, `30m`, `1d`) or ISO timestamp
+- `-u, --until <timestamp>` - End time (ISO timestamp, default: now)
+- `--dry-run` - Show what would be resynced without triggering
+
+### Examples
+
+```bash
+# Resync last 2 hours for a specific instance
+omni resync -i wa-main --since 2h
+
+# Resync since a specific timestamp
+omni resync -i wa-main --since 2026-02-09T10:00:00Z
+
+# Resync all connected instances for the last hour
+omni resync --all --since 1h
+
+# Preview what would be resynced (dry run)
+omni resync -i wa-main --since 30m --dry-run
+```
