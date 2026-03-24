@@ -37,6 +37,7 @@ import {
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
+  type MediaProcessedPayload,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
   OpenClawClient,
@@ -526,6 +527,19 @@ function getProcessedColumn(
 
 const MEDIA_WAIT_NULL = { content: null, localPath: null } as const;
 
+// ============================================================================
+// Event-Driven Media Completion (replaces DB polling)
+// ============================================================================
+
+/** Pending media awaits, keyed by DB message UUID */
+const mediaCompletions = new Map<
+  string,
+  { resolve: (result: { content: string; error?: string }) => void; reject: (error: Error) => void; createdAt: number }
+>();
+
+/** Cache of already-completed results (event arrived before dispatcher asked). TTL managed via setTimeout. */
+const mediaResultCache = new Map<string, { content: string; error?: string }>();
+
 /**
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
@@ -549,16 +563,15 @@ function checkProcessedColumn(
 }
 
 /**
- * Poll the messages table until the media processing column is populated or timeout.
- * Detects error markers written by media-processor on failure to fail fast.
+ * Await media processing via NATS event instead of DB polling.
+ * Checks: DB first (already done) → event cache (arrived early) → await promise (NATS delivery).
  */
-async function waitForMediaProcessing(
+async function awaitMediaProcessing(
   services: Services,
   instanceId: string,
   chatId: string,
   externalId: string,
   contentType: string,
-  pollMs = 500,
 ): Promise<{ content: string | null; localPath: string | null }> {
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
@@ -569,22 +582,40 @@ async function waitForMediaProcessing(
     return MEDIA_WAIT_NULL;
   }
 
-  // 60s timeout — processing typically completes in <15s
-  const deadline = Date.now() + 60_000;
-
-  while (Date.now() < deadline) {
-    const msg = await services.messages.getByExternalId(chat.id, externalId);
-    const result = checkProcessedColumn(msg, column);
-    if (result === 'error') {
-      log.warn('Media processing failed', { instanceId, chatId, externalId, error: msg?.[column] });
-      return MEDIA_WAIT_NULL;
-    }
-    if (result !== 'pending') return result;
-    await sleep(pollMs);
+  const msg = await services.messages.getByExternalId(chat.id, externalId);
+  if (!msg) {
+    log.warn('Message not found for media wait', { instanceId, chatId, externalId });
+    return MEDIA_WAIT_NULL;
   }
 
-  log.warn('Media processing wait timed out', { instanceId, chatId, externalId, contentType });
-  return MEDIA_WAIT_NULL;
+  // 1. Check DB — result may already be written (processing finished before debounce fired)
+  const existing = checkProcessedColumn(msg, column);
+  if (existing === 'error') {
+    log.warn('Media processing failed (DB)', { instanceId, chatId, externalId });
+    return MEDIA_WAIT_NULL;
+  }
+  if (existing !== 'pending') return existing;
+
+  // 2. Check event cache — event may have arrived before dispatcher asked
+  const cached = mediaResultCache.get(msg.id);
+  if (cached) {
+    mediaResultCache.delete(msg.id);
+    if (!cached.content || cached.error) return MEDIA_WAIT_NULL;
+    const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
+    return { content: cached.content, localPath };
+  }
+
+  // 3. Await NATS event — guaranteed delivery via durable consumer
+  const result = await new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
+    mediaCompletions.set(msg.id, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
+  });
+
+  if (!result.content || result.error) return MEDIA_WAIT_NULL;
+
+  // Re-read message for localPath (media storage may have updated it)
+  const updated = await services.messages.getByExternalId(chat.id, externalId);
+  const localPath = updated?.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, updated.mediaLocalPath as string)) : null;
+  return { content: result.content, localPath };
 }
 
 /**
@@ -763,13 +794,13 @@ async function collectProcessedMedia(
     const contentType = m.payload.content?.type;
     if (!contentType || !getProcessedColumn(contentType)) continue;
 
-    const result = await waitForMediaProcessing(
-      services,
-      instance.id,
-      m.payload.chatId,
-      m.payload.externalId,
-      contentType,
-    );
+    let result: { content: string | null; localPath: string | null };
+    try {
+      result = await awaitMediaProcessing(services, instance.id, m.payload.chatId, m.payload.externalId, contentType);
+    } catch (error) {
+      log.warn('Media await failed', { externalId: m.payload.externalId, error: String(error) });
+      result = MEDIA_WAIT_NULL;
+    }
 
     if (result.content) {
       results.push(
@@ -3582,6 +3613,19 @@ export async function setupAgentDispatcher(
   // Periodic cleanup of rate limiter counters
   const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
+  // Periodic cleanup of leaked media promises (10min circuit breaker)
+  const mediaCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const leakThreshold = 10 * 60_000; // 10 minutes
+    for (const [mediaId, pending] of mediaCompletions.entries()) {
+      if (now - pending.createdAt > leakThreshold) {
+        log.warn('media_promise_leaked', { mediaId, ageMs: now - pending.createdAt });
+        pending.reject(new Error('media processing promise leaked (10min circuit breaker)'));
+        mediaCompletions.delete(mediaId);
+      }
+    }
+  }, 60_000);
+
   // Create debouncer for message events
   const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
     const firstMsg = messages[0];
@@ -3837,10 +3881,39 @@ export async function setupAgentDispatcher(
       },
     );
 
-    log.info('Agent dispatcher initialized (message + reaction + reaction-removed triggers)');
+    // ========================================
+    // Subscribe to media.processed (event-driven media wait)
+    // ========================================
+    await eventBus.subscribe(
+      'media.processed',
+      async (event) => {
+        const payload = event.payload as MediaProcessedPayload;
+        const { mediaId, content, error } = payload;
+
+        // If dispatcher is already waiting → resolve the promise
+        const pending = mediaCompletions.get(mediaId);
+        if (pending) {
+          pending.resolve({ content, error });
+          mediaCompletions.delete(mediaId);
+          return;
+        }
+
+        // If dispatcher hasn't asked yet → cache the result (TTL 5min)
+        mediaResultCache.set(mediaId, { content, error });
+        setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+      },
+      {
+        durable: 'agent-dispatcher-media',
+        queue: 'agent-dispatcher-media',
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(cleanupInterval);
+    clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
   }
@@ -3849,7 +3922,15 @@ export async function setupAgentDispatcher(
   return async () => {
     log.info('Shutting down agent dispatcher');
     clearInterval(cleanupInterval);
+    clearInterval(mediaCleanupInterval);
     debouncer.clear();
+
+    // Reject any pending media promises on shutdown
+    for (const [mediaId, pending] of mediaCompletions.entries()) {
+      pending.reject(new Error('dispatcher shutting down'));
+      mediaCompletions.delete(mediaId);
+    }
+    mediaResultCache.clear();
 
     // Dispose all providers that support it (e.g., OpenClaw WS clients)
     const disposePromises: Promise<void>[] = [];
