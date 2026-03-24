@@ -338,11 +338,9 @@ async function processMessageMedia(
   if (!result.success) {
     log.warn('Media processing failed', { messageId: media.messageId, error: result.errorMessage });
 
-    // Write error marker so waitForMediaProcessing can fail fast instead of polling for minutes
-    const errorColumn = getContentFieldForType(
-      result.processingType ?? inferProcessingType(content.type),
-      content.type,
-    );
+    // Write error marker so consumers can detect failures via DB check
+    const processingType = result.processingType ?? inferProcessingType(content.type);
+    const errorColumn = getContentFieldForType(processingType, content.type);
     if (errorColumn) {
       const marker = `[error: ${result.errorMessage ?? 'unknown'}]`;
       await ctx.db
@@ -350,6 +348,19 @@ async function processMessageMedia(
         .set({ [errorColumn]: marker })
         .where(eq(messages.id, media.messageId));
     }
+
+    // Publish failure event so dispatcher resolves immediately instead of waiting
+    await ctx.eventBus.publish(
+      'media.processed',
+      {
+        eventId: eventId ?? media.messageId,
+        mediaId: media.messageId,
+        processingType,
+        content: '',
+        error: result.errorMessage ?? 'unknown',
+      },
+      { instanceId, channelType: metadata.channelType },
+    );
     return;
   }
 
@@ -445,6 +456,23 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
           externalId: payload.externalId,
           error: String(error),
         });
+
+        // Publish failure event for unexpected crashes so dispatcher doesn't wait forever
+        try {
+          await ctx.eventBus.publish(
+            'media.processed',
+            {
+              eventId: event.id,
+              mediaId: payload.externalId,
+              processingType: inferProcessingType(content.type),
+              content: '',
+              error: `unexpected: ${String(error)}`,
+            },
+            { instanceId: metadata.instanceId, channelType: metadata.channelType },
+          );
+        } catch (publishError) {
+          log.error('Failed to publish media failure event', { error: String(publishError) });
+        }
         // Don't re-throw - media processing failures shouldn't block message flow
       }
     },

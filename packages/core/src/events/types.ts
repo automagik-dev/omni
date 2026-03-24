@@ -300,6 +300,8 @@ export interface MediaProcessedPayload {
   model?: string;
   provider?: string;
   tokensUsed?: number;
+  /** Set when processing failed — content will be empty string */
+  error?: string;
 }
 
 /**
