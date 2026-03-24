@@ -60,6 +60,65 @@ export const AgentRouteSchema = z.object({
   agentGateModel: z.string().max(120).nullable().openapi({ description: 'Response gate model override' }),
   agentGatePrompt: z.string().nullable().openapi({ description: 'Response gate prompt override' }),
 
+  // Debounce overrides (null = inherit from instance)
+  messageDebounceMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .nullable()
+    .openapi({ description: 'Debounce mode override' }),
+  messageDebounceMinMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Debounce min delay (ms) override' }),
+  messageDebounceMaxMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Debounce max delay (ms) override' }),
+  messageDebounceGroupMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Debounce group chat delay (ms) override' }),
+  messageDebounceRestartOnTyping: z
+    .boolean()
+    .nullable()
+    .openapi({ description: 'Restart debounce on typing override' }),
+
+  // Split delay overrides (null = inherit from instance)
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .nullable()
+    .openapi({ description: 'Split delay mode override' }),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Split delay fixed (ms) override' }),
+  messageSplitDelayMinMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Split delay min (ms) override' }),
+  messageSplitDelayMaxMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Split delay max (ms) override' }),
+  enableAutoSplit: z.boolean().nullable().openapi({ description: 'Auto-split messages override' }),
+
+  // Ack overrides (null = inherit from instance)
+  reactionAck: z.enum(['off', 'on']).nullable().openapi({ description: 'Reaction ack toggle override' }),
+  reactionAckEmoji: z.record(z.string()).nullable().openapi({ description: 'Reaction ack emoji per-channel override' }),
+  ackTimeoutMs: z.number().int().positive().nullable().openapi({ description: 'Ack timeout (ms) override' }),
+  agentAckMessage: z.string().nullable().openapi({ description: 'Agent ack message override (null = disabled)' }),
+
   // Metadata
   label: z
     .string()
@@ -93,6 +152,39 @@ export const CreateAgentRouteRequestSchema = z.object({
   agentGateModel: z.string().max(120).optional().openapi({ description: 'Response gate model' }),
   agentGatePrompt: z.string().optional().openapi({ description: 'Response gate prompt' }),
 
+  // Debounce overrides
+  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized']).optional().openapi({ description: 'Debounce mode' }),
+  messageDebounceMinMs: z.number().int().nonnegative().optional().openapi({ description: 'Debounce min delay (ms)' }),
+  messageDebounceMaxMs: z.number().int().nonnegative().optional().openapi({ description: 'Debounce max delay (ms)' }),
+  messageDebounceGroupMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .openapi({ description: 'Debounce group chat delay (ms)' }),
+  messageDebounceRestartOnTyping: z.boolean().optional().openapi({ description: 'Restart debounce on typing' }),
+
+  // Split delay overrides
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .optional()
+    .openapi({ description: 'Split delay mode' }),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .openapi({ description: 'Split delay fixed (ms)' }),
+  messageSplitDelayMinMs: z.number().int().nonnegative().optional().openapi({ description: 'Split delay min (ms)' }),
+  messageSplitDelayMaxMs: z.number().int().nonnegative().optional().openapi({ description: 'Split delay max (ms)' }),
+  enableAutoSplit: z.boolean().optional().openapi({ description: 'Auto-split messages' }),
+
+  // Ack overrides
+  reactionAck: z.enum(['off', 'on']).optional().openapi({ description: 'Reaction ack toggle' }),
+  reactionAckEmoji: z.record(z.string()).optional().openapi({ description: 'Reaction ack emoji per-channel' }),
+  ackTimeoutMs: z.number().int().positive().optional().openapi({ description: 'Ack timeout (ms)' }),
+  agentAckMessage: z.string().optional().openapi({ description: 'Agent ack message (empty string = disabled)' }),
+
   label: z.string().max(255).optional().openapi({ description: 'Human-readable label' }),
   priority: z.number().int().default(0).openapi({ description: 'Priority (higher = higher priority)' }),
   isActive: z.boolean().default(true).openapi({ description: 'Whether active' }),
@@ -122,6 +214,78 @@ export const UpdateAgentRouteRequestSchema = z.object({
   agentGateEnabled: z.boolean().nullable().optional().openapi({ description: 'Enable LLM response gate' }),
   agentGateModel: z.string().max(120).nullable().optional().openapi({ description: 'Response gate model' }),
   agentGatePrompt: z.string().nullable().optional().openapi({ description: 'Response gate prompt' }),
+
+  // Debounce overrides
+  messageDebounceMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .nullable()
+    .optional()
+    .openapi({ description: 'Debounce mode' }),
+  messageDebounceMinMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Debounce min delay (ms)' }),
+  messageDebounceMaxMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Debounce max delay (ms)' }),
+  messageDebounceGroupMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Debounce group chat delay (ms)' }),
+  messageDebounceRestartOnTyping: z
+    .boolean()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Restart debounce on typing' }),
+
+  // Split delay overrides
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .nullable()
+    .optional()
+    .openapi({ description: 'Split delay mode' }),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Split delay fixed (ms)' }),
+  messageSplitDelayMinMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Split delay min (ms)' }),
+  messageSplitDelayMaxMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Split delay max (ms)' }),
+  enableAutoSplit: z.boolean().nullable().optional().openapi({ description: 'Auto-split messages' }),
+
+  // Ack overrides
+  reactionAck: z.enum(['off', 'on']).nullable().optional().openapi({ description: 'Reaction ack toggle' }),
+  reactionAckEmoji: z
+    .record(z.string())
+    .nullable()
+    .optional()
+    .openapi({ description: 'Reaction ack emoji per-channel' }),
+  ackTimeoutMs: z.number().int().positive().nullable().optional().openapi({ description: 'Ack timeout (ms)' }),
+  agentAckMessage: z.string().nullable().optional().openapi({ description: 'Agent ack message' }),
 
   label: z.string().max(255).nullable().optional().openapi({ description: 'Human-readable label' }),
   priority: z.number().int().optional().openapi({ description: 'Priority (higher = higher priority)' }),

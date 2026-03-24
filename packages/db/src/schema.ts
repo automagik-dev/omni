@@ -375,6 +375,26 @@ export const agentRoutes = pgTable(
     agentGateModel: varchar('agent_gate_model', { length: 120 }),
     agentGatePrompt: text('agent_gate_prompt'),
 
+    // ---- Debounce overrides (NULL = inherit from instance) ----
+    messageDebounceMode: varchar('message_debounce_mode', { length: 20 }).$type<DebounceMode>(),
+    messageDebounceMinMs: integer('message_debounce_min_ms'),
+    messageDebounceMaxMs: integer('message_debounce_max_ms'),
+    messageDebounceGroupMs: integer('message_debounce_group_ms'),
+    messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing'),
+
+    // ---- Split delay overrides (NULL = inherit from instance) ----
+    messageSplitDelayMode: varchar('message_split_delay_mode', { length: 20 }).$type<SplitDelayMode>(),
+    messageSplitDelayFixedMs: integer('message_split_delay_fixed_ms'),
+    messageSplitDelayMinMs: integer('message_split_delay_min_ms'),
+    messageSplitDelayMaxMs: integer('message_split_delay_max_ms'),
+    enableAutoSplit: boolean('enable_auto_split'),
+
+    // ---- Ack overrides (NULL = inherit from instance) ----
+    reactionAck: varchar('reaction_ack', { length: 10 }).$type<'off' | 'on'>(),
+    reactionAckEmoji: jsonb('reaction_ack_emoji').$type<Record<string, string>>(),
+    ackTimeoutMs: integer('ack_timeout_ms'),
+    agentAckMessage: text('agent_ack_message'),
+
     // ---- Metadata ----
     label: varchar('label', { length: 255 }),
     priority: integer('priority').notNull().default(0),

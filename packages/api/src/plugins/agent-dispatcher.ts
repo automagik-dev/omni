@@ -73,6 +73,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
+import type { ResolvedRoute } from '../services/route-resolver';
 import { getPlugin } from './loader';
 import {
   type BufferedMessage,
@@ -2784,6 +2785,42 @@ async function applyAgentFkOverrides(
 }
 
 /**
+ * Merge route overrides onto instance defaults. Null route fields inherit from instance.
+ */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat field-by-field merge, no branching logic
+function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): DispatchInstance {
+  return {
+    ...instance,
+    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
+    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
+    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
+    agentSessionStrategy:
+      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
+    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
+    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
+    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
+    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
+    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
+    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
+    messageDebounceMode: (route.messageDebounceMode as Instance['messageDebounceMode']) ?? instance.messageDebounceMode,
+    messageDebounceMinMs: route.messageDebounceMinMs ?? instance.messageDebounceMinMs,
+    messageDebounceMaxMs: route.messageDebounceMaxMs ?? instance.messageDebounceMaxMs,
+    messageDebounceGroupMs: route.messageDebounceGroupMs ?? instance.messageDebounceGroupMs,
+    messageDebounceRestartOnTyping: route.messageDebounceRestartOnTyping ?? instance.messageDebounceRestartOnTyping,
+    messageSplitDelayMode:
+      (route.messageSplitDelayMode as Instance['messageSplitDelayMode']) ?? instance.messageSplitDelayMode,
+    messageSplitDelayFixedMs: route.messageSplitDelayFixedMs ?? instance.messageSplitDelayFixedMs,
+    messageSplitDelayMinMs: route.messageSplitDelayMinMs ?? instance.messageSplitDelayMinMs,
+    messageSplitDelayMaxMs: route.messageSplitDelayMaxMs ?? instance.messageSplitDelayMaxMs,
+    enableAutoSplit: route.enableAutoSplit ?? instance.enableAutoSplit,
+    reactionAck: (route.reactionAck as Instance['reactionAck']) ?? instance.reactionAck,
+    reactionAckEmoji: (route.reactionAckEmoji as Instance['reactionAckEmoji']) ?? instance.reactionAckEmoji,
+    ackTimeoutMs: route.ackTimeoutMs ?? instance.ackTimeoutMs,
+    agentAckMessage: route.agentAckMessage ?? instance.agentAckMessage,
+  };
+}
+
+/**
  * omni-930 phase 3: Apply instance-level agentId (UUID FK) overrides and return the result.
  * Used as the no-route early-return path in resolveEffectiveInstance.
  */
@@ -2826,21 +2863,7 @@ async function resolveEffectiveInstance(
   }
 
   // Merge route overrides with instance defaults
-  const effectiveInstance: DispatchInstance = {
-    ...instance,
-    // Override behavior (null = inherit from instance)
-    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
-    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
-    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
-    agentSessionStrategy:
-      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
-    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
-    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
-    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
-    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
-    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
-    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
-  };
+  const effectiveInstance: DispatchInstance = mergeRouteOverrides(instance, route);
 
   // omni-p7r phase 2: Resolve agent entity overrides.
   // Route-level agentId takes priority; fall back to instance-level agentId.
