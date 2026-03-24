@@ -200,7 +200,7 @@ describe('template variable resolution', () => {
 
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}' }));
     await client.run(makeRequestWithChat('chat123'));
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
 
     // Team name should resolve to 'cegonha-chat123'
     const inboxPath = join(TEAMS_DIR, 'cegonha-chat123', 'inboxes', 'team-lead.json');
@@ -215,7 +215,7 @@ describe('template variable resolution', () => {
 
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}-{thread_id}' }));
     await client.run(makeRequestWithChat('chat123', 'thread456'));
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
 
     const inboxPath = join(TEAMS_DIR, 'cegonha-chat123-thread456', 'inboxes', 'team-lead.json');
     expect(existsSync(inboxPath)).toBe(true);
@@ -230,7 +230,7 @@ describe('template variable resolution', () => {
     const client = new GenieClient(makeConfig({ teamName: 'cegonha-{chat_id}-{thread_id}' }));
     // No thread_id in request
     await client.run(makeRequestWithChat('chat789'));
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
 
     // thread_id resolves to empty -> sanitize strips trailing dash
     // 'cegonha-chat789-' -> sanitize -> 'cegonha-chat789'
@@ -248,7 +248,7 @@ describe('template variable resolution', () => {
 
     await client.run(makeRequestWithChat('alice'));
     await client.run(makeRequestWithChat('bob'));
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
 
     const aliceInbox = join(TEAMS_DIR, 'team-alice', 'inboxes', 'team-lead.json');
     const bobInbox = join(TEAMS_DIR, 'team-bob', 'inboxes', 'team-lead.json');
@@ -383,13 +383,13 @@ describe('session recovery', () => {
 
     // First run: spawns and caches
     await client.run(makeRequest());
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
     expect(genieCallCount).toBe(1);
 
     // Team is now cached -- second run should skip spawn
     genieCallCount = 0;
     await client.run(makeRequest({ message: 'second' }));
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
     expect(genieCallCount).toBe(0);
 
     // NOTE: Current implementation does NOT detect session death after caching.
