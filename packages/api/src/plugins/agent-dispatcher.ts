@@ -3632,27 +3632,25 @@ export async function setupAgentDispatcher(
     if (!firstMsg) return;
 
     const instanceId = firstMsg.metadata.instanceId;
-    const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
-    if (!baseInstance) {
-      log.warn('Instance not found for debounced messages', { instanceId });
-      return;
+
+    // Use the pre-resolved instance from early route resolution (done in message.received handler).
+    // This avoids a redundant resolveEffectiveInstance() call — the route was already resolved
+    // before the debounce timer, so per-user debounce overrides are already applied.
+    let instance: DispatchInstance;
+    if (firstMsg.metadata.resolvedInstance) {
+      instance = firstMsg.metadata.resolvedInstance as DispatchInstance;
+    } else {
+      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow)
+      const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+      if (!baseInstance) {
+        log.warn('Instance not found for debounced messages', { instanceId });
+        return;
+      }
+      const externalChatId = firstMsg.payload.chatId;
+      const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+      const resolved = await resolveEffectiveInstance(services, db, baseInstance, chat?.id, firstMsg.metadata.personId);
+      instance = resolved.instance;
     }
-
-    // Resolve agent route and merge with instance defaults
-    const externalChatId = firstMsg.payload.chatId;
-    const personId = firstMsg.metadata.personId;
-
-    // Look up internal chat UUID for route resolution
-    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-    const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
-
-    const { instance, routeId: _routeId } = await resolveEffectiveInstance(
-      services,
-      db,
-      baseInstance,
-      internalChatId,
-      personId,
-    );
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
@@ -3692,7 +3690,19 @@ export async function setupAgentDispatcher(
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
-          const debounceConfig = getDebounceConfig(instance);
+
+          // Early route resolution: resolve route BEFORE debounce so per-user
+          // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
+          const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+          const { instance: resolved, routeId } = await resolveEffectiveInstance(
+            services,
+            db,
+            instance,
+            chat?.id,
+            metadata.personId,
+          );
+
+          const debounceConfig = getDebounceConfig(resolved);
 
           // Group chats (WhatsApp: @g.us) can use a different debounce window.
           // If configured, use groupMs instead of minMs for the timer delay.
@@ -3720,6 +3730,8 @@ export async function setupAgentDispatcher(
                 traceId,
                 correlationId: metadata.correlationId,
                 journeyTracked: metadata.timings != null,
+                resolvedInstance: resolved,
+                routeId,
               },
               timestamp: event.timestamp,
             },
@@ -3861,10 +3873,20 @@ export async function setupAgentDispatcher(
         if (!metadata.instanceId) return;
 
         try {
-          const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance?.agentId) return;
+          const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+          if (!baseInstance?.agentId) return;
 
-          const debounceConfig = getDebounceConfig(instance);
+          // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
+          const { instance: resolved } = await resolveEffectiveInstance(
+            services,
+            db,
+            baseInstance,
+            chat?.id,
+            metadata.personId,
+          );
+
+          const debounceConfig = getDebounceConfig(resolved);
           if (debounceConfig.restartOnTyping) {
             debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
           }
@@ -3991,4 +4013,12 @@ export async function setupAgentDispatcher(
 export const setupAgentResponder = setupAgentDispatcher;
 
 /** @internal Exported for unit testing only — do not use in production code. */
-export const __test__ = { buildContextMessages };
+export const __test__ = {
+  buildContextMessages,
+  awaitMediaProcessing,
+  mediaCompletions,
+  mediaResultCache,
+  checkProcessedColumn,
+  getProcessedColumn,
+  MEDIA_WAIT_NULL,
+};

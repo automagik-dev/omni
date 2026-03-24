@@ -30,6 +30,10 @@ export interface DispatchMetadata {
   correlationId?: string;
   /** Whether this message is being journey-tracked (has timings) */
   journeyTracked?: boolean;
+  /** Pre-resolved instance with route overrides applied (avoids double resolution in debounce callback) */
+  resolvedInstance?: unknown;
+  /** Route ID that matched during early resolution (null = no route matched) */
+  routeId?: string | null;
 }
 
 export interface DebounceConfig {
