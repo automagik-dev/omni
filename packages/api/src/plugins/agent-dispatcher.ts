@@ -563,6 +563,26 @@ function checkProcessedColumn(
 }
 
 /**
+ * Retry a DB lookup until it returns a non-null result or 5s elapses.
+ * Handles the race where message-persistence hasn't written the row yet.
+ */
+async function waitForRecord<T>(
+  fn: () => Promise<T | null | undefined>,
+  maxMs = 5_000,
+  pollMs = 250,
+): Promise<T | null> {
+  let result = await fn();
+  if (result) return result;
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    result = await fn();
+    if (result) return result;
+  }
+  return null;
+}
+
+/**
  * Await media processing via NATS event instead of DB polling.
  * Checks: DB first (already done) → event cache (arrived early) → await promise (NATS delivery).
  */
@@ -576,15 +596,18 @@ async function awaitMediaProcessing(
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+  // Wait briefly for message-persistence to create the DB rows (race condition:
+  // both media-processor and agent-dispatcher subscribe to message.received,
+  // and the dispatcher's debounce may fire before persistence completes).
+  const chat = await waitForRecord(() => services.chats.findByExternalIdSmart(instanceId, chatId));
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
   }
 
-  const msg = await services.messages.getByExternalId(chat.id, externalId);
+  const msg = await waitForRecord(() => services.messages.getByExternalId(chat.id, externalId));
   if (!msg) {
-    log.warn('Message not found for media wait', { instanceId, chatId, externalId });
+    log.warn('Message not found for media wait after retries', { instanceId, chatId, externalId });
     return MEDIA_WAIT_NULL;
   }
 

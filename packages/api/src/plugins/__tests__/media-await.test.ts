@@ -123,17 +123,25 @@ describe('awaitMediaProcessing', () => {
     expect(result).toEqual(MEDIA_WAIT_NULL);
   });
 
-  it('returns MEDIA_WAIT_NULL when chat is not found', async () => {
-    const services = mockServices({ chat: null });
-    const result = await awaitMediaProcessing(services, 'inst-1', 'chat-ext-1', 'ext-msg-1', 'image');
-    expect(result).toEqual(MEDIA_WAIT_NULL);
-  });
+  it(
+    'returns MEDIA_WAIT_NULL when chat is not found after retries',
+    async () => {
+      const services = mockServices({ chat: null });
+      const result = await awaitMediaProcessing(services, 'inst-1', 'chat-ext-1', 'ext-msg-1', 'image');
+      expect(result).toEqual(MEDIA_WAIT_NULL);
+    },
+    { timeout: 10_000 },
+  );
 
-  it('returns MEDIA_WAIT_NULL when message is not found', async () => {
-    const services = mockServices({ message: null });
-    const result = await awaitMediaProcessing(services, 'inst-1', 'chat-ext-1', 'ext-msg-1', 'image');
-    expect(result).toEqual(MEDIA_WAIT_NULL);
-  });
+  it(
+    'returns MEDIA_WAIT_NULL when message is not found after retries',
+    async () => {
+      const services = mockServices({ message: null });
+      const result = await awaitMediaProcessing(services, 'inst-1', 'chat-ext-1', 'ext-msg-1', 'image');
+      expect(result).toEqual(MEDIA_WAIT_NULL);
+    },
+    { timeout: 10_000 },
+  );
 
   it('returns immediately when DB already has processed result (DB-already-done)', async () => {
     const services = mockServices({
