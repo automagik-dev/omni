@@ -2148,3 +2148,369 @@ omni resync --all --since 1h
 # Preview what would be resynced (dry run)
 omni resync -i wa-main --since 30m --dry-run
 ```
+
+---
+
+## omni dead-letters
+
+Manage failed events captured by the dead letter queue. Events land here after exhausting retry attempts (3 auto-retries at 1h, 6h, 24h intervals).
+
+### Subcommands
+
+#### `list [options]`
+List dead letters with optional filters.
+
+**Options:**
+- `--status <status>` - Filter: `pending`, `retrying`, `resolved`, `abandoned`
+- `--type <type>` - Filter by event type (e.g. `message.received`)
+- `--since <date>` - Filter by date (ISO format or relative like `24h`)
+- `--limit <n>` - Max results (default: 20)
+
+**Examples:**
+```bash
+# List all pending dead letters
+omni dead-letters list --status pending
+
+# List failures from the last 24 hours
+omni dead-letters list --since 24h
+
+# List failed message.received events
+omni dead-letters list --type message.received --limit 50
+```
+
+#### `get <id>`
+Get full details of a dead letter including payload, error, and retry history.
+
+**Example:**
+```bash
+omni dead-letters get dl_abc123
+```
+
+#### `stats`
+Get dead letter statistics — counts by status and event type.
+
+**Example:**
+```bash
+omni dead-letters stats
+```
+
+#### `retry <id>`
+Retry processing a dead letter. Re-publishes the original event to NATS.
+
+**Example:**
+```bash
+omni dead-letters retry dl_abc123
+```
+
+#### `resolve <id>`
+Mark a dead letter as resolved (manually handled, no longer needs retry).
+
+**Options:**
+- `--note <note>` - Resolution note for audit trail
+
+**Example:**
+```bash
+omni dead-letters resolve dl_abc123 --note "Duplicate event, original processed successfully"
+```
+
+#### `abandon <id>`
+Abandon a dead letter — stops all retry attempts permanently.
+
+**Example:**
+```bash
+omni dead-letters abandon dl_abc123
+```
+
+---
+
+## omni payloads
+
+Manage raw event payloads stored for debugging and replay. Payloads are stored at different stages of the message lifecycle.
+
+### Subcommands
+
+#### `list <eventId>`
+List all payload stages for an event.
+
+**Example:**
+```bash
+omni payloads list evt_abc123
+```
+
+#### `get <eventId> <stage>`
+Get a specific payload stage. Stages: `webhook_raw`, `agent_request`, `agent_response`, `channel_send`, `error`.
+
+**Examples:**
+```bash
+# See the raw webhook payload from WhatsApp
+omni payloads get evt_abc123 webhook_raw
+
+# See what was sent to the agent
+omni payloads get evt_abc123 agent_request
+
+# See the agent's response
+omni payloads get evt_abc123 agent_response
+
+# See errors if dispatch failed
+omni payloads get evt_abc123 error
+```
+
+#### `delete <eventId>`
+Delete all stored payloads for an event.
+
+**Example:**
+```bash
+omni payloads delete evt_abc123
+```
+
+#### `config [eventType]`
+List or update payload storage configuration. Controls which stages are stored and retention.
+
+**Options:**
+- `--retention <days>` - Retention period in days
+- `--store-webhook <bool>` - Store raw webhook payloads
+- `--store-agent-request <bool>` - Store agent request payloads
+- `--store-agent-response <bool>` - Store agent response payloads
+- `--store-channel-send <bool>` - Store channel send payloads
+- `--store-error <bool>` - Store error payloads
+
+**Examples:**
+```bash
+# List current payload config
+omni payloads config
+
+# Set 30-day retention for message.received events
+omni payloads config message.received --retention 30
+
+# Disable storing agent responses (save disk space)
+omni payloads config --store-agent-response false
+```
+
+#### `stats`
+Get payload storage statistics — total size, count by stage.
+
+**Example:**
+```bash
+omni payloads stats
+```
+
+---
+
+## omni settings
+
+Manage server-side API settings. These are key-value pairs stored in the database that control server behavior.
+
+### Subcommands
+
+#### `list [options]`
+List all settings with current values.
+
+**Example:**
+```bash
+omni settings list
+```
+
+#### `get <key>`
+Get a specific setting value.
+
+**Examples:**
+```bash
+# Check the Gemini API key setting
+omni settings get gemini.api_key
+
+# Check default language for media processing
+omni settings get media.default_language
+```
+
+#### `set <key> <value>`
+Update a setting value.
+
+**Options:**
+- `--reason <reason>` - Reason for change (audit trail)
+
+**Examples:**
+```bash
+# Set the default language for transcription
+omni settings set media.default_language pt --reason "Brazilian Portuguese is primary"
+
+# Set a prompt override for image description
+omni settings set prompt.image_description "Describe this image in detail, in Portuguese"
+```
+
+---
+
+## omni logs
+
+View system logs from the database or stream live PM2 process logs.
+
+### Arguments
+- `[level]` - Log level filter: `debug`, `info`, `warn`, `error`
+
+### Options
+- `--modules <modules>` - Comma-separated module names to filter (e.g. `agent-dispatcher,media-processor`)
+- `--limit <n>` - Limit results (default: 100)
+- `--process [service]` - Stream PM2 process logs (default: `api`)
+- `--follow` - Stream live logs (only with `--process`)
+
+### Examples
+
+```bash
+# View recent error logs
+omni logs error
+
+# View agent-dispatcher warnings
+omni logs warn --modules agent-dispatcher
+
+# View media processing logs
+omni logs --modules media-processor --limit 50
+
+# Stream live API logs
+omni logs --process api --follow
+
+# Stream live logs filtered to errors
+omni logs error --process api --follow
+```
+
+---
+
+## omni config
+
+Manage CLI configuration (local to the machine). Stores API URL, default instance, and other CLI preferences.
+
+### Subcommands
+
+#### `list`
+List all configuration values.
+
+**Example:**
+```bash
+omni config list
+```
+
+#### `get <key>`
+Get a specific configuration value.
+
+**Examples:**
+```bash
+omni config get api_url
+omni config get default_instance
+```
+
+#### `set <key> [value]`
+Set a configuration value. Omit value to clear.
+
+**Examples:**
+```bash
+# Set API URL for a different Omni server
+omni config set api_url http://localhost:8883
+
+# Set default instance (skip --instance flag on every command)
+omni config set default_instance 4d1054ba-b078-4dc2-9bc3-7583944dbbe0
+
+# Clear a value
+omni config set default_instance
+```
+
+#### `unset <key>`
+Remove a configuration value.
+
+**Example:**
+```bash
+omni config unset default_instance
+```
+
+---
+
+## omni auth
+
+Manage API authentication credentials. Stores API key and URL for CLI access.
+
+### Subcommands
+
+#### `login [options]`
+Save API credentials for CLI use.
+
+**Options:**
+- `--api-key <key>` - API key for authentication
+- `--api-url <url>` - API base URL (default: `http://localhost:8882`)
+
+**Examples:**
+```bash
+# Login with API key
+omni auth login --api-key omni_key_abc123
+
+# Login to a remote server
+omni auth login --api-key omni_key_abc123 --api-url https://omni.example.com:8882
+```
+
+#### `status`
+Show current authentication status — API URL, key validity, server version.
+
+**Example:**
+```bash
+omni auth status
+```
+
+#### `logout`
+Clear stored credentials.
+
+**Example:**
+```bash
+omni auth logout
+```
+
+#### `recover [options]`
+Recover API key when `keyValid` shows `no`. Requires local PM2 access (runs on the same machine as the Omni server).
+
+**Options:**
+- `--api-url <url>` - API base URL (default: `http://localhost:8882`)
+- `--rotate` - Generate a new key instead of recovering the existing one
+
+**Examples:**
+```bash
+# Recover existing key
+omni auth recover
+
+# Generate a fresh key
+omni auth recover --rotate
+
+# Recover for a different instance
+omni auth recover --api-url http://localhost:8883
+```
+
+---
+
+## omni status
+
+Show API health and connection info. Displays server version, uptime, connected instances, and database status.
+
+### Examples
+
+```bash
+omni status
+```
+
+---
+
+## omni completions
+
+Generate shell completions for the Omni CLI. Outputs a completion script for the specified shell.
+
+### Arguments
+- `[shell]` - Shell type: `bash`, `zsh`, `fish`
+
+### Examples
+
+```bash
+# Generate bash completions
+omni completions bash
+
+# Install zsh completions
+omni completions zsh > ~/.zsh/completions/_omni
+
+# Install bash completions
+omni completions bash > /etc/bash_completion.d/omni
+
+# Install fish completions
+omni completions fish > ~/.config/fish/completions/omni.fish
+```
