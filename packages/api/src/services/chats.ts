@@ -33,6 +33,7 @@ export interface ChatWithParticipants extends Chat {
 
 export interface ListChatsOptions {
   instanceId?: string;
+  instanceIds?: string[];
   channel?: ChannelType[];
   chatType?: ChatType[];
   excludeChatTypes?: ChatType[];
@@ -114,6 +115,7 @@ export class ChatService {
     const conditions = [];
 
     if (instanceId) conditions.push(eq(chats.instanceId, instanceId));
+    if (options.instanceIds?.length) conditions.push(inArray(chats.instanceId, options.instanceIds));
     if (channel?.length) conditions.push(inArray(chats.channel, channel));
     if (chatType?.length) conditions.push(inArray(chats.chatType, chatType));
 
