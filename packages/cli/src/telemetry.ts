@@ -92,10 +92,26 @@ export function sanitizeArgs(argv: string[]): string[] {
 // Lazy Sentry initialisation
 // ---------------------------------------------------------------------------
 
-let sentryModule: typeof import('@sentry/bun') | null = null;
+/** Minimal type surface for the Sentry API methods we actually use.
+ *  @sentry/bun is an optional peer dep loaded at runtime via require(). */
+interface SentryLike {
+  init(opts: Record<string, unknown>): void;
+  setTag(key: string, value: string): void;
+  withScope(
+    callback: (scope: {
+      setTag: (k: string, v: string) => void;
+      setContext: (k: string, v: Record<string, unknown>) => void;
+    }) => void,
+  ): void;
+  addBreadcrumb(crumb: Record<string, unknown>): void;
+  captureException(error: Error): void;
+  flush(timeout: number): Promise<boolean>;
+}
+
+let sentryModule: SentryLike | null = null;
 let initAttempted = false;
 
-function ensureSentry(): typeof import('@sentry/bun') | null {
+function ensureSentry(): SentryLike | null {
   if (initAttempted) return sentryModule;
   initAttempted = true;
 
@@ -106,7 +122,7 @@ function ensureSentry(): typeof import('@sentry/bun') | null {
 
   try {
     // Dynamic require — avoids loading Sentry at startup
-    const Sentry = require('@sentry/bun') as typeof import('@sentry/bun');
+    const Sentry = require('@sentry/bun') as SentryLike;
 
     Sentry.init({
       dsn,
@@ -116,7 +132,7 @@ function ensureSentry(): typeof import('@sentry/bun') | null {
       maxBreadcrumbs: 10,
       // No performance tracing for CLI
       tracesSampleRate: 0,
-      beforeSend(event) {
+      beforeSend(event: Record<string, unknown>) {
         // Strip server_name (leaks hostname)
         if (event.server_name) {
           event.server_name = undefined;
