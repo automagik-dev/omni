@@ -9,7 +9,7 @@
  */
 
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { createAccessCommand } from './commands/access.js';
 import { createRoutesCommand } from './commands/agent-routes.js';
 import { createAgentsCommand } from './commands/agents.js';
@@ -282,6 +282,45 @@ for (const def of COMMANDS) {
 
   program.addCommand(cmd, { hidden: shouldHide });
 }
+
+/**
+ * Add --instance-ids (and --instances) as hidden aliases for all commands
+ * that accept --instance or --instances options.
+ * A preAction hook remaps alias values to the primary attribute name.
+ */
+function addInstanceIdAliases(cmd: Command): void {
+  for (const subcmd of cmd.commands) {
+    const hasInstanceIds = subcmd.options.some((o) => o.long === '--instance-ids');
+    const snapshot = [...subcmd.options];
+    for (const opt of snapshot) {
+      if (opt.long === '--instance' && !hasInstanceIds) {
+        opt.description += ' (aliases: --instance-ids, --instances)';
+        subcmd.addOption(new Option('--instance-ids <id>').hideHelp());
+        if (!subcmd.options.some((o) => o.long === '--instances')) {
+          subcmd.addOption(new Option('--instances <id>').hideHelp());
+        }
+      } else if (opt.long === '--instances' && !hasInstanceIds) {
+        opt.description += ' (alias: --instance-ids)';
+        subcmd.addOption(new Option('--instance-ids <ids>').hideHelp());
+      }
+    }
+    addInstanceIdAliases(subcmd);
+  }
+}
+
+addInstanceIdAliases(program);
+
+// Remap alias option values to primary attribute names before action handlers run
+program.hook('preAction', (_thisCmd, actionCmd) => {
+  const opts = actionCmd.opts();
+  if (opts.instanceIds !== undefined) {
+    if (opts.instance === undefined) actionCmd.setOptionValue('instance', opts.instanceIds);
+    if (opts.instances === undefined) actionCmd.setOptionValue('instances', opts.instanceIds);
+  }
+  if (opts.instances !== undefined && opts.instance === undefined) {
+    actionCmd.setOptionValue('instance', opts.instances);
+  }
+});
 
 // Configure help to show minimal info for root (we customize everything)
 program.configureHelp({

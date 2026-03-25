@@ -85,7 +85,8 @@ export function createConfigCommand(): Command {
   config
     .command('get <key>')
     .description('Get a configuration value')
-    .action((key: string) => {
+    .option('--raw', 'Output only the value (no key label, no formatting)')
+    .action((key: string, options: { raw?: boolean }) => {
       if (!isValidConfigKey(key)) {
         output.error(`Unknown config key: ${key}`, {
           availableKeys: Object.keys(CONFIG_KEYS),
@@ -96,6 +97,11 @@ export function createConfigCommand(): Command {
 
       if (value === undefined) {
         output.error(`Config key '${key}' is not set`, undefined, 1);
+      }
+
+      if (options.raw) {
+        output.raw(String(value));
+        return;
       }
 
       output.data({ key, value });
