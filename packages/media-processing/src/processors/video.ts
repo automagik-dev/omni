@@ -4,6 +4,8 @@
  * Generates descriptions for videos using Gemini Flash.
  * Supports video understanding including scene description, action detection,
  * and audio transcription for videos with speech.
+ *
+ * Uses centralized retry + circuit breaker for resilience.
  */
 
 import { readFileSync, statSync } from 'node:fs';
@@ -13,9 +15,9 @@ import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import { VIDEO_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
+import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
 
-const MAX_RETRIES = 3;
 const MAX_VIDEO_SIZE_MB = 20; // Gemini inline limit
 
 /**
@@ -97,7 +99,7 @@ export class VideoProcessor extends BaseProcessor {
   }
 
   /**
-   * Describe video using Gemini Flash API
+   * Describe video using Gemini Flash API with retry + circuit breaker
    */
   private async describeWithGemini(videoData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
@@ -105,58 +107,57 @@ export class VideoProcessor extends BaseProcessor {
       return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
     }
 
-    let lastError: Error | null = null;
+    const timeouts = getMediaTimeouts();
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        const result = await model.generateContent([
-          {
-            inlineData: {
-              mimeType: this.normalizeVideoMimeType(mimeType),
-              data: videoData.toString('base64'),
+    try {
+      const { text, inputTokens, outputTokens } = await this.executeWithResilience(
+        'gemini',
+        async () => {
+          const result = await model.generateContent([
+            {
+              inlineData: {
+                mimeType: this.normalizeVideoMimeType(mimeType),
+                data: videoData.toString('base64'),
+              },
             },
-          },
-          { text: prompt },
-        ]);
+            { text: prompt },
+          ]);
 
-        const response = result.response;
-        const text = response.text();
-        const usageMetadata = response.usageMetadata;
+          const response = result.response;
+          const usageMetadata = response.usageMetadata;
 
-        const inputTokens = usageMetadata?.promptTokenCount ?? 0;
-        const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
+          return {
+            text: response.text(),
+            inputTokens: usageMetadata?.promptTokenCount ?? 0,
+            outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+          };
+        },
+        { timeoutMs: timeouts.videoTimeoutMs },
+      );
 
-        const costCents = calculateCost('gemini_video', GEMINI_MODEL, {
-          inputTokens,
-          outputTokens,
-        });
+      const costCents = calculateCost('gemini_video', GEMINI_MODEL, {
+        inputTokens,
+        outputTokens,
+      });
 
-        return {
-          success: true,
-          content: text.trim(),
-          contentFormat: 'text',
-          processingType: 'description',
-          provider: 'google',
-          model: GEMINI_MODEL,
-          processingTimeMs: 0,
-          inputTokens,
-          outputTokens,
-          costCents,
-        };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (this.isRateLimitError(error)) {
-          this.log.warn(`Gemini rate limit hit (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-          await this.sleep(attempt);
-        } else {
-          this.log.error('Gemini video description error', { error: lastError.message });
-          break;
-        }
-      }
+      return {
+        success: true,
+        content: text.trim(),
+        contentFormat: 'text',
+        processingType: 'description',
+        provider: 'google',
+        model: GEMINI_MODEL,
+        processingTimeMs: 0,
+        inputTokens,
+        outputTokens,
+        costCents,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isCircuit = this.isCircuitOpen(error);
+      this.log.error('Gemini video description error', { error: errorMsg, circuitOpen: isCircuit });
+      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
     }
-
-    return this.createFailedResult(lastError?.message ?? 'Video description failed', 'google', GEMINI_MODEL);
   }
 
   /**

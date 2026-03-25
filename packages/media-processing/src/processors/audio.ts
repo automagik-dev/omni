@@ -3,6 +3,8 @@
  *
  * Transcribes audio using Groq Whisper (primary) with OpenAI fallback.
  * Groq's Whisper is extremely fast (216x real-time) and cost-effective.
+ *
+ * Uses centralized retry + circuit breaker for resilience.
  */
 
 import { createReadStream, statSync } from 'node:fs';
@@ -13,9 +15,8 @@ import type { Uploadable } from 'openai/uploads';
 import { GROQ_WHISPER_MODEL, OPENAI_WHISPER_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import type { ProcessOptions, ProcessingResult } from '../types';
+import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
-
-const MAX_RETRIES = 3;
 
 /**
  * Audio processor using Groq Whisper with OpenAI fallback
@@ -101,7 +102,7 @@ export class AudioProcessor extends BaseProcessor {
   }
 
   /**
-   * Transcribe using Groq Whisper API with retry on rate limits
+   * Transcribe using Groq Whisper API with retry + circuit breaker
    */
   private async transcribeWithGroq(filePath: string, language: string): Promise<ProcessingResult> {
     const client = this.getGroqClient();
@@ -109,54 +110,47 @@ export class AudioProcessor extends BaseProcessor {
       return this.createFailedResult('Groq client not configured (missing API key)', 'groq', GROQ_WHISPER_MODEL);
     }
 
-    let lastError: Error | null = null;
+    const timeouts = getMediaTimeouts();
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        // Use ReadStream which is compatible with the SDK
-        const fileStream = createReadStream(filePath);
+    try {
+      const text = await this.executeWithResilience(
+        'groq',
+        async () => {
+          const fileStream = createReadStream(filePath);
 
-        const transcription = await client.audio.transcriptions.create({
-          file: fileStream as unknown as Uploadable,
-          model: GROQ_WHISPER_MODEL,
-          language,
-          response_format: 'text',
-        });
+          const transcription = await client.audio.transcriptions.create({
+            file: fileStream as unknown as Uploadable,
+            model: GROQ_WHISPER_MODEL,
+            language,
+            response_format: 'text',
+          });
 
-        // Groq returns text directly when response_format="text"
-        const text =
-          typeof transcription === 'string' ? transcription : ((transcription as { text?: string }).text ?? '');
+          return typeof transcription === 'string' ? transcription : ((transcription as { text?: string }).text ?? '');
+        },
+        { timeoutMs: timeouts.audioTimeoutMs },
+      );
 
-        return {
-          success: true,
-          content: text.trim(),
-          contentFormat: 'text',
-          processingType: 'transcription',
-          provider: 'groq',
-          model: GROQ_WHISPER_MODEL,
-          processingTimeMs: 0,
-          language,
-          costCents: 0,
-        };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (this.isRateLimitError(error)) {
-          this.log.warn(`Groq rate limit hit (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-          await this.sleep(attempt);
-        } else {
-          // Non-rate-limit error, don't retry
-          this.log.error('Groq transcription error', { error: lastError.message });
-          break;
-        }
-      }
+      return {
+        success: true,
+        content: text.trim(),
+        contentFormat: 'text',
+        processingType: 'transcription',
+        provider: 'groq',
+        model: GROQ_WHISPER_MODEL,
+        processingTimeMs: 0,
+        language,
+        costCents: 0,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isCircuit = this.isCircuitOpen(error);
+      this.log.error('Groq transcription error', { error: errorMsg, circuitOpen: isCircuit });
+      return this.createFailedResult(errorMsg, 'groq', GROQ_WHISPER_MODEL);
     }
-
-    return this.createFailedResult(lastError?.message ?? 'Transcription failed', 'groq', GROQ_WHISPER_MODEL);
   }
 
   /**
-   * Transcribe using OpenAI Whisper API (fallback)
+   * Transcribe using OpenAI Whisper API (fallback) with retry + circuit breaker
    */
   private async transcribeWithOpenAI(filePath: string, language: string): Promise<ProcessingResult> {
     const client = this.getOpenAIClient();
@@ -164,19 +158,25 @@ export class AudioProcessor extends BaseProcessor {
       return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', OPENAI_WHISPER_MODEL);
     }
 
+    const timeouts = getMediaTimeouts();
+
     try {
-      // Use ReadStream which is compatible with the SDK
-      const fileStream = createReadStream(filePath);
+      const text = await this.executeWithResilience(
+        'openai',
+        async () => {
+          const fileStream = createReadStream(filePath);
 
-      const transcription = await client.audio.transcriptions.create({
-        file: fileStream,
-        model: OPENAI_WHISPER_MODEL,
-        language,
-        response_format: 'text',
-      });
+          const transcription = await client.audio.transcriptions.create({
+            file: fileStream,
+            model: OPENAI_WHISPER_MODEL,
+            language,
+            response_format: 'text',
+          });
 
-      const text =
-        typeof transcription === 'string' ? transcription : ((transcription as { text?: string }).text ?? '');
+          return typeof transcription === 'string' ? transcription : ((transcription as { text?: string }).text ?? '');
+        },
+        { timeoutMs: timeouts.audioTimeoutMs },
+      );
 
       return {
         success: true,
@@ -192,7 +192,6 @@ export class AudioProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('OpenAI transcription error', { error: errorMsg });
-
       return this.createFailedResult(errorMsg, 'openai', OPENAI_WHISPER_MODEL);
     }
   }

@@ -112,6 +112,42 @@ export interface PricingRate {
 }
 
 /**
+ * Timeout configuration for media processors (env-configurable)
+ */
+export interface MediaTimeoutConfig {
+  /** Audio processing timeout in ms (env: MEDIA_AUDIO_TIMEOUT_MS, default 30000) */
+  audioTimeoutMs: number;
+  /** Image processing timeout in ms (env: MEDIA_IMAGE_TIMEOUT_MS, default 15000) */
+  imageTimeoutMs: number;
+  /** Video processing timeout in ms (env: MEDIA_VIDEO_TIMEOUT_MS, default 60000) */
+  videoTimeoutMs: number;
+  /** Document processing timeout in ms (env: MEDIA_DOCUMENT_TIMEOUT_MS, default 30000) */
+  documentTimeoutMs: number;
+}
+
+/**
+ * Default timeout values for media processors
+ */
+export const DEFAULT_MEDIA_TIMEOUTS: MediaTimeoutConfig = {
+  audioTimeoutMs: 30_000,
+  imageTimeoutMs: 15_000,
+  videoTimeoutMs: 60_000,
+  documentTimeoutMs: 30_000,
+};
+
+/**
+ * Read timeout configuration from environment variables with defaults.
+ */
+export function getMediaTimeouts(): MediaTimeoutConfig {
+  return {
+    audioTimeoutMs: Number(process.env.MEDIA_AUDIO_TIMEOUT_MS) || DEFAULT_MEDIA_TIMEOUTS.audioTimeoutMs,
+    imageTimeoutMs: Number(process.env.MEDIA_IMAGE_TIMEOUT_MS) || DEFAULT_MEDIA_TIMEOUTS.imageTimeoutMs,
+    videoTimeoutMs: Number(process.env.MEDIA_VIDEO_TIMEOUT_MS) || DEFAULT_MEDIA_TIMEOUTS.videoTimeoutMs,
+    documentTimeoutMs: Number(process.env.MEDIA_DOCUMENT_TIMEOUT_MS) || DEFAULT_MEDIA_TIMEOUTS.documentTimeoutMs,
+  };
+}
+
+/**
  * Media content row shape (for DB storage)
  */
 export interface MediaContentInput {
