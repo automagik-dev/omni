@@ -14,13 +14,13 @@ describe('sanitizeArgs', () => {
   });
 
   test('redacts --api-key value (space-separated)', () => {
-    const args = ['auth', 'login', '--api-key', 'sk_secret_key_123'];
+    const args = ['auth', 'login', '--api-key', 'test-api-key-value'];
     const result = sanitizeArgs(args);
     expect(result).toEqual(['auth', 'login', '--api-key', '[REDACTED]']);
   });
 
   test('redacts --api-key value (equals-separated)', () => {
-    const args = ['auth', 'login', '--api-key=sk_secret_key_123'];
+    const args = ['auth', 'login', '--api-key=test-api-key-value'];
     const result = sanitizeArgs(args);
     expect(result).toEqual(['auth', 'login', '--api-key=[REDACTED]']);
   });
@@ -38,7 +38,7 @@ describe('sanitizeArgs', () => {
   });
 
   test('redacts --password value', () => {
-    const args = ['auth', '--password', 'p4ssw0rd'];
+    const args = ['auth', '--password', 'testpass'];
     const result = sanitizeArgs(args);
     expect(result).toEqual(['auth', '--password', '[REDACTED]']);
   });
@@ -68,13 +68,13 @@ describe('sanitizeArgs', () => {
   });
 
   test('redacts multiple sensitive flags', () => {
-    const args = ['send', '--api-key', 'sk_123', '--text', 'hello', '--instance', 'abc'];
+    const args = ['send', '--api-key', 'test-key', '--text', 'hello', '--instance', 'abc'];
     const result = sanitizeArgs(args);
     expect(result).toEqual(['send', '--api-key', '[REDACTED]', '--text', '[REDACTED]', '--instance', 'abc']);
   });
 
   test('is case-insensitive for flag matching', () => {
-    const args = ['auth', '--API-KEY', 'sk_123'];
+    const args = ['auth', '--API-KEY', 'test-key'];
     const result = sanitizeArgs(args);
     expect(result).toEqual(['auth', '--API-KEY', '[REDACTED]']);
   });
