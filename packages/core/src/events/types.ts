@@ -27,6 +27,7 @@ export const CORE_EVENT_TYPES = [
   // Media processing
   'media.received',
   'media.processed',
+  'media.processing.failed',
   // Identity management
   'identity.created',
   'identity.linked',
@@ -302,6 +303,17 @@ export interface MediaProcessedPayload {
   tokensUsed?: number;
   /** Set when processing failed — content will be empty string */
   error?: string;
+}
+
+export interface MediaProcessingFailedPayload {
+  eventId: string;
+  mediaId: string;
+  processingType: 'transcription' | 'description' | 'extraction';
+  error: string;
+  provider?: string;
+  model?: string;
+  /** Number of retry attempts made before giving up */
+  retryAttempts?: number;
 }
 
 /**
@@ -639,6 +651,7 @@ export interface EventPayloadMap {
   'message.poll_vote': MessagePollVotePayload;
   'media.received': MediaReceivedPayload;
   'media.processed': MediaProcessedPayload;
+  'media.processing.failed': MediaProcessingFailedPayload;
   'identity.created': IdentityCreatedPayload;
   'identity.linked': IdentityLinkedPayload;
   'identity.merged': IdentityMergedPayload;

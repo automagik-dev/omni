@@ -21,7 +21,12 @@ import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages } from '@omni/db';
-import { type MediaProcessingService, createMediaProcessingService } from '@omni/media-processing';
+import {
+  type MediaProcessingService,
+  createMediaProcessingService,
+  getMediaHealthTracker,
+  setGlobalCircuitBreakerStateChangeCallback,
+} from '@omni/media-processing';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
@@ -336,20 +341,35 @@ async function processMessageMedia(
   });
 
   if (!result.success) {
-    log.warn('Media processing failed', { messageId: media.messageId, error: result.errorMessage });
+    const reason = result.errorMessage ?? 'unknown';
+    log.warn('Media processing failed', { messageId: media.messageId, error: reason });
 
     // Write error marker so consumers can detect failures via DB check
     const processingType = result.processingType ?? inferProcessingType(content.type);
     const errorColumn = getContentFieldForType(processingType, content.type);
     if (errorColumn) {
-      const marker = `[error: ${result.errorMessage ?? 'unknown'}]`;
+      const marker = `[media processing failed: ${reason}]`;
       await ctx.db
         .update(messages)
         .set({ [errorColumn]: marker })
         .where(eq(messages.id, media.messageId));
     }
 
-    // Publish failure event so dispatcher resolves immediately instead of waiting
+    // Publish media.processing.failed event (dedicated failure event)
+    await ctx.eventBus.publish(
+      'media.processing.failed',
+      {
+        eventId: eventId ?? media.messageId,
+        mediaId: media.messageId,
+        processingType,
+        error: reason,
+        provider: result.provider,
+        model: result.model,
+      },
+      { instanceId, channelType: metadata.channelType },
+    );
+
+    // Also publish media.processed with error so dispatcher resolves immediately
     await ctx.eventBus.publish(
       'media.processed',
       {
@@ -357,7 +377,7 @@ async function processMessageMedia(
         mediaId: media.messageId,
         processingType,
         content: '',
-        error: result.errorMessage ?? 'unknown',
+        error: reason,
       },
       { instanceId, channelType: metadata.channelType },
     );
@@ -457,16 +477,34 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
           error: String(error),
         });
 
-        // Publish failure event for unexpected crashes so dispatcher doesn't wait forever
+        // Publish failure events for unexpected crashes so dispatcher doesn't wait forever
         try {
+          const crashProcessingType = inferProcessingType(content.type);
+          const crashReason = `unexpected: ${String(error)}`;
+
+          // Dedicated failure event
+          await ctx.eventBus.publish(
+            'media.processing.failed',
+            {
+              eventId: event.id,
+              mediaId: payload.externalId,
+              processingType: crashProcessingType,
+              error: crashReason,
+              provider: 'unknown',
+              model: 'unknown',
+            },
+            { instanceId: metadata.instanceId, channelType: metadata.channelType },
+          );
+
+          // Also publish media.processed for backward compatibility
           await ctx.eventBus.publish(
             'media.processed',
             {
               eventId: event.id,
               mediaId: payload.externalId,
-              processingType: inferProcessingType(content.type),
+              processingType: crashProcessingType,
               content: '',
-              error: `unexpected: ${String(error)}`,
+              error: crashReason,
             },
             { instanceId: metadata.instanceId, channelType: metadata.channelType },
           );
@@ -483,6 +521,37 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       retryDelayMs: 1000,
       startFrom: 'first',
       concurrency: 5, // Process up to 5 media files in parallel
+    },
+  );
+
+  // Set up circuit breaker state change logging
+  setGlobalCircuitBreakerStateChangeCallback((name, from, to) => {
+    log.warn('Circuit breaker state change', { provider: name, from, to });
+  });
+
+  // Subscribe to media.health requests and respond with health report
+  await eventBus.subscribePattern(
+    'media.health.request',
+    async (event) => {
+      const tracker = getMediaHealthTracker();
+      const report = tracker.getReport();
+      const correlationId = event.metadata?.correlationId ?? event.id;
+
+      await eventBus.publishGeneric(
+        'system.media.health.response',
+        { correlationId, report },
+        { source: 'media-processor' },
+      );
+
+      log.debug('Published media health report', {
+        correlationId,
+        totalRequests: report.overall.totalRequests,
+        successRate: report.overall.successRate,
+      });
+    },
+    {
+      durable: 'media-health-responder',
+      queue: 'media-health-responder',
     },
   );
 

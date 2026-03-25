@@ -2,6 +2,8 @@
  * Image Processor
  *
  * Generates descriptions for images using Gemini Vision (primary) with OpenAI fallback.
+ *
+ * Uses centralized retry + circuit breaker for resilience.
  */
 
 import { readFileSync } from 'node:fs';
@@ -12,9 +14,8 @@ import { GEMINI_MODEL, OPENAI_VISION_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import { IMAGE_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
+import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
-
-const MAX_RETRIES = 3;
 
 /**
  * Image processor using Gemini Vision with OpenAI fallback
@@ -100,7 +101,7 @@ export class ImageProcessor extends BaseProcessor {
   }
 
   /**
-   * Describe image using Gemini Vision API
+   * Describe image using Gemini Vision API with retry + circuit breaker
    */
   private async describeWithGemini(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
@@ -108,62 +109,61 @@ export class ImageProcessor extends BaseProcessor {
       return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
     }
 
-    let lastError: Error | null = null;
+    const timeouts = getMediaTimeouts();
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        const result = await model.generateContent([
-          {
-            inlineData: {
-              mimeType: this.normalizeGeminiMimeType(mimeType),
-              data: imageData.toString('base64'),
+    try {
+      const { text, inputTokens, outputTokens } = await this.executeWithResilience(
+        'gemini',
+        async () => {
+          const result = await model.generateContent([
+            {
+              inlineData: {
+                mimeType: this.normalizeGeminiMimeType(mimeType),
+                data: imageData.toString('base64'),
+              },
             },
-          },
-          { text: prompt },
-        ]);
+            { text: prompt },
+          ]);
 
-        const response = result.response;
-        const text = response.text();
-        const usageMetadata = response.usageMetadata;
+          const response = result.response;
+          const usageMetadata = response.usageMetadata;
 
-        const inputTokens = usageMetadata?.promptTokenCount ?? 0;
-        const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
+          return {
+            text: response.text(),
+            inputTokens: usageMetadata?.promptTokenCount ?? 0,
+            outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+          };
+        },
+        { timeoutMs: timeouts.imageTimeoutMs },
+      );
 
-        const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
-          inputTokens,
-          outputTokens,
-        });
+      const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
+        inputTokens,
+        outputTokens,
+      });
 
-        return {
-          success: true,
-          content: text.trim(),
-          contentFormat: 'text',
-          processingType: 'description',
-          provider: 'google',
-          model: GEMINI_MODEL,
-          processingTimeMs: 0,
-          inputTokens,
-          outputTokens,
-          costCents,
-        };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (this.isRateLimitError(error)) {
-          this.log.warn(`Gemini rate limit hit (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-          await this.sleep(attempt);
-        } else {
-          this.log.error('Gemini description error', { error: lastError.message });
-          break;
-        }
-      }
+      return {
+        success: true,
+        content: text.trim(),
+        contentFormat: 'text',
+        processingType: 'description',
+        provider: 'google',
+        model: GEMINI_MODEL,
+        processingTimeMs: 0,
+        inputTokens,
+        outputTokens,
+        costCents,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isCircuit = this.isCircuitOpen(error);
+      this.log.error('Gemini description error', { error: errorMsg, circuitOpen: isCircuit });
+      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
     }
-
-    return this.createFailedResult(lastError?.message ?? 'Description failed', 'google', GEMINI_MODEL);
   }
 
   /**
-   * Describe image using OpenAI Vision API (fallback)
+   * Describe image using OpenAI Vision API (fallback) with retry + circuit breaker
    */
   private async describeWithOpenAI(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const client = this.getOpenAIClient();
@@ -171,33 +171,43 @@ export class ImageProcessor extends BaseProcessor {
       return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', OPENAI_VISION_MODEL);
     }
 
-    try {
-      const base64Data = imageData.toString('base64');
-      const dataUrl = `data:${mimeType};base64,${base64Data}`;
+    const timeouts = getMediaTimeouts();
 
-      const response = await client.chat.completions.create({
-        model: OPENAI_VISION_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
+    try {
+      const { text, inputTokens, outputTokens } = await this.executeWithResilience(
+        'openai',
+        async () => {
+          const base64Data = imageData.toString('base64');
+          const dataUrl = `data:${mimeType};base64,${base64Data}`;
+
+          const response = await client.chat.completions.create({
+            model: OPENAI_VISION_MODEL,
+            messages: [
               {
-                type: 'image_url',
-                image_url: {
-                  url: dataUrl,
-                  detail: 'high',
-                },
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: dataUrl,
+                      detail: 'high',
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        max_tokens: 1024,
-      });
+            max_tokens: 1024,
+          });
 
-      const text = response.choices[0]?.message?.content ?? '';
-      const inputTokens = response.usage?.prompt_tokens ?? 0;
-      const outputTokens = response.usage?.completion_tokens ?? 0;
+          return {
+            text: response.choices[0]?.message?.content ?? '',
+            inputTokens: response.usage?.prompt_tokens ?? 0,
+            outputTokens: response.usage?.completion_tokens ?? 0,
+          };
+        },
+        { timeoutMs: timeouts.imageTimeoutMs },
+      );
 
       const costCents = calculateCost('openai_vision', OPENAI_VISION_MODEL, {
         inputTokens,
@@ -219,7 +229,6 @@ export class ImageProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('OpenAI description error', { error: errorMsg });
-
       return this.createFailedResult(errorMsg, 'openai', OPENAI_VISION_MODEL);
     }
   }
