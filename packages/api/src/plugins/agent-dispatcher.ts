@@ -2325,7 +2325,6 @@ async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): 
   return instance.agentId ?? undefined;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: agent response processing has many format branches
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -3157,7 +3156,6 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
  * LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
  * check DB for LID→phone mappings to detect if any @lid mention maps to the owner.
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID resolution with multiple DB fallback paths
 async function resolveLidMentionBot(
   chatsService: Services['chats'],
   instanceId: string,

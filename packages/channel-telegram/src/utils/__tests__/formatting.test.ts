@@ -84,8 +84,6 @@ describe('splitHtmlMessage', () => {
     const chunks = splitHtmlMessage(html, 1000);
     expect(chunks.length).toBeGreaterThan(1);
 
-    // Test helper; keep readable rather than micro-optimizing for complexity score.
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: test helper
     const validateBalanced = (chunk: string) => {
       const stack: string[] = [];
       const tagRe = /<\/?([a-z0-9]+)(?:\s[^>]*)?>/gi;
