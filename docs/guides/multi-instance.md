@@ -235,7 +235,7 @@ omni-prod routes list --instance <id>
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@localhost:8432/omni` |
 | `PGSERVE_EMBEDDED` | Run PostgreSQL embedded in API process | `true` |
 | `PGSERVE_PORT` | Embedded PostgreSQL port | `8432` |
-| `PGSERVE_DATA` | pgserve data directory | `./.pgserve-data` |
+| `PGSERVE_DATA` | pgserve data directory | `~/.omni/data/pgserve` |
 | `NATS_URL` | NATS server connection URL | `nats://localhost:4222` |
 | `NATS_MANAGED` | Let PM2 manage NATS server | `true` |
 | `NATS_PORT` | NATS server listen port | `4222` |

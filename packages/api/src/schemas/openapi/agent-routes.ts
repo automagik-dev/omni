@@ -117,7 +117,10 @@ export const AgentRouteSchema = z.object({
   reactionAck: z.enum(['off', 'on']).nullable().openapi({ description: 'Reaction ack toggle override' }),
   reactionAckEmoji: z.record(z.string()).nullable().openapi({ description: 'Reaction ack emoji per-channel override' }),
   ackTimeoutMs: z.number().int().positive().nullable().openapi({ description: 'Ack timeout (ms) override' }),
-  agentAckMessage: z.string().nullable().openapi({ description: 'Agent ack message override (null = disabled)' }),
+  agentAckMessage: z
+    .string()
+    .nullable()
+    .openapi({ description: 'Agent ack message override (null = inherit from instance, empty string = disabled)' }),
 
   // Metadata
   label: z
@@ -183,7 +186,10 @@ export const CreateAgentRouteRequestSchema = z.object({
   reactionAck: z.enum(['off', 'on']).optional().openapi({ description: 'Reaction ack toggle' }),
   reactionAckEmoji: z.record(z.string()).optional().openapi({ description: 'Reaction ack emoji per-channel' }),
   ackTimeoutMs: z.number().int().positive().optional().openapi({ description: 'Ack timeout (ms)' }),
-  agentAckMessage: z.string().optional().openapi({ description: 'Agent ack message (empty string = disabled)' }),
+  agentAckMessage: z
+    .string()
+    .optional()
+    .openapi({ description: 'Agent ack message (omit = inherit from instance, empty string = disabled)' }),
 
   label: z.string().max(255).optional().openapi({ description: 'Human-readable label' }),
   priority: z.number().int().default(0).openapi({ description: 'Priority (higher = higher priority)' }),
@@ -285,7 +291,11 @@ export const UpdateAgentRouteRequestSchema = z.object({
     .optional()
     .openapi({ description: 'Reaction ack emoji per-channel' }),
   ackTimeoutMs: z.number().int().positive().nullable().optional().openapi({ description: 'Ack timeout (ms)' }),
-  agentAckMessage: z.string().nullable().optional().openapi({ description: 'Agent ack message' }),
+  agentAckMessage: z
+    .string()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Agent ack message (null = inherit from instance, empty string = disabled)' }),
 
   label: z.string().max(255).nullable().optional().openapi({ description: 'Human-readable label' }),
   priority: z.number().int().optional().openapi({ description: 'Priority (higher = higher priority)' }),

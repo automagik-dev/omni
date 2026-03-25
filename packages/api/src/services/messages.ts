@@ -143,7 +143,10 @@ export class MessageService {
 
     const conditions = [];
     if (chatId) conditions.push(eq(messages.chatId, chatId));
-    if (instanceIds?.length) conditions.push(inArray(chats.instanceId, instanceIds));
+    // undefined = no scoping, [] = deny-all, [...ids] = filter to those
+    if (Array.isArray(instanceIds)) {
+      conditions.push(instanceIds.length > 0 ? inArray(chats.instanceId, instanceIds) : sql`1 = 0`);
+    }
     if (!includeHidden) conditions.push(sql`chats.visibility = 'visible'`);
     if (source?.length) conditions.push(inArray(messages.source, source));
     if (messageType?.length) conditions.push(inArray(messages.messageType, messageType));
@@ -175,7 +178,7 @@ export class MessageService {
     cursor?: string;
   }> {
     const { instanceIds, includeHidden = false, limit = 50 } = options;
-    const needsJoin = !!instanceIds?.length || !includeHidden;
+    const needsJoin = Array.isArray(instanceIds) || !includeHidden;
     const conditions = this.buildListConditions(options);
 
     const baseQuery = this.db.select({ messages }).from(messages);
@@ -220,14 +223,15 @@ export class MessageService {
     } = options;
 
     const conditions = [];
-    const needsJoin = !!instanceIds?.length || !includeHidden;
+    const needsJoin = Array.isArray(instanceIds) || !includeHidden;
 
     if (chatId) {
       conditions.push(eq(messages.chatId, chatId));
     }
 
-    if (instanceIds?.length) {
-      conditions.push(inArray(chats.instanceId, instanceIds));
+    // undefined = no scoping, [] = deny-all, [...ids] = filter to those
+    if (Array.isArray(instanceIds)) {
+      conditions.push(instanceIds.length > 0 ? inArray(chats.instanceId, instanceIds) : sql`1 = 0`);
     }
 
     if (!includeHidden) {
