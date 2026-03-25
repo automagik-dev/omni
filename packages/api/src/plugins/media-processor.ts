@@ -348,7 +348,7 @@ async function processMessageMedia(
     const processingType = result.processingType ?? inferProcessingType(content.type);
     const errorColumn = getContentFieldForType(processingType, content.type);
     if (errorColumn) {
-      const marker = `[media processing failed: ${reason}]`;
+      const marker = `[error: media processing failed — ${reason}]`;
       await ctx.db
         .update(messages)
         .set({ [errorColumn]: marker })
@@ -482,12 +482,25 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
           const crashProcessingType = inferProcessingType(content.type);
           const crashReason = `unexpected: ${String(error)}`;
 
+          // Resolve DB message UUID — dispatcher awaits completions keyed by message.id,
+          // not platform externalId. Best-effort: fall back to externalId if lookup fails.
+          let crashMediaId = payload.externalId;
+          try {
+            const chat = await ctx.services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
+            if (chat) {
+              const msg = await ctx.services.messages.getByExternalId(chat.id, payload.externalId);
+              if (msg) crashMediaId = msg.id;
+            }
+          } catch {
+            // Lookup failed — use externalId as fallback
+          }
+
           // Dedicated failure event
           await ctx.eventBus.publish(
             'media.processing.failed',
             {
               eventId: event.id,
-              mediaId: payload.externalId,
+              mediaId: crashMediaId,
               processingType: crashProcessingType,
               error: crashReason,
               provider: 'unknown',
@@ -501,7 +514,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
             'media.processed',
             {
               eventId: event.id,
-              mediaId: payload.externalId,
+              mediaId: crashMediaId,
               processingType: crashProcessingType,
               content: '',
               error: crashReason,

@@ -87,6 +87,14 @@ describe('checkProcessedColumn', () => {
     expect(checkProcessedColumn({ transcription: '[error: API failed]' }, 'transcription')).toBe('error');
   });
 
+  it('returns "error" for media-processor failure marker format', () => {
+    // Regression: media-processor writes `[error: media processing failed — reason]`
+    // and the dispatcher must detect it as an error via startsWith('[error')
+    const marker = '[error: media processing failed — Vision API quota exceeded]';
+    expect(checkProcessedColumn({ imageDescription: marker }, 'imageDescription')).toBe('error');
+    expect(checkProcessedColumn({ transcription: marker }, 'transcription')).toBe('error');
+  });
+
   it('returns content and localPath when column has a value', () => {
     const result = checkProcessedColumn(
       { imageDescription: 'A photo of a cat', mediaLocalPath: null },
