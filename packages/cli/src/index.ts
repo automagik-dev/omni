@@ -55,6 +55,7 @@ if (process.argv.includes('--json')) {
   process.argv.splice(idx, 1);
 }
 import { getConfigSummary, getInlineStatus } from './status.js';
+import { captureCliError, flushTelemetry } from './telemetry.js';
 import { VERSION, fetchServerVersion, formatCliVersionLine } from './version.js';
 
 /**
@@ -445,6 +446,26 @@ ${c().dim('Showing all commands (--all flag active)')}`;
   return output;
 });
 
+// ---------------------------------------------------------------------------
+// Error telemetry: capture unknown commands, unknown flags, and failures
+// ---------------------------------------------------------------------------
+
+// Hook Commander's error output to capture CLI errors for Sentry telemetry.
+// We wrap writeErr so Commander still prints errors and exits normally.
+const originalWriteErr = program.configureOutput()?.writeErr ?? ((str: string) => process.stderr.write(str));
+program.configureOutput({
+  writeErr: (str: string) => {
+    // Commander error messages start with "error:" — capture them as telemetry
+    if (str.startsWith('error:')) {
+      const message = str.replace(/^error:\s*/, '').trim();
+      const err = new Error(message);
+      err.name = 'CommanderError';
+      captureCliError(err);
+    }
+    originalWriteErr(str);
+  },
+});
+
 // Parse and execute
 const argv = process.argv.slice(2);
 const isRootVersionOnly = argv.length > 0 && argv.every((arg) => arg === '--version' || arg === '-V');
@@ -460,5 +481,5 @@ if (isRootVersionOnly) {
 
 await program.parseAsync(process.argv);
 
-// Flush stdout before exit — prevents truncated JSON when piped (e.g., --json | jq)
-await flushStdout();
+// Flush Sentry events + stdout before exit
+await Promise.all([flushTelemetry(), flushStdout()]);

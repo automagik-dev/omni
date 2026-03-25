@@ -27,6 +27,7 @@ export type ConfigKey =
   | 'defaultInstance'
   | 'format'
   | 'showCommands'
+  | 'telemetry'
   | 'updateChannel'
   | 'server.port'
   | 'server.databaseUrl'
@@ -41,6 +42,7 @@ export interface Config {
   defaultInstance?: string;
   format?: 'human' | 'json';
   showCommands?: string; // 'all' or comma-separated categories
+  telemetry?: string; // 'true' or 'false' — error telemetry via Sentry
   updateChannel?: 'main' | 'dev';
   server?: Partial<ServerConfig>;
 }
@@ -69,6 +71,10 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   showCommands: {
     description: 'Which command categories to show in help',
     values: ['all', 'core', 'standard', 'advanced', 'debug'],
+  },
+  telemetry: {
+    description: 'Error telemetry via Sentry (default: true)',
+    values: ['true', 'false'],
   },
   updateChannel: {
     description: 'Update track for omni update',
@@ -162,30 +168,31 @@ function setServerField(config: Config, field: keyof ServerConfig, value: string
   }
 }
 
-/** Set a top-level config field */
-function setTopLevelField(config: Config, key: ConfigKey, value: string): void {
-  if (key === 'format') {
-    if (value !== 'human' && value !== 'json') {
-      throw new Error(`Invalid format value: ${value}. Must be 'human' or 'json'.`);
-    }
-    config.format = value;
-  } else if (key === 'showCommands') {
-    const validCategories = ['all', 'core', 'standard', 'advanced', 'debug'];
+/** Validate a value against CONFIG_KEYS allowed values */
+function validateConfigValue(key: ConfigKey, value: string): void {
+  const meta = CONFIG_KEYS[key];
+  if (!meta?.values) return;
+
+  // showCommands accepts comma-separated categories
+  if (key === 'showCommands') {
     const categories = value.split(',').map((c) => c.trim());
     for (const cat of categories) {
-      if (!validCategories.includes(cat)) {
-        throw new Error(`Invalid category: ${cat}. Valid: ${validCategories.join(', ')}`);
+      if (!meta.values.includes(cat)) {
+        throw new Error(`Invalid category: ${cat}. Valid: ${meta.values.join(', ')}`);
       }
     }
-    config.showCommands = value;
-  } else if (key === 'updateChannel') {
-    if (value !== 'main' && value !== 'dev') {
-      throw new Error(`Invalid updateChannel: ${value}. Must be 'main' or 'dev'.`);
-    }
-    config.updateChannel = value;
-  } else {
-    (config as Record<string, unknown>)[key] = value;
+    return;
   }
+
+  if (!meta.values.includes(value)) {
+    throw new Error(`Invalid value for ${key}: ${value}. Must be one of: ${meta.values.join(', ')}`);
+  }
+}
+
+/** Set a top-level config field */
+function setTopLevelField(config: Config, key: ConfigKey, value: string): void {
+  validateConfigValue(key, value);
+  (config as Record<string, unknown>)[key] = value;
 }
 
 /** Set a single config value */
