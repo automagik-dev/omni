@@ -31,6 +31,7 @@ mock.module('../output.js', () => ({
   areColorsEnabled: () => true,
   setMaxCellWidth: mock(),
   getCurrentFormat: () => 'human',
+  flushStdout: () => Promise.resolve(),
 }));
 
 // Mock getClient
