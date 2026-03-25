@@ -7,86 +7,70 @@
 
 import { describe, expect, test } from 'bun:test';
 
-import {
-  type OutputFormat,
-  areColorsEnabled,
-  data,
-  dim,
-  disableColors,
-  error,
-  flushStdout,
-  getCurrentFormat,
-  header,
-  info,
-  keyValue,
-  list,
-  raw,
-  success,
-  warn,
-} from '../output';
+import type { OutputFormat } from '../output.js';
+import * as output from '../output.js';
 
 describe('Output Module Exports', () => {
   test('exports color control functions', () => {
-    expect(typeof disableColors).toBe('function');
-    expect(typeof areColorsEnabled).toBe('function');
+    expect(typeof output.disableColors).toBe('function');
+    expect(typeof output.areColorsEnabled).toBe('function');
   });
 
   test('exports format function', () => {
-    expect(typeof getCurrentFormat).toBe('function');
+    expect(typeof output.getCurrentFormat).toBe('function');
   });
 
   test('exports output functions', () => {
-    expect(typeof success).toBe('function');
-    expect(typeof error).toBe('function');
-    expect(typeof warn).toBe('function');
-    expect(typeof info).toBe('function');
-    expect(typeof data).toBe('function');
-    expect(typeof list).toBe('function');
-    expect(typeof keyValue).toBe('function');
-    expect(typeof header).toBe('function');
-    expect(typeof dim).toBe('function');
-    expect(typeof raw).toBe('function');
+    expect(typeof output.success).toBe('function');
+    expect(typeof output.error).toBe('function');
+    expect(typeof output.warn).toBe('function');
+    expect(typeof output.info).toBe('function');
+    expect(typeof output.data).toBe('function');
+    expect(typeof output.list).toBe('function');
+    expect(typeof output.keyValue).toBe('function');
+    expect(typeof output.header).toBe('function');
+    expect(typeof output.dim).toBe('function');
+    expect(typeof output.raw).toBe('function');
+  });
+
+  test('exports flushStdout', () => {
+    expect(typeof output.flushStdout).toBe('function');
   });
 });
 
 describe('areColorsEnabled', () => {
   test('returns a boolean', () => {
-    const result = areColorsEnabled();
+    const result = output.areColorsEnabled();
     expect(typeof result).toBe('boolean');
   });
 });
 
 describe('getCurrentFormat', () => {
   test('returns human or json', () => {
-    const format = getCurrentFormat();
+    const format = output.getCurrentFormat();
     expect(['human', 'json']).toContain(format);
   });
 
   test('return type is OutputFormat', () => {
-    const format: OutputFormat = getCurrentFormat();
+    const format: OutputFormat = output.getCurrentFormat();
     expect(format).toBeDefined();
   });
 });
 
 describe('disableColors', () => {
   test('can be called without error', () => {
-    expect(() => disableColors()).not.toThrow();
+    expect(() => output.disableColors()).not.toThrow();
   });
 });
 
 describe('flushStdout', () => {
-  test('is exported as a function', () => {
-    expect(typeof flushStdout).toBe('function');
-  });
-
   test('returns a promise that resolves', async () => {
-    const result = flushStdout();
+    const result = output.flushStdout();
     expect(result).toBeInstanceOf(Promise);
     await expect(result).resolves.toBeUndefined();
   });
 
   test('resolves after pending writes', async () => {
-    // flushStdout should resolve without error even after writes
-    await expect(flushStdout()).resolves.toBeUndefined();
+    await expect(output.flushStdout()).resolves.toBeUndefined();
   });
 });

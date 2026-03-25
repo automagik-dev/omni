@@ -17,7 +17,7 @@ import {
   type ServerConfig,
   isValidConfigKey,
   loadServerConfig,
-} from '../config';
+} from '../config.js';
 
 describe('Config Validation', () => {
   describe('isValidConfigKey', () => {
