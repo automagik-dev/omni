@@ -33,6 +33,7 @@ export interface ChatWithParticipants extends Chat {
 
 export interface ListChatsOptions {
   instanceId?: string;
+  instanceIds?: string[];
   channel?: ChannelType[];
   chatType?: ChatType[];
   excludeChatTypes?: ChatType[];
@@ -114,6 +115,10 @@ export class ChatService {
     const conditions = [];
 
     if (instanceId) conditions.push(eq(chats.instanceId, instanceId));
+    // undefined/null = no scoping, [] = deny-all, [...ids] = scope to those instances
+    if (Array.isArray(options.instanceIds)) {
+      conditions.push(options.instanceIds.length > 0 ? inArray(chats.instanceId, options.instanceIds) : sql`1 = 0`);
+    }
     if (channel?.length) conditions.push(inArray(chats.channel, channel));
     if (chatType?.length) conditions.push(inArray(chats.chatType, chatType));
 

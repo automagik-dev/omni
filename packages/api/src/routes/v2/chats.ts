@@ -159,8 +159,10 @@ const updateParticipantRoleSchema = z.object({
 chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const query = c.req.valid('query');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
-  const result = await services.chats.list(query);
+  const queryWithAccess = apiKey?.instanceIds ? { ...query, instanceIds: apiKey.instanceIds } : query;
+  const result = await services.chats.list(queryWithAccess);
 
   return c.json({
     items: result.items,

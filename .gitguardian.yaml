@@ -1,0 +1,15 @@
+# GitGuardian Configuration
+# https://docs.gitguardian.com/ggshield-docs/reference/gitguardian-yaml
+
+version: 2
+
+secret:
+  show_secrets: false
+
+  # Ignore test files — they contain intentionally fake credentials for testing redaction logic
+  ignored_paths:
+    - "**/__tests__/**"
+    - "**/*.test.ts"
+    - "**/*.test.js"
+    - "**/*.spec.ts"
+    - "**/*.spec.js"

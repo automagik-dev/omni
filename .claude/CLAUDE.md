@@ -144,3 +144,297 @@ packages/core/CLAUDE.md      # Core package patterns
 packages/api/CLAUDE.md       # API conventions
 packages/channel-*/CLAUDE.md # Channel-specific notes
 ```
+
+---
+
+## Bun Ecosystem (Mandatory Compliance)
+
+This project uses **Bun exclusively**. You MUST follow these rules without exception.
+
+| Task | MUST Use | NEVER Use |
+|------|----------|-----------|
+| Install packages | `bun install`, `bun add` | `npm install`, `yarn add`, `pnpm add` |
+| Run scripts | `bun run <script>` | `npm run`, `yarn`, `pnpm run` |
+| Execute binaries | `bunx <cmd>` | `npx`, `yarn dlx`, `pnpm dlx` |
+| Run TypeScript | `bun <file.ts>` | `node`, `ts-node`, `tsx` |
+| Run tests | `bun test` | `jest`, `vitest`, `npm test` |
+| Watch mode | `bun --watch` | `nodemon`, `ts-node-dev` |
+
+If you catch yourself about to run a prohibited command, STOP and use the Bun equivalent.
+
+---
+
+## Tech Stack (Locked Decisions)
+
+| Category | Use This | Not This |
+|----------|----------|----------|
+| Runtime | Bun | Node.js |
+| Language | TypeScript (strict) | JavaScript |
+| HTTP Framework | Hono | Express, Fastify |
+| Type-safe API | tRPC | GraphQL, REST-only |
+| Database ORM | Drizzle | Prisma, TypeORM |
+| Database | PostgreSQL | MySQL, MongoDB |
+| Event Bus | NATS JetStream | Redis Pub/Sub, RabbitMQ |
+| Validation | Zod | Joi, Yup |
+| Monorepo | Turborepo | Nx, Lerna |
+| Process Manager | PM2 | Forever, systemd |
+
+---
+
+## Project Structure
+
+```
+omni-v2/
+├── packages/
+│   ├── core/           # Events, identity, schemas (shared)
+│   ├── api/            # HTTP API (Hono + tRPC + OpenAPI)
+│   ├── channel-sdk/    # Plugin SDK for channel developers
+│   ├── channel-*/      # Official channel implementations
+│   ├── cli/            # LLM-optimized CLI
+│   ├── sdk/            # Auto-generated TypeScript SDK
+│   └── mcp/            # MCP Server for AI assistants
+├── apps/
+│   └── ui/             # React dashboard
+├── docs/               # Documentation
+├── scripts/            # Build, deploy, SDK generation
+├── .claude/            # AI workflow (agents, commands, hooks, skills)
+└── .genie/             # Genie workspace (wishes, brainstorms, state)
+```
+
+---
+
+## Where to Put Things
+
+| What | Where | Why |
+|------|-------|-----|
+| Event definitions | `packages/core/src/events/` | Single source of truth |
+| Zod schemas | `packages/core/src/schemas/` | Shared validation |
+| Database schema | `packages/core/src/db/` | Drizzle schema |
+| API endpoints | `packages/api/src/routes/` | HTTP handlers |
+| tRPC routers | `packages/api/src/trpc/` | Type-safe internal API |
+| Channel plugins | `packages/channel-*/` | Isolated per channel |
+| Shared types | `packages/core/src/types/` | TypeScript interfaces |
+| CLI commands | `packages/cli/src/commands/` | LLM-optimized CLI |
+
+---
+
+## Commands: Use Make First
+
+**ALWAYS check `make help` before running raw commands.** The Makefile wraps common tasks with proper setup, environment loading, and error handling.
+
+### Quick Reference
+
+| Task | Command |
+|------|---------|
+| Full setup | `make setup` |
+| Start dev | `make dev` |
+| Run checks | `make check` |
+| Lint | `make lint` |
+| Typecheck | `make typecheck` |
+| Generate SDK | `make sdk-generate` |
+| Restart API | `make restart-api` |
+| Run CLI | `make cli ARGS="--help"` |
+| Install CLI globally | `make cli-link` |
+
+### Development
+
+```bash
+make dev          # Start all services + API
+make dev-api      # Start just the API
+make dev-services # Start PostgreSQL + NATS + API via PM2
+```
+
+### Quality Checks
+
+```bash
+make check        # All checks: typecheck + lint + test
+make typecheck    # TypeScript only
+make lint         # Biome linter
+make lint-fix     # Auto-fix lint issues
+make test         # All tests
+make test-api     # API package tests only
+make test-file F=<path>  # Specific test file
+```
+
+### Individual Services
+
+```bash
+make restart-api     # Restart API only
+make restart-nats    # Restart NATS only
+make restart-pgserve # Restart PostgreSQL only
+make logs-api        # View API logs
+```
+
+### CLI
+
+```bash
+make cli ARGS="--help"    # Run CLI from source
+make cli-build            # Build CLI package
+make cli-link             # Build + link globally (omni command)
+```
+
+### SDK
+
+```bash
+make sdk-generate   # Generate SDK from OpenAPI spec
+```
+
+**When to use raw commands:** Only for edge cases not covered by make targets (e.g., specific bun flags, one-off debugging).
+
+---
+
+## Database & Migrations (Comprehensive Reference)
+
+**The API auto-migrates on startup** via `migrateDb()` in `packages/api/src/index.ts`.
+Schema changes flow through Drizzle migrations, NOT `drizzle-kit push`.
+
+**`drizzle-kit push` and `migrateDb()` are INCOMPATIBLE.** Push creates tables without
+migration journal entries. Migrate then crashes with "relation already exists". NEVER
+use `drizzle-kit push` in CI, production, or any pipeline that also runs `migrateDb()`.
+`db-push` is a local dev convenience ONLY.
+
+### Schema Change Workflow
+
+```bash
+# 1. Edit schema source of truth
+vim packages/db/src/schema.ts
+
+# 2. Generate migration (creates SQL + updates journal)
+cd packages/db && bunx drizzle-kit generate
+
+# 3. Review generated SQL
+cat packages/db/drizzle/NNNN_<name>.sql
+
+# 4. Test — restart API (auto-migrates on boot)
+pm2 restart omni-v2-api
+
+# 5. Commit migration + schema together
+git add packages/db/drizzle/ packages/db/src/schema.ts
+git commit -m "feat(db): add <description>"
+```
+
+### Make Targets
+
+```bash
+make db-push          # Push schema directly (DEV ONLY, no journal)
+make db-studio        # Open Drizzle Studio
+make db-fix-journal   # Fix journal after migration consolidation
+```
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `packages/db/src/schema.ts` | Schema source of truth |
+| `packages/db/drizzle/*.sql` | Migration SQL files |
+| `packages/db/drizzle/meta/_journal.json` | Migration journal |
+| `packages/db/src/migrate.ts` | Programmatic runner |
+| `packages/api/src/index.ts:302` | Auto-migrate on startup |
+
+### NEVER
+
+- Use `drizzle-kit push` in CI or production
+- Delete migration files that have been deployed
+- Hand-edit migration SQL without recomputing the SHA256 hash
+- Squash migrations without a journal fix script
+- Mix push and migrate in the same environment
+
+### Data Migrations
+
+```bash
+make migrate-messages-dry  # Dry run: events → messages
+make migrate-messages      # Live migration
+```
+
+---
+
+## Git Workflow — AI-First with Rolling Promotion
+
+### The Simple Rule
+
+> **New work = PR to dev. Fixes = direct commit to dev.**
+
+```
+main <── rolling PR (human merges) <── dev <── feature PRs (auto-merge)
+                                         |
+                                         └── direct commits (fixes/hotfixes)
+```
+
+### Branch Roles
+
+| Branch | Purpose | Who commits | Protection |
+|--------|---------|-------------|------------|
+| `main` | Production | Human merges rolling PR | PR-only, all checks required |
+| `dev` | Integration | Agent + PRs | Direct commits OK, PRs need checks |
+| `feat/*` | New features | Worktrees, PR to `dev` | Auto-merge when green |
+| `fix/*` | Bug fixes | Direct on `dev` or worktree | — |
+
+### Rolling PR (dev to main)
+
+A rolling PR from `dev` to `main` is always maintained:
+- **GitHub Actions** creates it automatically if missing (every 15 min)
+- **Agent** monitors CI status and fixes issues
+- **Human** reviews and merges when ready
+- Label `ready-to-merge` added when all checks pass
+
+### Conventional Commits (Required)
+
+All commits must follow the format: `type(scope): description`
+
+| Type | When |
+|------|------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `chore` | Maintenance, deps, config |
+| `docs` | Documentation only |
+| `refactor` | Code restructuring |
+| `test` | Adding/fixing tests |
+| `ci` | CI/CD changes |
+
+**Examples:**
+```
+feat(api): add batch message endpoint
+fix(lint): resolve biome warnings in channel-telegram
+chore(merge): resolve conflicts with main
+ci(rolling-pr): update workflow permissions
+```
+
+**Enforcement:** commitlint via husky (local) + GitHub Actions (CI gate)
+
+### Zero-Tolerance Quality
+
+- **No warnings** — biome strict mode, `--error-on-warnings`
+- **No skips** — monitor test output for `.skip` patterns
+- **No failures** — CI must be green; fix red states immediately
+
+### Agent Responsibilities
+
+1. **Monitor all gates** — zero tolerance for warnings/skips/failures
+2. **Fix issues** — direct commit to dev with conventional format
+3. **Resolve conflicts** — `git merge origin/main` (merge commits, not rebase)
+4. **Notify human** — label + channel message when rolling PR is green
+
+### Automated Releases
+
+- **release-please** runs on main merge
+- Single repo-wide version (all packages together)
+- CHANGELOG.md auto-updated
+
+---
+
+## Technical Never Do
+
+- **Don't code on main** — main is production, rolling PR only. Use `dev` for development, `feat/*` for features. If `git branch --show-current` returns `main`, STOP immediately.
+- Don't use non-conventional commit messages (all commits must be `type(scope): description`)
+- Don't create nightly branches (deprecated — use feature PR to dev flow)
+- Don't use npm/yarn/pnpm (use Bun exclusively)
+- Don't mix channel logic in core (channels are plugins)
+- Don't skip event publishing for state changes
+- Don't use raw SQL (use Drizzle)
+- Don't create REST endpoints without OpenAPI docs
+- Don't skip Zod validation on external inputs
+- Don't hardcode channel-specific behavior in core
+- Don't use `any` types
+- Don't leave uncommitted work
+- Don't stop without pushing
+- Don't bypass make commands for common tasks

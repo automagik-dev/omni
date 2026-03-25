@@ -2661,7 +2661,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         if (ownerJid) {
           const ownerPhone = ownerJid.replace(/:.*$/, '').replace(/@.*$/, '');
           const lidCache = this.getLidMappingCache(instanceId);
-          // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID mention resolution requires multiple matching strategies
           const isMentioningInstance = contextInfo.mentionedJid.some((jid) => {
             // Direct match
             if (jid === ownerJid) return true;

@@ -37,6 +37,7 @@ import {
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
+  type MediaProcessedPayload,
   type MessageReceivedPayload,
   OpenClawAgentProvider,
   OpenClawClient,
@@ -73,6 +74,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
+import type { ResolvedRoute } from '../services/route-resolver';
 import { getPlugin } from './loader';
 import {
   type BufferedMessage,
@@ -525,6 +527,19 @@ function getProcessedColumn(
 
 const MEDIA_WAIT_NULL = { content: null, localPath: null } as const;
 
+// ============================================================================
+// Event-Driven Media Completion (replaces DB polling)
+// ============================================================================
+
+/** Pending media awaits, keyed by DB message UUID */
+const mediaCompletions = new Map<
+  string,
+  { resolve: (result: { content: string; error?: string }) => void; reject: (error: Error) => void; createdAt: number }
+>();
+
+/** Cache of already-completed results (event arrived before dispatcher asked). TTL managed via setTimeout. */
+const mediaResultCache = new Map<string, { content: string; error?: string }>();
+
 /**
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
@@ -548,42 +563,82 @@ function checkProcessedColumn(
 }
 
 /**
- * Poll the messages table until the media processing column is populated or timeout.
- * Detects error markers written by media-processor on failure to fail fast.
+ * Retry a DB lookup until it returns a non-null result or 5s elapses.
+ * Handles the race where message-persistence hasn't written the row yet.
  */
-async function waitForMediaProcessing(
+async function waitForRecord<T>(
+  fn: () => Promise<T | null | undefined>,
+  maxMs = 5_000,
+  pollMs = 250,
+): Promise<T | null> {
+  let result = await fn();
+  if (result) return result;
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    result = await fn();
+    if (result) return result;
+  }
+  return null;
+}
+
+/**
+ * Await media processing via NATS event instead of DB polling.
+ * Checks: DB first (already done) → event cache (arrived early) → await promise (NATS delivery).
+ */
+async function awaitMediaProcessing(
   services: Services,
   instanceId: string,
   chatId: string,
   externalId: string,
   contentType: string,
-  pollMs = 500,
 ): Promise<{ content: string | null; localPath: string | null }> {
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
 
-  const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+  // Wait briefly for message-persistence to create the DB rows (race condition:
+  // both media-processor and agent-dispatcher subscribe to message.received,
+  // and the dispatcher's debounce may fire before persistence completes).
+  const chat = await waitForRecord(() => services.chats.findByExternalIdSmart(instanceId, chatId));
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
   }
 
-  // 60s timeout — processing typically completes in <15s
-  const deadline = Date.now() + 60_000;
-
-  while (Date.now() < deadline) {
-    const msg = await services.messages.getByExternalId(chat.id, externalId);
-    const result = checkProcessedColumn(msg, column);
-    if (result === 'error') {
-      log.warn('Media processing failed', { instanceId, chatId, externalId, error: msg?.[column] });
-      return MEDIA_WAIT_NULL;
-    }
-    if (result !== 'pending') return result;
-    await sleep(pollMs);
+  const msg = await waitForRecord(() => services.messages.getByExternalId(chat.id, externalId));
+  if (!msg) {
+    log.warn('Message not found for media wait after retries', { instanceId, chatId, externalId });
+    return MEDIA_WAIT_NULL;
   }
 
-  log.warn('Media processing wait timed out', { instanceId, chatId, externalId, contentType });
-  return MEDIA_WAIT_NULL;
+  // 1. Check DB — result may already be written (processing finished before debounce fired)
+  const existing = checkProcessedColumn(msg, column);
+  if (existing === 'error') {
+    log.warn('Media processing failed (DB)', { instanceId, chatId, externalId });
+    return MEDIA_WAIT_NULL;
+  }
+  if (existing !== 'pending') return existing;
+
+  // 2. Check event cache — event may have arrived before dispatcher asked
+  const cached = mediaResultCache.get(msg.id);
+  if (cached) {
+    mediaResultCache.delete(msg.id);
+    if (!cached.content || cached.error) return MEDIA_WAIT_NULL;
+    const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
+    return { content: cached.content, localPath };
+  }
+
+  // 3. Await NATS event — guaranteed delivery via durable consumer
+  const result = await new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
+    mediaCompletions.set(msg.id, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
+  });
+
+  if (!result.content || result.error) return MEDIA_WAIT_NULL;
+
+  // Re-read message for localPath (media storage may have updated it)
+  const updated = await services.messages.getByExternalId(chat.id, externalId);
+  const localPath = updated?.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, updated.mediaLocalPath as string)) : null;
+  return { content: result.content, localPath };
 }
 
 /**
@@ -762,13 +817,13 @@ async function collectProcessedMedia(
     const contentType = m.payload.content?.type;
     if (!contentType || !getProcessedColumn(contentType)) continue;
 
-    const result = await waitForMediaProcessing(
-      services,
-      instance.id,
-      m.payload.chatId,
-      m.payload.externalId,
-      contentType,
-    );
+    let result: { content: string | null; localPath: string | null };
+    try {
+      result = await awaitMediaProcessing(services, instance.id, m.payload.chatId, m.payload.externalId, contentType);
+    } catch (error) {
+      log.warn('Media await failed', { externalId: m.payload.externalId, error: String(error) });
+      result = MEDIA_WAIT_NULL;
+    }
 
     if (result.content) {
       results.push(
@@ -2270,7 +2325,6 @@ async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): 
   return instance.agentId ?? undefined;
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: agent response processing has many format branches
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2784,6 +2838,42 @@ async function applyAgentFkOverrides(
 }
 
 /**
+ * Merge route overrides onto instance defaults. Null route fields inherit from instance.
+ */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat field-by-field merge, no branching logic
+function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): DispatchInstance {
+  return {
+    ...instance,
+    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
+    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
+    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
+    agentSessionStrategy:
+      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
+    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
+    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
+    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
+    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
+    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
+    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
+    messageDebounceMode: (route.messageDebounceMode as Instance['messageDebounceMode']) ?? instance.messageDebounceMode,
+    messageDebounceMinMs: route.messageDebounceMinMs ?? instance.messageDebounceMinMs,
+    messageDebounceMaxMs: route.messageDebounceMaxMs ?? instance.messageDebounceMaxMs,
+    messageDebounceGroupMs: route.messageDebounceGroupMs ?? instance.messageDebounceGroupMs,
+    messageDebounceRestartOnTyping: route.messageDebounceRestartOnTyping ?? instance.messageDebounceRestartOnTyping,
+    messageSplitDelayMode:
+      (route.messageSplitDelayMode as Instance['messageSplitDelayMode']) ?? instance.messageSplitDelayMode,
+    messageSplitDelayFixedMs: route.messageSplitDelayFixedMs ?? instance.messageSplitDelayFixedMs,
+    messageSplitDelayMinMs: route.messageSplitDelayMinMs ?? instance.messageSplitDelayMinMs,
+    messageSplitDelayMaxMs: route.messageSplitDelayMaxMs ?? instance.messageSplitDelayMaxMs,
+    enableAutoSplit: route.enableAutoSplit ?? instance.enableAutoSplit,
+    reactionAck: (route.reactionAck as Instance['reactionAck']) ?? instance.reactionAck,
+    reactionAckEmoji: (route.reactionAckEmoji as Instance['reactionAckEmoji']) ?? instance.reactionAckEmoji,
+    ackTimeoutMs: route.ackTimeoutMs ?? instance.ackTimeoutMs,
+    agentAckMessage: route.agentAckMessage ?? instance.agentAckMessage,
+  };
+}
+
+/**
  * omni-930 phase 3: Apply instance-level agentId (UUID FK) overrides and return the result.
  * Used as the no-route early-return path in resolveEffectiveInstance.
  */
@@ -2826,21 +2916,7 @@ async function resolveEffectiveInstance(
   }
 
   // Merge route overrides with instance defaults
-  const effectiveInstance: DispatchInstance = {
-    ...instance,
-    // Override behavior (null = inherit from instance)
-    agentTimeout: route.agentTimeout ?? instance.agentTimeout,
-    agentStreamMode: route.agentStreamMode ?? instance.agentStreamMode,
-    agentReplyFilter: (route.agentReplyFilter as Instance['agentReplyFilter']) ?? instance.agentReplyFilter,
-    agentSessionStrategy:
-      (route.agentSessionStrategy as Instance['agentSessionStrategy']) ?? instance.agentSessionStrategy,
-    agentPrefixSenderName: route.agentPrefixSenderName ?? instance.agentPrefixSenderName,
-    agentWaitForMedia: route.agentWaitForMedia ?? instance.agentWaitForMedia,
-    agentSendMediaPath: route.agentSendMediaPath ?? instance.agentSendMediaPath,
-    agentGateEnabled: route.agentGateEnabled ?? instance.agentGateEnabled,
-    agentGateModel: route.agentGateModel ?? instance.agentGateModel,
-    agentGatePrompt: route.agentGatePrompt ?? instance.agentGatePrompt,
-  };
+  const effectiveInstance: DispatchInstance = mergeRouteOverrides(instance, route);
 
   // omni-p7r phase 2: Resolve agent entity overrides.
   // Route-level agentId takes priority; fall back to instance-level agentId.
@@ -3080,7 +3156,6 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
  * LID resolution fallback: if plugin didn't resolve isMentioningInstance (cache cold),
  * check DB for LID→phone mappings to detect if any @lid mention maps to the owner.
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: LID resolution with multiple DB fallback paths
 async function resolveLidMentionBot(
   chatsService: Services['chats'],
   instanceId: string,
@@ -3559,33 +3634,44 @@ export async function setupAgentDispatcher(
   // Periodic cleanup of rate limiter counters
   const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
+  // Periodic cleanup of leaked media promises (10min circuit breaker)
+  const mediaCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const leakThreshold = 10 * 60_000; // 10 minutes
+    for (const [mediaId, pending] of mediaCompletions.entries()) {
+      if (now - pending.createdAt > leakThreshold) {
+        log.warn('media_promise_leaked', { mediaId, ageMs: now - pending.createdAt });
+        pending.reject(new Error('media processing promise leaked (10min circuit breaker)'));
+        mediaCompletions.delete(mediaId);
+      }
+    }
+  }, 60_000);
+
   // Create debouncer for message events
   const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
     const firstMsg = messages[0];
     if (!firstMsg) return;
 
     const instanceId = firstMsg.metadata.instanceId;
-    const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
-    if (!baseInstance) {
-      log.warn('Instance not found for debounced messages', { instanceId });
-      return;
+
+    // Use the pre-resolved instance from early route resolution (done in message.received handler).
+    // This avoids a redundant resolveEffectiveInstance() call — the route was already resolved
+    // before the debounce timer, so per-user debounce overrides are already applied.
+    let instance: DispatchInstance;
+    if (firstMsg.metadata.resolvedInstance) {
+      instance = firstMsg.metadata.resolvedInstance as DispatchInstance;
+    } else {
+      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow)
+      const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+      if (!baseInstance) {
+        log.warn('Instance not found for debounced messages', { instanceId });
+        return;
+      }
+      const externalChatId = firstMsg.payload.chatId;
+      const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+      const resolved = await resolveEffectiveInstance(services, db, baseInstance, chat?.id, firstMsg.metadata.personId);
+      instance = resolved.instance;
     }
-
-    // Resolve agent route and merge with instance defaults
-    const externalChatId = firstMsg.payload.chatId;
-    const personId = firstMsg.metadata.personId;
-
-    // Look up internal chat UUID for route resolution
-    const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-    const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
-
-    const { instance, routeId: _routeId } = await resolveEffectiveInstance(
-      services,
-      db,
-      baseInstance,
-      internalChatId,
-      personId,
-    );
 
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
@@ -3625,7 +3711,19 @@ export async function setupAgentDispatcher(
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
-          const debounceConfig = getDebounceConfig(instance);
+
+          // Early route resolution: resolve route BEFORE debounce so per-user
+          // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
+          const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+          const { instance: resolved, routeId } = await resolveEffectiveInstance(
+            services,
+            db,
+            instance,
+            chat?.id,
+            metadata.personId,
+          );
+
+          const debounceConfig = getDebounceConfig(resolved);
 
           // Group chats (WhatsApp: @g.us) can use a different debounce window.
           // If configured, use groupMs instead of minMs for the timer delay.
@@ -3653,6 +3751,8 @@ export async function setupAgentDispatcher(
                 traceId,
                 correlationId: metadata.correlationId,
                 journeyTracked: metadata.timings != null,
+                resolvedInstance: resolved,
+                routeId,
               },
               timestamp: event.timestamp,
             },
@@ -3794,10 +3894,20 @@ export async function setupAgentDispatcher(
         if (!metadata.instanceId) return;
 
         try {
-          const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance?.agentId) return;
+          const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+          if (!baseInstance?.agentId) return;
 
-          const debounceConfig = getDebounceConfig(instance);
+          // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
+          const { instance: resolved } = await resolveEffectiveInstance(
+            services,
+            db,
+            baseInstance,
+            chat?.id,
+            metadata.personId,
+          );
+
+          const debounceConfig = getDebounceConfig(resolved);
           if (debounceConfig.restartOnTyping) {
             debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
           }
@@ -3814,10 +3924,39 @@ export async function setupAgentDispatcher(
       },
     );
 
-    log.info('Agent dispatcher initialized (message + reaction + reaction-removed triggers)');
+    // ========================================
+    // Subscribe to media.processed (event-driven media wait)
+    // ========================================
+    await eventBus.subscribe(
+      'media.processed',
+      async (event) => {
+        const payload = event.payload as MediaProcessedPayload;
+        const { mediaId, content, error } = payload;
+
+        // If dispatcher is already waiting → resolve the promise
+        const pending = mediaCompletions.get(mediaId);
+        if (pending) {
+          pending.resolve({ content, error });
+          mediaCompletions.delete(mediaId);
+          return;
+        }
+
+        // If dispatcher hasn't asked yet → cache the result (TTL 5min)
+        mediaResultCache.set(mediaId, { content, error });
+        setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+      },
+      {
+        durable: 'agent-dispatcher-media',
+        queue: 'agent-dispatcher-media',
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(cleanupInterval);
+    clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
   }
@@ -3826,7 +3965,15 @@ export async function setupAgentDispatcher(
   return async () => {
     log.info('Shutting down agent dispatcher');
     clearInterval(cleanupInterval);
+    clearInterval(mediaCleanupInterval);
     debouncer.clear();
+
+    // Reject any pending media promises on shutdown
+    for (const [mediaId, pending] of mediaCompletions.entries()) {
+      pending.reject(new Error('dispatcher shutting down'));
+      mediaCompletions.delete(mediaId);
+    }
+    mediaResultCache.clear();
 
     // Dispose all providers that support it (e.g., OpenClaw WS clients)
     const disposePromises: Promise<void>[] = [];
@@ -3887,4 +4034,12 @@ export async function setupAgentDispatcher(
 export const setupAgentResponder = setupAgentDispatcher;
 
 /** @internal Exported for unit testing only — do not use in production code. */
-export const __test__ = { buildContextMessages };
+export const __test__ = {
+  buildContextMessages,
+  awaitMediaProcessing,
+  mediaCompletions,
+  mediaResultCache,
+  checkProcessedColumn,
+  getProcessedColumn,
+  MEDIA_WAIT_NULL,
+};

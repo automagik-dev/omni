@@ -40,6 +40,23 @@ export interface ResolvedRoute {
   agentGateEnabled: boolean | null;
   agentGateModel: string | null;
   agentGatePrompt: string | null;
+  // Debounce overrides
+  messageDebounceMode: string | null;
+  messageDebounceMinMs: number | null;
+  messageDebounceMaxMs: number | null;
+  messageDebounceGroupMs: number | null;
+  messageDebounceRestartOnTyping: boolean | null;
+  // Split delay overrides
+  messageSplitDelayMode: string | null;
+  messageSplitDelayFixedMs: number | null;
+  messageSplitDelayMinMs: number | null;
+  messageSplitDelayMaxMs: number | null;
+  enableAutoSplit: boolean | null;
+  // Ack overrides
+  reactionAck: string | null;
+  reactionAckEmoji: unknown | null;
+  ackTimeoutMs: number | null;
+  agentAckMessage: string | null;
   label: string | null;
   priority: number;
   isActive: boolean;

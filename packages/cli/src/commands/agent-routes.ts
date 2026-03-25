@@ -109,7 +109,6 @@ async function createAgentRouteAction(options: {
   }
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: CLI option parsing requires many branches
 async function updateAgentRouteAction(
   routeId: string,
   options: {

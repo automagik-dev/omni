@@ -9,6 +9,8 @@
  * - Excel: exceljs (local, xlsx/xlsm only)
  * - Text/Markdown/JSON: direct read
  * - Scanned PDFs: Gemini Vision (fallback)
+ *
+ * Uses centralized retry + circuit breaker for Gemini OCR calls.
  */
 
 import { readFileSync } from 'node:fs';
@@ -18,6 +20,7 @@ import { GEMINI_MODEL } from '../models';
 import { calculateCost } from '../pricing';
 import { DOCUMENT_OCR_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
+import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
 
 /** Minimum text length to consider extraction successful (below this, assume scanned PDF) */
@@ -425,7 +428,7 @@ export class DocumentProcessor extends BaseProcessor {
   }
 
   /**
-   * Process document with Gemini OCR (for scanned PDFs)
+   * Process document with Gemini OCR (for scanned PDFs) with retry + circuit breaker
    */
   private async processWithGeminiOcr(filePath: string, ocrPrompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
@@ -433,25 +436,35 @@ export class DocumentProcessor extends BaseProcessor {
       return this.createFailedResult('Gemini not configured for OCR fallback (missing API key)', 'local', 'pdf-parse');
     }
 
+    const timeouts = getMediaTimeouts();
+
     try {
-      const pdfData = readFileSync(filePath);
+      const { text, inputTokens, outputTokens } = await this.executeWithResilience(
+        'gemini',
+        async () => {
+          const pdfData = readFileSync(filePath);
 
-      const result = await model.generateContent([
-        {
-          inlineData: {
-            mimeType: 'application/pdf',
-            data: pdfData.toString('base64'),
-          },
+          const result = await model.generateContent([
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: pdfData.toString('base64'),
+              },
+            },
+            { text: ocrPrompt },
+          ]);
+
+          const response = result.response;
+          const usageMetadata = response.usageMetadata;
+
+          return {
+            text: response.text(),
+            inputTokens: usageMetadata?.promptTokenCount ?? 0,
+            outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+          };
         },
-        { text: ocrPrompt },
-      ]);
-
-      const response = result.response;
-      const text = response.text();
-      const usageMetadata = response.usageMetadata;
-
-      const inputTokens = usageMetadata?.promptTokenCount ?? 0;
-      const outputTokens = usageMetadata?.candidatesTokenCount ?? 0;
+        { timeoutMs: timeouts.documentTimeoutMs },
+      );
 
       const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
         inputTokens,
