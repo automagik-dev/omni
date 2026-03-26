@@ -8,7 +8,7 @@
  *
  * Both fixes are tested through the setupMediaProcessor integration path.
  */
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import { __test__ as dispatcherTest } from '../agent-dispatcher';
 import { setupMediaProcessor } from '../media-processor';
 
@@ -118,10 +118,6 @@ describe('media-processor failure marker (bug 1)', () => {
 // Bug 2 regression: crash handler must use DB message UUID
 // ---------------------------------------------------------------------------
 describe('media-processor crash handler mediaId (bug 2)', () => {
-  afterEach(() => {
-    // Reset any module-level state
-  });
-
   it('uses DB message UUID (not externalId) in failure events when lookups succeed', async () => {
     const { eventBus, published, handlers } = createMockEventBus();
     const services = createMockServices({ messageId: 'msg-db-uuid-123' });

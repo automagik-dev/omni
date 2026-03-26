@@ -491,8 +491,12 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
               const msg = await ctx.services.messages.getByExternalId(chat.id, payload.externalId);
               if (msg) crashMediaId = msg.id;
             }
-          } catch {
-            // Lookup failed — use externalId as fallback
+          } catch (lookupError) {
+            log.debug('Failed to resolve DB message UUID for crash handler, falling back to externalId', {
+              error: String(lookupError),
+              instanceId: metadata.instanceId,
+              chatId: payload.chatId,
+            });
           }
 
           // Dedicated failure event
