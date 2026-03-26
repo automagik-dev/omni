@@ -109,30 +109,47 @@ async function createAgentRouteAction(options: {
   }
 }
 
-async function updateAgentRouteAction(
-  routeId: string,
-  options: {
-    instance: string;
-    agent?: string;
-    timeout?: number;
-    stream?: boolean;
-    prefixSender?: boolean;
-    waitMedia?: boolean;
-    sendMediaPath?: boolean;
-    gate?: boolean;
-    gateModel?: string;
-    gatePrompt?: string;
-    replyFilterMode?: string;
-    label?: string;
-    priority?: number;
-    active?: boolean;
-    inactive?: boolean;
-  },
-) {
+interface RouteUpdateOptions {
+  instance: string;
+  agent?: string;
+  timeout?: number;
+  stream?: boolean;
+  prefixSender?: boolean;
+  waitMedia?: boolean;
+  sendMediaPath?: boolean;
+  gate?: boolean;
+  gateModel?: string;
+  gatePrompt?: string;
+  replyFilterMode?: string;
+  label?: string;
+  priority?: number;
+  active?: boolean;
+  inactive?: boolean;
+}
+
+function buildRouteUpdates(options: RouteUpdateOptions): Partial<UpdateAgentRoute> {
+  const updates: Partial<UpdateAgentRoute> = {};
+  if (options.agent) updates.agentId = options.agent;
+  if (options.timeout !== undefined) updates.agentTimeout = options.timeout;
+  if (options.stream !== undefined) updates.agentStreamMode = options.stream;
+  if (options.prefixSender !== undefined) updates.agentPrefixSenderName = options.prefixSender;
+  if (options.waitMedia !== undefined) updates.agentWaitForMedia = options.waitMedia;
+  if (options.sendMediaPath !== undefined) updates.agentSendMediaPath = options.sendMediaPath;
+  if (options.gate !== undefined) updates.agentGateEnabled = options.gate;
+  if (options.gateModel !== undefined) updates.agentGateModel = options.gateModel;
+  if (options.gatePrompt !== undefined) updates.agentGatePrompt = options.gatePrompt;
+  if (options.replyFilterMode !== undefined) updates.agentReplyFilter = buildRouteReplyFilter(options.replyFilterMode);
+  if (options.label !== undefined) updates.label = options.label;
+  if (options.priority !== undefined) updates.priority = options.priority;
+  if (options.active) updates.isActive = true;
+  if (options.inactive) updates.isActive = false;
+  return updates;
+}
+
+async function updateAgentRouteAction(routeId: string, options: RouteUpdateOptions) {
   const client = getClient();
 
   try {
-    // Validate mutually exclusive flags
     if (options.active && options.inactive) {
       output.error('Cannot specify both --active and --inactive');
       return;
@@ -141,24 +158,7 @@ async function updateAgentRouteAction(
     const instanceId = await resolveInstanceId(options.instance);
     const resolvedRouteId = await resolveRouteId(instanceId, routeId);
 
-    // Build update object with only provided options
-    const updates: Partial<UpdateAgentRoute> = {};
-    if (options.agent) updates.agentId = options.agent;
-    if (options.timeout !== undefined) updates.agentTimeout = options.timeout;
-    if (options.stream !== undefined) updates.agentStreamMode = options.stream;
-    if (options.prefixSender !== undefined) updates.agentPrefixSenderName = options.prefixSender;
-    if (options.waitMedia !== undefined) updates.agentWaitForMedia = options.waitMedia;
-    if (options.sendMediaPath !== undefined) updates.agentSendMediaPath = options.sendMediaPath;
-    if (options.gate !== undefined) updates.agentGateEnabled = options.gate;
-    if (options.gateModel !== undefined) updates.agentGateModel = options.gateModel;
-    if (options.gatePrompt !== undefined) updates.agentGatePrompt = options.gatePrompt;
-    if (options.replyFilterMode !== undefined)
-      updates.agentReplyFilter = buildRouteReplyFilter(options.replyFilterMode);
-    if (options.label !== undefined) updates.label = options.label;
-    if (options.priority !== undefined) updates.priority = options.priority;
-    if (options.active) updates.isActive = true;
-    if (options.inactive) updates.isActive = false;
-
+    const updates = buildRouteUpdates(options);
     if (Object.keys(updates).length === 0) {
       output.error('No updates provided');
       return;
