@@ -28,8 +28,12 @@ export interface PgserveConfig {
   dataDir: string | null;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: pgserve has no type declarations
-let serverInstance: any | null = null;
+/** Minimal shape of the pgserve server instance (pgserve ships no type declarations). */
+interface PgserveInstance {
+  stop(): Promise<void>;
+}
+
+let serverInstance: PgserveInstance | null = null;
 
 /**
  * Read pgserve-related env vars and return a typed config object.
@@ -55,8 +59,7 @@ function buildDatabaseUrl(port: number): string {
   return `postgresql://postgres:postgres@localhost:${port}/omni`;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: pgserve has no type declarations
-type StartServerFn = (opts: Record<string, unknown>) => Promise<any>;
+type StartServerFn = (opts: Record<string, unknown>) => Promise<PgserveInstance>;
 
 async function tryStartOnPort(startFn: StartServerFn, port: number, config: PgserveConfig): Promise<string | null> {
   try {
