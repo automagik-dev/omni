@@ -348,9 +348,7 @@ export async function resolveRouteId(instanceId: string, input: string): Promise
     const matches = routes.filter((r) => r.id.toLowerCase().startsWith(input.toLowerCase()));
     if (matches.length === 1) return matches[0].id;
     if (matches.length > 1) {
-      const ids = matches
-        .map((r) => `  ${r.id.slice(0, 8)}  ${r.scope} (${r.isActive ? 'active' : 'inactive'})`)
-        .join('\n');
+      const ids = matches.map((r) => `  ${r.id}  ${r.scope} (${r.isActive ? 'active' : 'inactive'})`).join('\n');
       output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} routes:\n${ids}`);
     }
   }
