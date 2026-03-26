@@ -323,3 +323,37 @@ export async function resolveBatchJobId(input: string): Promise<string> {
 
   output.error(`No batch job found matching "${input}"`);
 }
+
+/**
+ * Resolve an agent route identifier to a UUID.
+ *
+ * Routes are scoped to an instance, so instanceId must already be resolved.
+ *
+ * Matches in order:
+ *   1. Exact UUID match (skip API call)
+ *   2. UUID prefix match (minimum 2 hex chars)
+ *
+ * Routes don't have names, only IDs.
+ *
+ * Exits with error if no match or ambiguous.
+ */
+export async function resolveRouteId(instanceId: string, input: string): Promise<string> {
+  if (UUID_RE.test(input)) return input;
+
+  const client = getClient();
+  const routes = await client.routes.list(instanceId, {});
+
+  // Partial UUID prefix (at least 2 chars, looks hex-ish)
+  if (/^[0-9a-f]{2,}$/i.test(input)) {
+    const matches = routes.filter((r) => r.id.toLowerCase().startsWith(input.toLowerCase()));
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length > 1) {
+      const ids = matches
+        .map((r) => `  ${r.id.slice(0, 8)}  ${r.scope} (${r.isActive ? 'active' : 'inactive'})`)
+        .join('\n');
+      output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} routes:\n${ids}`);
+    }
+  }
+
+  output.error(`No route found matching "${input}"`);
+}
