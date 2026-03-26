@@ -411,6 +411,77 @@ async function processMessageMedia(
 }
 
 /**
+ * Publish failure events when media processing crashes unexpectedly.
+ * Ensures the dispatcher doesn't wait forever for a completion that will never come.
+ */
+async function publishMediaCrashEvents(
+  ctx: MediaProcessorContext,
+  eventId: string,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId?: string; channelType?: ChannelType },
+  error: unknown,
+): Promise<void> {
+  try {
+    const processingType = inferProcessingType(payload.content.type);
+    const reason = `unexpected: ${String(error)}`;
+    const mediaId = await resolveMediaIdForCrash(ctx, metadata.instanceId ?? '', payload);
+    const meta = { instanceId: metadata.instanceId, channelType: metadata.channelType };
+
+    await ctx.eventBus.publish(
+      'media.processing.failed',
+      {
+        eventId,
+        mediaId,
+        processingType,
+        error: reason,
+        provider: 'unknown',
+        model: 'unknown',
+      },
+      meta,
+    );
+
+    await ctx.eventBus.publish(
+      'media.processed',
+      {
+        eventId,
+        mediaId,
+        processingType,
+        content: '',
+        error: reason,
+      },
+      meta,
+    );
+  } catch (publishError) {
+    log.error('Failed to publish media failure event', { error: String(publishError) });
+  }
+}
+
+/**
+ * Best-effort resolve DB message UUID for crash handler.
+ * Dispatcher awaits completions keyed by message.id, not platform externalId.
+ */
+async function resolveMediaIdForCrash(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  payload: MessageReceivedPayload,
+): Promise<string> {
+  try {
+    const chat = await ctx.services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+    if (chat) {
+      const msg = await ctx.services.messages.getByExternalId(chat.id, payload.externalId);
+      if (msg) return msg.id;
+    }
+  } catch (lookupError) {
+    log.debug('Failed to resolve DB message UUID for crash handler, falling back to externalId', {
+      error: String(lookupError),
+      instanceId,
+      chatId: payload.chatId,
+    });
+  }
+  return payload.externalId;
+}
+
+/**
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
@@ -454,16 +525,8 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       const payload = event.payload as MessageReceivedPayload;
       const metadata = event.metadata;
 
-      // Skip if no instance ID
-      if (!metadata.instanceId) {
-        return;
-      }
-
-      // Check if message has media
-      const content = payload.content;
-      if (!shouldProcess(content.type)) {
-        return;
-      }
+      if (!metadata.instanceId) return;
+      if (!shouldProcess(payload.content.type)) return;
 
       try {
         await processMessageMedia(ctx, payload, {
@@ -476,59 +539,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
           externalId: payload.externalId,
           error: String(error),
         });
-
-        // Publish failure events for unexpected crashes so dispatcher doesn't wait forever
-        try {
-          const crashProcessingType = inferProcessingType(content.type);
-          const crashReason = `unexpected: ${String(error)}`;
-
-          // Resolve DB message UUID — dispatcher awaits completions keyed by message.id,
-          // not platform externalId. Best-effort: fall back to externalId if lookup fails.
-          let crashMediaId = payload.externalId;
-          try {
-            const chat = await ctx.services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-            if (chat) {
-              const msg = await ctx.services.messages.getByExternalId(chat.id, payload.externalId);
-              if (msg) crashMediaId = msg.id;
-            }
-          } catch (lookupError) {
-            log.debug('Failed to resolve DB message UUID for crash handler, falling back to externalId', {
-              error: String(lookupError),
-              instanceId: metadata.instanceId,
-              chatId: payload.chatId,
-            });
-          }
-
-          // Dedicated failure event
-          await ctx.eventBus.publish(
-            'media.processing.failed',
-            {
-              eventId: event.id,
-              mediaId: crashMediaId,
-              processingType: crashProcessingType,
-              error: crashReason,
-              provider: 'unknown',
-              model: 'unknown',
-            },
-            { instanceId: metadata.instanceId, channelType: metadata.channelType },
-          );
-
-          // Also publish media.processed for backward compatibility
-          await ctx.eventBus.publish(
-            'media.processed',
-            {
-              eventId: event.id,
-              mediaId: crashMediaId,
-              processingType: crashProcessingType,
-              content: '',
-              error: crashReason,
-            },
-            { instanceId: metadata.instanceId, channelType: metadata.channelType },
-          );
-        } catch (publishError) {
-          log.error('Failed to publish media failure event', { error: String(publishError) });
-        }
-        // Don't re-throw - media processing failures shouldn't block message flow
+        await publishMediaCrashEvents(ctx, event.id, payload, metadata, error);
       }
     },
     {
