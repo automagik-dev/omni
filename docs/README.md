@@ -118,8 +118,4 @@ docs/
 
 ## Maintained By
 
-- **📜 Scroll** — Docs reviewer, keeps docs in sync with code
-- **🦑 Ink** — Baileys research
-- **🐚 Pearl** — WhatsApp Business research
-- **🪸 Coral** — Omni architecture research
-- **🐙 Omni** — Engineering lead, final review
+Maintained by the Omni development team.
