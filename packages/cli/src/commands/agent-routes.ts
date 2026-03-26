@@ -14,7 +14,7 @@ import type { UpdateAgentRoute } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
-import { resolveInstanceId } from '../resolve.js';
+import { resolveInstanceId, resolveRouteId } from '../resolve.js';
 
 type ReplyFilter =
   | { mode: string; conditions?: { onDm?: boolean; onMention?: boolean; onReply?: boolean } }
@@ -139,6 +139,7 @@ async function updateAgentRouteAction(
     }
 
     const instanceId = await resolveInstanceId(options.instance);
+    const resolvedRouteId = await resolveRouteId(instanceId, routeId);
 
     // Build update object with only provided options
     const updates: Partial<UpdateAgentRoute> = {};
@@ -163,7 +164,7 @@ async function updateAgentRouteAction(
       return;
     }
 
-    const route = await client.routes.update(instanceId, routeId, updates);
+    const route = await client.routes.update(instanceId, resolvedRouteId, updates);
 
     output.success('Route updated');
     output.data(route);
@@ -218,11 +219,12 @@ export function createRoutesCommand(): Command {
     .command('get <routeId>')
     .description('Get agent route details')
     .requiredOption('--instance <id>', 'Instance ID')
-    .action(async (routeId: string, options: { instance: string }) => {
+    .action(async (routeIdInput: string, options: { instance: string }) => {
       const client = getClient();
 
       try {
         const instanceId = await resolveInstanceId(options.instance);
+        const routeId = await resolveRouteId(instanceId, routeIdInput);
         const route = await client.routes.get(instanceId, routeId);
 
         output.data(route);
@@ -291,11 +293,12 @@ export function createRoutesCommand(): Command {
     .command('delete <routeId>')
     .description('Delete an agent route')
     .requiredOption('--instance <id>', 'Instance ID')
-    .action(async (routeId: string, options: { instance: string }) => {
+    .action(async (routeIdInput: string, options: { instance: string }) => {
       const client = getClient();
 
       try {
         const instanceId = await resolveInstanceId(options.instance);
+        const routeId = await resolveRouteId(instanceId, routeIdInput);
         await client.routes.delete(instanceId, routeId);
 
         output.success('Route deleted');
