@@ -377,7 +377,7 @@ export class MessageService {
    * Create a new message
    */
   async create(options: CreateMessageOptions): Promise<Message> {
-    return await this.db.transaction(async (tx) => {
+    return this.db.transaction(async (tx) => {
       // Insert message
       const [created] = await tx
         .insert(messages)
