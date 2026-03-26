@@ -39,6 +39,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
 import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
+import type { Database } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -511,10 +512,9 @@ const messageRefSchema = z.union([
 // Lazy singleton for MediaStorageService (same pattern as media.ts)
 let _mediaStorageForDownload: MediaStorageService | null = null;
 
-function getMediaStorageForDownload(db: unknown): MediaStorageService {
+function getMediaStorageForDownload(db: Database): MediaStorageService {
   if (!_mediaStorageForDownload) {
-    // biome-ignore lint/suspicious/noExplicitAny: db type bridging
-    _mediaStorageForDownload = new MediaStorageService(db as any);
+    _mediaStorageForDownload = new MediaStorageService(db);
   }
   return _mediaStorageForDownload;
 }
