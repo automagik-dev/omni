@@ -82,6 +82,33 @@ export function sanitizeMessage(
   return { ok: true, text: cleaned };
 }
 
+// ── Outbound sanitization ──
+// Strips internal agent directives and routing headers before messages reach external channels.
+// These patterns are injected by the genie provider (fire-and-forget model) and should
+// never be visible to end users. See GH #300.
+
+/** Routing header: [channel:whatsapp-baileys instance:abc chat:xyz@s.whatsapp.net ...] */
+const ROUTING_HEADER_RE =
+  /^\[(?:channel:\S+|instance:\S+|chat:\S+|thread:\S+|msg:\S+|from:\S+|type:\S+|replyTo:\S+)(?:\s+(?:channel:\S+|instance:\S+|chat:\S+|thread:\S+|msg:\S+|from:\S+|type:\S+|replyTo:\S+))*\]\s*/gm;
+
+/** ⚡ REPLY NOW directive injected by genie-client.ts */
+const REPLY_NOW_RE = /⚡\s*REPLY\s+NOW\b[^\n]*/g;
+
+/**
+ * Sanitize an outbound message before it reaches an external channel.
+ *
+ * Strips internal routing headers and agent directives that should never
+ * be visible to end users. Returns the cleaned text (may be empty if the
+ * entire message was internal metadata).
+ */
+export function sanitizeOutboundText(text: string): string {
+  let cleaned = text.replace(ROUTING_HEADER_RE, '');
+  cleaned = cleaned.replace(REPLY_NOW_RE, '');
+  // Collapse leftover blank lines from stripped content
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  return cleaned.trim();
+}
+
 /**
  * Validate an instance ID format for cache keys.
  */
