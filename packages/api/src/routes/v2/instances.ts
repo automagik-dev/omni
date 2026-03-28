@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
+import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
 import type { AppVariables } from '../../types';
@@ -1347,6 +1348,28 @@ instancesRoutes.get('/:id/users/:userId/profile', instanceAccess, async (c) => {
   }
 });
 
+/** Enrich plugin contacts that have no name from platform_identities (GH #307) */
+async function enrichContactNames(
+  contacts: { platformUserId: string; name?: string }[],
+  services: Services,
+  instanceId: string,
+): Promise<void> {
+  const nameless = contacts.filter((c) => !c.name);
+  if (nameless.length === 0) return;
+
+  const identities = await services.persons.listIdentitiesByInstance(instanceId, { limit: 1000 });
+  const nameMap = new Map<string, string>();
+  for (const identity of identities.items) {
+    if (identity.platformUsername) {
+      nameMap.set(identity.platformUserId, identity.platformUsername);
+    }
+  }
+  for (const contact of nameless) {
+    const dbName = nameMap.get(contact.platformUserId);
+    if (dbName) contact.name = dbName;
+  }
+}
+
 // List contacts query schema
 const listContactsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
@@ -1425,6 +1448,9 @@ instancesRoutes.get('/:id/contacts', instanceAccess, zValidator('query', listCon
 
     // If plugin returns contacts, use them
     if (result.contacts.length > 0) {
+      // Enrich contacts that have no name from platform_identities (GH #307)
+      await enrichContactNames(result.contacts, services, id);
+
       let filtered = result.contacts;
 
       // Server-side search filter
