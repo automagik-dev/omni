@@ -4088,4 +4088,6 @@ export const __test__ = {
   checkProcessedColumn,
   getProcessedColumn,
   MEDIA_WAIT_NULL,
+  mergeRouteOverrides,
+  getDebounceConfig,
 };
