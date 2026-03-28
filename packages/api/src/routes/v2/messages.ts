@@ -36,6 +36,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { zValidator } from '@hono/zod-validator';
+import { sanitizeOutboundText } from '@omni/channel-sdk';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
 import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
@@ -862,7 +863,12 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, text, replyTo, threadId, mentions } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions } = parsed.data;
+  // Strip internal routing headers and agent directives before sending (GH #300)
+  const text = sanitizeOutboundText(parsed.data.text);
+  if (!text) {
+    return c.json({ data: { messageId: '', status: 'filtered', instanceId, to } }, 200);
+  }
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 

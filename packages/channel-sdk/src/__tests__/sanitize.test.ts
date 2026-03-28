@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { sanitizeMessage } from '../sanitize';
+import { sanitizeMessage, sanitizeOutboundText } from '../sanitize';
 
 function createMockLogger() {
   return {
@@ -144,5 +144,62 @@ describe('sanitizeMessage', () => {
     const avgMs = elapsed / iterations;
 
     expect(avgMs).toBeLessThan(1);
+  });
+});
+
+describe('sanitizeOutboundText', () => {
+  test('passes through clean text unchanged', () => {
+    expect(sanitizeOutboundText('Hello, how are you?')).toBe('Hello, how are you?');
+  });
+
+  test('strips routing header line', () => {
+    const input =
+      '[channel:whatsapp-baileys instance:abc123 chat:5511999@s.whatsapp.net msg:MSG1 from:John type:dm]\nHello there!';
+    expect(sanitizeOutboundText(input)).toBe('Hello there!');
+  });
+
+  test('strips routing header with subset of tags', () => {
+    const input = '[channel:telegram instance:xyz chat:123456]\nHi!';
+    expect(sanitizeOutboundText(input)).toBe('Hi!');
+  });
+
+  test('strips REPLY NOW directive', () => {
+    const input =
+      'Hello!\n⚡ REPLY NOW via SendMessage to "sofia-whatsapp". Include the routing header from the first line of this message in your reply. Do not proceed with other tasks until you respond.';
+    expect(sanitizeOutboundText(input)).toBe('Hello!');
+  });
+
+  test('strips both routing header and REPLY NOW from a full genie message', () => {
+    const input =
+      '[channel:whatsapp-baileys instance:abc chat:5511@s.whatsapp.net from:User type:dm]\nWhat is the weather today?\n⚡ REPLY NOW via SendMessage to "sofia". Include the routing header from the first line of this message in your reply.';
+    expect(sanitizeOutboundText(input)).toBe('What is the weather today?');
+  });
+
+  test('returns empty string when entire message is internal metadata', () => {
+    const input = '[channel:whatsapp-baileys instance:abc chat:xyz]\n⚡ REPLY NOW via SendMessage to "agent".';
+    expect(sanitizeOutboundText(input)).toBe('');
+  });
+
+  test('preserves emoji and international text', () => {
+    expect(sanitizeOutboundText('Olá! 👋 Como vai?')).toBe('Olá! 👋 Como vai?');
+  });
+
+  test('does not strip bracketed text that is not a routing header', () => {
+    const input = '[This is a note] Some message';
+    expect(sanitizeOutboundText(input)).toBe('[This is a note] Some message');
+  });
+
+  test('handles empty string', () => {
+    expect(sanitizeOutboundText('')).toBe('');
+  });
+
+  test('collapses excessive blank lines after stripping', () => {
+    const input = '[channel:whatsapp instance:x chat:y]\n\n\nActual message\n\n\n⚡ REPLY NOW directive';
+    expect(sanitizeOutboundText(input)).toBe('Actual message');
+  });
+
+  test('strips multiple routing headers in multiline message', () => {
+    const input = '[channel:whatsapp instance:a chat:b]\nFirst part\n[channel:discord instance:c chat:d]\nSecond part';
+    expect(sanitizeOutboundText(input)).toBe('First part\nSecond part');
   });
 });

@@ -20,7 +20,13 @@
 import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
+import {
+  type AckHandle,
+  type AckProvider,
+  type ReactionAckConfig,
+  sanitizeOutboundText,
+  startAck,
+} from '@omni/channel-sdk';
 import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
@@ -376,9 +382,13 @@ async function sendTextMessage(
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
 
+  // Strip internal routing headers and agent directives (GH #300)
+  const sanitized = sanitizeOutboundText(text);
+  if (!sanitized) return; // Entire message was internal metadata — nothing to send
+
   await plugin.sendMessage(instanceId, {
     to: chatId,
-    content: { type: 'text', text },
+    content: { type: 'text', text: sanitized },
     replyTo,
     metadata: { messageFormatMode, correlationId, senderAgentId },
   });
