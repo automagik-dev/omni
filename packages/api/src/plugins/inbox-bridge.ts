@@ -16,6 +16,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ChannelRegistry, OutgoingMessage } from '@omni/channel-sdk';
+import { sanitizeOutboundText } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { Services } from '../services';
 
@@ -340,6 +341,10 @@ async function sendInboxMessage(
 
   if (!parsed.cleanText) return 'ok';
 
+  // Strip internal routing headers and agent directives before sending (GH #312)
+  const sanitizedText = sanitizeOutboundText(parsed.cleanText);
+  if (!sanitizedText) return 'ok';
+
   const plugin = channelRegistry.get(parsed.channel as Parameters<typeof channelRegistry.get>[0]);
   if (!plugin) {
     log.warn('Channel plugin not found', { channel: parsed.channel, team, inboxName });
@@ -350,7 +355,7 @@ async function sendInboxMessage(
     to: parsed.chat,
     threadId: parsed.thread,
     replyTo: parsed.replyTo,
-    content: { type: 'text', text: parsed.cleanText },
+    content: { type: 'text', text: sanitizedText },
   };
 
   try {
