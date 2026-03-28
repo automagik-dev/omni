@@ -1,0 +1,1 @@
+ALTER TABLE "instances" ADD COLUMN "mark_online_on_connect" boolean DEFAULT true NOT NULL;

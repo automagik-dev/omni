@@ -131,6 +131,12 @@ const createInstanceSchema = z.object({
     .describe(
       'Number of context messages to include when dispatching to agent. Groups use the full value; DMs are capped at 20. (0 = disabled, max 200)',
     ),
+  markOnlineOnConnect: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Mark the instance as online when connecting to WhatsApp (default: true). Set to false to preserve phone push notifications.',
+    ),
   reactionAck: z
     .enum(['on', 'off'])
     .default('off')
@@ -169,6 +175,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Override fields with .default() to strip the default — omitted keys must stay undefined
   // so PATCH only updates what is explicitly sent (not reset to defaults)
   readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+  markOnlineOnConnect: z.boolean().optional(),
   groupHistorySize: z.number().int().min(0).max(200).optional(),
   reactionAck: z.enum(['on', 'off']).optional(),
   reactionAckEmoji: z.record(z.string()).nullable().optional(),
@@ -767,6 +774,14 @@ instancesRoutes.post(
       connectionOptions.presence = instance.discordPresence;
     }
 
+    // Pass per-instance markOnlineOnConnect to WhatsApp plugin (GH #310)
+    if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
+      connectionOptions.whatsapp = {
+        ...(connectionOptions.whatsapp as Record<string, unknown> | undefined),
+        markOnlineOnConnect: instance.markOnlineOnConnect,
+      };
+    }
+
     const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
     if (errorMessage) {
       return c.json(
@@ -861,6 +876,13 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'slack') {
       applySlackConnectOptions(restartOptions, instance);
+    }
+    // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
+    if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
+      restartOptions.whatsapp = {
+        ...(restartOptions.whatsapp as Record<string, unknown> | undefined),
+        markOnlineOnConnect: instance.markOnlineOnConnect,
+      };
     }
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {
