@@ -77,6 +77,10 @@ export class MessageDebouncer {
 
   onUserTyping(instanceId: string, chatId: string, config: DebounceConfig): void {
     const chatKey = this.getChatKey(instanceId, chatId);
+    // Don't restart the timer if this chat is currently being flushed — the
+    // finally-block re-flush will pick up any pending messages.  Restarting
+    // here would race with that re-flush and could cause a double-dispatch.
+    if (this.inFlight.has(chatKey)) return;
     if (config.restartOnTyping && this.buffers.has(chatKey)) {
       log.debug('Restarting debounce timer on user typing', { chatKey });
       this.restartTimer(chatKey, config);
