@@ -243,6 +243,10 @@ export class ChatService {
       const groupName = nameMap.get(chat.externalId);
       if (groupName) {
         chat.name = groupName;
+      } else {
+        // Fallback: derive a name from the JID when group metadata is not synced (GH #309)
+        const jidPrefix = chat.externalId.split('@')[0];
+        chat.name = jidPrefix ? `Group ${jidPrefix.slice(0, 15)}${jidPrefix.length > 15 ? '…' : ''}` : 'Unknown Group';
       }
     }
   }
