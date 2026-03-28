@@ -749,6 +749,10 @@ export const instances = pgTable(
       .default('on')
       .$type<'on' | 'off' | 'exclude-self'>(),
 
+    // ---- WhatsApp Presence ----
+    /** Mark the instance as "online" when connecting to WhatsApp (default: true) */
+    markOnlineOnConnect: boolean('mark_online_on_connect').notNull().default(true),
+
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
     groupHistorySize: integer('group_history_size').notNull().default(50),
