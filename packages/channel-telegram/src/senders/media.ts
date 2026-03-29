@@ -12,6 +12,7 @@
 
 import { createLogger } from '@omni/core';
 import type { TelegramBotLike } from '../grammy-shim';
+import { TelegramError, TelegramErrorCode } from '../utils/errors';
 
 const log = createLogger('telegram:sender:media');
 
@@ -25,7 +26,11 @@ async function resolveFileSource(source: string | Buffer, filename?: string): Pr
     const { InputFile } = await import('grammy');
     return new InputFile(source, filename);
   } catch (error) {
-    throw new Error(`Failed to load grammy InputFile for buffer upload: ${String(error)}`);
+    throw new TelegramError(
+      TelegramErrorCode.SEND_FAILED,
+      `Failed to load grammy InputFile for buffer upload: ${String(error)}`,
+      false,
+    );
   }
 }
 
@@ -222,7 +227,11 @@ export async function sendDocument(
       const { InputFile } = await import('grammy');
       file = new InputFile(documentSource, filename);
     } catch (error) {
-      throw new Error(`Failed to load grammy InputFile for buffer upload: ${String(error)}`);
+      throw new TelegramError(
+        TelegramErrorCode.SEND_FAILED,
+        `Failed to load grammy InputFile for buffer upload: ${String(error)}`,
+        false,
+      );
     }
   } else if (filename) {
     // URL with filename — wrap in InputFile so Telegram uses the provided name

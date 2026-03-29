@@ -12,6 +12,47 @@ import type { ApiErrorResponse, AppVariables } from '../types';
 const log = createLogger('api:error');
 
 /**
+ * Fields that must never appear in HTTP responses.
+ * Matched case-insensitively against context keys.
+ */
+const SENSITIVE_KEYS = new Set([
+  'password',
+  'token',
+  'secret',
+  'credential',
+  'credentials',
+  'authorization',
+  'cookie',
+  'session',
+  'connectionstring',
+  'dsn',
+  'apikey',
+  'privatekey',
+  'accesstoken',
+  'refreshtoken',
+]);
+
+/**
+ * Sanitize error context before including it in HTTP responses.
+ * Strips sensitive fields (tokens, credentials, connection strings, etc.)
+ * while preserving safe debugging info for API consumers.
+ *
+ * Full unsanitized context remains in server logs and Sentry.
+ */
+function sanitizeErrorContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!context) return undefined;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (SENSITIVE_KEYS.has(key.toLowerCase())) continue;
+    // Strip stack traces that may leak file paths
+    if (key === 'stack' || key === 'stackTrace') continue;
+    sanitized[key] = value;
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/**
  * Map error codes to HTTP status codes
  */
 const ERROR_STATUS_MAP: Record<string, 400 | 401 | 403 | 404 | 409 | 429 | 500 | 502 | 503 | 504> = {
@@ -90,7 +131,7 @@ function handleOmniError(c: Context, error: OmniError): Response {
     error: {
       code: error.code,
       message: error.message,
-      details: error.context,
+      details: sanitizeErrorContext(error.context),
     },
   };
   return c.json(response, status);
@@ -143,7 +184,7 @@ function handleConflictError(c: Context, error: ConflictError): Response {
         details: {
           resourceType: error.resourceType,
           conflictReason: error.conflictReason,
-          ...error.context,
+          ...sanitizeErrorContext(error.context),
         },
       },
     },
@@ -155,18 +196,49 @@ function handleConflictError(c: Context, error: ConflictError): Response {
  * Channel error code → HTTP status + user-friendly message.
  * Hoisted to module scope to avoid re-creation on every error.
  */
-const CHANNEL_ERROR_MAP: Record<string, { status: 400 | 401 | 429 | 502 | 503; message: string }> = {
-  WHATSAPP_NOT_CONNECTED: {
-    status: 503,
-    message: 'WhatsApp instance is disconnected. Re-scan QR code to reconnect.',
-  },
+const CHANNEL_ERROR_MAP: Record<string, { status: 400 | 401 | 403 | 429 | 502 | 503; message: string }> = {
+  // WhatsApp
+  WHATSAPP_NOT_CONNECTED: { status: 503, message: 'WhatsApp instance is disconnected. Re-scan QR code to reconnect.' },
   WHATSAPP_AUTH_FAILED: { status: 401, message: 'WhatsApp authentication failed. Re-scan QR code.' },
   WHATSAPP_RATE_LIMITED: { status: 429, message: 'WhatsApp rate limit reached. Try again later.' },
   WHATSAPP_INVALID_JID: { status: 400, message: 'Invalid WhatsApp JID format.' },
   WHATSAPP_INVALID_PHONE: { status: 400, message: 'Invalid phone number format.' },
   WHATSAPP_SEND_FAILED: { status: 502, message: 'Failed to send message via WhatsApp.' },
   WHATSAPP_MEDIA_UPLOAD_FAILED: { status: 502, message: 'Failed to upload media to WhatsApp.' },
+  WHATSAPP_PAIRING_FAILED: { status: 503, message: 'WhatsApp pairing failed. Try scanning QR code again.' },
+  WHATSAPP_UNKNOWN_ERROR: { status: 502, message: 'An unexpected WhatsApp error occurred.' },
+
+  // Telegram
   TELEGRAM_NOT_CONNECTED: { status: 503, message: 'Telegram bot is disconnected.' },
+  TELEGRAM_SEND_FAILED: { status: 502, message: 'Failed to send message via Telegram.' },
+  TELEGRAM_AUTH_FAILED: { status: 401, message: 'Telegram bot token is invalid or revoked.' },
+  TELEGRAM_RATE_LIMITED: { status: 429, message: 'Telegram rate limit reached. Try again later.' },
+  TELEGRAM_BOT_BLOCKED: { status: 403, message: 'Telegram bot was blocked by the user.' },
+  TELEGRAM_BOT_MISSING: { status: 503, message: 'Telegram bot not found for this instance.' },
+  TELEGRAM_WEBHOOK_FAILED: { status: 502, message: 'Failed to configure Telegram webhook.' },
+  TELEGRAM_UNKNOWN_ERROR: { status: 502, message: 'An unexpected Telegram error occurred.' },
+
+  // Discord
+  DISCORD_NOT_CONNECTED: { status: 503, message: 'Discord bot is disconnected.' },
+  DISCORD_SEND_FAILED: { status: 502, message: 'Failed to send message via Discord.' },
+  DISCORD_AUTH_FAILED: { status: 401, message: 'Discord authentication failed.' },
+  DISCORD_RATE_LIMITED: { status: 429, message: 'Discord rate limit reached. Try again later.' },
+  DISCORD_NOT_FOUND: { status: 400, message: 'Discord resource not found.' },
+  DISCORD_MISSING_ACCESS: { status: 403, message: 'Discord bot lacks access to the requested resource.' },
+  DISCORD_MISSING_PERMISSIONS: { status: 403, message: 'Discord bot lacks required permissions.' },
+  DISCORD_INVALID_TOKEN: { status: 401, message: 'Discord bot token is invalid.' },
+  DISCORD_UNKNOWN_ERROR: { status: 502, message: 'An unexpected Discord error occurred.' },
+
+  // Slack
+  SLACK_NOT_CONNECTED: { status: 503, message: 'Slack bot is disconnected.' },
+  SLACK_SEND_FAILED: { status: 502, message: 'Failed to send message via Slack.' },
+  SLACK_INVALID_TOKEN: { status: 401, message: 'Slack bot token is invalid or expired.' },
+  SLACK_RATE_LIMITED: { status: 429, message: 'Slack rate limit reached. Try again later.' },
+  SLACK_FILE_UPLOAD_FAILED: { status: 502, message: 'Failed to upload file to Slack.' },
+  SLACK_FILE_DOWNLOAD_FAILED: { status: 502, message: 'Failed to download file from Slack.' },
+  SLACK_CONNECTION_FAILED: { status: 503, message: 'Failed to connect to Slack.' },
+  SLACK_DM_REJECTED: { status: 403, message: 'Slack DM was rejected by the recipient.' },
+  SLACK_UNKNOWN_ERROR: { status: 502, message: 'An unexpected Slack error occurred.' },
 };
 
 /**
