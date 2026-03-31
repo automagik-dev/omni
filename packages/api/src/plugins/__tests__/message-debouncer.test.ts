@@ -208,6 +208,49 @@ describe('MessageDebouncer', () => {
     });
   });
 
+  describe('typing during in-flight does not cause double dispatch', () => {
+    it('onUserTyping is ignored while flush is in-flight', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+      let resolveFirstFlush: (() => void) | null = null;
+
+      const typingConfig: DebounceConfig = {
+        mode: 'fixed',
+        minMs: 100,
+        maxMs: 100,
+        restartOnTyping: true,
+        groupMs: null,
+      };
+
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+        if (flushCalls.length === 1) {
+          await new Promise<void>((resolve) => {
+            resolveFirstFlush = resolve;
+          });
+        }
+      });
+
+      // Buffer a message and wait for the fixed window to fire
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), typingConfig);
+      await wait(150);
+      expect(flushCalls.length).toBe(1);
+
+      // While in-flight: buffer a late message AND fire a typing event
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), typingConfig);
+      debouncer.onUserTyping('inst-1', 'chat-1', typingConfig);
+
+      // Release first flush
+      resolveFirstFlush!();
+      await wait(50);
+
+      // Should have exactly 2 flushes — the re-flush from finally picked up msg2.
+      // Without the inFlight guard in onUserTyping, a third flush could fire from
+      // the typing-restarted timer racing the finally-block re-flush.
+      expect(flushCalls.length).toBe(2);
+      expect(flushCalls[1]!.length).toBe(1);
+    });
+  });
+
   describe('clear()', () => {
     it('clears all internal state including inFlight', async () => {
       debouncer = new MessageDebouncer(async () => {

@@ -1,9 +1,0 @@
-model: gpt-5.3-codex
-tools:
-  - type: bash
-keywords:
-  - omni
-  - send
-  - messages
-  - batch
-description: Omni v2 message execution specialist — use for sending messages (text, TTS, media, reactions, stickers, polls), searching messages, batch operations, and testing automations via the omni CLI.

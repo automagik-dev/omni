@@ -20,7 +20,13 @@
 import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type AckHandle, type AckProvider, type ReactionAckConfig, startAck } from '@omni/channel-sdk';
+import {
+  type AckHandle,
+  type AckProvider,
+  type ReactionAckConfig,
+  sanitizeOutboundText,
+  startAck,
+} from '@omni/channel-sdk';
 import type { FetchHistoryResult, HistorySyncMessage } from '@omni/channel-sdk';
 import type { StreamSender } from '@omni/channel-sdk';
 import {
@@ -376,9 +382,13 @@ async function sendTextMessage(
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
 
+  // Strip internal routing headers and agent directives (GH #300)
+  const sanitized = sanitizeOutboundText(text);
+  if (!sanitized) return; // Entire message was internal metadata — nothing to send
+
   await plugin.sendMessage(instanceId, {
     to: chatId,
-    content: { type: 'text', text },
+    content: { type: 'text', text: sanitized },
     replyTo,
     metadata: { messageFormatMode, correlationId, senderAgentId },
   });
@@ -2325,6 +2335,100 @@ async function resolveDispatchSenderAgentId(_db: Database, instance: Instance): 
   return instance.agentId ?? undefined;
 }
 
+function buildAckConfig(instance: DispatchInstance): ReactionAckConfig {
+  const inst = instance as unknown as Record<string, unknown>;
+  return {
+    reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
+    reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
+    ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
+  };
+}
+
+async function dispatchToAgent(
+  services: Services,
+  instance: DispatchInstance,
+  msgs: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  channel: ChannelType,
+  chatId: string,
+  senderId: string,
+  personId: string,
+  senderName: string | undefined,
+  traceId: string,
+  senderAgentId: string | undefined,
+  perThreadExtraContext: string[] | undefined,
+  db: Database,
+): Promise<void> {
+  // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
+  // a type mismatch. BufferedMessage doesn't carry the original NATS event envelope.
+  const firstMsg = msgs[0];
+  if (!firstMsg) return;
+  const rawEvent = firstMsg.payload as unknown as AgentTrigger['event'];
+  let handled = false;
+  try {
+    handled = await dispatchViaStreamingProvider(
+      services,
+      instance,
+      msgs,
+      triggerType,
+      channel,
+      chatId,
+      senderId,
+      personId,
+      senderName,
+      traceId,
+      rawEvent,
+      db,
+      perThreadExtraContext,
+    );
+    if (!handled) {
+      handled = await dispatchViaProvider(
+        services,
+        instance,
+        msgs,
+        triggerType,
+        channel,
+        chatId,
+        senderId,
+        personId,
+        senderName,
+        traceId,
+        rawEvent,
+        db,
+        perThreadExtraContext,
+        senderAgentId,
+      );
+    }
+  } catch (providerError) {
+    log.error('Provider dispatch failed, falling back to legacy', {
+      instanceId: instance.id,
+      chatId,
+      error: String(providerError),
+      traceId,
+    });
+  }
+
+  if (handled) return;
+
+  log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
+    instanceId: instance.id,
+  });
+  await dispatchViaLegacy(
+    services,
+    instance,
+    msgs,
+    triggerType,
+    channel,
+    chatId,
+    senderId,
+    personId,
+    senderName,
+    traceId,
+    perThreadExtraContext,
+    senderAgentId,
+  );
+}
+
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2339,45 +2443,36 @@ async function processAgentResponse(
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
-  const traceId = firstMessage.metadata.traceId;
+  const traceId = firstMessage.metadata.traceId ?? '';
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
-  const inst = instance as unknown as Record<string, unknown>;
-  const ackConfig: ReactionAckConfig = {
-    reactionAck: (inst.reactionAck as 'off' | 'on') ?? 'off',
-    reactionAckEmoji: inst.reactionAckEmoji as ReactionAckConfig['reactionAckEmoji'],
-    ackTimeoutMs: (inst.ackTimeoutMs as number) ?? 30_000,
-  };
   const plugin = (await getPlugin(channel)) ?? null;
   const ackProvider = createPluginAckProvider(plugin);
   const messageId = firstMessage.payload.externalId ?? '';
-  const ackHandle: AckHandle = startAck(plugin, ackProvider, instance.id, chatId, messageId, channel, ackConfig);
+  const ackHandle: AckHandle = startAck(
+    plugin,
+    ackProvider,
+    instance.id,
+    chatId,
+    messageId,
+    channel,
+    buildAckConfig(instance),
+  );
 
   // Resolve person ID (waits for message-persistence to create identity)
   const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
   if (!personId) {
-    log.warn('Could not resolve person ID, skipping agent', {
-      instanceId: instance.id,
-      chatId,
-      senderId,
-    });
+    log.warn('Could not resolve person ID, skipping agent', { instanceId: instance.id, chatId, senderId });
     ackHandle.remove();
     return;
   }
 
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
-  // Only track activity for messages that will actually be dispatched, so that
-  // identity-resolution failures (transient race condition) do not corrupt the
-  // idle-reset sliding window.
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
-
-  // omni-h3q / omni-930: Look up the Agent entity UUID for this instance so that
-  // sent messages can be attributed to the specific agent in the DB.
-  // Uses agentId (UUID FK) directly when set, otherwise falls back to agentProviderId lookup.
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
   log.info('Dispatching to agent', {
@@ -2393,6 +2488,7 @@ async function processAgentResponse(
   await sendTypingPresence(channel, instance.id, chatId, 'composing');
 
   // ── Auto-ack text message (pre-dispatch, fire-and-forget) ──
+  const inst = instance as unknown as Record<string, unknown>;
   const agentAckMessage = (inst.agentAckMessage as string) ?? null;
   if (agentAckMessage) {
     sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
@@ -2401,8 +2497,6 @@ async function processAgentResponse(
   }
 
   // ── Per-thread lazy init ──
-  // On the first trigger in a per_thread session: fetch thread history, process media,
-  // and inject the formatted messages as extra context for the agent.
   const perThreadExtraContext = await resolvePerThreadExtraContext(
     db,
     services,
@@ -2414,71 +2508,7 @@ async function processAgentResponse(
   );
 
   try {
-    // B-1: Try IAgentProvider path first (Agno, Webhook, OpenClaw)
-    // TODO(P1): rawEvent is MessageReceivedPayload, not OmniEvent. The double cast hides
-    // a type mismatch. BufferedMessage doesn't carry the original NATS event envelope.
-    // Providers reading context.event fields (id, type, timestamp) will get undefined.
-    // Fix: either store the full OmniEvent in BufferedMessage, or make AgentTrigger.event optional.
-    const rawEvent = firstMessage.payload as unknown as AgentTrigger['event'];
-    let handled = false;
-    try {
-      // B-1a: Try streaming dispatch first (if instance + provider + channel support it)
-      handled = await dispatchViaStreamingProvider(
-        services,
-        instance,
-        messages,
-        triggerType,
-        channel,
-        chatId,
-        senderId,
-        personId,
-        senderName,
-        traceId,
-        rawEvent,
-        db,
-        perThreadExtraContext,
-      );
-
-      // B-1b: Fall back to accumulate-then-reply
-      if (!handled) {
-        handled = await dispatchViaProvider(
-          services,
-          instance,
-          messages,
-          triggerType,
-          channel,
-          chatId,
-          senderId,
-          personId,
-          senderName,
-          traceId,
-          rawEvent,
-          db,
-          perThreadExtraContext,
-          senderAgentId,
-        );
-      }
-    } catch (providerError) {
-      log.error('Provider dispatch failed, falling back to legacy', {
-        instanceId: instance.id,
-        chatId,
-        error: String(providerError),
-        traceId,
-      });
-      // Fall through to legacy path
-    }
-
-    if (handled) {
-      ackHandle.remove();
-      return;
-    }
-
-    // Fallback: legacy agentRunner.run() path
-    log.debug('No IAgentProvider resolved or provider failed, using legacy agentRunner path', {
-      instanceId: instance.id,
-    });
-
-    await dispatchViaLegacy(
+    await dispatchToAgent(
       services,
       instance,
       messages,
@@ -2489,8 +2519,9 @@ async function processAgentResponse(
       personId,
       senderName,
       traceId,
-      perThreadExtraContext,
       senderAgentId,
+      perThreadExtraContext,
+      db,
     );
   } catch (error) {
     log.error('Failed to process agent response', {
@@ -2499,10 +2530,8 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
-    // ── Error feedback: notify user when agent dispatch fails ──
     sendErrorFeedback(channel, instance.id, chatId, error).catch(() => {});
   } finally {
-    // ── Remove Ack (post-processing) ──
     ackHandle.remove();
     await sendTypingPresence(channel, instance.id, chatId, 'paused');
   }
@@ -3150,6 +3179,49 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
 }
 
 /**
+ * Check if a single LID JID matches the instance owner via direct comparison or DB resolution.
+ * Returns true if the LID maps to the owner.
+ */
+async function isLidMatchingOwner(
+  chatsService: Services['chats'],
+  instanceId: string,
+  ownerIdentifier: string,
+  ownerPhone: string,
+  ownerIsLid: boolean,
+  lidJid: string,
+): Promise<boolean> {
+  // Direct LID match: when ownerIdentifier is itself a LID, compare directly
+  if (ownerIsLid && extractPhoneFromJid(lidJid) === ownerPhone) {
+    log.debug('LID mention matches owner LID directly', { lidJid, ownerIdentifier });
+    return true;
+  }
+
+  // DB resolution: resolve LID -> phone JID, then compare with owner phone
+  try {
+    const mapping = await chatsService.findLidMapping(instanceId, lidJid);
+    if (!mapping) return false;
+
+    const resolvedPhone = extractPhoneFromJid(mapping);
+    if (resolvedPhone === ownerPhone) {
+      log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
+      return true;
+    }
+
+    // Reverse check: when owner is LID, also look up the owner's phone mapping
+    if (ownerIsLid) {
+      const ownerMapping = await chatsService.findLidMapping(instanceId, ownerIdentifier);
+      if (ownerMapping && extractPhoneFromJid(ownerMapping) === resolvedPhone) {
+        log.debug('LID resolved to owner via reverse mapping', { lidJid, resolvedPhone, ownerIdentifier });
+        return true;
+      }
+    }
+  } catch {
+    // Non-critical: skip DB lookup failures
+  }
+  return false;
+}
+
+/**
  * Resolve LID-addressed mentions via DB mapping to determine if a @lid mention
  * targets the instance owner. Mutates messageContext.mentionsBot if resolved.
  *
@@ -3170,35 +3242,9 @@ async function resolveLidMentionBot(
   const ownerPhone = extractPhoneFromJid(ownerIdentifier);
 
   for (const lidJid of lidMentions) {
-    // Direct LID match: when ownerIdentifier is itself a LID, compare directly
-    if (ownerIsLid && extractPhoneFromJid(lidJid) === ownerPhone) {
+    if (await isLidMatchingOwner(chatsService, instanceId, ownerIdentifier, ownerPhone, ownerIsLid, lidJid)) {
       messageContext.mentionsBot = true;
-      log.debug('LID mention matches owner LID directly', { lidJid, ownerIdentifier });
       break;
-    }
-
-    // DB resolution: resolve LID -> phone JID, then compare with owner phone
-    try {
-      const mapping = await chatsService.findLidMapping(instanceId, lidJid);
-      if (mapping) {
-        const resolvedPhone = extractPhoneFromJid(mapping);
-        if (resolvedPhone === ownerPhone) {
-          messageContext.mentionsBot = true;
-          log.debug('LID resolved to instance owner via DB', { lidJid, resolvedPhone, ownerPhone });
-          break;
-        }
-        // Reverse check: when owner is LID, also look up the owner's phone mapping
-        if (ownerIsLid) {
-          const ownerMapping = await chatsService.findLidMapping(instanceId, ownerIdentifier);
-          if (ownerMapping && extractPhoneFromJid(ownerMapping) === resolvedPhone) {
-            messageContext.mentionsBot = true;
-            log.debug('LID resolved to owner via reverse mapping', { lidJid, resolvedPhone, ownerIdentifier });
-            break;
-          }
-        }
-      }
-    } catch {
-      // Non-critical: skip DB lookup failures
     }
   }
 }
@@ -4042,4 +4088,6 @@ export const __test__ = {
   checkProcessedColumn,
   getProcessedColumn,
   MEDIA_WAIT_NULL,
+  mergeRouteOverrides,
+  getDebounceConfig,
 };

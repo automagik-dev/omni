@@ -407,6 +407,25 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Check if any mentioned JID matches the owner JID (direct, phone, or LID resolution).
+   */
+  private isMentioningOwner(mentionedJids: string[], ownerJid: string, lidCache: Map<string, string>): boolean {
+    const ownerPhone = ownerJid.replace(/:.*$/, '').replace(/@.*$/, '');
+    return mentionedJids.some((jid) => {
+      if (jid === ownerJid) return true;
+      const mentionPhone = jid.replace(/:.*$/, '').replace(/@.*$/, '');
+      if (mentionPhone === ownerPhone) return true;
+      if (jid.endsWith('@lid')) {
+        const resolvedPhone = lidCache.get(jid);
+        if (resolvedPhone) {
+          return resolvedPhone.replace(/:.*$/, '').replace(/@.*$/, '') === ownerPhone;
+        }
+      }
+      return false;
+    });
+  }
+
+  /**
    * Check if LID-first identity resolution is enabled for an instance.
    * When false, falls back to legacy phone-based resolution (DEC-8 rollback).
    */
@@ -2659,25 +2678,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         const sock = this.sockets.get(instanceId);
         const ownerJid = sock?.user?.id;
         if (ownerJid) {
-          const ownerPhone = ownerJid.replace(/:.*$/, '').replace(/@.*$/, '');
           const lidCache = this.getLidMappingCache(instanceId);
-          const isMentioningInstance = contextInfo.mentionedJid.some((jid) => {
-            // Direct match
-            if (jid === ownerJid) return true;
-            // Phone number match (strip :device and @suffix)
-            const mentionPhone = jid.replace(/:.*$/, '').replace(/@.*$/, '');
-            if (mentionPhone === ownerPhone) return true;
-            // LID resolution: look up LID in cache to get phone JID
-            if (jid.endsWith('@lid')) {
-              const resolvedPhone = lidCache.get(jid);
-              if (resolvedPhone) {
-                const resolved = resolvedPhone.replace(/:.*$/, '').replace(/@.*$/, '');
-                return resolved === ownerPhone;
-              }
-            }
-            return false;
-          });
-          if (isMentioningInstance) {
+          if (this.isMentioningOwner(contextInfo.mentionedJid, ownerJid, lidCache)) {
             extendedPayload.isMentioningInstance = true;
           }
         }

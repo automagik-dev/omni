@@ -97,20 +97,13 @@ export class ChatService {
   }
 
   private buildListConditions(options: ListChatsOptions) {
-    const {
-      instanceId,
-      channel,
-      chatType,
-      excludeChatTypes,
-      search,
-      includeArchived = false,
-      unreadOnly = false,
-      pendingOnly = false,
-      attentionOnly = false,
-      label,
-      includeHidden = false,
-      cursor,
-    } = options;
+    const conditions = this.buildCoreFilters(options);
+    this.applyStateFilters(conditions, options);
+    return conditions;
+  }
+
+  private buildCoreFilters(options: ListChatsOptions) {
+    const { instanceId, channel, chatType, excludeChatTypes, search, includeHidden = false } = options;
 
     const conditions = [];
 
@@ -143,10 +136,24 @@ export class ChatService {
       );
     }
 
-    if (!includeArchived) conditions.push(sql`${chats.archivedAt} IS NULL`);
-    conditions.push(sql`${chats.deletedAt} IS NULL`);
-    if (unreadOnly) conditions.push(gt(chats.unreadCount, 0));
     if (!includeHidden) conditions.push(eq(chats.visibility, 'visible'));
+    conditions.push(sql`${chats.deletedAt} IS NULL`);
+
+    return conditions;
+  }
+
+  private applyStateFilters(conditions: unknown[], options: ListChatsOptions) {
+    const {
+      includeArchived = false,
+      unreadOnly = false,
+      pendingOnly = false,
+      attentionOnly = false,
+      label,
+      cursor,
+    } = options;
+
+    if (!includeArchived) conditions.push(sql`${chats.archivedAt} IS NULL`);
+    if (unreadOnly) conditions.push(gt(chats.unreadCount, 0));
 
     if (pendingOnly) {
       conditions.push(eq(chats.lastMessageFromMe, false));
@@ -164,8 +171,6 @@ export class ChatService {
 
     if (label) conditions.push(sql`${label} = ANY(${chats.labels})`);
     if (cursor) conditions.push(sql`${chats.lastMessageAt} < ${cursor}`);
-
-    return conditions;
   }
 
   /**
@@ -238,6 +243,10 @@ export class ChatService {
       const groupName = nameMap.get(chat.externalId);
       if (groupName) {
         chat.name = groupName;
+      } else {
+        // Fallback: derive a name from the JID when group metadata is not synced (GH #309)
+        const jidPrefix = chat.externalId.split('@')[0];
+        chat.name = jidPrefix ? `Group ${jidPrefix.slice(0, 15)}${jidPrefix.length > 15 ? '…' : ''}` : 'Unknown Group';
       }
     }
   }

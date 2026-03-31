@@ -120,8 +120,9 @@ async function fetchSearchResults(params: URLSearchParams): Promise<ExtendedMess
   });
 
   if (!resp.ok) {
-    const err = (await resp.json()) as { error?: string };
-    throw new Error(err?.error ?? `API error: ${resp.status}`);
+    const err = (await resp.json()) as { error?: unknown };
+    const errorMsg = typeof err?.error === 'string' ? err.error : `API error: ${resp.status}`;
+    throw new Error(errorMsg);
   }
 
   const data = (await resp.json()) as { items?: ExtendedMessage[] };

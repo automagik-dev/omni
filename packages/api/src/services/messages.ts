@@ -208,78 +208,9 @@ export class MessageService {
    * Count total messages matching filters
    */
   async count(options: Omit<ListMessagesOptions, 'limit' | 'cursor'> = {}): Promise<number> {
-    const {
-      chatId,
-      instanceIds,
-      source,
-      messageType,
-      status,
-      hasMedia,
-      senderPersonId,
-      since,
-      until,
-      search,
-      includeHidden = false,
-    } = options;
-
-    const conditions = [];
+    const { instanceIds, includeHidden = false } = options;
     const needsJoin = Array.isArray(instanceIds) || !includeHidden;
-
-    if (chatId) {
-      conditions.push(eq(messages.chatId, chatId));
-    }
-
-    // undefined = no scoping, [] = deny-all, [...ids] = filter to those
-    if (Array.isArray(instanceIds)) {
-      conditions.push(instanceIds.length > 0 ? inArray(chats.instanceId, instanceIds) : sql`1 = 0`);
-    }
-
-    if (!includeHidden) {
-      conditions.push(eq(chats.visibility, 'visible'));
-    }
-
-    if (source?.length) {
-      conditions.push(inArray(messages.source, source));
-    }
-
-    if (messageType?.length) {
-      conditions.push(inArray(messages.messageType, messageType));
-    }
-
-    if (status?.length) {
-      conditions.push(inArray(messages.status, status));
-    }
-
-    if (hasMedia !== undefined) {
-      conditions.push(eq(messages.hasMedia, hasMedia));
-    }
-
-    if (senderPersonId) {
-      conditions.push(eq(messages.senderPersonId, senderPersonId));
-    }
-
-    if (since) {
-      conditions.push(gte(messages.platformTimestamp, since));
-    }
-
-    if (until) {
-      conditions.push(lte(messages.platformTimestamp, until));
-    }
-
-    if (search) {
-      const searchPattern = `%${search}%`;
-      conditions.push(
-        or(
-          ilike(messages.textContent, searchPattern),
-          ilike(messages.transcription, searchPattern),
-          ilike(messages.imageDescription, searchPattern),
-          ilike(messages.documentExtraction, searchPattern),
-        ),
-      );
-    }
-
-    // Exclude deleted messages by default
-    conditions.push(sql`${messages.deletedAt} IS NULL`);
+    const conditions = this.buildListConditions(options as ListMessagesOptions);
 
     const baseQuery = this.db.select({ count: count() }).from(messages);
     const query = needsJoin ? baseQuery.innerJoin(chats, eq(messages.chatId, chats.id)) : baseQuery;
@@ -377,7 +308,7 @@ export class MessageService {
    * Create a new message
    */
   async create(options: CreateMessageOptions): Promise<Message> {
-    return await this.db.transaction(async (tx) => {
+    return this.db.transaction(async (tx) => {
       // Insert message
       const [created] = await tx
         .insert(messages)

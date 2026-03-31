@@ -73,26 +73,28 @@ export function error(message: string, details?: unknown, exitCode = 1): never {
   process.exit(exitCode);
 }
 
-/** Output warning message */
+/** Output warning message. In JSON mode, writes to stderr to keep stdout as valid JSON. */
 export function warn(message: string): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // Write to stderr so --json stdout remains valid, parseable JSON
     // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ warning: message }, null, 2));
+    console.error(JSON.stringify({ warning: message }));
   } else {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().yellow('⚠'), message);
   }
 }
 
-/** Output info message */
+/** Output info message. In JSON mode, writes to stderr to keep stdout as valid JSON. */
 export function info(message: string): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
+    // Write to stderr so --json stdout remains valid, parseable JSON
     // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ info: message }, null, 2));
+    console.error(JSON.stringify({ info: message }));
   } else {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().blue('ℹ'), message);
