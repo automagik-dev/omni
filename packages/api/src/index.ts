@@ -298,6 +298,7 @@ async function setupEventBusServices(
     await services.automations.startEngine({
       sendMessage: async (instanceId, to, content) => {
         const instance = await services.instances.getById(instanceId);
+        if (!instance) throw new Error(`Instance not found: ${instanceId}`);
         const plugin = await getPlugin(instance.channel);
         if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
         await plugin.sendMessage(instanceId, { to, content: { type: 'text', text: content } });
