@@ -1,7 +1,7 @@
 {
   "name": "@omni/channel-internal",
   "version": "2.260331.1",
-  "description": "Internal agent-to-agent routing channel for Omni v2",
+  "description": "Internal agent-to-agent routing channel for Omni",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

@@ -1,7 +1,7 @@
 {
   "name": "@omni/channel-telegram",
   "version": "2.260331.1",
-  "description": "Telegram channel plugin for Omni v2 using grammy",
+  "description": "Telegram channel plugin for Omni using grammy",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
