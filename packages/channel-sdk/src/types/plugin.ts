@@ -303,6 +303,26 @@ export interface ChannelPlugin {
     }>;
   }>;
 
+  /**
+   * Fetch members of a specific group
+   *
+   * Optional - implement to support group member listing.
+   *
+   * @param instanceId - Instance to fetch group members for
+   * @param groupJid - Group JID to fetch members from
+   * @returns Members list with name and role
+   */
+  fetchGroupMembers?(
+    instanceId: string,
+    groupJid: string,
+  ): Promise<{
+    members: Array<{
+      id: string;
+      name?: string;
+      role?: 'admin' | 'superadmin' | 'member';
+    }>;
+  }>;
+
   // ─────────────────────────────────────────────────────────────
   // Health
   // ─────────────────────────────────────────────────────────────

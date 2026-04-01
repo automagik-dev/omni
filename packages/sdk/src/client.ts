@@ -1047,6 +1047,15 @@ export interface Group {
 }
 
 /**
+ * Group member
+ */
+export interface GroupMember {
+  id: string;
+  name?: string;
+  role?: 'admin' | 'superadmin' | 'member';
+}
+
+/**
  * Helper to throw API error from response
  */
 function throwIfError(response: Response, error: unknown): asserts error is undefined {
@@ -1360,6 +1369,19 @@ export function createOmniClient(config: OmniClientConfig) {
         };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return { items: json?.items ?? [], meta: json?.meta ?? { totalFetched: 0, hasMore: false } };
+      },
+
+      /**
+       * List members of a group
+       */
+      async listGroupMembers(id: string, groupJid: string): Promise<{ members: GroupMember[] }> {
+        const resp = await apiFetch(
+          `${baseUrl}/api/v2/instances/${id}/groups/${encodeURIComponent(groupJid)}/members`,
+          {},
+        );
+        const json = (await resp.json()) as { members?: GroupMember[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return { members: json?.members ?? [] };
       },
 
       /**
