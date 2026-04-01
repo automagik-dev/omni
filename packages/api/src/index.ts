@@ -48,6 +48,7 @@ import {
   setupSyncWorker,
 } from './plugins';
 import { setupInboxBridge } from './plugins/inbox-bridge';
+import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { printStartupBanner } from './utils/startup-banner';
 
@@ -294,7 +295,14 @@ async function setupEventBusServices(
 
   // Automation engine (subscribes to NATS events and evaluates rules)
   try {
-    await services.automations.startEngine({});
+    await services.automations.startEngine({
+      sendMessage: async (instanceId, to, content) => {
+        const instance = await services.instances.getById(instanceId);
+        const plugin = await getPlugin(instance.channel);
+        if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
+        await plugin.sendMessage(instanceId, { to, content: { type: 'text', text: content } });
+      },
+    });
   } catch (error) {
     log.error('Failed to start automation engine', { error: String(error) });
   }
