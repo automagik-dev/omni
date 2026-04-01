@@ -2275,6 +2275,58 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
   }
 
+  /**
+   * Fetch members of a specific group with name enrichment.
+   *
+   * Uses sock.groupMetadata(groupJid) and enriches participant names from
+   * contactsCache and chatNamesCache.
+   */
+  async fetchGroupMembers(
+    instanceId: string,
+    groupJid: string,
+  ): Promise<{ members: Array<{ id: string; name?: string; role?: 'admin' | 'superadmin' | 'member' }> }> {
+    const sock = this.getSocket(instanceId);
+
+    try {
+      const metadata = await sock.groupMetadata(groupJid);
+      const contactsCacheMap = this.contactsCache.get(instanceId);
+      const chatNamesMap = this.chatNamesCache.get(instanceId);
+
+      const members = (metadata.participants ?? []).map((p) => {
+        // Resolve name from caches using participant's phoneNumber JID
+        const phoneJid = (p as { phoneNumber?: string }).phoneNumber;
+        let name: string | undefined;
+
+        if (phoneJid) {
+          name = contactsCacheMap?.get(phoneJid)?.name ?? chatNamesMap?.get(phoneJid);
+        }
+        // Also try the participant id directly in caches
+        if (!name) {
+          name = contactsCacheMap?.get(p.id)?.name ?? chatNamesMap?.get(p.id);
+        }
+
+        const role: 'admin' | 'superadmin' | 'member' = (p.admin as 'admin' | 'superadmin' | undefined) ?? 'member';
+
+        return {
+          id: p.id,
+          name: name || undefined,
+          role,
+        };
+      });
+
+      this.logger.info('Group members fetch complete', {
+        instanceId,
+        groupJid,
+        totalMembers: members.length,
+      });
+
+      return { members };
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Internal handlers called by connection/message handlers
   // ─────────────────────────────────────────────────────────────
