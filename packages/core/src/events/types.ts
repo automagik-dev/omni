@@ -41,6 +41,7 @@ export const CORE_EVENT_TYPES = [
   'access.allowed',
   'access.denied',
   'access.pairing_requested',
+  'access.pairing_approved',
   // Presence
   'presence.typing',
   'presence.online',
@@ -401,6 +402,13 @@ export interface AccessPairingRequestedPayload {
   expiresAt: number;
 }
 
+export interface AccessPairingApprovedPayload {
+  instanceId: string;
+  platformUserId: string;
+  requestId: string;
+  ruleId: string;
+}
+
 /**
  * Sync event payloads
  */
@@ -662,6 +670,7 @@ export interface EventPayloadMap {
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
   'access.pairing_requested': AccessPairingRequestedPayload;
+  'access.pairing_approved': AccessPairingApprovedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

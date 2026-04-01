@@ -16,7 +16,7 @@ import { randomInt } from 'node:crypto';
 import type { CacheProvider, EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules } from '@omni/db';
+import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules, instances } from '@omni/db';
 import { type SQL, and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { CacheKeys } from '../cache/cache-keys';
 
@@ -226,7 +226,7 @@ export class AccessService {
   async requestPairing(
     instanceId: string,
     platformUserId: string,
-    options: { expiryMs?: number } = {},
+    options: { expiryMs?: number; channelType?: string } = {},
   ): Promise<PairingRequest | null> {
     const expiryMs = options.expiryMs ?? DEFAULT_PAIRING_EXPIRY_MS;
 
@@ -331,13 +331,20 @@ export class AccessService {
 
     // Publish event outside the transaction so it only fires on commit
     if (txResult.isNew && this.eventBus) {
-      await this.eventBus.publish('access.pairing_requested', {
-        instanceId,
-        platformUserId,
-        pairingCode: txResult.request.pairingCode,
-        requestId: txResult.request.id,
-        expiresAt: txResult.request.expiresAt.getTime(),
-      });
+      await this.eventBus.publish(
+        'access.pairing_requested',
+        {
+          instanceId,
+          platformUserId,
+          pairingCode: txResult.request.pairingCode,
+          requestId: txResult.request.id,
+          expiresAt: txResult.request.expiresAt.getTime(),
+        },
+        {
+          instanceId,
+          channelType: options.channelType as import('@omni/core').ChannelType | undefined,
+        },
+      );
     }
 
     return txResult.request;
@@ -383,7 +390,7 @@ export class AccessService {
    * access are both rejected atomically inside a transaction.
    */
   async approvePairingRequest(requestId: string, instanceId: string): Promise<AccessRule> {
-    const allowRule = await this.db.transaction(async (tx) => {
+    const { allowRule, platformUserId } = await this.db.transaction(async (tx) => {
       // Fetch the request with instance scoping to prevent cross-tenant access
       const [request] = await tx
         .select()
@@ -452,11 +459,34 @@ export class AccessService {
       // Delete the consumed pairing request
       await tx.delete(accessRules).where(eq(accessRules.id, requestId));
 
-      return created;
+      return { allowRule: created, platformUserId: request.platformUserId ?? '' };
     });
 
     // Invalidate cache outside the transaction
     await this.cache?.clear();
+
+    // Emit pairing approved event with channel metadata
+    if (this.eventBus) {
+      // Look up instance to get channel type for NATS subject routing
+      const [instance] = await this.db
+        .select({ channel: instances.channel })
+        .from(instances)
+        .where(eq(instances.id, instanceId))
+        .limit(1);
+      await this.eventBus.publish(
+        'access.pairing_approved',
+        {
+          instanceId,
+          platformUserId,
+          requestId,
+          ruleId: allowRule.id,
+        },
+        {
+          instanceId,
+          channelType: instance?.channel,
+        },
+      );
+    }
 
     return allowRule;
   }

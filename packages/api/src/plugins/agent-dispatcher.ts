@@ -3454,7 +3454,7 @@ async function checkAccessWithFallback(
   // Guard against empty primaryId: a missing payload.from would otherwise create a
   // degenerate pairing entry shared by all anonymous senders.
   if (accessResult.mode === 'allowlist' && !accessResult.rule && primaryId) {
-    accessService.requestPairing(instance.id, primaryId).catch((err) => {
+    accessService.requestPairing(instance.id, primaryId, { channelType: instance.channel }).catch((err) => {
       log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
     });
   }
