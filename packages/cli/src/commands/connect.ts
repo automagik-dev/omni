@@ -2,13 +2,14 @@
  * Connect Command — omni connect <instance-id> <agent-name>
  *
  * One-command setup for Omni ↔ Genie NATS integration:
- *   1. Discovers agent via `genie agent directory <agent-name> --json`
+ *   1. Discovers agent via `genie dir get <agent-name> --json`
  *   2. Creates/updates Omni provider with schema `nats-genie`
  *   3. Creates Omni agent record linked to provider
  *   4. Updates instance to use the new agent
  */
 
 import { execFileSync } from 'node:child_process';
+import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -22,28 +23,27 @@ interface GenieDirectoryEntry {
 
 /** Find or create a provider, returning its ID */
 async function findOrCreateProvider(
-  client: ReturnType<typeof getClient>,
+  client: OmniClient,
   agentName: string,
   agentEntry: GenieDirectoryEntry,
   natsUrl: string,
 ): Promise<string | null> {
   try {
-    const response = await client.post('/providers', {
+    const provider = await client.providers.create({
       name: `nats-genie-${agentName}`,
       schema: 'nats-genie',
       baseUrl: `nats://${natsUrl}`,
       schemaConfig: { agentName: agentEntry.name, agentDir: agentEntry.dir, natsUrl },
     });
-    return (response.data as Record<string, unknown>).id as string;
+    return provider.id;
   } catch {
     // Provider may already exist — try to find it
     try {
-      const listResponse = await client.get('/providers');
-      const providers = (listResponse.data as Record<string, unknown>[]) || [];
+      const providers = await client.providers.list();
       const existing = providers.find((p) => p.name === `nats-genie-${agentName}` && p.schema === 'nats-genie');
       if (existing) {
         output.info(`Using existing provider: ${existing.id}`);
-        return existing.id as string;
+        return existing.id;
       }
     } catch {
       // fall through
@@ -54,22 +54,23 @@ async function findOrCreateProvider(
 }
 
 /** Find or create an agent record, returning its ID */
-async function findOrCreateAgent(
-  client: ReturnType<typeof getClient>,
-  agentName: string,
-  providerId: string,
-): Promise<string | null> {
+async function findOrCreateAgent(client: OmniClient, agentName: string, providerId: string): Promise<string | null> {
   try {
-    const response = await client.post('/agents', { name: agentName, providerId, type: 'agent' });
-    return (response.data as Record<string, unknown>).id as string;
+    const agent = await client.agents.create({
+      name: agentName,
+      agentProviderId: providerId,
+      agentType: 'agent',
+    } as Parameters<typeof client.agents.create>[0]);
+    return agent.id;
   } catch {
     try {
-      const listResponse = await client.get('/agents');
-      const agentsList = (listResponse.data as Record<string, unknown>[]) || [];
-      const existing = agentsList.find((a) => a.name === agentName && a.providerId === providerId);
+      const { items } = await client.agents.list();
+      const existing = items.find(
+        (a) => a.name === agentName && (a as Record<string, unknown>).agentProviderId === providerId,
+      );
       if (existing) {
         output.info(`Using existing agent: ${existing.id}`);
-        return existing.id as string;
+        return existing.id;
       }
     } catch {
       // fall through
@@ -109,16 +110,12 @@ export function createConnectCommand(): Command {
       output.info(`Found agent: ${agentEntry.name} (dir: ${agentEntry.dir})`);
 
       // 2. Verify instance exists
-      let instance: Record<string, unknown>;
       try {
-        const response = await client.get(`/instances/${instanceId}`);
-        instance = response.data as Record<string, unknown>;
+        await client.instances.get(instanceId);
       } catch {
         output.error(`Instance "${instanceId}" not found. Run: omni instances list`);
         return;
       }
-
-      const instanceName = (instance.name as string) || instanceId;
 
       // 3. Create or find provider
       output.info('Creating NATS Genie provider...');
@@ -133,7 +130,7 @@ export function createConnectCommand(): Command {
       // 5. Update instance to use the agent
       output.info('Updating instance agent assignment...');
       try {
-        await client.patch(`/instances/${instanceId}`, { agentProviderId: providerId });
+        await client.instances.update(instanceId, { agentProviderId: providerId } as Record<string, unknown>);
       } catch {
         output.warn('Could not update instance agent assignment automatically.');
         output.info(`Set manually: omni instances update ${instanceId} --agent-provider-id ${providerId}`);
@@ -141,7 +138,7 @@ export function createConnectCommand(): Command {
 
       // Done
       output.success(
-        `Connected instance "${instanceName}" to genie agent "${agentName}".\n  NATS topics:\n    Inbound:  omni.message.${instanceId}.*\n    Outbound: omni.reply.${instanceId}.*\n\n  Next: Start the genie bridge:\n    genie omni start`,
+        `Connected instance "${instanceId}" to genie agent "${agentName}".\n  NATS topics:\n    Inbound:  omni.message.${instanceId}.*\n    Outbound: omni.reply.${instanceId}.*\n\n  Next: Start the genie bridge:\n    genie omni start`,
       );
     });
 }
