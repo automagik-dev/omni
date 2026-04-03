@@ -308,6 +308,10 @@ type InstanceConnectionOptionsInput = {
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
+  gupshupApiKey?: string | null;
+  gupshupAppName?: string | null;
+  gupshupSourcePhone?: string | null;
+  webhookVerifyToken?: string | null;
 };
 
 function applyChannelSpecificConnectionOptions(
@@ -323,6 +327,13 @@ function applyChannelSpecificConnectionOptions(
     if (input.token) options.botToken = input.token;
     if (input.slackAppToken) options.appToken = input.slackAppToken;
     if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+  }
+
+  if (input.channel === 'gupshup') {
+    if (input.gupshupApiKey) options.gupshupApiKey = input.gupshupApiKey;
+    if (input.gupshupAppName) options.gupshupAppName = input.gupshupAppName;
+    if (input.gupshupSourcePhone) options.gupshupSourcePhone = input.gupshupSourcePhone;
+    if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
   }
 }
 
@@ -497,6 +508,10 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
+    gupshupApiKey: instance.gupshupApiKey,
+    gupshupAppName: instance.gupshupAppName,
+    gupshupSourcePhone: instance.gupshupSourcePhone,
+    webhookVerifyToken: instance.webhookVerifyToken,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -757,6 +772,10 @@ instancesRoutes.post(
       slackAppToken: body.slackAppToken ?? instance.slackAppToken,
       slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
       whatsapp: body.whatsapp,
+      gupshupApiKey: instance.gupshupApiKey,
+      gupshupAppName: instance.gupshupAppName,
+      gupshupSourcePhone: instance.gupshupSourcePhone,
+      webhookVerifyToken: instance.webhookVerifyToken,
     });
 
     // Trigger connection via channel plugin
