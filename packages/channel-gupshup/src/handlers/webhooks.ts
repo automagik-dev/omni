@@ -96,8 +96,10 @@ async function handleInboundMessage(
 ): Promise<void> {
   const sourcePhone = extractUserId(msg.source);
 
-  // Dedup key: ${sourcePhone}:${messageId}
-  const dedupeKey = `${sourcePhone}:${msg.id}`;
+  // Dedup key: ${sourcePhoneWithoutPlus}:${messageId}
+  // SDK EXTERNAL_ID_RE does not allow '+' — use raw source (no leading +)
+  const rawSource = msg.source.trim();
+  const dedupeKey = `${rawSource}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
     return;
   }
