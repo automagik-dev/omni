@@ -23,6 +23,16 @@ export default plugin;
 // Named exports for flexibility
 export { GupshupPlugin } from './plugin';
 export { GUPSHUP_CAPABILITIES } from './capabilities';
+export { GupshupClient } from './client';
+
+// Handlers
+export { handleGupshupWebhook, verifyWebhookToken } from './handlers/webhooks';
+
+// Senders
+export { sendText } from './senders/text';
+export { sendMedia, resolveMediaType } from './senders/media';
+export { sendTemplate } from './senders/template';
+export { sendInteractive } from './senders/interactive';
 
 // Errors
 export { GupshupError, GupshupErrorCode, mapGupshupError, isRetryable } from './utils/errors';
