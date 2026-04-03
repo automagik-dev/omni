@@ -95,12 +95,10 @@ function buildClaudeCodeConfig(options: SchemaConfigOptions): Record<string, unk
   return config;
 }
 
-function buildGenieConfig(options: SchemaConfigOptions): Record<string, unknown> {
-  return {
-    agentName: options.agentName,
-    targetAgent: options.targetAgent,
-    teamName: options.teamName ?? 'omni-{chat_id}',
-  };
+function buildNatsGenieConfig(options: SchemaConfigOptions): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (options.agentName) config.agentName = options.agentName;
+  return config;
 }
 
 /** Build schema-specific config from CLI options */
@@ -108,7 +106,7 @@ function buildSchemaConfig(options: SchemaConfigOptions): Record<string, unknown
   const builders: Record<string, (opts: SchemaConfigOptions) => Record<string, unknown>> = {
     openclaw: buildOpenClawConfig,
     'claude-code': buildClaudeCodeConfig,
-    genie: buildGenieConfig,
+    'nats-genie': buildNatsGenieConfig,
   };
 
   const builder = builders[options.schema];
