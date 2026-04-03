@@ -39,6 +39,7 @@ export const channelTypes = [
   'slack',
   'telegram',
   'a2a',
+  'gupshup',
   'internal',
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
