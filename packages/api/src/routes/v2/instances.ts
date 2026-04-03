@@ -119,6 +119,10 @@ const createInstanceSchema = z.object({
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
   slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
+  gupshupApiKey: z.string().optional().nullable().describe('Gupshup API key'),
+  gupshupAppName: z.string().optional().nullable().describe('Gupshup app name'),
+  gupshupSourcePhone: z.string().optional().nullable().describe('Gupshup source phone (E.164)'),
+  webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -169,6 +173,10 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   discordBotToken: z.string().nullable().optional(),
   slackBotToken: z.string().nullable().optional(),
   slackAppToken: z.string().nullable().optional(),
+  gupshupApiKey: z.string().nullable().optional(),
+  gupshupAppName: z.string().nullable().optional(),
+  gupshupSourcePhone: z.string().nullable().optional(),
+  webhookVerifyToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
@@ -228,6 +236,8 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'slackBotToken',
   'slackAppToken',
   'slackSigningSecret',
+  'gupshupApiKey',
+  'webhookVerifyToken',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */

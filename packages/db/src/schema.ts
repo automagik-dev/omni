@@ -625,6 +625,12 @@ export const instances = pgTable(
     /** Telegram reaction level: off (default), ack, minimal, extensive */
     telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
+    // ---- Gupshup Configuration ----
+    gupshupApiKey: text('gupshup_api_key'),
+    gupshupAppName: varchar('gupshup_app_name', { length: 255 }),
+    gupshupSourcePhone: varchar('gupshup_source_phone', { length: 20 }),
+    webhookVerifyToken: text('webhook_verify_token'),
+
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
