@@ -324,9 +324,9 @@ export interface ListProvidersParams {
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
  * - a2a: Agent-to-Agent protocol provider
- * - genie: Genie fire-and-forget provider (writes to Claude Code team inbox)
+ * - nats-genie: NATS-based Genie provider (publishes to NATS topics)
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a' | 'genie';
+export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
 
 /**
  * Body for creating a provider

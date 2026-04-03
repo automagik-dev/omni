@@ -11,7 +11,7 @@ export const ProviderSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Provider UUID' }),
   name: z.string().openapi({ description: 'Provider name' }),
   schema: z
-    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'genie'])
+    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'])
     .openapi({ description: 'Provider schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
@@ -30,10 +30,9 @@ export const ProviderSchema = z.object({
         '- **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
         '  - `apiKey` in schemaConfig overrides the provider-level apiKey\n' +
         '- **webhook**: `{ mode?, retries? }`\n' +
-        '- **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox\n' +
-        '  - `agentName`: identity of the omni agent in the team (used as `from` field)\n' +
-        '  - `targetAgent`: which team member inbox to deliver to\n' +
-        '  - Optional: `teamName` (default "genie")',
+        '- **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub\n' +
+        '  - `agentName`: genie agent name (from genie directory)\n' +
+        '  - Optional: `natsUrl` (default "localhost:4222")',
       example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
     }),
   defaultStream: z.boolean().openapi({ description: 'Default streaming' }),
@@ -53,7 +52,7 @@ export const ProviderSchema = z.object({
 export const CreateProviderSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Provider name' }),
   schema: z
-    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'genie'])
+    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'])
     .default('agno')
     .openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
@@ -74,10 +73,9 @@ export const CreateProviderSchema = z.object({
         '- **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md\n' +
         '  - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`\n' +
         '- **webhook**: optional `{ mode, retries }`\n' +
-        '- **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox\n' +
-        '  - `agentName`: identity of the omni agent in the team (used as `from` field)\n' +
-        '  - `targetAgent`: which team member inbox to deliver to\n' +
-        '  - Optional: `teamName` (default "genie")',
+        '- **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub\n' +
+        '  - `agentName`: genie agent name (from genie directory)\n' +
+        '  - Optional: `natsUrl` (default "localhost:4222")',
       example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
     }),
   defaultStream: z.boolean().default(true).openapi({ description: 'Default streaming' }),

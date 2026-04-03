@@ -20,6 +20,7 @@ import { createChannelsCommand } from './commands/channels.js';
 import { createChatsCommand } from './commands/chats.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
+import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
 import { createInstallCommand } from './commands/install.js';
@@ -138,6 +139,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'AI/LLM providers configuration',
+  },
+  {
+    create: createConnectCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Connect instance to genie agent via NATS',
   },
   {
     create: createRoutesCommand,
