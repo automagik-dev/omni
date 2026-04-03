@@ -59,8 +59,12 @@ async function findOrCreateAgent(client: OmniClient, agentName: string, provider
     const agent = await client.agents.create({
       name: agentName,
       agentProviderId: providerId,
-      agentType: 'agent',
-    } as Parameters<typeof client.agents.create>[0]);
+      agentType: 'assistant',
+      provider: 'custom',
+      capabilities: [],
+      isInternal: false,
+      isActive: true,
+    });
     return agent.id;
   } catch {
     try {
