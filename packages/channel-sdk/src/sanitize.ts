@@ -91,7 +91,7 @@ export function sanitizeMessage(
 const ROUTING_HEADER_RE =
   /^\[(?:channel:\S+|instance:\S+|chat:\S+|thread:\S+|msg:\S+|from:\S+|type:\S+|replyTo:\S+)(?:\s+(?:channel:\S+|instance:\S+|chat:\S+|thread:\S+|msg:\S+|from:\S+|type:\S+|replyTo:\S+))*\]\s*/gm;
 
-/** ⚡ REPLY NOW directive injected by genie-client.ts */
+/** ⚡ REPLY NOW directive injected by agent providers */
 const REPLY_NOW_RE = /⚡\s*REPLY\s+NOW\b[^\n]*/g;
 
 /**

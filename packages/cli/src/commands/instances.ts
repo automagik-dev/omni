@@ -896,6 +896,30 @@ export function createInstancesCommand(): Command {
       }
     });
 
+  // omni instances group-members <id> <jid>
+  instances
+    .command('group-members <id> <jid>')
+    .description('List members of a group')
+    .action(async (rawId: string, jid: string) => {
+      try {
+        const id = await resolveInstanceId(rawId);
+        const result = (await apiCall(`instances/${id}/groups/${encodeURIComponent(jid)}/members`)) as {
+          members: Array<{ id: string; name?: string; role?: string }>;
+        };
+
+        const items = result.members.map((m) => ({
+          id: m.id,
+          name: m.name ?? '-',
+          role: m.role ?? 'member',
+        }));
+
+        output.list(items, { emptyMessage: 'No members found.', rawData: result.members });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list group members: ${message}`);
+      }
+    });
+
   // omni instances profile <id> <user-id>
   instances
     .command('profile <id> <userId>')

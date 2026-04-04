@@ -1607,6 +1607,58 @@ instancesRoutes.get('/:id/groups', instanceAccess, zValidator('query', listGroup
 });
 
 // ============================================================================
+// Group Members
+// ============================================================================
+
+/**
+ * GET /instances/:id/groups/:jid/members - List members of a group
+ *
+ * Returns group members with names and roles.
+ * Returns 501 if the plugin does not support group member listing.
+ */
+instancesRoutes.get('/:id/groups/:jid/members', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const jid = c.req.param('jid');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+
+  const instance = await services.instances.getById(id);
+
+  if (!channelRegistry) {
+    return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+
+  if (!plugin) {
+    return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
+  }
+
+  if (!('fetchGroupMembers' in plugin) || typeof plugin.fetchGroupMembers !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: `Plugin ${instance.channel} does not support group member listing` } },
+      501,
+    );
+  }
+
+  try {
+    const result = await (
+      plugin as {
+        fetchGroupMembers: (
+          instanceId: string,
+          groupJid: string,
+        ) => Promise<{ members: Array<{ id: string; name?: string; role?: string }> }>;
+      }
+    ).fetchGroupMembers(id, jid);
+
+    return c.json({ members: result.members });
+  } catch (error) {
+    const message = `Failed to fetch group members: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return c.json({ error: { code: 'GROUP_MEMBERS_FETCH_FAILED', message } }, 500);
+  }
+});
+
+// ============================================================================
 // B2: CHECK NUMBER ON WHATSAPP
 // ============================================================================
 

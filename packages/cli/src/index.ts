@@ -16,9 +16,11 @@ import { createAgentsCommand } from './commands/agents.js';
 import { createAuthCommand } from './commands/auth.js';
 import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
+import { createChannelsCommand } from './commands/channels.js';
 import { createChatsCommand } from './commands/chats.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
+import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
 import { createInstallCommand } from './commands/install.js';
@@ -108,6 +110,12 @@ const COMMANDS: CommandDef[] = [
 
   // Management group - Configuration and setup
   {
+    create: createChannelsCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Channel types, add instances, status overview',
+  },
+  {
     create: createInstancesCommand,
     category: 'core',
     helpGroup: 'Management',
@@ -131,6 +139,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'AI/LLM providers configuration',
+  },
+  {
+    create: createConnectCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Connect instance to genie agent via NATS',
   },
   {
     create: createRoutesCommand,
@@ -258,7 +272,7 @@ const program = new Command();
 
 program
   .name('omni')
-  .description('CLI for Omni v2 - Universal Omnichannel Platform')
+  .description('CLI for Omni - Universal Omnichannel Platform')
   .version(VERSION, '-V, --version', 'output the version number')
   .enablePositionalOptions()
   .passThroughOptions()

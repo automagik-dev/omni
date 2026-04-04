@@ -90,14 +90,14 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
       });
     }
 
-    case 'genie':
-      // Genie providers are created via GenieAgentProvider directly,
+    case 'nats-genie':
+      // NATS Genie providers are created via NatsGenieProvider directly,
       // not through the legacy createProviderClient factory.
       throw new ProviderError(
-        'Genie providers should be created via GenieAgentProvider, not createProviderClient',
+        'NATS Genie providers should be created via NatsGenieProvider, not createProviderClient',
         'NOT_FOUND',
         400,
-        { schema: 'genie', hint: 'Use new GenieAgentProvider(id, name, client, config) instead' },
+        { schema: 'nats-genie', hint: 'Use omni connect <instance> <agent> to set up' },
       );
 
     default:
@@ -118,7 +118,7 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
     schema === 'claude-code' ||
     schema === 'ag-ui' ||
     schema === 'a2a' ||
-    schema === 'genie'
+    schema === 'nats-genie'
   );
 }
 
@@ -126,5 +126,5 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a', 'genie'];
+  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a', 'nats-genie'];
 }
