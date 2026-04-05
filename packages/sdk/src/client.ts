@@ -3125,6 +3125,42 @@ export function createOmniClient(config: OmniClientConfig) {
     },
 
     // ========================================================================
+    // TURNS
+    // ========================================================================
+
+    /**
+     * Turn lifecycle for turn-based agent execution
+     */
+    turns: {
+      /**
+       * Close the open turn for this API key.
+       * Idempotent: closing an already-closed turn returns success with alreadyClosed: true.
+       */
+      async close(body: {
+        action: 'message' | 'react' | 'skip';
+        reason?: string;
+      }): Promise<{
+        turnId?: string;
+        action?: string;
+        duration?: number;
+        nudgeCount?: number;
+        messagesSent?: number;
+        closedAt?: string;
+        alreadyClosed?: boolean;
+        message?: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return (json?.data as Record<string, unknown>) ?? {};
+      },
+    },
+
+    // ========================================================================
     // AGENTS
     // ========================================================================
 

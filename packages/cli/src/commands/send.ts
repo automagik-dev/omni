@@ -14,6 +14,7 @@ import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
+import { resolveContext } from '../context.js';
 import { type Example, type OptionDef, formatExamples, formatOptionGroup } from '../help.js';
 import { areColorsEnabled } from '../output.js';
 import * as output from '../output.js';
@@ -452,6 +453,7 @@ export function createSendCommand(): Command {
 
   send
     .description('Send a message to a recipient')
+    .argument('[file]', 'File to send as media (shorthand for --media, uses context for instance/chat)')
     .option('--instance <id>', 'Instance ID (uses default if not specified)')
     .option('--to <recipient>', 'Recipient: WA JID, phone number, or Omni chat/person UUID')
     // Text message
@@ -497,7 +499,25 @@ export function createSendCommand(): Command {
     // Forward
     .option('--forward', 'Forward a message to another chat')
     .option('--from-chat <chatId>', 'Source chat ID for forwarding')
-    .action(async (options: SendOptions) => {
+    .action(async (file: string | undefined, options: SendOptions) => {
+      // Positional file arg: omni send file.jpg (uses context for instance/chat)
+      if (file && !options.media) {
+        options.media = file;
+
+        // When using positional arg without --to, fall back to context resolution
+        if (!options.to) {
+          const ctx = await resolveContext({ instance: options.instance });
+          if (!ctx.instanceId) {
+            output.error('No instance in context. Use --instance, set OMNI_INSTANCE, or run: omni use <instance>');
+          }
+          if (!ctx.chatId) {
+            output.error('No chat in context. Use --to, set OMNI_CHAT, or run: omni open <contact>');
+          }
+          options.instance = ctx.instanceId as string;
+          options.to = ctx.chatId as string;
+        }
+      }
+
       // Validate message type first (before instance lookup)
       const messageType = getMessageType(options);
       if (!messageType) {

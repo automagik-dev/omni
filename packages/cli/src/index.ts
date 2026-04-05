@@ -23,6 +23,7 @@ import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
+import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
 import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
@@ -36,9 +37,11 @@ import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createReactCommand } from './commands/react.js';
 import { createReplayCommand } from './commands/replay.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
+import { createSayCommand } from './commands/say.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createStartCommand } from './commands/start.js';
@@ -98,6 +101,18 @@ const COMMANDS: CommandDef[] = [
     helpGroup: 'Core',
     helpDescription: 'Send message (text, media, location, poll)',
   },
+  {
+    create: createSayCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Send text to open chat (verb command)',
+  },
+  {
+    create: createReactCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'React to a message with emoji (verb command)',
+  },
   { create: createChatsCommand, category: 'core', helpGroup: 'Core', helpDescription: 'List and manage conversations' },
   {
     create: createMessagesCommand,
@@ -134,6 +149,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Core',
     helpDescription: 'Show current context (instance, chat)',
+  },
+  {
+    create: createDoneCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Close turn (send final message + emit turn.done)',
   },
 
   // Management group - Configuration and setup

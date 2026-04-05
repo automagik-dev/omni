@@ -55,6 +55,8 @@ export interface NatsGenieConfig {
   agentDir?: string;
   /** NATS server URL (default: localhost:4222) */
   natsUrl?: string;
+  /** Execution mode: 'fire-and-forget' (default) or 'turn-based' */
+  mode?: 'fire-and-forget' | 'turn-based';
 }
 
 /**
