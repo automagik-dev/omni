@@ -105,3 +105,29 @@ export async function resolveInstanceFromContext(explicitInstance?: string): Pro
   const output = await import('./output.js');
   return output.error('No instance specified. Use --instance, set OMNI_INSTANCE, or run: omni open <contact>');
 }
+
+/**
+ * Resolve the message ID for --reply.
+ *
+ * Priority:
+ *   1. Explicit message ID passed via --reply <id>
+ *   2. OMNI_MESSAGE env var (set by turn-based dispatcher)
+ *   3. messageId from resolved context (PG-backed)
+ *   4. null — no reply target available
+ */
+export async function resolveReplyTo(explicitMessageId?: string): Promise<string | null> {
+  if (explicitMessageId) return explicitMessageId;
+
+  const envMessage = process.env.OMNI_MESSAGE;
+  if (envMessage) return envMessage;
+
+  try {
+    const client = getClient();
+    const ctx = await client.context.get();
+    if (ctx.messageId) return ctx.messageId;
+  } catch {
+    // Context endpoint may not be available
+  }
+
+  return null;
+}
