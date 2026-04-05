@@ -36,6 +36,16 @@ if (dsn) {
           cookies: false,
         },
       }),
+      // Hono framework integration — route-level spans with parameterized URLs.
+      Sentry.honoIntegration(),
+      // Auto-instrument AI SDK calls — captures model, token counts, latency, cost.
+      // Prompt/completion content is NOT captured when sendDefaultPii: false.
+      Sentry.anthropicAIIntegration(),
+      Sentry.openAIIntegration(),
+      Sentry.googleGenAIIntegration(),
+      // Auto-instrument PostgreSQL queries — captures query duration for slow-query detection.
+      // Query parameters are scrubbed by beforeSendSpan.
+      Sentry.postgresIntegration(),
     ],
 
     beforeSend(event) {
