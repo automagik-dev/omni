@@ -3355,6 +3355,26 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // JID-based self-filter for bot's own reaction echoes (#336).
+  // The UUID check above (platformIdentityId) doesn't work for WhatsApp because
+  // payload.from is a JID, not a UUID. For dual-emitted reactions where
+  // rawPayload.isFromMe is set, compare the sender JID against ownerIdentifier
+  // to catch bot-originated reactions that slipped through other filters.
+  // Scoped to isFromMe to avoid blocking legitimate owner-typed messages or self-chat.
+  const rawSelfCheck = payload.rawPayload as Record<string, unknown> | undefined;
+  if (
+    rawSelfCheck?.isFromMe === true &&
+    instance.ownerIdentifier &&
+    extractPhoneFromJid(payload.from) === extractPhoneFromJid(instance.ownerIdentifier)
+  ) {
+    log.debug('Message from instance owner (isFromMe + JID match), skipping', {
+      instanceId: instance.id,
+      from: payload.from,
+      ownerIdentifier: instance.ownerIdentifier,
+    });
+    return null;
+  }
+
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
 
