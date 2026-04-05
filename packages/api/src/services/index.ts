@@ -8,6 +8,7 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
+import { providerRegistry } from '../providers/registry';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { AgentStateService } from './agent-state';
@@ -79,6 +80,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 
   const settings = new SettingsService(db);
   const routeResolver = new RouteResolver(db);
+
+  // Wire provider registry to settings for config-based default resolution
+  providerRegistry.setSettings(settings);
 
   return {
     agents: new AgentService(db, eventBus),

@@ -102,6 +102,47 @@ const DEFAULT_SETTINGS: Array<{
     isSecret: false,
     description: 'Override prompt for response gate (null = code default)',
   },
+  // Provider defaults — which provider to use for each capability
+  {
+    key: 'tts.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default TTS provider (e.g. "elevenlabs", "gemini")',
+    defaultValue: 'elevenlabs',
+  },
+  {
+    key: 'stt.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default STT provider (e.g. "groq", "gemini")',
+    defaultValue: 'groq',
+  },
+  {
+    key: 'imagegen.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default image generation provider (e.g. "gemini")',
+    defaultValue: 'gemini',
+  },
+  {
+    key: 'videogen.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default video generation provider (e.g. "gemini")',
+    defaultValue: 'gemini',
+  },
+  {
+    key: 'vision.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default vision provider (e.g. "gemini")',
+    defaultValue: 'gemini',
+  },
 ];
 
 export interface SettingWithHistory extends GlobalSetting {
