@@ -2736,13 +2736,59 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
   }
 
   const natsUrl = typeof schemaConfig.natsUrl === 'string' ? schemaConfig.natsUrl : 'localhost:4222';
+  const channel = instance.channel as ChannelType;
 
-  return new NatsGenieProvider(provider.id, provider.name, {
+  const natsProvider = new NatsGenieProvider(provider.id, provider.name, {
     agentName,
     natsUrl,
     instanceId: instance.id,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
+    onReply: async (chatId, content, metadata) => {
+      try {
+        await sendTextMessage(channel, instance.id, chatId, content);
+      } catch (error) {
+        log.error('Failed to deliver agent reply', {
+          chatId,
+          instanceId: instance.id,
+          providerId: provider.id,
+          agent: (metadata as Record<string, unknown>)?.agent,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
   });
+
+  // Fire subscription as a side effect — do not block provider resolution.
+  // providerCache below caches by `${provider.id}:${instance.id}`, so this
+  // only runs once per (provider, instance) pair.
+  // Retries with exponential backoff (2s → 4s → 8s → … → 60s cap, max 10 attempts).
+  const startWithRetry = async (attempt = 1): Promise<void> => {
+    try {
+      await natsProvider.startReplySubscription();
+      log.info('NATS reply subscription started', { instanceId: instance.id, attempt });
+    } catch (err) {
+      const delay = Math.min(2000 * 2 ** (attempt - 1), 60_000);
+      if (attempt < 10) {
+        log.warn('NATS reply subscription failed, retrying', {
+          instanceId: instance.id,
+          providerId: provider.id,
+          attempt,
+          nextRetryMs: delay,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        setTimeout(() => startWithRetry(attempt + 1), delay);
+      } else {
+        log.error('NATS reply subscription permanently failed', {
+          instanceId: instance.id,
+          providerId: provider.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  };
+  startWithRetry();
+
+  return natsProvider;
 }
 
 /**
@@ -3328,6 +3374,13 @@ async function shouldProcessMessage(
     log.debug('Instance does not trigger on message.received', { instanceId: instance.id });
     return null;
   }
+
+  // Layer 3 JID self-filter removed (#344). It was intended to block bot reaction
+  // echoes (#336) but was dead code for that purpose: reaction dual-emits with
+  // isFromMe=true are already blocked at the plugin level (layer 1: !isFromMe check
+  // in handleReactionReceived) and by the sentMessageIds cache (layer 2). The filter
+  // only caught legitimate owner phone messages (multi-device sync), dropping them
+  // silently. See https://github.com/automagik-dev/omni/issues/344.
 
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
@@ -4085,4 +4138,5 @@ export const __test__ = {
   MEDIA_WAIT_NULL,
   mergeRouteOverrides,
   getDebounceConfig,
+  createNatsGenieProviderInstance,
 };

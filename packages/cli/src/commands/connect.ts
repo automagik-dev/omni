@@ -2,7 +2,7 @@
  * Connect Command — omni connect <instance-id> <agent-name>
  *
  * One-command setup for Omni ↔ Genie NATS integration:
- *   1. Discovers agent via `genie dir get <agent-name> --json`
+ *   1. Discovers agent via `genie dir ls <agent-name> --json`
  *   2. Creates/updates Omni provider with schema `nats-genie`
  *   3. Creates Omni agent record linked to provider
  *   4. Updates instance to use the new agent
@@ -98,7 +98,7 @@ export function createConnectCommand(): Command {
 
       let agentEntry: GenieDirectoryEntry;
       try {
-        const stdout = execFileSync('genie', ['dir', 'get', agentName, '--json'], {
+        const stdout = execFileSync('genie', ['dir', 'ls', agentName, '--json'], {
           encoding: 'utf-8',
           env: process.env,
           timeout: 10_000,

@@ -116,6 +116,10 @@ function buildInstanceConnectOptions(instance: {
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   profileMetadata?: Record<string, unknown> | null;
+  gupshupApiKey?: string | null;
+  gupshupAppName?: string | null;
+  gupshupSourcePhone?: string | null;
+  webhookVerifyToken?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -126,6 +130,12 @@ function buildInstanceConnectOptions(instance: {
     if (instance.slackAppToken) options.appToken = instance.slackAppToken;
     if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
     applySlackMetadata(options, instance.profileMetadata);
+  }
+  if (instance.channel === 'gupshup') {
+    if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
+    if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
+    if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
+    if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
   }
   return options;
 }
@@ -146,6 +156,10 @@ async function connectInstance(
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    webhookVerifyToken?: string | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -494,6 +508,10 @@ export class InstanceMonitor {
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    webhookVerifyToken?: string | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;

@@ -25,7 +25,7 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
-const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
+const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram', 'gupshup'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
 /** Set value on body, resolving "null" string to actual null */
@@ -105,6 +105,10 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'discordBotToken', opts.discordToken);
   setVal(body, 'slackBotToken', opts.slackBotToken);
   setVal(body, 'slackAppToken', opts.slackAppToken);
+  setVal(body, 'gupshupApiKey', opts.gupshupApiKey);
+  setVal(body, 'gupshupAppName', opts.gupshupAppName);
+  setVal(body, 'gupshupSourcePhone', opts.gupshupSourcePhone);
+  setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -304,6 +308,11 @@ export function createInstancesCommand(): Command {
     .option('--discord-token <token>', 'Discord bot token')
     .option('--slack-bot-token <token>', 'Slack bot token')
     .option('--slack-app-token <token>', 'Slack app token')
+    // Gupshup
+    .option('--gupshup-api-key <key>', 'Gupshup API key')
+    .option('--gupshup-app-name <name>', 'Gupshup app name')
+    .option('--gupshup-source-phone <phone>', 'Gupshup source phone (E.164)')
+    .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {

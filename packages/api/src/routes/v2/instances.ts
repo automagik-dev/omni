@@ -119,6 +119,10 @@ const createInstanceSchema = z.object({
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
   slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
+  gupshupApiKey: z.string().optional().nullable().describe('Gupshup API key'),
+  gupshupAppName: z.string().optional().nullable().describe('Gupshup app name'),
+  gupshupSourcePhone: z.string().optional().nullable().describe('Gupshup source phone (E.164)'),
+  webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -169,6 +173,10 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   discordBotToken: z.string().nullable().optional(),
   slackBotToken: z.string().nullable().optional(),
   slackAppToken: z.string().nullable().optional(),
+  gupshupApiKey: z.string().nullable().optional(),
+  gupshupAppName: z.string().nullable().optional(),
+  gupshupSourcePhone: z.string().nullable().optional(),
+  webhookVerifyToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
@@ -228,6 +236,8 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'slackBotToken',
   'slackAppToken',
   'slackSigningSecret',
+  'gupshupApiKey',
+  'webhookVerifyToken',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -298,6 +308,10 @@ type InstanceConnectionOptionsInput = {
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
+  gupshupApiKey?: string | null;
+  gupshupAppName?: string | null;
+  gupshupSourcePhone?: string | null;
+  webhookVerifyToken?: string | null;
 };
 
 function applyChannelSpecificConnectionOptions(
@@ -313,6 +327,13 @@ function applyChannelSpecificConnectionOptions(
     if (input.token) options.botToken = input.token;
     if (input.slackAppToken) options.appToken = input.slackAppToken;
     if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+  }
+
+  if (input.channel === 'gupshup') {
+    if (input.gupshupApiKey) options.gupshupApiKey = input.gupshupApiKey;
+    if (input.gupshupAppName) options.gupshupAppName = input.gupshupAppName;
+    if (input.gupshupSourcePhone) options.gupshupSourcePhone = input.gupshupSourcePhone;
+    if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
   }
 }
 
@@ -487,6 +508,10 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
+    gupshupApiKey: instance.gupshupApiKey,
+    gupshupAppName: instance.gupshupAppName,
+    gupshupSourcePhone: instance.gupshupSourcePhone,
+    webhookVerifyToken: instance.webhookVerifyToken,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -747,6 +772,10 @@ instancesRoutes.post(
       slackAppToken: body.slackAppToken ?? instance.slackAppToken,
       slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
       whatsapp: body.whatsapp,
+      gupshupApiKey: instance.gupshupApiKey,
+      gupshupAppName: instance.gupshupAppName,
+      gupshupSourcePhone: instance.gupshupSourcePhone,
+      webhookVerifyToken: instance.webhookVerifyToken,
     });
 
     // Trigger connection via channel plugin

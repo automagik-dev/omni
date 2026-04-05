@@ -15,15 +15,28 @@ export interface ContactData {
 }
 
 /**
+ * Compute the WhatsApp ID (waid) from a phone number's digits.
+ * BR mobile numbers in 13-digit format (55 + 2-digit area + 9 + 8 digits)
+ * must be normalized to 12 digits by stripping the leading 9 after the area code.
+ */
+export function computeWaid(digits: string): string {
+  if (digits.length === 13 && digits.startsWith('55') && digits.charAt(4) === '9') {
+    return digits.slice(0, 4) + digits.slice(5);
+  }
+  return digits;
+}
+
+/**
  * Build a vCard string from contact data
  */
 export function buildVCard(contact: ContactData): string {
   const lines = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${contact.name}`, `N:;${contact.name};;;`];
 
   if (contact.phone) {
-    // Clean phone number
-    const phone = contact.phone.replace(/[^\d+]/g, '');
-    lines.push(`TEL;type=CELL;type=VOICE;waid=${phone.replace(/^\+/, '')}:${phone}`);
+    // Clean phone number — keep only digits (strip + and formatting)
+    const digits = contact.phone.replace(/[^\d]/g, '');
+    const waid = computeWaid(digits);
+    lines.push(`TEL;type=CELL;type=VOICE;waid=${waid}:${contact.phone}`);
   }
 
   if (contact.email) {

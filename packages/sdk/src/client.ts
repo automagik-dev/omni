@@ -79,7 +79,15 @@ export interface ChatParticipant {
 }
 
 // Channel type enum
-export type Channel = 'whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack' | 'telegram' | 'a2a' | 'internal';
+export type Channel =
+  | 'whatsapp-baileys'
+  | 'whatsapp-cloud'
+  | 'discord'
+  | 'slack'
+  | 'telegram'
+  | 'a2a'
+  | 'gupshup'
+  | 'internal';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
