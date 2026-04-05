@@ -14,12 +14,12 @@
 
 import { createDownloadGuard, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
+import { z } from 'zod';
 
 import type { GupshupPlugin } from '../plugin';
 import type {
   GupshupContact,
   GupshupContactContent,
-  GupshupInboundPayload,
   GupshupInteractiveContent,
   GupshupLocationContent,
   GupshupMediaContent,
@@ -28,6 +28,18 @@ import type {
   GupshupTextContent,
 } from '../types';
 import { extractUserId } from '../utils/identity';
+
+/**
+ * Zod schema for validating inbound Gupshup webhook payloads.
+ * Validates top-level shape before processing untrusted input.
+ */
+const GupshupInboundPayloadSchema = z.object({
+  app: z.string(),
+  timestamp: z.number(),
+  version: z.number(),
+  type: z.enum(['message', 'message-event']),
+  payload: z.record(z.unknown()),
+});
 
 // Download guard for Gupshup CDN media (filemanager.gupshup.io — public URLs)
 const _downloadGuard = createDownloadGuard({ maxSizeBytes: 100 * 1024 * 1024 }); // 100MB
@@ -68,17 +80,23 @@ export async function handleGupshupWebhook(
     return new Response('Bad Request', { status: 400 });
   }
 
-  let payload: GupshupInboundPayload;
+  let parsed: unknown;
   try {
-    payload = JSON.parse(body) as GupshupInboundPayload;
+    parsed = JSON.parse(body);
   } catch {
     return new Response('Bad Request: invalid JSON', { status: 400 });
   }
 
+  const result = GupshupInboundPayloadSchema.safeParse(parsed);
+  if (!result.success) {
+    return new Response('Bad Request: invalid payload shape', { status: 400 });
+  }
+  const payload = result.data;
+
   if (payload.type === 'message') {
-    await handleInboundMessage(plugin, instanceId, payload.payload as GupshupMessagePayload, dedupeCache);
+    await handleInboundMessage(plugin, instanceId, payload.payload as unknown as GupshupMessagePayload, dedupeCache);
   } else if (payload.type === 'message-event') {
-    await handleMessageEvent(plugin, instanceId, payload.payload as GupshupMessageEventPayload);
+    await handleMessageEvent(plugin, instanceId, payload.payload as unknown as GupshupMessageEventPayload);
   }
 
   return new Response('OK', { status: 200 });
