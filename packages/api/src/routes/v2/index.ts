@@ -15,6 +15,7 @@ import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
 import { chatsRoutes } from './chats';
+import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
@@ -56,6 +57,7 @@ v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before ro
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
 v2Routes.route('/keys', keysRoutes); // API key management
+v2Routes.route('/context', contextRoutes); // Conversation context for turn-based agents
 v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/payloads and /api/v2/payload-config
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations

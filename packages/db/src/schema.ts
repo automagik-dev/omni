@@ -522,6 +522,13 @@ export const apiKeys = pgTable(
     revokedBy: varchar('revoked_by', { length: 255 }),
     revokeReason: text('revoke_reason'),
 
+    // Conversation context (for turn-based agents and CLI)
+    activeInstanceId: uuid('active_instance_id'),
+    contextInstanceId: uuid('context_instance_id'),
+    contextChatId: uuid('context_chat_id'),
+    contextMessageId: uuid('context_message_id'),
+    contextUpdatedAt: timestamp('context_updated_at'),
+
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),
     createdBy: varchar('created_by', { length: 255 }),
@@ -2502,5 +2509,86 @@ export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
   }),
   subtasks: many(agentTasks, {
     relationName: 'parentChild',
+  }),
+}));
+
+// ============================================================================
+// TURNS (Turn-Based Agent Execution)
+// ============================================================================
+
+export const turnStatuses = ['open', 'done', 'timeout'] as const;
+export type TurnStatus = (typeof turnStatuses)[number];
+
+export const turnActions = ['message', 'react', 'skip', 'timeout'] as const;
+export type TurnAction = (typeof turnActions)[number];
+
+/**
+ * Turn state for turn-based agent execution.
+ * Each turn represents a single agent work session triggered by an inbound message.
+ * The agent gets a sandboxed environment and communicates via verb commands.
+ * Turn lifecycle: open → (agent works, sends intermediate messages) → done/timeout.
+ *
+ * @see WISH.md — Turn-Based Execution Mode
+ */
+export const turns = pgTable(
+  'turns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    chatId: text('chat_id').notNull(),
+    messageId: text('message_id').notNull(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    apiKeyId: uuid('api_key_id')
+      .notNull()
+      .references(() => apiKeys.id, { onDelete: 'cascade' }),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('open').$type<TurnStatus>(),
+    action: varchar('action', { length: 20 }).$type<TurnAction>(),
+
+    // ---- Counters ----
+    nudgeCount: integer('nudge_count').notNull().default(0),
+    messagesSent: integer('messages_sent').notNull().default(0),
+
+    // ---- Timestamps ----
+    startedAt: timestamp('started_at').notNull().defaultNow(),
+    lastActivityAt: timestamp('last_activity_at').notNull().defaultNow(),
+    closedAt: timestamp('closed_at'),
+
+    // ---- Close info ----
+    closedReason: text('closed_reason'),
+
+    // ---- Extensibility ----
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  },
+  (table) => ({
+    instanceChatIdx: index('turns_instance_chat_idx').on(table.instanceId, table.chatId),
+    statusIdx: index('turns_status_idx').on(table.status),
+    apiKeyIdx: index('turns_api_key_idx').on(table.apiKeyId),
+    agentIdx: index('turns_agent_idx').on(table.agentId),
+    lastActivityIdx: index('turns_last_activity_idx').on(table.lastActivityAt),
+    openTurnsIdx: index('turns_open_idx').on(table.status, table.lastActivityAt).where(sql`${table.status} = 'open'`),
+  }),
+);
+
+export type Turn = typeof turns.$inferSelect;
+export type NewTurn = typeof turns.$inferInsert;
+
+export const turnsRelations = relations(turns, ({ one }) => ({
+  instance: one(instances, {
+    fields: [turns.instanceId],
+    references: [instances.id],
+  }),
+  agent: one(agents, {
+    fields: [turns.agentId],
+    references: [agents.id],
+  }),
+  apiKey: one(apiKeys, {
+    fields: [turns.apiKeyId],
+    references: [apiKeys.id],
   }),
 }));

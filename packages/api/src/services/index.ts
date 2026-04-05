@@ -33,6 +33,7 @@ import { RouteService } from './routes';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
 import { TTSService } from './tts';
+import { TurnService } from './turns';
 import { WebhookService } from './webhooks';
 
 /**
@@ -64,6 +65,7 @@ export interface Services {
   batchJobs: BatchJobService;
   agentRunner: AgentRunnerService;
   tts: TTSService;
+  turns: TurnService;
   consumerOffsets: ConsumerOffsetService;
 }
 
@@ -104,6 +106,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
     tts: new TTSService(settings),
+    turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
   };
 }

@@ -304,6 +304,14 @@ export class ApiKeyService {
   }
 
   /**
+   * Find an API key by name
+   */
+  async findByName(name: string): Promise<ApiKey | null> {
+    const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1);
+    return result ?? null;
+  }
+
+  /**
    * Revoke an API key
    */
   async revoke(id: string, reason?: string, revokedBy?: string): Promise<ApiKey | null> {

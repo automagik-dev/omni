@@ -18,6 +18,7 @@ import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
 import { createChannelsCommand } from './commands/channels.js';
 import { createChatsCommand } from './commands/chats.js';
+import { createCloseCommand } from './commands/close.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
@@ -30,6 +31,7 @@ import { createKeysCommand } from './commands/keys.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
+import { createOpenCommand } from './commands/open.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
@@ -44,7 +46,9 @@ import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createUpdateCommand } from './commands/update.js';
+import { createUseCommand } from './commands/use.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
+import { createWhereCommand } from './commands/where.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors, flushStdout } from './output.js';
@@ -106,6 +110,30 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Core',
     helpDescription: 'Text-to-speech operations',
+  },
+  {
+    create: createOpenCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Open conversation context (set active chat)',
+  },
+  {
+    create: createCloseCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Clear active conversation context',
+  },
+  {
+    create: createUseCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Set active instance for verb commands',
+  },
+  {
+    create: createWhereCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Show current context (instance, chat)',
   },
 
   // Management group - Configuration and setup

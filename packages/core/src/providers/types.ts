@@ -270,7 +270,7 @@ export interface IAgentProvider {
   readonly id: string;
   readonly name: string;
   readonly schema: ProviderSchema;
-  readonly mode: 'round-trip' | 'fire-and-forget';
+  readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
