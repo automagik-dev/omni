@@ -2736,13 +2736,39 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
   }
 
   const natsUrl = typeof schemaConfig.natsUrl === 'string' ? schemaConfig.natsUrl : 'localhost:4222';
+  const channel = instance.channel as ChannelType;
 
-  return new NatsGenieProvider(provider.id, provider.name, {
+  const natsProvider = new NatsGenieProvider(provider.id, provider.name, {
     agentName,
     natsUrl,
     instanceId: instance.id,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
+    onReply: async (chatId, content, _metadata) => {
+      try {
+        await sendTextMessage(channel, instance.id, chatId, content);
+      } catch (error) {
+        log.error('Failed to deliver agent reply', {
+          chatId,
+          instanceId: instance.id,
+          providerId: provider.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
   });
+
+  // Fire subscription as a side effect — do not block provider resolution.
+  // providerCache below caches by `${provider.id}:${instance.id}`, so this
+  // only runs once per (provider, instance) pair.
+  natsProvider.startReplySubscription().catch((err) => {
+    log.error('Failed to start NATS reply subscription', {
+      instanceId: instance.id,
+      providerId: provider.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  return natsProvider;
 }
 
 /**
@@ -4085,4 +4111,5 @@ export const __test__ = {
   MEDIA_WAIT_NULL,
   mergeRouteOverrides,
   getDebounceConfig,
+  createNatsGenieProviderInstance,
 };
