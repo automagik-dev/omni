@@ -1959,6 +1959,91 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
+
+      /**
+       * Update a person's fields (displayName, phone, email, metadata)
+       */
+      async update(
+        id: string,
+        data: {
+          displayName?: string;
+          primaryPhone?: string | null;
+          primaryEmail?: string | null;
+          avatarUrl?: string | null;
+          metadata?: Record<string, unknown> | null;
+        },
+      ): Promise<Person> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const json = (await resp.json()) as { data?: Person };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * Link two platform identities to the same person
+       */
+      async link(identityA: string, identityB: string): Promise<Person> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identityA, identityB }),
+        });
+        const json = (await resp.json()) as { data?: Person };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Link failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
+
+      /**
+       * Unlink a platform identity from its person
+       */
+      async unlink(identityId: string, reason: string): Promise<{ person: Person; identity: Record<string, unknown> }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/unlink`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identityId, reason }),
+        });
+        const json = (await resp.json()) as {
+          data?: { person: Person; identity: Record<string, unknown> };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Unlink failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
+
+      /**
+       * Merge two persons (source into target, source is deleted)
+       */
+      async merge(
+        sourcePersonId: string,
+        targetPersonId: string,
+        reason?: string,
+      ): Promise<{
+        person: Person;
+        mergedIdentityIds: string[];
+        deletedPersonId: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/merge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourcePersonId, targetPersonId, reason }),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            person: Person;
+            mergedIdentityIds: string[];
+            deletedPersonId: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Merge failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
     },
 
     // ========================================================================
@@ -2960,6 +3045,79 @@ export function createOmniClient(config: OmniClientConfig) {
        */
       async delete(id: string): Promise<void> {
         const resp = await apiFetch(`${baseUrl}/api/v2/keys/${id}`, {
+          method: 'DELETE',
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+    },
+
+    // ========================================================================
+    // CONTEXT
+    // ========================================================================
+
+    /**
+     * Conversation context for turn-based agents and CLI
+     */
+    context: {
+      /**
+       * Get current conversation context for this API key
+       */
+      async get(): Promise<{
+        instanceId: string | null;
+        chatId: string | null;
+        messageId: string | null;
+        activeInstanceId: string | null;
+        updatedAt: string | null;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {});
+        const json = (await resp.json()) as {
+          data?: {
+            instanceId: string | null;
+            chatId: string | null;
+            messageId: string | null;
+            activeInstanceId: string | null;
+            updatedAt: string | null;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return (
+          json?.data ?? { instanceId: null, chatId: null, messageId: null, activeInstanceId: null, updatedAt: null }
+        );
+      },
+
+      /**
+       * Set conversation context (instance, chat, message)
+       */
+      async set(body: {
+        instanceId?: string;
+        chatId?: string;
+        messageId?: string;
+      }): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+
+      /**
+       * Set active instance (admin convenience)
+       */
+      async use(instanceId: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context/use`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceId }),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+
+      /**
+       * Clear conversation context
+       */
+      async clear(): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {
           method: 'DELETE',
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
