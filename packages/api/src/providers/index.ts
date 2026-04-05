@@ -10,3 +10,5 @@ export * from './types';
 export { ProviderRegistry, providerRegistry } from './registry';
 export type { ProviderSettingsReader } from './registry';
 export { GEMINI_MODELS, getGeminiClient, resolveGeminiApiKey, resetGeminiClient } from './gemini/client';
+export { GeminiSttProvider } from './gemini/stt';
+export { GroqSttProvider, GROQ_STT_MODEL } from './groq/stt';

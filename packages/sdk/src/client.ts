@@ -3125,6 +3125,271 @@ export function createOmniClient(config: OmniClientConfig) {
     },
 
     // ========================================================================
+    // MEDIA
+    // ========================================================================
+
+    /**
+     * Multimodal media operations: TTS, STT, image gen, video gen, vision.
+     * Provider-routed via the API provider registry.
+     */
+    media: {
+      /**
+       * Synthesize text to speech via the registered TTS provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`tts.provider` setting)
+       *   3. First registered provider
+       *
+       * Returns the audio as a Buffer plus metadata.
+       */
+      async tts(body: {
+        text: string;
+        provider?: string;
+        voice?: string;
+        language?: string;
+        speed?: number;
+        format?: 'mp3' | 'ogg' | 'opus' | 'wav' | 'pcm' | 'flac' | 'aac';
+        style?: string;
+      }): Promise<{ provider: string; mimeType: string; durationMs: number; sizeBytes: number; audio: Buffer }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: { provider: string; mimeType: string; durationMs: number; sizeBytes: number; audioBase64: string };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('TTS response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          mimeType: data.mimeType,
+          durationMs: data.durationMs,
+          sizeBytes: data.sizeBytes,
+          audio: Buffer.from(data.audioBase64, 'base64'),
+        };
+      },
+
+      /**
+       * Transcribe audio to text via the registered STT provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`stt.provider` setting)
+       *   3. First registered provider
+       *
+       * Pass `timestamps: true` to receive per-segment breakdown.
+       */
+      async stt(body: {
+        audio: Buffer;
+        mimeType: string;
+        provider?: string;
+        language?: string;
+        timestamps?: boolean;
+        model?: string;
+      }): Promise<{
+        provider: string;
+        text: string;
+        segments?: Array<{ text: string; startMs?: number; endMs?: number }>;
+        detectedLanguage?: string;
+        processingMs: number;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/stt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: body.audio.toString('base64'),
+            mimeType: body.mimeType,
+            provider: body.provider,
+            language: body.language,
+            timestamps: body.timestamps,
+            model: body.model,
+          }),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            text: string;
+            segments?: Array<{ text: string; startMs?: number; endMs?: number }>;
+            detectedLanguage?: string;
+            processingMs: number;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('STT response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          text: data.text,
+          segments: data.segments,
+          detectedLanguage: data.detectedLanguage,
+          processingMs: data.processingMs,
+        };
+      },
+
+      /**
+       * Generate image(s) from a text prompt via the registered imagegen provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`imagegen.provider` setting)
+       *   3. First registered provider
+       *
+       * Returns base64-encoded images plus metadata. Callers can save to disk
+       * or forward to a chat via `client.messages.sendMedia`.
+       */
+      async imagine(body: {
+        prompt: string;
+        provider?: string;
+        count?: number;
+        aspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '3:2' | '2:3';
+        imageSize?: string;
+        model?: string;
+        negativePrompt?: string;
+        seed?: number;
+      }): Promise<{
+        provider: string;
+        processingMs: number;
+        images: Array<{
+          mimeType: string;
+          sizeBytes: number;
+          base64: string;
+          width?: number;
+          height?: number;
+          seed?: number;
+        }>;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/imagine`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            processingMs: number;
+            images: Array<{
+              mimeType: string;
+              sizeBytes: number;
+              base64: string;
+              width?: number;
+              height?: number;
+              seed?: number;
+            }>;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Imagine response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+
+      /**
+       * Describe an image or video via the registered vision provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`vision.provider` setting)
+       *   3. First registered provider
+       *
+       * Pass a guided `prompt` for targeted descriptions (e.g. "What color is the cat?").
+       */
+      async vision(body: {
+        media: Buffer;
+        mimeType: string;
+        provider?: string;
+        prompt?: string;
+        language?: string;
+        maxTokens?: number;
+      }): Promise<{ provider: string; text: string; processingMs: number }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/vision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mediaBase64: body.media.toString('base64'),
+            mimeType: body.mimeType,
+            provider: body.provider,
+            prompt: body.prompt,
+            language: body.language,
+            maxTokens: body.maxTokens,
+          }),
+        });
+        const json = (await resp.json()) as {
+          data?: { provider: string; text: string; processingMs: number };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Vision response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          text: data.text,
+          processingMs: data.processingMs,
+        };
+      },
+
+      /**
+       * Generate a video from a text prompt via the registered video-gen provider.
+       *
+       * The API blocks until generation completes, polls internally, and
+       * returns the final MP4 as base64. Generation typically takes 60–180
+       * seconds with Veo 3.1. The server enforces a 5-minute timeout.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`videogen.provider` setting)
+       *   3. First registered provider
+       */
+      async film(body: {
+        prompt: string;
+        provider?: string;
+        durationSec?: number;
+        resolution?: string;
+        aspectRatio?: string;
+        seed?: number;
+        audio?: boolean;
+      }): Promise<{
+        provider: string;
+        operationId: string;
+        mimeType: string;
+        sizeBytes: number;
+        durationMs: number;
+        videoBase64: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/film`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            operationId: string;
+            mimeType: string;
+            sizeBytes: number;
+            durationMs: number;
+            videoBase64: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Film response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+    },
+
+    // ========================================================================
     // TURNS
     // ========================================================================
 

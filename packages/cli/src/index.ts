@@ -25,10 +25,13 @@ import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
+import { createFilmCommand } from './commands/film.js';
+import { createImagineCommand } from './commands/imagine.js';
 import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
 import { createJourneyCommand } from './commands/journey.js';
 import { createKeysCommand } from './commands/keys.js';
+import { createListenCommand } from './commands/listen.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
@@ -42,8 +45,10 @@ import { createReplayCommand } from './commands/replay.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSayCommand } from './commands/say.js';
+import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
@@ -112,6 +117,36 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Core',
     helpDescription: 'React to a message with emoji (verb command)',
+  },
+  {
+    create: createListenCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Transcribe audio to text (verb command)',
+  },
+  {
+    create: createImagineCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Generate an image from a prompt (Gemini Nano Banana, verb command)',
+  },
+  {
+    create: createFilmCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Generate a video from a prompt (Gemini Veo 3.1, verb command)',
+  },
+  {
+    create: createSpeakCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Synthesize text to speech and send as voice note (verb command)',
+  },
+  {
+    create: createSeeCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Describe an image or video via Gemini Vision (verb command)',
   },
   { create: createChatsCommand, category: 'core', helpGroup: 'Core', helpDescription: 'List and manage conversations' },
   {

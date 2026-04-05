@@ -243,6 +243,13 @@ const CLI_COMMANDS: Record<string, string> = {
   'turns.close': 'done "text" / done --react / done --skip',
 
   // ============================================================================
+  // MEDIA (multimodal verbs — tts/stt/vision/imagegen/videogen)
+  // ============================================================================
+  'media.tts': 'speak <text>',
+  'media.stt': 'listen <file>',
+  'media.vision': 'see <file> [prompt]',
+
+  // ============================================================================
   // AGENTS
   // ============================================================================
   'agents.list': 'agents list',
