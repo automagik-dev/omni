@@ -3387,7 +3387,7 @@ export interface components {
              * @description Provider schema type
              * @enum {string}
              */
-            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
             /**
              * Format: uri
              * @description Base URL
@@ -3456,7 +3456,7 @@ export interface components {
              * @default agno
              * @enum {string}
              */
-            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
             /**
              * Format: uri
              * @description Base URL
@@ -10371,7 +10371,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -10454,7 +10454,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -10544,7 +10544,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -10661,7 +10661,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                             /**
                              * Format: uri
                              * @description Base URL
@@ -10815,7 +10815,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -10905,7 +10905,7 @@ export interface operations {
                              * @description Provider schema type
                              * @enum {string}
                              */
-                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "genie";
+                            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                             /**
                              * Format: uri
                              * @description Base URL

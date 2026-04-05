@@ -39,12 +39,12 @@ import {
   type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
-  GenieAgentProvider,
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
   type MediaProcessedPayload,
   type MessageReceivedPayload,
+  NatsGenieProvider,
   OpenClawAgentProvider,
   OpenClawClient,
   type OpenClawClientConfig,
@@ -55,7 +55,6 @@ import {
   type StreamDelta,
   WebhookAgentProvider,
   checkSessionReset,
-  createGenieClient,
   createLogger,
   createProviderClient,
   executeHooks,
@@ -2724,30 +2723,52 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
   });
 }
 
-/** Create a Genie agent provider (delivers to Claude Code team inbox) */
-function createGenieProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
+/** Create a NATS Genie provider (publishes to NATS, no filesystem) */
+function createNatsGenieProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider | null {
   const schemaConfig = (
     typeof provider.schemaConfig === 'object' && provider.schemaConfig !== null ? provider.schemaConfig : {}
   ) as Record<string, unknown>;
 
   const agentName = typeof schemaConfig.agentName === 'string' ? schemaConfig.agentName : '';
-  const targetAgent = typeof schemaConfig.targetAgent === 'string' ? schemaConfig.targetAgent : '';
-
-  if (!agentName || !targetAgent) {
-    log.error('Genie provider missing agentName or targetAgent in schemaConfig', { providerId: provider.id });
+  if (!agentName) {
+    log.error('NATS Genie provider missing agentName in schemaConfig', { providerId: provider.id });
     return null;
   }
 
-  const teamName = typeof schemaConfig.teamName === 'string' ? schemaConfig.teamName : 'genie';
-  const agentRole = typeof schemaConfig.agentRole === 'string' ? schemaConfig.agentRole : 'team-lead';
+  const natsUrl = typeof schemaConfig.natsUrl === 'string' ? schemaConfig.natsUrl : 'localhost:4222';
+  const channel = instance.channel as ChannelType;
 
-  const autoSpawnDir = typeof schemaConfig.autoSpawnDir === 'string' ? schemaConfig.autoSpawnDir : undefined;
-  const sessionName = typeof schemaConfig.sessionName === 'string' ? schemaConfig.sessionName : undefined;
-  const client = createGenieClient({ teamName, agentName, targetAgent, agentRole, autoSpawnDir, sessionName });
-
-  return new GenieAgentProvider(provider.id, provider.name, client, {
+  const natsProvider = new NatsGenieProvider(provider.id, provider.name, {
+    agentName,
+    natsUrl,
+    instanceId: instance.id,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
+    onReply: async (chatId, content, _metadata) => {
+      try {
+        await sendTextMessage(channel, instance.id, chatId, content);
+      } catch (error) {
+        log.error('Failed to deliver agent reply', {
+          chatId,
+          instanceId: instance.id,
+          providerId: provider.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
   });
+
+  // Fire subscription as a side effect — do not block provider resolution.
+  // providerCache below caches by `${provider.id}:${instance.id}`, so this
+  // only runs once per (provider, instance) pair.
+  natsProvider.startReplySubscription().catch((err) => {
+    log.error('Failed to start NATS reply subscription', {
+      instanceId: instance.id,
+      providerId: provider.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  return natsProvider;
 }
 
 /**
@@ -2786,8 +2807,8 @@ export function resolveProvider(
     case 'a2a':
       agentProvider = createA2AProviderInstance(provider, instance);
       break;
-    case 'genie':
-      agentProvider = createGenieProviderInstance(provider, instance);
+    case 'nats-genie':
+      agentProvider = createNatsGenieProviderInstance(provider, instance);
       break;
     default:
       log.debug('Provider schema not supported for IAgentProvider dispatch', {
@@ -3331,6 +3352,26 @@ async function shouldProcessMessage(
 
   if (!instanceTriggersOnEvent(instance, 'message.received')) {
     log.debug('Instance does not trigger on message.received', { instanceId: instance.id });
+    return null;
+  }
+
+  // JID-based self-filter for bot's own reaction echoes (#336).
+  // The UUID check above (platformIdentityId) doesn't work for WhatsApp because
+  // payload.from is a JID, not a UUID. For dual-emitted reactions where
+  // rawPayload.isFromMe is set, compare the sender JID against ownerIdentifier
+  // to catch bot-originated reactions that slipped through other filters.
+  // Scoped to isFromMe to avoid blocking legitimate owner-typed messages or self-chat.
+  const rawSelfCheck = payload.rawPayload as Record<string, unknown> | undefined;
+  if (
+    rawSelfCheck?.isFromMe === true &&
+    instance.ownerIdentifier &&
+    extractPhoneFromJid(payload.from) === extractPhoneFromJid(instance.ownerIdentifier)
+  ) {
+    log.debug('Message from instance owner (isFromMe + JID match), skipping', {
+      instanceId: instance.id,
+      from: payload.from,
+      ownerIdentifier: instance.ownerIdentifier,
+    });
     return null;
   }
 
@@ -4090,4 +4131,5 @@ export const __test__ = {
   MEDIA_WAIT_NULL,
   mergeRouteOverrides,
   getDebounceConfig,
+  createNatsGenieProviderInstance,
 };

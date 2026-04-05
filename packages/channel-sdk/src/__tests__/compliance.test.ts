@@ -422,7 +422,7 @@ describe('channel coverage', () => {
           e.name !== 'channel-a2a' &&
           e.name !== 'channel-internal' &&
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
-          e.name !== 'channel-gupshup', // Stub — full compliance added in Group 3/4
+          e.name !== 'channel-gupshup', // In progress — PR #334
       )
       .map((e) => e.name.replace('channel-', ''));
 

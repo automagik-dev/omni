@@ -237,7 +237,7 @@ export const providerSchemas = [
   'ag-ui',
   'claude-code',
   'a2a',
-  'genie',
+  'nats-genie',
 ] as const satisfies readonly CoreProviderSchema[];
 export type ProviderSchema = (typeof providerSchemas)[number];
 

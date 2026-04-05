@@ -714,193 +714,6 @@ async function runOpenClawSetup(opts: SetupOpenClawOptions): Promise<void> {
 // COMMAND REGISTRATION
 // ============================================================================
 
-// ============================================================================
-// GENIE SETUP
-// ============================================================================
-
-const GENIE_TEMPLATE_VARS = `
-  Template variables (resolved per-message at runtime):
-    {chat_id}     - Conversation ID (1 session per chat)
-    {thread_id}   - Thread ID (1 session per thread)
-    {sender_id}   - Sender user ID (1 session per person)
-    {channel}     - Channel type (telegram, whatsapp, etc.)
-    {instance_id} - Omni instance ID
-  Examples:
-    "workspace"              → Single shared session
-    "genie-{chat_id}"        → One session per conversation
-    "genie-{chat_id}-{thread_id}" → Per-thread isolation`;
-
-interface SetupGenieOptions {
-  agentName: string;
-  targetAgent: string;
-  teamName: string;
-  agentRole: string;
-  name: string;
-  baseUrl: string;
-  instanceId?: string;
-  nonInteractive?: boolean;
-}
-
-/** Collect missing genie options via interactive prompts */
-async function collectGenieOptions(options: Partial<SetupGenieOptions>): Promise<SetupGenieOptions> {
-  const agentName = options.agentName ?? (await promptLine('Agent name (your identity / "from" field): '));
-  const targetAgent = options.targetAgent ?? (await promptLine('Target agent (inbox to deliver to): '));
-  const agentRole =
-    options.agentRole ??
-    (await promptLine('Agent role (registered genie dir agent, e.g. "omni-pm") [team-lead]: ', 'team-lead'));
-
-  if (!options.teamName) {
-    output.info(GENIE_TEMPLATE_VARS);
-  }
-  const teamName =
-    options.teamName ?? (await promptLine(`Team name template [${agentName}-{chat_id}]: `, `${agentName}-{chat_id}`));
-
-  const defaultName = `genie-${agentName}`;
-  const name = options.name ?? (await promptLine(`Provider name [${defaultName}]: `, defaultName));
-  const baseUrl =
-    options.baseUrl ??
-    (await promptLine('Base URL [file:///home/genie/.claude/teams]: ', 'file:///home/genie/.claude/teams'));
-
-  let instanceId = options.instanceId;
-  if (!instanceId) {
-    instanceId = (await promptLine('Instance ID (Omni instance UUID, leave blank to skip): ')) || undefined;
-  }
-
-  return {
-    agentName,
-    targetAgent,
-    teamName,
-    agentRole,
-    name,
-    baseUrl,
-    instanceId,
-    nonInteractive: options.nonInteractive,
-  };
-}
-
-/** Main setup flow for Genie provider */
-async function runGenieSetup(opts: SetupGenieOptions): Promise<void> {
-  const spinner = ora();
-
-  try {
-    // Step 1: Create provider via API
-    spinner.start('Creating Genie provider...');
-    const client = getClient();
-    const provider = await client.providers.create({
-      name: opts.name,
-      schema: 'genie',
-      baseUrl: opts.baseUrl,
-      schemaConfig: {
-        agentName: opts.agentName,
-        targetAgent: opts.targetAgent,
-        teamName: opts.teamName,
-        agentRole: opts.agentRole,
-      },
-    });
-    spinner.succeed(`Provider created: ${provider.id}`);
-
-    // Step 2: Health check
-    spinner.start('Testing provider health...');
-    const health = await client.providers.checkHealth(provider.id);
-    if (health.healthy) {
-      spinner.succeed(`Provider is healthy (latency: ${health.latency}ms)`);
-    } else {
-      spinner.warn(`Provider created but health check failed: ${health.error ?? 'unknown'}`);
-      output.info('  The provider was created. Re-test later with:');
-      output.info(`    omni providers test ${provider.id}`);
-    }
-
-    // Summary
-    output.info('');
-    output.success('Genie provider setup complete');
-    output.info(`  Provider ID:    ${provider.id}`);
-    output.info(`  Provider name:  ${opts.name}`);
-    output.info(`  Agent name:     ${opts.agentName}`);
-    output.info(`  Target agent:   ${opts.targetAgent}`);
-    output.info(`  Agent role:     ${opts.agentRole}`);
-    output.info(`  Team template:  ${opts.teamName}`);
-    output.info(`  Base URL:       ${opts.baseUrl}`);
-    output.info('');
-    output.info('How it works:');
-    output.info('  1. Incoming messages are written to ~/.claude/teams/<team>/inboxes/<target>.json');
-    output.info('  2. Claude Code agent picks up messages natively from its team inbox');
-    output.info('  3. Agent replies via `omni send` (fire-and-forget, no polling)');
-    output.info('');
-    output.info('Next steps:');
-    if (opts.instanceId) {
-      output.info(`  1. Assign to instance: omni instances update ${opts.instanceId} --agent-provider ${provider.id}`);
-    } else {
-      output.info(`  1. Assign to instance: omni instances update <instance-id> --agent-provider ${provider.id}`);
-    }
-    output.info(`  2. Test connectivity:  omni providers test ${provider.id}`);
-    output.info(`  3. Update template:    omni providers update ${provider.id} --team-name "new-{chat_id}"`);
-  } catch (err) {
-    spinner.fail('Setup failed');
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    output.error(`Genie provider setup failed: ${message}`);
-  }
-}
-
-/** Resolve non-interactive genie options from CLI flags */
-function resolveGenieNonInteractive(options: {
-  agentName?: string;
-  targetAgent?: string;
-  teamName?: string;
-  agentRole?: string;
-  name?: string;
-  baseUrl?: string;
-  instanceId?: string;
-}): SetupGenieOptions | string {
-  if (!options.agentName) return 'Missing required flag: --agent-name';
-  if (!options.targetAgent) return 'Missing required flag: --target-agent';
-  return {
-    agentName: options.agentName,
-    targetAgent: options.targetAgent,
-    teamName: options.teamName ?? `${options.agentName}-{chat_id}`,
-    agentRole: options.agentRole ?? 'team-lead',
-    name: options.name ?? `genie-${options.agentName}`,
-    baseUrl: options.baseUrl ?? 'file:///home/genie/.claude/teams',
-    instanceId: options.instanceId,
-    nonInteractive: true,
-  };
-}
-
-/** Action handler for `omni providers setup genie` */
-async function handleGenieSetup(options: {
-  agentName?: string;
-  targetAgent?: string;
-  teamName?: string;
-  agentRole?: string;
-  name?: string;
-  baseUrl?: string;
-  instanceId?: string;
-  nonInteractive?: boolean;
-}): Promise<void> {
-  if (options.instanceId && !isValidUuid(options.instanceId)) {
-    output.error(`Invalid --instance-id: must be a valid UUID. Got: ${options.instanceId}`);
-    return;
-  }
-
-  let resolved: SetupGenieOptions;
-  if (options.nonInteractive) {
-    const result = resolveGenieNonInteractive(options);
-    if (typeof result === 'string') {
-      output.error(result);
-      return;
-    }
-    resolved = result;
-  } else {
-    resolved = await collectGenieOptions(options);
-  }
-
-  if (resolved.instanceId && !isValidUuid(resolved.instanceId)) {
-    output.error(`Invalid instance ID: must be a valid UUID. Got: ${resolved.instanceId}`);
-    return;
-  }
-
-  await runGenieSetup(resolved);
-}
-
 export function createSetupCommand(): Command {
   const setup = new Command('setup').description('Interactive setup wizards for providers');
 
@@ -969,19 +782,16 @@ export function createSetupCommand(): Command {
       },
     );
 
-  // omni providers setup genie
+  // omni providers setup genie — deprecated, use `omni connect` instead
   setup
     .command('genie')
-    .description('Set up a Genie provider (Claude Code team inbox integration)')
-    .option('--agent-name <name>', 'Agent identity / "from" field')
-    .option('--target-agent <name>', 'Target agent inbox to deliver messages to')
-    .option('--team-name <template>', 'Team name template (supports {chat_id}, {thread_id}, etc.)')
-    .option('--agent-role <role>', 'Registered genie dir agent name (default: team-lead)')
-    .option('--name <name>', 'Provider name (default: genie-<agent-name>)')
-    .option('--base-url <url>', 'Base URL (default: file:///home/genie/.claude/teams)')
-    .option('--instance-id <uuid>', 'Omni instance UUID to auto-assign provider')
-    .option('--non-interactive', 'Error on missing required flags instead of prompting')
-    .action(handleGenieSetup);
+    .description('[DEPRECATED] Use `omni connect <instance-id> <agent-name>` instead')
+    .allowUnknownOption()
+    .action(() => {
+      output.error(
+        'The `providers setup genie` command has been replaced.\nUse `omni connect <instance-id> <agent-name>` for NATS-based Genie integration.',
+      );
+    });
 
   return setup;
 }

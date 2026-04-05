@@ -33,6 +33,7 @@ import {
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isGroupJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
+import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
@@ -1366,7 +1367,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const correlationId = message.metadata?.correlationId as string | undefined;
     correlationId && this.captureT10(correlationId);
 
-    await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+
+    // Track sent reaction ID so shouldProcessMessage can filter the echo (#336)
+    if (reactionMsgId) {
+      this.trackSentMessageId(instanceId, reactionMsgId);
+    }
 
     correlationId && this.captureT11(correlationId);
 
@@ -1445,7 +1451,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const lines = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${contact.name}`];
 
     if (contact.phone) {
-      lines.push(`TEL;type=CELL:${contact.phone}`);
+      const digits = contact.phone.replace(/[^\d]/g, '');
+      const waid = computeWaid(digits);
+      lines.push(`TEL;type=CELL;waid=${waid}:${contact.phone}`);
     }
 
     if (contact.email) {
@@ -1522,7 +1530,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
-    await sendReaction(sock, jid, messageId, emoji, false);
+    const reactionMsgId = await sendReaction(sock, jid, messageId, emoji, false);
+    if (reactionMsgId) {
+      this.trackSentMessageId(instanceId, reactionMsgId);
+    }
   }
 
   /**
@@ -1531,7 +1542,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   async unreact(instanceId: string, chatId: string, messageId: string, _emoji: string): Promise<void> {
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
-    await removeReaction(sock, jid, messageId, false);
+    const reactionMsgId = await removeReaction(sock, jid, messageId, false);
+    if (reactionMsgId) {
+      this.trackSentMessageId(instanceId, reactionMsgId);
+    }
   }
 
   /** Resolve a message key for read receipts, with cache fallback and LID mapping */
@@ -2815,7 +2829,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Dual-emit as message.received for backward compatibility
     // Remove this once all consumers migrate to reaction.* events
-    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false') {
+    // Skip dual-emit for bot's own reactions (isFromMe) to prevent dispatch loops (#336)
+    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false' && !isFromMe) {
       await this.emitMessageReceived({
         instanceId,
         externalId,
