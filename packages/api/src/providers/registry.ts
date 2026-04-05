@@ -28,7 +28,7 @@ export interface ProviderSettingsReader {
  *   const tts = await registry.resolve('tts');           // config default
  *   const tts = await registry.resolve('tts', 'gemini'); // explicit
  */
-export class ProviderRegistry {
+class ProviderRegistry {
   /** capability -> Map<providerName, providerInstance> */
   private providers = new Map<ProviderCapability, Map<string, ProviderInterfaceMap[ProviderCapability]>>();
   private settings: ProviderSettingsReader | null = null;

@@ -71,11 +71,3 @@ export async function resolveGeminiApiKey(settings: {
   }
   return apiKey;
 }
-
-/**
- * Reset the client singleton. Useful for testing.
- */
-export function resetGeminiClient(): void {
-  clientInstance = null;
-  clientApiKey = null;
-}

@@ -15,7 +15,7 @@ const log = createLogger('provider:groq:stt');
 const GROQ_MAX_BYTES = 19.5 * 1024 * 1024;
 
 /** Default Whisper model for Groq STT */
-export const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
+const GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 
 const GROQ_TRANSCRIPTION_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
