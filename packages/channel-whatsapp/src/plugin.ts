@@ -33,6 +33,7 @@ import {
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isGroupJid, isLidJid, isUserJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
+import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
 import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
@@ -1445,7 +1446,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const lines = ['BEGIN:VCARD', 'VERSION:3.0', `FN:${contact.name}`];
 
     if (contact.phone) {
-      lines.push(`TEL;type=CELL:${contact.phone}`);
+      const digits = contact.phone.replace(/[^\d]/g, '');
+      const waid = computeWaid(digits);
+      lines.push(`TEL;type=CELL;waid=${waid}:${contact.phone}`);
     }
 
     if (contact.email) {
