@@ -10,6 +10,7 @@ import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 export interface ListEventsOptions {
   channel?: ChannelType[];
   instanceId?: string;
+  instanceIds?: string[];
   personId?: string;
   eventType?: EventType[];
   contentType?: ContentType[];
@@ -70,6 +71,8 @@ export class EventService {
 
     if (instanceId) {
       conditions.push(eq(omniEvents.instanceId, instanceId));
+    } else if (options.instanceIds?.length) {
+      conditions.push(inArray(omniEvents.instanceId, options.instanceIds));
     }
 
     if (personId) {

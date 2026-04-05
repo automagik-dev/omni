@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260404.1",
+  "version": "2.260405.1",
   "type": "module",
   "exports": {
     ".": {
@@ -20,11 +20,13 @@
     "dev": "bun --watch --env-file=../../.env src/index.ts",
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "fix-persons": "bun run scripts/fix-person-duplicates.ts"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
+    "@google/genai": "^1.0.0",
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",

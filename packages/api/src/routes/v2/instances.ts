@@ -536,6 +536,17 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const data = c.req.valid('json');
   const services = c.get('services');
 
+  // Detect agent assignment changes for auto-key provisioning
+  let oldAgentId: string | null | undefined;
+  if (data.agentId !== undefined) {
+    try {
+      const current = await services.instances.getById(id);
+      oldAgentId = current.agentId;
+    } catch {
+      // Instance not found — update will throw
+    }
+  }
+
   const instance = await services.instances.update(id, data);
 
   // Invalidate access cache when access mode changes
@@ -543,8 +554,75 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     await accessCache.clear();
   }
 
+  // Auto-provision/update scoped API key on agent assignment change
+  if (data.agentId !== undefined && data.agentId !== oldAgentId) {
+    await handleAgentKeyProvisioning(services, id, data.agentId, oldAgentId ?? null);
+  }
+
   return c.json({ data: sanitizeInstance(instance) });
 });
+
+/**
+ * Auto-provision or update a scoped API key when an agent is assigned to an instance.
+ * - Assign: creates or updates key `agent:<name>` with instanceIds including this instance
+ * - Unassign: removes instanceId from the old agent's key
+ */
+async function handleAgentKeyProvisioning(
+  services: Services,
+  instanceId: string,
+  newAgentId: string | null,
+  oldAgentId: string | null,
+) {
+  // Remove instance from old agent's key
+  if (oldAgentId) {
+    try {
+      const oldAgent = await services.agents.getById(oldAgentId);
+      const keyName = `agent:${oldAgent.name}`;
+      const existingKey = await services.apiKeys.findByName(keyName);
+      if (existingKey?.instanceIds) {
+        const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
+        await services.apiKeys.update(existingKey.id, {
+          instanceIds: updated.length > 0 ? updated : null,
+        });
+        log.info('Removed instance from agent key', { keyName, instanceId });
+      }
+    } catch (err) {
+      log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });
+    }
+  }
+
+  // Add instance to new agent's key (or create key)
+  if (newAgentId) {
+    try {
+      const agent = await services.agents.getById(newAgentId);
+      const keyName = `agent:${agent.name}`;
+      const existingKey = await services.apiKeys.findByName(keyName);
+
+      if (existingKey) {
+        // Add instanceId to existing key's instanceIds
+        const currentIds = existingKey.instanceIds ?? [];
+        if (!currentIds.includes(instanceId)) {
+          await services.apiKeys.update(existingKey.id, {
+            instanceIds: [...currentIds, instanceId],
+          });
+          log.info('Added instance to existing agent key', { keyName, instanceId });
+        }
+      } else {
+        // Create new scoped API key for this agent
+        const result = await services.apiKeys.create({
+          name: keyName,
+          description: `Auto-provisioned scoped key for agent ${agent.name}`,
+          scopes: ['*'],
+          instanceIds: [instanceId],
+          createdBy: 'system:auto-provision',
+        });
+        log.info('Created scoped agent key', { keyName, instanceId, keyId: result.key.id });
+      }
+    } catch (err) {
+      log.error('Failed to provision agent key', { newAgentId, instanceId, error: String(err) });
+    }
+  }
+}
 
 /**
  * DELETE /instances/:id - Delete instance

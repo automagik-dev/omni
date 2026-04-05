@@ -80,6 +80,7 @@ import {
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
+import { publishTurnOpen } from '../services/turn-events';
 import { getPlugin } from './loader';
 import {
   type BufferedMessage,
@@ -1657,6 +1658,102 @@ async function forwardToChainedInstance(
 }
 
 /**
+ * Handle turn-based dispatch: open turn, set context, inject env vars, fire trigger.
+ * Extracted from dispatchViaProvider to keep cognitive complexity within limits.
+ */
+async function dispatchViaTurnBasedProvider(
+  services: Services,
+  instance: DispatchInstance,
+  provider: IAgentProvider,
+  trigger: AgentTrigger,
+  messages: BufferedMessage[],
+  chatId: string,
+  traceId: string,
+  db: Database,
+): Promise<boolean> {
+  const messageId = messages[0]?.payload.externalId ?? '';
+
+  // Look up agent record for scoped key name
+  let agentRecord: { id: string; name: string } | undefined;
+  if (instance.agentId) {
+    const [row] = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(eq(agents.id, instance.agentId))
+      .limit(1);
+    agentRecord = row;
+  }
+  if (!agentRecord) {
+    log.error('Turn-based dispatch: agent not found', { instanceId: instance.id, agentId: instance.agentId });
+    return false;
+  }
+
+  // Find the scoped API key (provisioned on agent-instance assignment)
+  const keyName = `agent:${agentRecord.name}`;
+  const scopedKey = await services.apiKeys.findByName(keyName);
+  if (!scopedKey) {
+    log.error('Turn-based dispatch: scoped API key not found', { keyName, instanceId: instance.id });
+    return false;
+  }
+
+  // Open turn
+  const turn = await services.turns.open({
+    instanceId: instance.id,
+    chatId,
+    messageId,
+    agentId: agentRecord.id,
+    apiKeyId: scopedKey.id,
+  });
+
+  // Set context on the scoped key so verb commands resolve to this chat
+  await services.apiKeys.update(scopedKey.id, {
+    contextInstanceId: instance.id,
+    contextChatId: chatId,
+    contextMessageId: messageId || null,
+  });
+
+  // Publish turn.open NATS event
+  publishTurnOpen(instance.id, chatId, {
+    turnId: turn.id,
+    messageId,
+    agentId: agentRecord.id,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Inject env vars into trigger for the agent bridge
+  trigger.env = {
+    OMNI_INSTANCE: instance.id,
+    OMNI_CHAT: chatId,
+    OMNI_MESSAGE: messageId,
+    OMNI_TURN_ID: turn.id,
+  };
+
+  // Dispatch (fire-and-forget — agent uses verb commands + omni done)
+  const dispatchStart = Date.now();
+  await provider.trigger(trigger);
+  const dispatchDurationMs = Date.now() - dispatchStart;
+
+  if (sentryEnabled()) {
+    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema, mode: 'turn-based' } });
+    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+      unit: 'millisecond',
+      attributes: { provider_type: provider.schema, mode: 'turn-based' },
+    });
+  }
+
+  log.info('Turn-based dispatch: turn opened', {
+    turnId: turn.id,
+    instanceId: instance.id,
+    chatId,
+    agentId: agentRecord.id,
+    providerId: provider.id,
+    traceId,
+  });
+
+  return true;
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1730,6 +1827,12 @@ async function dispatchViaProvider(
     allContextMessages,
   );
 
+  // ── Turn-based mode: delegate to extracted helper ──
+  if (provider.mode === 'turn-based') {
+    return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
+  }
+
+  // ── Standard (round-trip / fire-and-forget) dispatch ──
   const correlationId = messages[0]?.metadata.correlationId;
   const dispatchStart = Date.now();
   const result = await provider.trigger(trigger);
@@ -2736,6 +2839,7 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
   }
 
   const natsUrl = typeof schemaConfig.natsUrl === 'string' ? schemaConfig.natsUrl : 'localhost:4222';
+  const providerMode = schemaConfig.mode === 'turn-based' ? ('turn-based' as const) : ('fire-and-forget' as const);
   const channel = instance.channel as ChannelType;
 
   const natsProvider = new NatsGenieProvider(provider.id, provider.name, {
@@ -2743,6 +2847,7 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
     natsUrl,
     instanceId: instance.id,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
+    mode: providerMode,
     onReply: async (chatId, content, metadata) => {
       try {
         await sendTextMessage(channel, instance.id, chatId, content);

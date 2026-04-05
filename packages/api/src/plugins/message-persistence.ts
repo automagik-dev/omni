@@ -265,11 +265,22 @@ async function processSenderIdentity(
   // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
   // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
   const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
-  const phoneNumber = isLidAddressed ? undefined : extractPhoneFromSender(platformUserId, channel);
+  const resolvedPhone = isLidAddressed ? (payload.rawPayload?.resolvedSenderPhone as string | undefined) : undefined;
+  const phoneNumber = isLidAddressed
+    ? resolvedPhone
+      ? `+${resolvedPhone}`
+      : undefined
+    : extractPhoneFromSender(platformUserId, channel);
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
-    { createPerson: true, displayName, matchByPhone: phoneNumber },
+    {
+      createPerson: true,
+      displayName,
+      matchByPhone: phoneNumber,
+      matchByPlatformUserId: platformUserId,
+      matchByChannel: channel,
+    },
   );
 
   // Fetch profile for new identities (non-blocking)

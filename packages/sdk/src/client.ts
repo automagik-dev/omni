@@ -1959,6 +1959,91 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
         return json.data;
       },
+
+      /**
+       * Update a person's fields (displayName, phone, email, metadata)
+       */
+      async update(
+        id: string,
+        data: {
+          displayName?: string;
+          primaryPhone?: string | null;
+          primaryEmail?: string | null;
+          avatarUrl?: string | null;
+          metadata?: Record<string, unknown> | null;
+        },
+      ): Promise<Person> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const json = (await resp.json()) as { data?: Person };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Person not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
+       * Link two platform identities to the same person
+       */
+      async link(identityA: string, identityB: string): Promise<Person> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identityA, identityB }),
+        });
+        const json = (await resp.json()) as { data?: Person };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Link failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
+
+      /**
+       * Unlink a platform identity from its person
+       */
+      async unlink(identityId: string, reason: string): Promise<{ person: Person; identity: Record<string, unknown> }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/unlink`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identityId, reason }),
+        });
+        const json = (await resp.json()) as {
+          data?: { person: Person; identity: Record<string, unknown> };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Unlink failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
+
+      /**
+       * Merge two persons (source into target, source is deleted)
+       */
+      async merge(
+        sourcePersonId: string,
+        targetPersonId: string,
+        reason?: string,
+      ): Promise<{
+        person: Person;
+        mergedIdentityIds: string[];
+        deletedPersonId: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/persons/merge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourcePersonId, targetPersonId, reason }),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            person: Person;
+            mergedIdentityIds: string[];
+            deletedPersonId: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Merge failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
+      },
     },
 
     // ========================================================================
@@ -2963,6 +3048,380 @@ export function createOmniClient(config: OmniClientConfig) {
           method: 'DELETE',
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+    },
+
+    // ========================================================================
+    // CONTEXT
+    // ========================================================================
+
+    /**
+     * Conversation context for turn-based agents and CLI
+     */
+    context: {
+      /**
+       * Get current conversation context for this API key
+       */
+      async get(): Promise<{
+        instanceId: string | null;
+        chatId: string | null;
+        messageId: string | null;
+        activeInstanceId: string | null;
+        updatedAt: string | null;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {});
+        const json = (await resp.json()) as {
+          data?: {
+            instanceId: string | null;
+            chatId: string | null;
+            messageId: string | null;
+            activeInstanceId: string | null;
+            updatedAt: string | null;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return (
+          json?.data ?? { instanceId: null, chatId: null, messageId: null, activeInstanceId: null, updatedAt: null }
+        );
+      },
+
+      /**
+       * Set conversation context (instance, chat, message)
+       */
+      async set(body: {
+        instanceId?: string;
+        chatId?: string;
+        messageId?: string;
+      }): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+
+      /**
+       * Set active instance (admin convenience)
+       */
+      async use(instanceId: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context/use`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceId }),
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+
+      /**
+       * Clear conversation context
+       */
+      async clear(): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/context`, {
+          method: 'DELETE',
+        });
+        if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+    },
+
+    // ========================================================================
+    // MEDIA
+    // ========================================================================
+
+    /**
+     * Multimodal media operations: TTS, STT, image gen, video gen, vision.
+     * Provider-routed via the API provider registry.
+     */
+    media: {
+      /**
+       * Synthesize text to speech via the registered TTS provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`tts.provider` setting)
+       *   3. First registered provider
+       *
+       * Returns the audio as a Buffer plus metadata.
+       */
+      async tts(body: {
+        text: string;
+        provider?: string;
+        voice?: string;
+        language?: string;
+        speed?: number;
+        format?: 'mp3' | 'ogg' | 'opus' | 'wav' | 'pcm' | 'flac' | 'aac';
+        style?: string;
+      }): Promise<{ provider: string; mimeType: string; durationMs: number; sizeBytes: number; audio: Buffer }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: { provider: string; mimeType: string; durationMs: number; sizeBytes: number; audioBase64: string };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('TTS response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          mimeType: data.mimeType,
+          durationMs: data.durationMs,
+          sizeBytes: data.sizeBytes,
+          audio: Buffer.from(data.audioBase64, 'base64'),
+        };
+      },
+
+      /**
+       * Transcribe audio to text via the registered STT provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`stt.provider` setting)
+       *   3. First registered provider
+       *
+       * Pass `timestamps: true` to receive per-segment breakdown.
+       */
+      async stt(body: {
+        audio: Buffer;
+        mimeType: string;
+        provider?: string;
+        language?: string;
+        timestamps?: boolean;
+        model?: string;
+      }): Promise<{
+        provider: string;
+        text: string;
+        segments?: Array<{ text: string; startMs?: number; endMs?: number }>;
+        detectedLanguage?: string;
+        processingMs: number;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/stt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: body.audio.toString('base64'),
+            mimeType: body.mimeType,
+            provider: body.provider,
+            language: body.language,
+            timestamps: body.timestamps,
+            model: body.model,
+          }),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            text: string;
+            segments?: Array<{ text: string; startMs?: number; endMs?: number }>;
+            detectedLanguage?: string;
+            processingMs: number;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('STT response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          text: data.text,
+          segments: data.segments,
+          detectedLanguage: data.detectedLanguage,
+          processingMs: data.processingMs,
+        };
+      },
+
+      /**
+       * Generate image(s) from a text prompt via the registered imagegen provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`imagegen.provider` setting)
+       *   3. First registered provider
+       *
+       * Returns base64-encoded images plus metadata. Callers can save to disk
+       * or forward to a chat via `client.messages.sendMedia`.
+       */
+      async imagine(body: {
+        prompt: string;
+        provider?: string;
+        count?: number;
+        aspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '3:2' | '2:3';
+        imageSize?: string;
+        model?: string;
+        negativePrompt?: string;
+        seed?: number;
+      }): Promise<{
+        provider: string;
+        processingMs: number;
+        images: Array<{
+          mimeType: string;
+          sizeBytes: number;
+          base64: string;
+          width?: number;
+          height?: number;
+          seed?: number;
+        }>;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/imagine`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            processingMs: number;
+            images: Array<{
+              mimeType: string;
+              sizeBytes: number;
+              base64: string;
+              width?: number;
+              height?: number;
+              seed?: number;
+            }>;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Imagine response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+
+      /**
+       * Describe an image or video via the registered vision provider.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`vision.provider` setting)
+       *   3. First registered provider
+       *
+       * Pass a guided `prompt` for targeted descriptions (e.g. "What color is the cat?").
+       */
+      async vision(body: {
+        media: Buffer;
+        mimeType: string;
+        provider?: string;
+        prompt?: string;
+        language?: string;
+        maxTokens?: number;
+      }): Promise<{ provider: string; text: string; processingMs: number }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/vision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mediaBase64: body.media.toString('base64'),
+            mimeType: body.mimeType,
+            provider: body.provider,
+            prompt: body.prompt,
+            language: body.language,
+            maxTokens: body.maxTokens,
+          }),
+        });
+        const json = (await resp.json()) as {
+          data?: { provider: string; text: string; processingMs: number };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Vision response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return {
+          provider: data.provider,
+          text: data.text,
+          processingMs: data.processingMs,
+        };
+      },
+
+      /**
+       * Generate a video from a text prompt via the registered video-gen provider.
+       *
+       * The API blocks until generation completes, polls internally, and
+       * returns the final MP4 as base64. Generation typically takes 60–180
+       * seconds with Veo 3.1. The server enforces a 5-minute timeout.
+       *
+       * Provider resolution order:
+       *   1. Explicit `provider` parameter
+       *   2. Config default (`videogen.provider` setting)
+       *   3. First registered provider
+       */
+      async film(body: {
+        prompt: string;
+        provider?: string;
+        durationSec?: number;
+        resolution?: string;
+        aspectRatio?: string;
+        seed?: number;
+        audio?: boolean;
+      }): Promise<{
+        provider: string;
+        operationId: string;
+        mimeType: string;
+        sizeBytes: number;
+        durationMs: number;
+        videoBase64: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/film`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            operationId: string;
+            mimeType: string;
+            sizeBytes: number;
+            durationMs: number;
+            videoBase64: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Film response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+    },
+
+    // ========================================================================
+    // TURNS
+    // ========================================================================
+
+    /**
+     * Turn lifecycle for turn-based agent execution
+     */
+    turns: {
+      /**
+       * Close the open turn for this API key.
+       * Idempotent: closing an already-closed turn returns success with alreadyClosed: true.
+       */
+      async close(body: {
+        action: 'message' | 'react' | 'skip';
+        reason?: string;
+      }): Promise<{
+        turnId?: string;
+        action?: string;
+        duration?: number;
+        nudgeCount?: number;
+        messagesSent?: number;
+        closedAt?: string;
+        alreadyClosed?: boolean;
+        message?: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return (json?.data as Record<string, unknown>) ?? {};
       },
     },
 

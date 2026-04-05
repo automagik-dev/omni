@@ -270,7 +270,7 @@ export interface IAgentProvider {
   readonly id: string;
   readonly name: string;
   readonly schema: ProviderSchema;
-  readonly mode: 'round-trip' | 'fire-and-forget';
+  readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
@@ -339,6 +339,12 @@ export interface AgentTrigger {
    * as soon as possible. Set by the dispatcher when stream-recovery fires on reconnect.
    */
   abortSignal?: AbortSignal;
+  /**
+   * Environment variables for turn-based agents.
+   * Set by the dispatcher when provider.mode is 'turn-based'.
+   * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
+   */
+  env?: Record<string, string>;
 }
 
 /**
