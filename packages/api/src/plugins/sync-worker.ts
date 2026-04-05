@@ -15,6 +15,7 @@ import type { Database, SyncJobConfig, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
+import { validateContactPhone } from '../utils/phone';
 
 const log = createLogger('sync-worker');
 
@@ -614,7 +615,7 @@ async function processContactsSync(
             profileData: c.metadata,
           },
           {
-            matchByPhone: c.phone,
+            matchByPhone: validateContactPhone(c.phone, c.platformUserId),
             createPerson: true,
             displayName: c.name,
           },
