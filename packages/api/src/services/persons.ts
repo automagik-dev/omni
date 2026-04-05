@@ -11,6 +11,7 @@ import {
   type NewPlatformIdentity,
   type Person,
   type PlatformIdentity,
+  chatIdMappings,
   persons,
   platformIdentities,
 } from '@omni/db';
@@ -206,6 +207,19 @@ export class PersonService {
   }
 
   /**
+   * Look up a @lid→phone JID mapping from the chatIdMappings table.
+   * Returns the phone JID if found, null otherwise.
+   */
+  private async resolvePhoneFromLid(instanceId: string, lidId: string): Promise<string | null> {
+    const [mapping] = await this.db
+      .select({ phoneId: chatIdMappings.phoneId })
+      .from(chatIdMappings)
+      .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, lidId)))
+      .limit(1);
+    return mapping?.phoneId ?? null;
+  }
+
+  /**
    * Find existing person by phone (used for conflict resolution)
    */
   private async findPersonByPhone(phone: string): Promise<{ personId: string; wasLinked: true } | null> {
@@ -385,7 +399,19 @@ export class PersonService {
     let wasLinked = false;
 
     if (!personId && linkOptions) {
-      const linkResult = await this.findPersonToLink({ ...linkOptions, instanceId });
+      // Smart @lid→phone resolution: if this is a @lid identity with no phone match,
+      // check chatIdMappings for a known phone JID and use it for person matching
+      let resolvedLinkOptions = linkOptions;
+      if (!linkOptions.matchByPhone && data.platformUserId.endsWith('@lid') && instanceId) {
+        const phoneFromLid = await this.resolvePhoneFromLid(instanceId, data.platformUserId);
+        if (phoneFromLid) {
+          // Extract phone number from JID (e.g. "5511999999999@s.whatsapp.net" → "+5511999999999")
+          const phoneNumber = `+${phoneFromLid.replace(/@s\.whatsapp\.net$/, '')}`;
+          resolvedLinkOptions = { ...linkOptions, matchByPhone: phoneNumber };
+        }
+      }
+
+      const linkResult = await this.findPersonToLink({ ...resolvedLinkOptions, instanceId });
       personId = linkResult.personId;
       wasLinked = linkResult.wasLinked;
     }

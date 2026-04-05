@@ -6,9 +6,43 @@ import { zValidator } from '@hono/zod-validator';
 import { ChannelTypeSchema, ContentTypeSchema, EventTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const eventsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Restrict an instanceId filter to the API key's allowed instances.
+ * Returns the original value if the key has full access (null instanceIds).
+ * Returns undefined (deny results) if the requested instance is not allowed.
+ */
+function scopeInstanceFilter(apiKey: ApiKeyData | undefined, requestedInstanceId?: string): string | undefined {
+  if (!apiKey?.instanceIds) return requestedInstanceId; // full access
+  if (requestedInstanceId) {
+    return ApiKeyService.instanceAllowed(apiKey.instanceIds, requestedInstanceId) ? requestedInstanceId : '__denied__';
+  }
+  // No specific instance requested — will be filtered at query level
+  return undefined;
+}
+
+/**
+ * Build query with instance access restrictions for list endpoints.
+ */
+function applyInstanceAccess<T extends { instanceId?: string; instanceIds?: string[] }>(
+  query: T,
+  apiKey: ApiKeyData | undefined,
+): T {
+  if (!apiKey?.instanceIds) return query; // full access
+  if (query.instanceId) {
+    // Specific instance requested — check access
+    if (!ApiKeyService.instanceAllowed(apiKey.instanceIds, query.instanceId)) {
+      return { ...query, instanceId: '__denied__' }; // will match nothing
+    }
+    return query;
+  }
+  // No instance filter — restrict to allowed instances
+  return { ...query, instanceIds: apiKey.instanceIds };
+}
 
 // List events query schema
 const listQuerySchema = z.object({
@@ -104,8 +138,10 @@ const timelineQuerySchema = z.object({
 eventsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const query = c.req.valid('query');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
-  const result = await services.events.list(query);
+  const queryWithAccess = applyInstanceAccess(query, apiKey);
+  const result = await services.events.list(queryWithAccess);
 
   return c.json({
     items: result.items,
@@ -123,6 +159,12 @@ eventsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
   const { since, until, instanceId, granularity, allTime } = c.req.valid('query');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  const scopedInstanceId = scopeInstanceFilter(apiKey, instanceId);
+  if (scopedInstanceId === '__denied__') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
 
   // Default to last 24 hours if no date filter and not allTime
   const effectiveSince = allTime ? undefined : (since ?? new Date(Date.now() - 24 * 60 * 60 * 1000));
@@ -131,7 +173,7 @@ eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async 
   const analytics = await services.events.getAnalytics({
     since: effectiveSince,
     until: effectiveUntil,
-    instanceId,
+    instanceId: scopedInstanceId,
     granularity,
   });
 
@@ -170,19 +212,30 @@ eventsRoutes.get('/timeline/:personId', zValidator('query', timelineQuerySchema)
 eventsRoutes.post('/search', zValidator('json', searchBodySchema), async (c) => {
   const { query, filters, format, limit } = c.req.valid('json');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
-  const result = await services.events.list({
-    channel: filters?.channel,
-    instanceId: filters?.instanceId,
-    personId: filters?.personId,
-    eventType: filters?.eventType,
-    contentType: filters?.contentType,
-    direction: filters?.direction,
-    since: filters?.since ? new Date(filters.since) : undefined,
-    until: filters?.until ? new Date(filters.until) : undefined,
-    search: query,
-    limit,
-  });
+  const scopedInstanceId = scopeInstanceFilter(apiKey, filters?.instanceId);
+  if (scopedInstanceId === '__denied__') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
+
+  const listQuery = applyInstanceAccess(
+    {
+      channel: filters?.channel,
+      instanceId: scopedInstanceId,
+      personId: filters?.personId,
+      eventType: filters?.eventType,
+      contentType: filters?.contentType,
+      direction: filters?.direction,
+      since: filters?.since ? new Date(filters.since) : undefined,
+      until: filters?.until ? new Date(filters.until) : undefined,
+      search: query,
+      limit,
+    },
+    apiKey,
+  );
+
+  const result = await services.events.list(listQuery);
 
   // Transform based on format
   if (format === 'summary') {
@@ -227,8 +280,13 @@ eventsRoutes.post('/search', zValidator('json', searchBodySchema), async (c) => 
 eventsRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
   const event = await services.events.getById(id);
+
+  if (event.instanceId && apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, event.instanceId)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
 
   return c.json({ data: event });
 });
@@ -241,13 +299,15 @@ eventsRoutes.get('/by-sender/:senderId', async (c) => {
   const instanceId = c.req.query('instanceId');
   const limit = Number.parseInt(c.req.query('limit') ?? '50', 10);
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
 
-  // Search by sender in textContent/platform user id
-  const result = await services.events.list({
-    instanceId,
-    search: senderId,
-    limit,
-  });
+  const scopedInstanceId = scopeInstanceFilter(apiKey, instanceId);
+  if (scopedInstanceId === '__denied__') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
+
+  const queryWithAccess = applyInstanceAccess({ instanceId: scopedInstanceId, search: senderId, limit }, apiKey);
+  const result = await services.events.list(queryWithAccess);
 
   return c.json({
     items: result.items,

@@ -26,6 +26,7 @@
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
+    "@google/genai": "^1.0.0",
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",

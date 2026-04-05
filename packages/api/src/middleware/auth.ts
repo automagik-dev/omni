@@ -74,6 +74,20 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
   };
 
   c.set('apiKey', keyData);
+
+  // Fire-and-forget: track turn activity if this key has an open turn.
+  // Any API call from a scoped key automatically extends the turn's activity timer.
+  if (services.turns) {
+    services.turns
+      .getOpenByApiKey(validatedKey.id)
+      .then((turn) => {
+        if (turn) {
+          services.turns.recordActivity(turn.id).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+
   await next();
 
   // Fire-and-forget audit log after response

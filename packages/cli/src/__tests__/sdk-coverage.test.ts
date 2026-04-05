@@ -106,6 +106,10 @@ const CLI_COMMANDS: Record<string, string> = {
   'persons.search': 'persons search',
   'persons.get': 'persons get',
   'persons.presence': 'persons presence',
+  'persons.update': 'persons update <id>',
+  'persons.link': 'persons link <id>',
+  'persons.unlink': 'persons unlink <id>',
+  'persons.merge': 'persons merge <a> <b>',
 
   // ============================================================================
   // ACCESS CONTROL
@@ -224,6 +228,28 @@ const CLI_COMMANDS: Record<string, string> = {
   'keys.update': 'keys update',
   'keys.revoke': 'keys revoke',
   'keys.delete': 'keys delete',
+
+  // ============================================================================
+  // CONTEXT
+  // ============================================================================
+  'context.get': 'where',
+  'context.set': 'open <contact>',
+  'context.use': 'use <instance>',
+  'context.clear': 'close',
+
+  // ============================================================================
+  // TURNS
+  // ============================================================================
+  'turns.close': 'done "text" / done --react / done --skip',
+
+  // ============================================================================
+  // MEDIA (multimodal verbs — tts/stt/vision/imagegen/videogen)
+  // ============================================================================
+  'media.tts': 'speak <text>',
+  'media.stt': 'listen <file>',
+  'media.vision': 'see <file> [prompt]',
+  'media.imagine': 'imagine <prompt...>',
+  'media.film': 'film <prompt>',
 
   // ============================================================================
   // AGENTS

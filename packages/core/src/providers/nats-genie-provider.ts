@@ -36,6 +36,8 @@ export interface NatsGenieProviderConfig {
   onReply?: (chatId: string, content: string, metadata: Record<string, unknown>) => Promise<void>;
   /** Prefix sender name to messages (default: true) */
   prefixSenderName?: boolean;
+  /** Execution mode: 'fire-and-forget' (default) or 'turn-based' */
+  mode?: 'fire-and-forget' | 'turn-based';
 }
 
 /** NATS message payload published to omni.message.{instance}.{chat_id} */
@@ -49,6 +51,8 @@ interface NatsOutboundMessage {
   traceId: string;
   messageId?: string;
   files?: ProviderFile[];
+  /** Environment variables for turn-based agents (OMNI_INSTANCE, OMNI_CHAT, etc.) */
+  env?: Record<string, string>;
 }
 
 /** NATS reply payload received from omni.reply.{instance}.{chat_id} */
@@ -67,7 +71,7 @@ interface NatsReplyMessage {
 
 export class NatsGenieProvider implements IAgentProvider {
   readonly schema = 'nats-genie' as const;
-  readonly mode = 'fire-and-forget' as const;
+  readonly mode: 'fire-and-forget' | 'turn-based';
 
   private nc: NatsConnection | null = null;
   private sc = StringCodec();
@@ -77,7 +81,9 @@ export class NatsGenieProvider implements IAgentProvider {
     readonly id: string,
     readonly name: string,
     private config: NatsGenieProviderConfig,
-  ) {}
+  ) {
+    this.mode = config.mode ?? 'fire-and-forget';
+  }
 
   canHandle(_trigger: AgentTrigger): boolean {
     return true;
@@ -110,6 +116,7 @@ export class NatsGenieProvider implements IAgentProvider {
       traceId: context.traceId,
       messageId: context.source.messageId,
       files: context.content.files,
+      env: context.env,
     };
 
     try {

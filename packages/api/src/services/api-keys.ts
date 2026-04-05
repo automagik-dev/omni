@@ -72,6 +72,12 @@ export interface UpdateApiKeyOptions {
   instanceIds?: string[] | null;
   rateLimit?: number | null;
   expiresAt?: Date | null;
+  /** Context: active instance for turn-based agents */
+  contextInstanceId?: string | null;
+  /** Context: active chat for turn-based agents */
+  contextChatId?: string | null;
+  /** Context: trigger message ID for turn-based agents */
+  contextMessageId?: string | null;
 }
 
 export class ApiKeyService {
@@ -277,6 +283,16 @@ export class ApiKeyService {
     if (options.instanceIds !== undefined) updates.instanceIds = options.instanceIds;
     if (options.rateLimit !== undefined) updates.rateLimit = options.rateLimit;
     if (options.expiresAt !== undefined) updates.expiresAt = options.expiresAt;
+    if (options.contextInstanceId !== undefined) updates.contextInstanceId = options.contextInstanceId;
+    if (options.contextChatId !== undefined) updates.contextChatId = options.contextChatId;
+    if (options.contextMessageId !== undefined) updates.contextMessageId = options.contextMessageId;
+    if (
+      options.contextInstanceId !== undefined ||
+      options.contextChatId !== undefined ||
+      options.contextMessageId !== undefined
+    ) {
+      updates.contextUpdatedAt = new Date();
+    }
 
     const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
 
@@ -300,6 +316,14 @@ export class ApiKeyService {
    */
   async getById(id: string): Promise<ApiKey | null> {
     const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+    return result ?? null;
+  }
+
+  /**
+   * Find an API key by name
+   */
+  async findByName(name: string): Promise<ApiKey | null> {
+    const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1);
     return result ?? null;
   }
 

@@ -9,6 +9,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
 const eventOpsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -48,6 +49,12 @@ eventOpsRoutes.get('/metrics', async (c) => {
 eventOpsRoutes.post('/replay', zValidator('json', replayOptionsSchema), async (c) => {
   const options = c.req.valid('json');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // Enforce instance access on replay
+  if (options.instanceId && apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, options.instanceId)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
 
   try {
     const session = await services.eventOps.startReplay(options);

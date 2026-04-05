@@ -49,6 +49,8 @@ import {
 } from './plugins';
 import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
+import { closeTurnEvents, initTurnEvents } from './services/turn-events';
+import { TurnMonitor } from './services/turn-monitor';
 import { printStartupBanner } from './utils/startup-banner';
 
 // Configuration
@@ -61,6 +63,7 @@ let globalEventBus: EventBus | null = null;
 let globalChannelRegistry: ChannelRegistry | null = null;
 let globalInstanceMonitor: InstanceMonitor | null = null;
 let globalDispatcherCleanup: (() => Promise<void>) | null = null;
+let globalTurnMonitor: TurnMonitor | null = null;
 
 /**
  * Get the global channel registry
@@ -204,6 +207,14 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         await globalDispatcherCleanup();
       }
 
+      if (globalTurnMonitor) {
+        shutdownLog.info('Stopping turn monitor');
+        globalTurnMonitor.stop();
+      }
+
+      shutdownLog.info('Closing turn events NATS');
+      await closeTurnEvents();
+
       if (globalInstanceMonitor) {
         shutdownLog.info('Stopping instance monitor');
         globalInstanceMonitor.stop();
@@ -313,6 +324,31 @@ async function setupEventBusServices(
     await setupHistoryPushTracker(eventBus, services);
   } catch (error) {
     log.error('Failed to set up history-push tracker', { error: String(error) });
+  }
+
+  // Turn events NATS connection (for turn-based agent lifecycle signaling)
+  try {
+    await initTurnEvents(NATS_URL);
+  } catch (error) {
+    log.error('Failed to initialize turn events', { error: String(error) });
+  }
+
+  // Turn monitor (polls for stale turns, emits nudge/timeout events)
+  try {
+    globalTurnMonitor = new TurnMonitor({
+      turnService: services.turns,
+      sendFallback: async (instanceId, chatId, text) => {
+        const instance = await services.instances.getById(instanceId);
+        if (!instance) return;
+        const plugin = await getPlugin(instance.channel);
+        if (!plugin) return;
+        await plugin.sendMessage(instanceId, { to: chatId, content: { type: 'text', text } });
+      },
+    });
+    globalTurnMonitor.start();
+    log.info('Turn monitor started');
+  } catch (error) {
+    log.error('Failed to start turn monitor', { error: String(error) });
   }
 }
 
