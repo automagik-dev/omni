@@ -106,6 +106,10 @@ const CLI_COMMANDS: Record<string, string> = {
   'persons.search': 'persons search',
   'persons.get': 'persons get',
   'persons.presence': 'persons presence',
+  'persons.update': 'persons update <id>',
+  'persons.link': 'persons link <id>',
+  'persons.unlink': 'persons unlink <id>',
+  'persons.merge': 'persons merge <a> <b>',
 
   // ============================================================================
   // ACCESS CONTROL
