@@ -248,6 +248,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'media.tts': 'speak <text>',
   'media.stt': 'listen <file>',
   'media.vision': 'see <file> [prompt]',
+  'media.imagine': 'imagine <prompt...>',
+  'media.film': 'film <prompt>',
 
   // ============================================================================
   // AGENTS
