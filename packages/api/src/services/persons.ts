@@ -15,7 +15,7 @@ import {
   persons,
   platformIdentities,
 } from '@omni/db';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, ne, or, sql } from 'drizzle-orm';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -233,6 +233,9 @@ export class PersonService {
   private async findPersonToLink(linkOptions: {
     matchByPhone?: string;
     matchByEmail?: string;
+    matchByPlatformUserId?: string;
+    matchByChannel?: ChannelType;
+    instanceId?: string;
     createPerson?: boolean;
     displayName?: string;
   }): Promise<{ personId?: string; wasLinked: boolean }> {
@@ -251,6 +254,26 @@ export class PersonService {
         .limit(1);
       if (matchedPerson) {
         return { personId: matchedPerson.id, wasLinked: true };
+      }
+    }
+
+    // Try cross-instance matching by platformUserId + channel
+    if (linkOptions.matchByPlatformUserId && linkOptions.matchByChannel) {
+      const conditions = [
+        eq(platformIdentities.channel, linkOptions.matchByChannel),
+        eq(platformIdentities.platformUserId, linkOptions.matchByPlatformUserId),
+        isNotNull(platformIdentities.personId),
+      ];
+      if (linkOptions.instanceId) {
+        conditions.push(ne(platformIdentities.instanceId, linkOptions.instanceId));
+      }
+      const [crossMatch] = await this.db
+        .select({ personId: platformIdentities.personId })
+        .from(platformIdentities)
+        .where(and(...conditions))
+        .limit(1);
+      if (crossMatch?.personId) {
+        return { personId: crossMatch.personId, wasLinked: true };
       }
     }
 
@@ -343,6 +366,8 @@ export class PersonService {
     linkOptions?: {
       matchByPhone?: string;
       matchByEmail?: string;
+      matchByPlatformUserId?: string;
+      matchByChannel?: ChannelType;
       createPerson?: boolean;
       displayName?: string;
     },
@@ -386,14 +411,15 @@ export class PersonService {
         }
       }
 
-      const linkResult = await this.findPersonToLink(resolvedLinkOptions);
+      const linkResult = await this.findPersonToLink({ ...resolvedLinkOptions, instanceId });
       personId = linkResult.personId;
       wasLinked = linkResult.wasLinked;
     }
 
     // Create the identity
-    const linkedBy = wasLinked ? 'phone_match' : personId ? 'initial' : undefined;
-    const linkReason = wasLinked ? `Matched by ${linkOptions?.matchByPhone ? 'phone' : 'email'}` : undefined;
+    const matchType = linkOptions?.matchByPhone ? 'phone' : linkOptions?.matchByEmail ? 'email' : 'platform_id';
+    const linkedBy = wasLinked ? `${matchType}_match` : personId ? 'initial' : undefined;
+    const linkReason = wasLinked ? `Matched by ${matchType}` : undefined;
 
     const [created] = await this.db
       .insert(platformIdentities)

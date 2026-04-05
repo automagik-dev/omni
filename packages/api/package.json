@@ -20,7 +20,8 @@
     "dev": "bun --watch --env-file=../../.env src/index.ts",
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "fix-persons": "bun run scripts/fix-person-duplicates.ts"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
