@@ -121,6 +121,9 @@ export function createApp(
   // Error handler - must be registered with onError, not as middleware
   app.onError(errorHandler);
 
+  // Root-level health redirect for external checkers (k8s probes, genie providers)
+  app.get('/health', (c) => c.redirect('/api/v2/health', 307));
+
   // Health routes (no auth required)
   app.route('/api/v2', healthRoutes);
 
