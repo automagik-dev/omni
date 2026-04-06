@@ -2,7 +2,7 @@
  * Tests for the history command
  */
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 // ---- Mock data ----
 
@@ -90,11 +90,13 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-// Force human output format deterministically via the documented runtime env
-// override. This avoids needing a partial mock of '../config.js' (which would
-// pollute other test files like config.test.ts that import named exports —
-// bun's mock.module is process-wide).
-process.env.__OMNI_RUNTIME_FORMAT = 'human';
+// We force human output format via the documented runtime env override below
+// (in a beforeAll/afterAll pair scoped to this describe). This avoids both:
+//   1. A partial mock of '../config.js' which would pollute other test files
+//      that import named exports like DEFAULT_SERVER_CONFIG (bun's mock.module
+//      is process-wide).
+//   2. A top-level env mutation which would leak into CLI integration tests
+//      that spawn the binary as a subprocess and inherit our parent env.
 
 // Mock context module
 let mockContext = {
@@ -118,6 +120,22 @@ const originalError = console.error;
 const { createHistoryCommand } = await import('../commands/history.js');
 
 describe('history command', () => {
+  let savedRuntimeFormat: string | undefined;
+
+  beforeAll(() => {
+    savedRuntimeFormat = process.env.__OMNI_RUNTIME_FORMAT;
+    process.env.__OMNI_RUNTIME_FORMAT = 'human';
+  });
+
+  afterAll(() => {
+    if (savedRuntimeFormat === undefined) {
+      // biome-ignore lint/performance/noDelete: env vars must be deleted, not set to undefined
+      delete process.env.__OMNI_RUNTIME_FORMAT;
+    } else {
+      process.env.__OMNI_RUNTIME_FORMAT = savedRuntimeFormat;
+    }
+  });
+
   beforeEach(() => {
     consoleOutput = [];
     consoleErrorOutput = [];
