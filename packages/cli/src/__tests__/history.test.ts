@@ -90,12 +90,11 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-// Mock config module (needed by output.js)
-mock.module('../config.js', () => ({
-  getOutputFormat: () => 'human',
-  loadConfig: () => ({}),
-  setRuntimeFormat: () => {},
-}));
+// Force human output format deterministically via the documented runtime env
+// override. This avoids needing a partial mock of '../config.js' (which would
+// pollute other test files like config.test.ts that import named exports —
+// bun's mock.module is process-wide).
+process.env.__OMNI_RUNTIME_FORMAT = 'human';
 
 // Mock context module
 let mockContext = {

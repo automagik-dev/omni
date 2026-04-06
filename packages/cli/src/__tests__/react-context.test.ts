@@ -57,9 +57,10 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-mock.module('../config.js', () => ({
-  loadConfig: () => ({}),
-}));
+// Note: do NOT mock '../config.js' here. The real loadConfig() handles missing
+// ~/.omni/config.json gracefully (returns DEFAULT_CONFIG via try/catch). A partial
+// mock would pollute other test files (e.g. config.test.ts) that import named
+// exports like DEFAULT_SERVER_CONFIG — bun's mock.module is process-wide.
 
 // Re-register a real per-field cascade implementation for `../context.js` so
 // that mock pollution from sibling test files (e.g. history.test.ts) cannot
