@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { type DoctorDeps, runDoctor } from '../commands/doctor.js';
 import type { Config, ServerConfig } from '../config.js';
 import { DEFAULT_PGSERVE_PORT, buildRuntimeEnv } from '../runtime-env.js';
+import { POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -89,7 +90,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
       const expected = buildRuntimeEnv(state.serverConfig, state.cliConfig);
       const pm2StoredEnv = state.pm2Drift
         ? {
-            DATABASE_URL: 'postgresql://garbage:1234@evil.invalid/wrong',
+            DATABASE_URL: POLLUTED_DATABASE_URL,
             PGSERVE_DATA: expected.PGSERVE_DATA,
             OMNI_API_KEY: state.cliConfig.apiKey,
           }
@@ -192,7 +193,9 @@ describe('runDoctor — read-only mode', () => {
     const drift = report.checks.find((c) => c.id === 'pm2-env-drift');
     expect(drift?.level).toBe('WARN');
     expect(drift?.detail).toContain('DATABASE_URL drift');
-    expect(drift?.detail).toContain('garbage');
+    // The detail string should contain a fragment of POLLUTED_DATABASE_URL
+    // so the operator can see WHAT the drift value was, not just "drifted".
+    expect(drift?.detail).toContain('GARBAGE');
   });
 
   test('flags cli-key-valid as FAIL when the stored key does not validate', async () => {
@@ -289,8 +292,8 @@ describe('runDoctor — --fix mode', () => {
     const startCall = state.pm2Calls.find((c) => c.args[0] === 'start');
     expect(deleteCall).toBeDefined();
     expect(startCall).toBeDefined();
-    // The env passed to pm2 must NOT contain the polluted garbage URL.
-    expect(startCall?.env?.DATABASE_URL).not.toContain('garbage');
+    // The env passed to pm2 must NOT contain the polluted sentinel URL.
+    expect(startCall?.env?.DATABASE_URL).not.toContain('GARBAGE');
     expect(startCall?.env?.DATABASE_URL).toContain(':8432/omni');
     // Recheck sees the drift as fixed.
     const drift = report.checks.find((c) => c.id === 'pm2-env-drift');

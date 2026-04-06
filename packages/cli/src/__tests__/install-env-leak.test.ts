@@ -17,6 +17,7 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { buildEmbeddedDatabaseUrl } from '../runtime-env.js';
+import { POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
 
 function clearShellDbUrl(): void {
   // Computed-key form keeps biome's noDelete lint quiet (it only fires on
@@ -37,32 +38,34 @@ describe('install command — DATABASE_URL leak prevention', () => {
     const baseline = computeDefaultDatabaseUrl();
     expect(baseline).toBe(buildEmbeddedDatabaseUrl());
 
-    process.env.DATABASE_URL = 'postgresql://garbage:1234@evil.invalid:20642/wrong';
+    process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
     const polluted = computeDefaultDatabaseUrl();
     expect(polluted).toBe(baseline);
-    expect(polluted).not.toContain('garbage');
+    // Spot-check fragments of the sentinel — if any of these leak into the
+    // resolved URL, hermeticity is broken and the test should fail loudly.
+    expect(polluted).not.toContain('GARBAGE');
     expect(polluted).not.toContain('evil.invalid');
-    expect(polluted).not.toContain('20642');
+    expect(polluted).not.toContain('/wrong');
   });
 
   test('resolveInstallDatabaseUrl returns the embedded default when --database-url is absent', async () => {
     const { resolveInstallDatabaseUrl } = await import('../commands/install.js');
 
-    process.env.DATABASE_URL = 'postgresql://garbage:1234/wrong';
+    process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
     const resolved = resolveInstallDatabaseUrl({});
     expect(resolved).toBe(buildEmbeddedDatabaseUrl());
-    expect(resolved).not.toContain('garbage');
+    expect(resolved).not.toContain('GARBAGE');
   });
 
   test('resolveInstallDatabaseUrl passes through an explicit --database-url flag', async () => {
     const { resolveInstallDatabaseUrl } = await import('../commands/install.js');
 
-    process.env.DATABASE_URL = 'postgresql://garbage:1234/wrong';
+    process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
     const explicit = 'postgresql://omni:hunter2@db.example.com:5432/omni_prod';
     const resolved = resolveInstallDatabaseUrl({ databaseUrlFlag: explicit });
     expect(resolved).toBe(explicit);
     // The explicit URL is what the operator opted into, NOT the shell env.
-    expect(resolved).not.toContain('garbage');
+    expect(resolved).not.toContain('GARBAGE');
   });
 
   test('resolveInstallDatabaseUrl treats whitespace-only flag as absent', async () => {

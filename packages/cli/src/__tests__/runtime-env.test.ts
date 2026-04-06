@@ -14,6 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import { DEFAULT_SERVER_CONFIG } from '../config.js';
 import { DEFAULT_PGSERVE_PORT, buildEmbeddedDatabaseUrl, buildRuntimeEnv, resolveDatabaseUrl } from '../runtime-env.js';
+import { POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
 
 /**
  * External-DB sentinel that literally matches the pre-embedded 5432 default.
@@ -69,7 +70,7 @@ describe('resolveDatabaseUrl', () => {
 
   test('ignores process.env.DATABASE_URL (hermeticity)', () => {
     clearShellDbUrl();
-    process.env.DATABASE_URL = 'postgresql://garbage:1234@evil.invalid/wrong';
+    process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
     try {
       // Empty stored URL → should fall through to the embedded URL,
       // regardless of the polluted shell env.
@@ -137,7 +138,7 @@ describe('buildRuntimeEnv', () => {
 
     const first = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
 
-    process.env.DATABASE_URL = 'postgresql://not-real:0000@nowhere/junk';
+    process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
     const second = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
 
     clearShellDbUrl();
