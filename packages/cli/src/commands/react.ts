@@ -28,11 +28,11 @@ export function createReactCommand(): Command {
     .action(async (emoji: string, options: ReactOptions) => {
       const client = getClient();
 
-      // Resolve context
+      // Resolve context — only pass instance/chat flags; message is resolved
+      // separately via resolveReplyTo to avoid short-circuiting env var lookup
       const ctx = await resolveContext({
         instance: options.instance,
         chat: options.chat,
-        message: options.message,
       });
 
       if (!ctx.instanceId) {

@@ -61,6 +61,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Verify version sync
+        run: bun scripts/verify-versions.ts
+
       - name: Setup environment
         run: cp .env.example .env
 

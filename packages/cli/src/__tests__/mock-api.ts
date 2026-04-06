@@ -238,6 +238,9 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'GET /api/v2/providers': () => json({ items: dynamicProviders }),
   'POST /api/v2/providers': handleCreateProvider,
   'GET /api/v2/access/rules': () => json(EMPTY_ITEMS),
+  'GET /api/v2/context': () => json({ instanceId: null, chatId: null, messageId: null }),
+  'POST /api/v2/messages/send': () => json({ data: { messageId: 'mock-msg-id' } }),
+  'POST /api/v2/messages/send/reaction': () => json({ data: { messageId: 'mock-reaction-msg', success: true } }),
 };
 
 /** Pattern routes: regex-matched paths */

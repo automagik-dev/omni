@@ -26,6 +26,7 @@ import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
 import { createFilmCommand } from './commands/film.js';
+import { createHistoryCommand } from './commands/history.js';
 import { createImagineCommand } from './commands/imagine.js';
 import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
@@ -147,6 +148,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Core',
     helpDescription: 'Describe an image or video via Gemini Vision (verb command)',
+  },
+  {
+    create: createHistoryCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Show recent messages in the open chat (verb command)',
   },
   { create: createChatsCommand, category: 'core', helpGroup: 'Core', helpDescription: 'List and manage conversations' },
   {
