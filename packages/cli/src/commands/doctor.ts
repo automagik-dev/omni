@@ -32,7 +32,6 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
@@ -174,11 +173,9 @@ function productionDeps(): DoctorDeps {
     getPm2Processes,
     canConnect: async (port: number) => {
       try {
-        const socket = await Bun.connect({
-          hostname: '127.0.0.1',
-          port,
-          socket: { data() {} },
-        });
+        const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000));
+        const connect = Bun.connect({ hostname: '127.0.0.1', port, socket: { data() {} } });
+        const socket = await Promise.race([connect, timeout]);
         socket.end();
         return true;
       } catch {
@@ -203,7 +200,7 @@ function productionDeps(): DoctorDeps {
       }
     },
     findOrphanedDataDirs: () => {
-      const roots = [process.cwd(), join(homedir(), 'workspace'), join(homedir(), 'repos')];
+      const roots = [process.cwd()];
       const found: string[] = [];
       for (const root of roots) {
         if (!existsSync(root)) continue;
