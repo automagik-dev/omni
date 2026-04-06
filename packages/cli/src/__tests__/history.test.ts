@@ -1,5 +1,20 @@
 /**
  * Tests for the history command
+ *
+ * IMPORTANT — process-wide mock pollution
+ * ----------------------------------------
+ * Sibling test files (resolve.test.ts, react-context.test.ts) register a
+ * `mock.module('../output.js', ...)` factory that stubs every output function
+ * as a no-op. Because Bun's `mock.module` is process-wide and order-dependent,
+ * if one of those files loads before this file on CI, history.js's
+ * `import * as output from '../output.js'` resolves to the no-op stubs and the
+ * action handler produces zero observable output. The previous version of this
+ * file relied on `console.log` interception, which is bypassed entirely when
+ * the output functions are stubbed at the module boundary.
+ *
+ * Fix: register our own complete `'../output.js'` mock here BEFORE the dynamic
+ * import of `'../commands/history.js'`, with the same shape as resolve/react.
+ * Test assertions inspect the mock spies directly instead of console buffers.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
@@ -79,9 +94,37 @@ const MOCK_MESSAGES = [
 
 // ---- Mocks ----
 
+// `mockError` throws so process.exit isn't actually called and we can assert
+// on the message via try/catch in the relevant tests.
+const mockError = mock((msg: string): never => {
+  throw new Error(msg);
+});
+const mockInfo = mock((_msg: string) => {});
+const mockList = mock(<T>(_items: T[], _opts?: { rawData?: unknown[] }) => {});
+const mockSetMaxCellWidth = mock((_width: number) => {});
+
+mock.module('../output.js', () => ({
+  error: mockError,
+  success: mock(),
+  info: mockInfo,
+  warn: mock(),
+  table: mock(),
+  json: mock(),
+  raw: mock(),
+  data: mock(),
+  list: mockList,
+  keyValue: mock(),
+  header: mock(),
+  dim: mock(),
+  disableColors: mock(),
+  areColorsEnabled: () => true,
+  setMaxCellWidth: mockSetMaxCellWidth,
+  getCurrentFormat: () => 'human',
+  flushStdout: () => Promise.resolve(),
+}));
+
 const mockGetMessages = mock(() => Promise.resolve(MOCK_MESSAGES));
 
-// Mock client module
 mock.module('../client.js', () => ({
   getClient: () => ({
     chats: {
@@ -90,56 +133,33 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-// Mock config module (needed by output.js)
-mock.module('../config.js', () => ({
-  getOutputFormat: () => 'human',
-  loadConfig: () => ({}),
-  setRuntimeFormat: () => {},
-}));
-
-// Mock context module
-let mockContext = {
-  instanceId: 'inst-001',
-  chatId: 'chat-001',
-  messageId: null,
-  source: 'env' as const,
-};
-
-mock.module('../context.js', () => ({
-  resolveContext: () => Promise.resolve(mockContext),
-}));
-
-// Capture console output
-let consoleOutput: string[] = [];
-let consoleErrorOutput: string[] = [];
-const originalLog = console.log;
-const originalError = console.error;
-
-// Import after mocks
+// Import after mocks are set up
 const { createHistoryCommand } = await import('../commands/history.js');
+
+// Helper: clear an env var without lint complaints
+function clearEnvKey(key: string): void {
+  delete process.env[key];
+}
 
 describe('history command', () => {
   beforeEach(() => {
-    consoleOutput = [];
-    consoleErrorOutput = [];
-    console.log = (...args: unknown[]) => {
-      consoleOutput.push(args.map(String).join(' '));
-    };
-    console.error = (...args: unknown[]) => {
-      consoleErrorOutput.push(args.map(String).join(' '));
-    };
     mockGetMessages.mockClear();
-    mockContext = {
-      instanceId: 'inst-001',
-      chatId: 'chat-001',
-      messageId: null,
-      source: 'env' as const,
-    };
+    mockError.mockClear();
+    mockInfo.mockClear();
+    mockList.mockClear();
+    mockSetMaxCellWidth.mockClear();
+    mockGetMessages.mockImplementation(() => Promise.resolve(MOCK_MESSAGES));
+
+    // Default context for most tests — real resolveContext reads these env vars.
+    process.env.OMNI_INSTANCE = 'inst-001';
+    process.env.OMNI_CHAT = 'chat-001';
+    clearEnvKey('OMNI_MESSAGE');
   });
 
   afterEach(() => {
-    console.log = originalLog;
-    console.error = originalError;
+    clearEnvKey('OMNI_INSTANCE');
+    clearEnvKey('OMNI_CHAT');
+    clearEnvKey('OMNI_MESSAGE');
   });
 
   test('fetches messages with default limit of 10', async () => {
@@ -173,56 +193,70 @@ describe('history command', () => {
     });
   });
 
-  test('outputs table rows for human format', async () => {
+  test('passes formatted rows to output.list with raw messages', async () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history']);
 
-    // Table output includes header + separator + data rows
-    const allOutput = consoleOutput.join('\n');
-    expect(allOutput).toContain('ID');
-    expect(allOutput).toContain('TIME');
-    expect(allOutput).toContain('SENDER');
-    expect(allOutput).toContain('TYPE');
-    expect(allOutput).toContain('CONTENT');
-    // Check data is present
-    expect(allOutput).toContain('ext-msg-001');
-    expect(allOutput).toContain('Alice');
-    expect(allOutput).toContain('text');
+    expect(mockList).toHaveBeenCalledTimes(1);
+    const [rows, opts] = mockList.mock.calls[0] as [Array<Record<string, string>>, { rawData?: unknown[] }];
+
+    // Each message becomes a row
+    expect(rows).toHaveLength(4);
+    const firstRow = rows[0];
+    if (!firstRow) throw new Error('expected first row');
+    // Headers come from row keys
+    expect(Object.keys(firstRow)).toEqual(['ID', 'TIME', 'SENDER', 'TYPE', 'CONTENT']);
+    // Data is intact
+    expect(firstRow.ID).toBe('ext-msg-001');
+    expect(firstRow.SENDER).toBe('Alice');
+    expect(firstRow.TYPE).toBe('text');
+    // rawData is passed through
+    expect(opts.rawData).toEqual(MOCK_MESSAGES);
   });
 
   test('shows "me" for isFromMe messages without senderDisplayName', async () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history']);
 
-    const allOutput = consoleOutput.join('\n');
-    expect(allOutput).toContain('me');
+    const [rows] = mockList.mock.calls[0] as [Array<Record<string, string>>];
+    // ext-msg-002 is the isFromMe message with no displayName
+    const meRow = rows.find((r) => r.ID === 'ext-msg-002');
+    expect(meRow).toBeDefined();
+    expect(meRow?.SENDER).toBe('me');
   });
 
-  test('shows transcription for audio messages', async () => {
+  test('includes transcription in content for audio messages', async () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history']);
 
-    const allOutput = consoleOutput.join('\n');
-    expect(allOutput).toContain('transcription');
+    const [rows] = mockList.mock.calls[0] as [Array<Record<string, string>>];
+    const audioRow = rows.find((r) => r.ID === 'ext-msg-003');
+    expect(audioRow).toBeDefined();
+    expect(audioRow?.CONTENT).toContain('[transcription]');
+    expect(audioRow?.CONTENT).toContain('Can you send me the report?');
   });
 
-  test('shows media path for media messages in full mode', async () => {
+  test('includes media path for media messages in full mode', async () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history', '--full']);
 
-    const allOutput = consoleOutput.join('\n');
-    // In full mode, no truncation — file path visible
-    expect(allOutput).toContain('[file]');
-    expect(allOutput).toContain('/data/media/inst-1/2026-04/ext-msg-003.ogg');
+    // setMaxCellWidth(0) is called in --full mode
+    expect(mockSetMaxCellWidth).toHaveBeenCalledWith(0);
+
+    const [rows] = mockList.mock.calls[0] as [Array<Record<string, string>>];
+    const audioRow = rows.find((r) => r.ID === 'ext-msg-003');
+    expect(audioRow?.CONTENT).toContain('[file]');
+    expect(audioRow?.CONTENT).toContain('/data/media/inst-1/2026-04/ext-msg-003.ogg');
   });
 
-  test('shows media URL when no local path', async () => {
+  test('includes media URL when no local path', async () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history', '--full']);
 
-    const allOutput = consoleOutput.join('\n');
-    expect(allOutput).toContain('[media]');
-    expect(allOutput).toContain('https://media.example.com/img-004.jpg');
+    const [rows] = mockList.mock.calls[0] as [Array<Record<string, string>>];
+    const imageRow = rows.find((r) => r.ID === 'ext-msg-004');
+    expect(imageRow?.CONTENT).toContain('[media]');
+    expect(imageRow?.CONTENT).toContain('https://media.example.com/img-004.jpg');
   });
 
   test('handles empty message list', async () => {
@@ -231,8 +265,9 @@ describe('history command', () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history']);
 
-    const allOutput = consoleOutput.join('\n');
-    expect(allOutput).toContain('No messages found');
+    expect(mockInfo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith('No messages found.');
+    expect(mockList).not.toHaveBeenCalled();
   });
 
   test('handles API errors gracefully', async () => {
@@ -240,71 +275,45 @@ describe('history command', () => {
 
     const cmd = createHistoryCommand();
 
-    // output.error calls process.exit, so we need to catch
-    const exitMock = mock(() => {});
-    const origExit = process.exit;
-    process.exit = exitMock as unknown as typeof process.exit;
-
     try {
       await cmd.parseAsync(['node', 'history']);
     } catch {
-      // expected
+      // mockError throws — expected
     }
 
-    const errOutput = consoleErrorOutput.join('\n');
-    expect(errOutput).toContain('Failed to fetch history');
-    expect(errOutput).toContain('Network error');
-
-    process.exit = origExit;
+    expect(mockError).toHaveBeenCalledTimes(1);
+    const msg = mockError.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('Failed to fetch history');
+    expect(msg).toContain('Network error');
   });
 
   test('errors when no instance in context', async () => {
-    mockContext = {
-      instanceId: null as unknown as string,
-      chatId: 'chat-001',
-      messageId: null,
-      source: 'none' as const,
-    };
+    clearEnvKey('OMNI_INSTANCE');
 
     const cmd = createHistoryCommand();
-    const exitMock = mock(() => {});
-    const origExit = process.exit;
-    process.exit = exitMock as unknown as typeof process.exit;
-
     try {
       await cmd.parseAsync(['node', 'history']);
     } catch {
-      // expected
+      // mockError throws — expected
     }
 
-    const errOutput = consoleErrorOutput.join('\n');
-    expect(errOutput).toContain('No instance in context');
-
-    process.exit = origExit;
+    expect(mockError).toHaveBeenCalledTimes(1);
+    const msg = mockError.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('No instance in context');
   });
 
   test('errors when no chat in context', async () => {
-    mockContext = {
-      instanceId: 'inst-001',
-      chatId: null as unknown as string,
-      messageId: null,
-      source: 'env' as const,
-    };
+    clearEnvKey('OMNI_CHAT');
 
     const cmd = createHistoryCommand();
-    const exitMock = mock(() => {});
-    const origExit = process.exit;
-    process.exit = exitMock as unknown as typeof process.exit;
-
     try {
       await cmd.parseAsync(['node', 'history']);
     } catch {
-      // expected
+      // mockError throws — expected
     }
 
-    const errOutput = consoleErrorOutput.join('\n');
-    expect(errOutput).toContain('No chat in context');
-
-    process.exit = origExit;
+    expect(mockError).toHaveBeenCalledTimes(1);
+    const msg = mockError.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('No chat in context');
   });
 });

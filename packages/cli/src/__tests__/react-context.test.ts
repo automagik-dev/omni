@@ -40,7 +40,14 @@ mock.module('../output.js', () => ({
   flushStdout: () => Promise.resolve(),
 }));
 
-const mockContextGet = mock(() => Promise.resolve({ instanceId: null, chatId: null, messageId: null }));
+type MockedContextResponse = {
+  instanceId: string | null;
+  chatId: string | null;
+  messageId: string | null;
+};
+const mockContextGet = mock(
+  (): Promise<MockedContextResponse> => Promise.resolve({ instanceId: null, chatId: null, messageId: null }),
+);
 const mockSendReaction = mock(() => Promise.resolve({ messageId: 'sent-reaction-id' }));
 
 mock.module('../client.js', () => ({
@@ -50,9 +57,10 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-mock.module('../config.js', () => ({
-  loadConfig: () => ({}),
-}));
+// Note: do NOT mock '../config.js' here. The real loadConfig() handles missing
+// ~/.omni/config.json gracefully (returns DEFAULT_CONFIG via try/catch). A partial
+// mock would pollute other test files (e.g. config.test.ts) that import named
+// exports like DEFAULT_SERVER_CONFIG — bun's mock.module is process-wide.
 
 const { resolveContext } = await import('../context.js');
 
