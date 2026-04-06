@@ -81,7 +81,9 @@ const MOCK_MESSAGES = [
 
 const mockGetMessages = mock(() => Promise.resolve(MOCK_MESSAGES));
 
-// Mock client module
+// Mock client module — only chats.getMessages is needed by the history command.
+// The real resolveContext will try client.context.get() but the missing method
+// throws synchronously, which resolveContext catches and treats as "no PG ctx".
 mock.module('../client.js', () => ({
   getClient: () => ({
     chats: {
@@ -90,25 +92,13 @@ mock.module('../client.js', () => ({
   }),
 }));
 
-// We force human output format via the documented runtime env override below
-// (in a beforeAll/afterAll pair scoped to this describe). This avoids both:
-//   1. A partial mock of '../config.js' which would pollute other test files
-//      that import named exports like DEFAULT_SERVER_CONFIG (bun's mock.module
-//      is process-wide).
-//   2. A top-level env mutation which would leak into CLI integration tests
-//      that spawn the binary as a subprocess and inherit our parent env.
-
-// Mock context module
-let mockContext = {
-  instanceId: 'inst-001',
-  chatId: 'chat-001',
-  messageId: null,
-  source: 'env' as const,
-};
-
-mock.module('../context.js', () => ({
-  resolveContext: () => Promise.resolve(mockContext),
-}));
+// IMPORTANT: do NOT register mock.module for '../context.js' or '../config.js' here.
+// Bun's mock.module is process-wide; partial mocks pollute other test files
+// (e.g. config.test.ts imports DEFAULT_SERVER_CONFIG; react-context.test.ts uses
+// the real per-field cascade in resolveContext). Instead, this describe block
+// scopes all environment overrides in beforeAll/afterAll/beforeEach below — the
+// real resolveContext reads OMNI_INSTANCE/OMNI_CHAT env vars deterministically,
+// and __OMNI_RUNTIME_FORMAT='human' forces human output without touching config.
 
 // Capture console output
 let consoleOutput: string[] = [];
@@ -119,21 +109,43 @@ const originalError = console.error;
 // Import after mocks
 const { createHistoryCommand } = await import('../commands/history.js');
 
+// Helper: env var save/restore (process.env mutations leak across files,
+// so we save originals on entry and restore on exit).
+type EnvSnapshot = {
+  OMNI_INSTANCE?: string;
+  OMNI_CHAT?: string;
+  OMNI_MESSAGE?: string;
+  __OMNI_RUNTIME_FORMAT?: string;
+};
+
+function clearEnvKey(key: keyof EnvSnapshot): void {
+  delete process.env[key];
+}
+
+function restoreEnv(snapshot: EnvSnapshot): void {
+  for (const key of Object.keys(snapshot) as (keyof EnvSnapshot)[]) {
+    const original = snapshot[key];
+    if (original === undefined) clearEnvKey(key);
+    else process.env[key] = original;
+  }
+}
+
 describe('history command', () => {
-  let savedRuntimeFormat: string | undefined;
+  const envSnapshot: EnvSnapshot = {};
 
   beforeAll(() => {
-    savedRuntimeFormat = process.env.__OMNI_RUNTIME_FORMAT;
+    // Snapshot any pre-existing env values so we can restore them later.
+    envSnapshot.OMNI_INSTANCE = process.env.OMNI_INSTANCE;
+    envSnapshot.OMNI_CHAT = process.env.OMNI_CHAT;
+    envSnapshot.OMNI_MESSAGE = process.env.OMNI_MESSAGE;
+    envSnapshot.__OMNI_RUNTIME_FORMAT = process.env.__OMNI_RUNTIME_FORMAT;
+
+    // Force human output format for the duration of these tests.
     process.env.__OMNI_RUNTIME_FORMAT = 'human';
   });
 
   afterAll(() => {
-    if (savedRuntimeFormat === undefined) {
-      // biome-ignore lint/performance/noDelete: env vars must be deleted, not set to undefined
-      delete process.env.__OMNI_RUNTIME_FORMAT;
-    } else {
-      process.env.__OMNI_RUNTIME_FORMAT = savedRuntimeFormat;
-    }
+    restoreEnv(envSnapshot);
   });
 
   beforeEach(() => {
@@ -146,17 +158,20 @@ describe('history command', () => {
       consoleErrorOutput.push(args.map(String).join(' '));
     };
     mockGetMessages.mockClear();
-    mockContext = {
-      instanceId: 'inst-001',
-      chatId: 'chat-001',
-      messageId: null,
-      source: 'env' as const,
-    };
+
+    // Default context for most tests — real resolveContext reads these env vars.
+    process.env.OMNI_INSTANCE = 'inst-001';
+    process.env.OMNI_CHAT = 'chat-001';
+    clearEnvKey('OMNI_MESSAGE');
   });
 
   afterEach(() => {
     console.log = originalLog;
     console.error = originalError;
+    // Clear test-set env vars so the next test starts clean.
+    clearEnvKey('OMNI_INSTANCE');
+    clearEnvKey('OMNI_CHAT');
+    clearEnvKey('OMNI_MESSAGE');
   });
 
   test('fetches messages with default limit of 10', async () => {
@@ -276,12 +291,8 @@ describe('history command', () => {
   });
 
   test('errors when no instance in context', async () => {
-    mockContext = {
-      instanceId: null as unknown as string,
-      chatId: 'chat-001',
-      messageId: null,
-      source: 'none' as const,
-    };
+    // Clear instance env var so resolveContext returns null instanceId.
+    clearEnvKey('OMNI_INSTANCE');
 
     const cmd = createHistoryCommand();
     const exitMock = mock(() => {});
@@ -301,12 +312,8 @@ describe('history command', () => {
   });
 
   test('errors when no chat in context', async () => {
-    mockContext = {
-      instanceId: 'inst-001',
-      chatId: null as unknown as string,
-      messageId: null,
-      source: 'env' as const,
-    };
+    // Clear chat env var so resolveContext returns null chatId.
+    clearEnvKey('OMNI_CHAT');
 
     const cmd = createHistoryCommand();
     const exitMock = mock(() => {});
