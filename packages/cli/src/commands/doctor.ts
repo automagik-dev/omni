@@ -424,12 +424,40 @@ async function fixPm2EnvDrift(deps: DoctorDeps): Promise<string> {
   return `relaunched ${PM2_PROCESSES.api} with sanitized env`;
 }
 
+/** Max wall-clock time we wait for the API to come back up after rotation. */
+const ROTATION_WAIT_MAX_MS = 10_000;
+/** Poll cadence while waiting for /api/v2/health to respond post-rotation. */
+const ROTATION_POLL_INTERVAL_MS = 250;
+
+/**
+ * Poll the health endpoint until it responds or the deadline passes.
+ * Private helper used only by fixCliKeyValid — we don't expose this on
+ * DoctorDeps because it's composed from the existing `fetchHealthVersion`
+ * primitive that's already injectable for tests.
+ */
+async function waitForApiReady(deps: DoctorDeps, apiPort: number): Promise<boolean> {
+  const deadline = Date.now() + ROTATION_WAIT_MAX_MS;
+  while (Date.now() < deadline) {
+    const version = await deps.fetchHealthVersion(apiPort);
+    if (version !== null) {
+      return true;
+    }
+    await deps.sleepMs(ROTATION_POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
 /**
  * Rotate the CLI/server auth key. Requires the operator to have already
  * deleted the `__primary__` row from api_keys (we cannot do that from the
  * CLI without a raw DB connection). We DO generate a new key, restart the
- * API with it in the env, re-validate, and persist the new key to
- * ~/.omni/config.json on success.
+ * API with it in the env, persist the new key to `~/.omni/config.json`
+ * BEFORE re-validating, and then validate against the running server.
+ *
+ * Save-before-validate ordering is load-bearing: `validateStoredKey`
+ * reads the CLI key from disk via `loadConfig()`. If we validated first,
+ * the validator would read the OLD key and always report failure, even
+ * when the rotation actually succeeded. Persist first, validate second.
  */
 async function fixCliKeyValid(deps: DoctorDeps): Promise<string> {
   const { serverConfig, cliConfig } = deps.loadState();
@@ -441,20 +469,23 @@ async function fixCliKeyValid(deps: DoctorDeps): Promise<string> {
     throw new Error(`pm2 restart ${PM2_PROCESSES.api} exited ${restartCode}`);
   }
 
-  // Give the API a moment to come back up, then re-validate.
-  await deps.sleepMs(1000);
-  const valid = await deps.validateStoredKey(serverConfig.port);
-  if (!valid) {
-    // Persist anyway — the operator may need the key to run manual DB ops.
-    const updated = deps.reloadCliConfig();
-    updated.apiKey = newKey;
-    deps.saveCliConfig(updated);
-    throw new Error('rotated key does not validate; manually delete __primary__ from api_keys and rerun');
-  }
-
+  // Persist the rotated key BEFORE re-validating. `validateStoredKey`
+  // loads the key from disk, so the save must happen first or the
+  // validator will always see the stale key.
   const updated = deps.reloadCliConfig();
   updated.apiKey = newKey;
   deps.saveCliConfig(updated);
+
+  // Poll /api/v2/health until the API is reachable (or we time out).
+  // This replaces the prior fixed 1s sleep, which was both too long on
+  // fast hosts and too short on slow ones.
+  await waitForApiReady(deps, serverConfig.port);
+
+  const valid = await deps.validateStoredKey(serverConfig.port);
+  if (!valid) {
+    throw new Error('rotated key does not validate; manually delete __primary__ from api_keys and rerun');
+  }
+
   return 'rotated CLI key and re-validated';
 }
 

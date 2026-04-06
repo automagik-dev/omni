@@ -336,6 +336,75 @@ describe('runDoctor — --fix mode', () => {
     const key = report.checks.find((c) => c.id === 'cli-key-valid');
     expect(key?.level).toBe('FAIL');
   });
+
+  // HIGH-2 regression: save-before-validate ordering.
+  test('cli-key-valid fix persists the new key before calling validateStoredKey', async () => {
+    // This test pins the save-before-validate invariant from HIGH-2. The
+    // real validator reads the CLI key from disk, so if validation ran
+    // before the save, the probe would always see the stale key.
+    const state = mkHarness({
+      keyValid: false,
+      keyValidAfterFix: true,
+    });
+    let cliConfigAtValidationTime: string | undefined;
+    const deps = mkDeps(state);
+    const originalValidate = deps.validateStoredKey;
+    deps.validateStoredKey = async (port: number) => {
+      // Capture what the CLI config looks like at the moment validation
+      // happens. If the fix ordering regresses, this will be the old key.
+      cliConfigAtValidationTime = state.cliConfig.apiKey;
+      return originalValidate(port);
+    };
+
+    await runDoctor({ fix: true }, deps);
+
+    expect(cliConfigAtValidationTime).toBe('omni_sk_rotated-test-key');
+  });
+
+  // HIGH-2 regression: when validation fails, the rotated key is still
+  // persisted so the operator can run manual DB recovery steps.
+  test('cli-key-valid fix persists the new key even when validation fails', async () => {
+    const state = mkHarness({
+      keyValid: false,
+      keyValidAfterFix: false, // validation will keep returning false
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    // The key was persisted to the stub cli config despite the failed
+    // post-rotation validation — operators need the rotated key on disk
+    // to run manual DB recovery (__primary__ row deletion, etc.).
+    expect(state.cliConfig.apiKey).toBe('omni_sk_rotated-test-key');
+    // And the fix handler surfaced the clarifying error to the report.
+    expect(report.fixesApplied.some((f) => f.includes('rotated key does not validate'))).toBe(true);
+  });
+
+  // HIGH-2 (adjacent gemini comment): the fix handler must NOT rely on a
+  // fixed sleep — it should poll /api/v2/health until the server responds
+  // or the deadline passes. We assert fetchHealthVersion is invoked at
+  // least once by the fix path.
+  test('cli-key-valid fix polls fetchHealthVersion post-restart (no fixed sleep)', async () => {
+    const state = mkHarness({
+      keyValid: false,
+      keyValidAfterFix: true,
+    });
+    const deps = mkDeps(state);
+    let healthPolls = 0;
+    const originalFetch = deps.fetchHealthVersion;
+    deps.fetchHealthVersion = async (port: number) => {
+      healthPolls++;
+      return originalFetch(port);
+    };
+
+    await runDoctor({ fix: true }, deps);
+
+    // At minimum: one poll from the fix handler's waitForApiReady,
+    // plus any polls from the recheck pass (e.g. checkVersionMatch).
+    // The exact count isn't load-bearing; what matters is that the fix
+    // path touched the health primitive at all.
+    expect(healthPolls).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
