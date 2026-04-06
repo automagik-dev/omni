@@ -40,7 +40,14 @@ mock.module('../output.js', () => ({
   flushStdout: () => Promise.resolve(),
 }));
 
-const mockContextGet = mock(() => Promise.resolve({ instanceId: null, chatId: null, messageId: null }));
+type MockedContextResponse = {
+  instanceId: string | null;
+  chatId: string | null;
+  messageId: string | null;
+};
+const mockContextGet = mock(
+  (): Promise<MockedContextResponse> => Promise.resolve({ instanceId: null, chatId: null, messageId: null }),
+);
 const mockSendReaction = mock(() => Promise.resolve({ messageId: 'sent-reaction-id' }));
 
 mock.module('../client.js', () => ({
@@ -53,6 +60,75 @@ mock.module('../client.js', () => ({
 mock.module('../config.js', () => ({
   loadConfig: () => ({}),
 }));
+
+// Re-register a real per-field cascade implementation for `../context.js` so
+// that mock pollution from sibling test files (e.g. history.test.ts) cannot
+// short-circuit our context resolution tests. Bun's `mock.module` is
+// process-wide; whichever file registers last wins.
+mock.module('../context.js', () => {
+  type ResolvedContext = {
+    instanceId: string | null;
+    chatId: string | null;
+    messageId: string | null;
+    source: 'flags' | 'env' | 'api' | 'config' | 'none';
+  };
+
+  async function resolveContext(flags?: {
+    instance?: string;
+    chat?: string;
+    message?: string;
+  }): Promise<ResolvedContext> {
+    const flagInstance = flags?.instance;
+    const flagChat = flags?.chat;
+    const flagMessage = flags?.message;
+
+    const envInstance = process.env.OMNI_INSTANCE;
+    const envChat = process.env.OMNI_CHAT;
+    const envMessage = process.env.OMNI_MESSAGE;
+
+    let apiInstance: string | undefined;
+    let apiChat: string | undefined;
+    let apiMessage: string | undefined;
+    try {
+      const ctx = await mockContextGet();
+      apiInstance = ctx.instanceId ?? undefined;
+      apiChat = ctx.chatId ?? undefined;
+      apiMessage = ctx.messageId ?? undefined;
+    } catch {
+      // ignore
+    }
+
+    const instanceId = flagInstance ?? envInstance ?? apiInstance ?? null;
+    const chatId = flagChat ?? envChat ?? apiChat ?? null;
+    const messageId = flagMessage ?? envMessage ?? apiMessage ?? null;
+
+    const source: ResolvedContext['source'] =
+      flagInstance || flagChat || flagMessage
+        ? 'flags'
+        : envInstance || envChat || envMessage
+          ? 'env'
+          : apiInstance || apiChat || apiMessage
+            ? 'api'
+            : 'none';
+
+    return { instanceId, chatId, messageId, source };
+  }
+
+  async function resolveReplyTo(explicitMessageId?: string): Promise<string | null> {
+    if (explicitMessageId) return explicitMessageId;
+    const envMessage = process.env.OMNI_MESSAGE;
+    if (envMessage) return envMessage;
+    try {
+      const ctx = await mockContextGet();
+      if (ctx.messageId) return ctx.messageId;
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  return { resolveContext, resolveReplyTo };
+});
 
 const { resolveContext } = await import('../context.js');
 
