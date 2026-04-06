@@ -44,6 +44,7 @@ import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
 import { getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
+import { normalizeVersion } from './update.js';
 
 // ============================================================================
 // TYPES
@@ -364,8 +365,10 @@ async function checkVersionMatch(deps: DoctorDeps): Promise<CheckResult> {
   if (!serverVersion) {
     return { id: 'version-match', level: 'WARN', detail: 'could not reach /api/v2/health' };
   }
-  const cliClean = VERSION.split('+')[0];
-  const serverClean = serverVersion.split('+')[0];
+  // Share the version-strip helper with update.ts so build-hash suffixes
+  // (`2.20260218.18+abc1234`) compare cleanly on both sides.
+  const cliClean = normalizeVersion(VERSION);
+  const serverClean = normalizeVersion(serverVersion);
   if (cliClean === serverClean) {
     return { id: 'version-match', level: 'OK', detail: `cli=v${cliClean} server=v${serverClean}` };
   }
