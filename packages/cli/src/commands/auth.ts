@@ -9,9 +9,10 @@
 
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
-import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, saveConfig } from '../config.js';
+import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
+import { buildRuntimeEnv } from '../runtime-env.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
@@ -74,6 +75,12 @@ async function readApiKeyFromPm2(): Promise<{ key: string; processName: string }
 
 /**
  * Try to restart the API process with a new OMNI_API_KEY env var.
+ *
+ * Builds a sanitized runtime env from `~/.omni/config.json` (never from the
+ * calling shell) and passes it to the pm2 restart command. This prevents a
+ * polluted shell `DATABASE_URL` / `OMNI_API_KEY` from leaking into omni-api.
+ * See runtime-env.ts for the hermeticity contract.
+ *
  * Returns the process name used, or null if no API process found.
  */
 async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean; processName: string | null }> {
@@ -88,9 +95,18 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
       continue;
     }
 
-    // Set the new key in PM2 env and restart
+    // Build a sanitized env from config, then override OMNI_API_KEY with the
+    // newly generated key. The other fields (DATABASE_URL, PGSERVE_DATA, etc.)
+    // come from `~/.omni/config.json`, NOT from the calling shell.
+    const serverConfig = loadServerConfig();
+    const cliConfig = loadConfig();
+    const runtimeEnv = { ...buildRuntimeEnv(serverConfig, cliConfig), OMNI_API_KEY: newKey };
+
+    // Persist the key via `pm2 set` and bounce the process. We intentionally
+    // do NOT ask pm2 to re-read the shell env — the env we pass via `runPm2`
+    // is already hermetic and derived from config.
     await runPm2(['set', `${name}:OMNI_API_KEY`, newKey]);
-    const restartCode = await runPm2(['restart', name, '--update-env'], { OMNI_API_KEY: newKey });
+    const restartCode = await runPm2(['restart', name], runtimeEnv);
 
     return { success: restartCode === 0, processName: name };
   }
@@ -141,9 +157,9 @@ function printManualInstructions(newKey?: string): void {
   output.raw(`       omni auth login --api-key ${key}`);
   output.raw('');
   output.raw('  3. Or to rotate to a new key:');
-  output.raw('     a. Stop the API:  pm2 stop omni-v2-api');
+  output.raw('     a. Stop the API:  omni stop');
   output.raw('     b. Delete primary key from DB manually');
-  output.raw(`     c. Restart with:  OMNI_API_KEY=${key} pm2 restart omni-v2-api --update-env`);
+  output.raw(`     c. Restart:       OMNI_API_KEY=${key} omni start`);
   output.raw(`     d. Login:         omni auth login --api-key ${key}`);
   output.raw('');
 }
@@ -236,8 +252,9 @@ async function handleRotationSuccess(
   output.warn('Config updated with new key, but validation failed.');
   output.raw('');
   output.raw('  The API may still be starting up, or the primary key was not deleted from DB.');
-  output.raw('  If the primary key row still exists in the database, delete it and restart:');
-  output.raw(`    pm2 restart ${processName} --update-env`);
+  output.raw('  If the primary key row still exists in the database, delete it and run:');
+  output.raw('    omni restart');
+  output.raw('  Or diagnose with: omni doctor --fix');
   output.raw('  Then verify with: omni status');
   output.raw('');
   // biome-ignore lint/suspicious/noConsole: CLI output — key shown once for manual use

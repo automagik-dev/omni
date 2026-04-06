@@ -22,10 +22,11 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Command } from 'commander';
 import ora from 'ora';
-import { saveConfig, saveServerConfig } from '../config.js';
+import { DEFAULT_SERVER_CONFIG, saveConfig, saveServerConfig } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, runPm2 } from '../pm2.js';
+import { buildEmbeddedDatabaseUrl, buildRuntimeEnv } from '../runtime-env.js';
 import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
@@ -35,10 +36,40 @@ import { VERSION } from '../version.js';
 // ============================================================================
 
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
-const DEFAULT_DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/omni';
 const OMNI_DIR = join(homedir(), '.omni');
 const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
 const NATS_VERSION = 'v2.12.4';
+
+/**
+ * Compute the default database URL for the install wizard.
+ *
+ * Embedded mode is the default and derives the URL from the configured
+ * pgserve port (never from the calling shell, which has historically
+ * leaked foreign databases into omni-api via pm2's stored env). If an
+ * operator wants to point omni at an external PostgreSQL they must pass
+ * `--database-url <url>` explicitly — an opt-in signal that the external
+ * URL is intentional and not an accidental shell export.
+ *
+ * Exported so `install-env-leak.test.ts` can assert hermeticity.
+ */
+export function computeDefaultDatabaseUrl(): string {
+  return buildEmbeddedDatabaseUrl();
+}
+
+/**
+ * Resolve the `databaseUrl` that will be written to `~/.omni/config.json`.
+ * Exported for hermeticity tests. Never reads the calling shell's env.
+ *
+ * @param options.databaseUrlFlag — the explicit `--database-url` value, if
+ *                                  the operator passed one. Opt-in external-DB mode.
+ */
+export function resolveInstallDatabaseUrl(options: { databaseUrlFlag?: string }): string {
+  const flag = options.databaseUrlFlag?.trim();
+  if (flag && flag.length > 0) {
+    return flag;
+  }
+  return computeDefaultDatabaseUrl();
+}
 
 // ============================================================================
 // TYPES
@@ -50,6 +81,7 @@ interface InstallOptions {
   nonInteractive?: boolean;
   systemd?: boolean;
   port?: string;
+  databaseUrl?: string;
 }
 
 interface WizardConfig {
@@ -255,19 +287,19 @@ type ApiKeyPromptResult = {
   generated: boolean;
 };
 
-function buildApiRuntimeEnv(cfg: WizardConfig): Record<string, string> {
-  return {
-    API_PORT: String(cfg.port),
-    DATABASE_URL: cfg.databaseUrl,
-    OMNI_API_KEY: cfg.apiKey,
-    MEDIA_STORAGE_PATH: join(cfg.dataDir, 'media'),
-    OMNI_PACKAGES_DIR: join(cfg.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(cfg.dataDir, 'pgserve'),
-    NATS_URL: 'nats://localhost:4222',
-    NODE_ENV: 'production',
-    LOG_LEVEL: 'info',
+/**
+ * Build the pm2 runtime env for install. We delegate to the shared
+ * `buildRuntimeEnv` so install, restart, start, auth, and doctor all share a
+ * single source of truth. See runtime-env.ts for the hermeticity contract.
+ */
+function buildWizardRuntimeEnv(cfg: WizardConfig): Record<string, string> {
+  const serverConfig = {
+    ...DEFAULT_SERVER_CONFIG,
+    port: cfg.port,
+    databaseUrl: cfg.databaseUrl,
+    dataDir: cfg.dataDir,
   };
+  return buildRuntimeEnv(serverConfig, { apiKey: cfg.apiKey });
 }
 
 // ============================================================================
@@ -394,12 +426,17 @@ async function chooseProcessManager(nonInteractive: boolean, forceSystemd: boole
 async function promptConfig(
   nonInteractive: boolean,
   portOverride: number | undefined,
+  databaseUrlOverride: string | undefined,
 ): Promise<{ port: number; dataDir: string; databaseUrl: string }> {
+  // Embedded-mode default is derived from pgserve port, NOT from the shell.
+  // External-DB mode is only entered via the explicit `--database-url` flag.
+  const resolvedDatabaseUrl = resolveInstallDatabaseUrl({ databaseUrlFlag: databaseUrlOverride });
+
   if (nonInteractive) {
     return {
       port: portOverride ?? DEFAULT_API_PORT,
       dataDir: DEFAULT_DATA_DIR,
-      databaseUrl: DEFAULT_DATABASE_URL,
+      databaseUrl: resolvedDatabaseUrl,
     };
   }
 
@@ -407,12 +444,17 @@ async function promptConfig(
   const port = Number.parseInt(portStr, 10);
 
   const dataDir = await promptLine(`  Data directory [${DEFAULT_DATA_DIR}]: `, DEFAULT_DATA_DIR);
-  const databaseUrl = await promptLine(`  Database URL [${DEFAULT_DATABASE_URL}]: `, DEFAULT_DATABASE_URL);
+
+  // If `--database-url` was passed, skip the prompt entirely — the operator
+  // has opted into an explicit external DB.
+  const databaseUrl = databaseUrlOverride
+    ? databaseUrlOverride
+    : await promptLine(`  Database URL [${resolvedDatabaseUrl}]: `, resolvedDatabaseUrl);
 
   return {
     port: Number.isNaN(port) ? DEFAULT_API_PORT : port,
     dataDir: dataDir || DEFAULT_DATA_DIR,
-    databaseUrl: databaseUrl || DEFAULT_DATABASE_URL,
+    databaseUrl: databaseUrl || resolvedDatabaseUrl,
   };
 }
 
@@ -456,7 +498,7 @@ async function startServices(cfg: WizardConfig): Promise<void> {
     return;
   }
 
-  const runtimeEnv = buildApiRuntimeEnv(cfg);
+  const runtimeEnv = buildWizardRuntimeEnv(cfg);
   const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
   const launcherPath = getServerLauncherPath();
   const apiCode = await runPm2(
@@ -555,6 +597,8 @@ async function runInstall(options: InstallOptions): Promise<void> {
   const nonInteractive = options.nonInteractive === true;
   const forceSystemd = options.systemd === true;
   const portOverride = options.port !== undefined ? Number.parseInt(options.port, 10) : undefined;
+  const databaseUrlOverride =
+    options.databaseUrl && options.databaseUrl.trim().length > 0 ? options.databaseUrl.trim() : undefined;
 
   // Step 1: Banner
   printBanner();
@@ -577,7 +621,7 @@ async function runInstall(options: InstallOptions): Promise<void> {
   const processManager = await chooseProcessManager(nonInteractive, forceSystemd);
 
   // Step 6: Config
-  const { port, dataDir, databaseUrl } = await promptConfig(nonInteractive, portOverride);
+  const { port, dataDir, databaseUrl } = await promptConfig(nonInteractive, portOverride, databaseUrlOverride);
 
   // Step 7: API key
   const { apiKey, generated: apiKeyGenerated } = await promptApiKey(nonInteractive);
@@ -617,5 +661,6 @@ export function createInstallCommand(): Command {
     .option('--non-interactive', 'Use all defaults, skip prompts (for CI/scripted installs)')
     .option('--systemd', 'Write systemd unit instead of using PM2 (requires sudo)')
     .option('--port <port>', `API port to use (default: ${DEFAULT_API_PORT})`)
+    .option('--database-url <url>', 'External PostgreSQL URL (opt-in external-DB mode; defaults to embedded pgserve)')
     .action(runInstall);
 }
