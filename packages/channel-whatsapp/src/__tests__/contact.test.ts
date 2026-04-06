@@ -6,11 +6,37 @@ import { describe, expect, it } from 'bun:test';
 import { buildVCard, computeWaid } from '../senders/contact';
 
 describe('computeWaid', () => {
-  it('strips leading 9 from 13-digit BR mobile numbers', () => {
-    // 55 + 11 (area) + 9 (leading) + 60008976 → drop the 9
-    expect(computeWaid('5511960008976')).toBe('551160008976');
+  // DDDs 11-30: keep the 9 (WhatsApp stores with it)
+  it('keeps leading 9 for DDD 11 (São Paulo)', () => {
+    expect(computeWaid('5511960008976')).toBe('5511960008976');
   });
 
+  it('keeps leading 9 for DDD 21 (Rio de Janeiro)', () => {
+    expect(computeWaid('5521999887766')).toBe('5521999887766');
+  });
+
+  it('keeps leading 9 for DDD 27 (Vitória)', () => {
+    expect(computeWaid('5527999112233')).toBe('5527999112233');
+  });
+
+  it('keeps leading 9 for DDD 30 (boundary)', () => {
+    expect(computeWaid('5530999001122')).toBe('5530999001122');
+  });
+
+  // DDDs 31+: strip the 9 (WhatsApp stores without it)
+  it('strips leading 9 for DDD 31 (Belo Horizonte)', () => {
+    expect(computeWaid('5531960008976')).toBe('553160008976');
+  });
+
+  it('strips leading 9 for DDD 62 (Goiânia)', () => {
+    expect(computeWaid('5562999991234')).toBe('556299991234');
+  });
+
+  it('strips leading 9 for DDD 85 (Fortaleza)', () => {
+    expect(computeWaid('5585988776655')).toBe('558588776655');
+  });
+
+  // Non-BR and edge cases
   it('leaves 12-digit BR numbers unchanged', () => {
     expect(computeWaid('551160008976')).toBe('551160008976');
   });
@@ -24,7 +50,6 @@ describe('computeWaid', () => {
   });
 
   it('leaves 13-digit non-BR numbers unchanged', () => {
-    // 13 digits but does not start with 55
     expect(computeWaid('4479111234567')).toBe('4479111234567');
   });
 
@@ -35,9 +60,9 @@ describe('computeWaid', () => {
 });
 
 describe('buildVCard', () => {
-  it('emits TEL line with correct waid for 13-digit BR mobile', () => {
+  it('emits TEL line with correct waid for 13-digit BR mobile (DDD 11, keeps 9)', () => {
     const vcard = buildVCard({ name: 'Test User', phone: '+5511960008976' });
-    expect(vcard).toContain('TEL;type=CELL;type=VOICE;waid=551160008976:+5511960008976');
+    expect(vcard).toContain('TEL;type=CELL;type=VOICE;waid=5511960008976:+5511960008976');
   });
 
   it('emits TEL line with correct waid for 12-digit BR number', () => {
