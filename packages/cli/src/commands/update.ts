@@ -26,7 +26,7 @@ import { createOmniClient } from '@omni/sdk';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import ora from 'ora';
-import { loadConfig, loadServerConfig } from '../config.js';
+import { type Config, loadConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
@@ -235,18 +235,40 @@ async function fetchHealthBody(apiPort: number, timeoutMs: number): Promise<Heal
 }
 
 /**
- * Validate the stored CLI API key against the just-restarted server.
- * Returns true if the key validates, false otherwise. The caller decides
- * what to do on failure (typically exit non-zero and point at `omni doctor`).
+ * Client factory type matching `createOmniClient`. Exported so tests can
+ * inject a spy factory into `validateStoredKey` without mocking the
+ * `@omni/sdk` module globally (which would collide with other test files).
  */
-async function validateStoredKey(apiPort: number): Promise<boolean> {
-  const cliConfig = loadConfig();
+export type OmniClientFactory = typeof createOmniClient;
+
+/**
+ * Validate the stored CLI API key against the just-restarted local
+ * pm2 process.
+ *
+ * This function ALWAYS validates against `http://localhost:${apiPort}`,
+ * ignoring any `cliConfig.apiUrl` the user may have set. The entire point
+ * of the post-restart probe is to prove that the omni-api we just
+ * restarted is the one accepting the stored key — validating against a
+ * remote `apiUrl` would be a nonsensical answer to the question "did our
+ * local restart succeed?" and would produce bogus pass/fail for anyone
+ * pointing the CLI at a shared server.
+ *
+ * Exported so tests can drive it without mocking `loadConfig`. Production
+ * callers pass the result of `loadConfig()` in directly. The
+ * `clientFactory` parameter exists purely so tests can spy on the
+ * `baseUrl` passed to `createOmniClient` without patching the SDK module.
+ */
+export async function validateStoredKey(
+  apiPort: number,
+  cliConfig: Config,
+  clientFactory: OmniClientFactory = createOmniClient,
+): Promise<boolean> {
   if (!cliConfig.apiKey) {
     return false;
   }
-  const baseUrl = cliConfig.apiUrl ?? `http://localhost:${apiPort}`;
+  const baseUrl = `http://localhost:${apiPort}`;
   try {
-    const client = createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION });
+    const client = clientFactory({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION });
     const result = await client.auth.validate();
     return result.valid === true;
   } catch {
@@ -288,7 +310,7 @@ async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], lat
 
   // Only probe auth once we have a reachable health endpoint — no point
   // calling /auth/validate against a server that isn't up.
-  const keyValid = healthBody !== null ? await validateStoredKey(apiPort) : false;
+  const keyValid = healthBody !== null ? await validateStoredKey(apiPort, loadConfig()) : false;
 
   const result = decideUpdateVerify({ latest, apiPort, healthBody, keyValid });
 

@@ -12,11 +12,14 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
+  type OmniClientFactory,
   UPDATE_ERROR_AUTH_INVALID,
   decideUpdateVerify,
   normalizeVersion,
   updateErrorVersionMismatch,
+  validateStoredKey,
 } from '../commands/update.js';
+import type { Config } from '../config.js';
 
 describe('normalizeVersion', () => {
   test('strips a git-hash suffix', () => {
@@ -94,6 +97,90 @@ describe('decideUpdateVerify', () => {
       keyValid: false,
     });
     expect(result).toEqual({ kind: 'auth-invalid' });
+  });
+});
+
+describe('validateStoredKey — always targets localhost (HIGH-3)', () => {
+  // Build a stub client factory that records the baseUrl it was handed,
+  // so tests can assert the post-restart probe never talks to a remote
+  // cliConfig.apiUrl. The factory returns a minimal shape that only
+  // exposes the `auth.validate()` method validateStoredKey calls.
+  function mkSpyFactory(validResponse: boolean): {
+    factory: OmniClientFactory;
+    received: { baseUrl?: string; apiKey?: string };
+  } {
+    const received: { baseUrl?: string; apiKey?: string } = {};
+    // We cast because createOmniClient's real return type is enormous;
+    // the spy only needs to expose the subset validateStoredKey touches.
+    const factory = ((config: { baseUrl: string; apiKey: string }) => {
+      received.baseUrl = config.baseUrl;
+      received.apiKey = config.apiKey;
+      return {
+        auth: {
+          validate: async () => ({ valid: validResponse }),
+        },
+      };
+    }) as unknown as OmniClientFactory;
+    return { factory, received };
+  }
+
+  test('uses http://localhost:<apiPort> even when cliConfig.apiUrl is remote', async () => {
+    // Before the HIGH-3 fix, this test would fail — validateStoredKey
+    // preferred `cliConfig.apiUrl` over the local port, which produced
+    // bogus pass/fail for operators pointing the CLI at a shared server.
+    const { factory, received } = mkSpyFactory(true);
+    const cliConfig: Config = {
+      apiKey: 'omni_sk_test-key',
+      apiUrl: 'https://prod.example.com',
+    };
+
+    const result = await validateStoredKey(8882, cliConfig, factory);
+
+    expect(result).toBe(true);
+    expect(received.baseUrl).toBe('http://localhost:8882');
+    expect(received.apiKey).toBe('omni_sk_test-key');
+  });
+
+  test('ignores cliConfig.apiUrl even when it is undefined', async () => {
+    const { factory, received } = mkSpyFactory(true);
+    const cliConfig: Config = { apiKey: 'omni_sk_test-key' };
+
+    await validateStoredKey(9000, cliConfig, factory);
+
+    expect(received.baseUrl).toBe('http://localhost:9000');
+  });
+
+  test('returns false without calling the factory when no apiKey is stored', async () => {
+    let factoryCalled = false;
+    const factory = (() => {
+      factoryCalled = true;
+      return { auth: { validate: async () => ({ valid: true }) } };
+    }) as unknown as OmniClientFactory;
+
+    const result = await validateStoredKey(8882, {}, factory);
+
+    expect(result).toBe(false);
+    expect(factoryCalled).toBe(false);
+  });
+
+  test('returns false when the auth.validate call throws', async () => {
+    const factory = (() => ({
+      auth: {
+        validate: async () => {
+          throw new Error('network blew up');
+        },
+      },
+    })) as unknown as OmniClientFactory;
+
+    const result = await validateStoredKey(8882, { apiKey: 'omni_sk_test-key' }, factory);
+
+    expect(result).toBe(false);
+  });
+
+  test('returns false when auth.validate responds with valid: false', async () => {
+    const { factory } = mkSpyFactory(false);
+    const result = await validateStoredKey(8882, { apiKey: 'omni_sk_test-key' }, factory);
+    expect(result).toBe(false);
   });
 });
 
