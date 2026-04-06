@@ -15,7 +15,7 @@ import { basename, extname } from 'node:path';
 import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
-import { type ResolvedContext, resolveContext } from '../context.js';
+import { type ResolvedContext, resolveContext, resolveReplyTo } from '../context.js';
 import * as output from '../output.js';
 
 /** Get media type from file extension */
@@ -151,10 +151,11 @@ export function createDoneCommand(): Command {
     .action(async (text: string | undefined, options: DoneOptions) => {
       const client = getClient();
 
+      // Resolve context — only pass instance/chat flags; message is resolved
+      // separately to avoid short-circuiting env var lookup when only --message is set
       const ctx = await resolveContext({
         instance: options.instance,
         chat: options.chat,
-        message: options.message,
       });
 
       if (!ctx.instanceId) {
@@ -164,10 +165,14 @@ export function createDoneCommand(): Command {
         return output.error('No chat in context. Set OMNI_CHAT, use --chat, or run: omni open <contact>');
       }
 
+      // Resolve message ID separately (--message flag > OMNI_MESSAGE env > PG context)
+      const messageId = await resolveReplyTo(options.message);
+      const ctxWithMessage: ResolvedContext = { ...ctx, messageId };
+
       if (options.skip) return handleSkip(client, options.reason);
-      if (options.react) return handleReact(client, ctx, options.react);
-      if (options.media) return handleMedia(client, ctx, options.media, options.caption);
-      if (text) return handleText(client, ctx, text);
+      if (options.react) return handleReact(client, ctxWithMessage, options.react);
+      if (options.media) return handleMedia(client, ctxWithMessage, options.media, options.caption);
+      if (text) return handleText(client, ctxWithMessage, text);
 
       output.error(
         'Specify what to do: omni done "text", omni done --media <file>, omni done --react <emoji>, or omni done --skip',
