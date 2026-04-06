@@ -1,6 +1,8 @@
 {
   "name": "omni",
-  "version": "3.0.0",
+  "version": "2.260405.3",
   "description": "Full Omni platform control — three-tier skill system for agents (omni-agent), first-time setup (omni-setup), and platform ops (omni-ops)",
-  "author": { "name": "Automagik" }
+  "author": {
+    "name": "Automagik"
+  }
 }
