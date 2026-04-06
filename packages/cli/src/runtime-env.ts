@@ -21,7 +21,10 @@
  *      fields (API_PORT, OMNI_API_KEY, PGSERVE_DATA, etc.).
  *   3. Always derive `DATABASE_URL` from `ServerConfig.databaseUrl`; fall
  *      back to the canonical embedded URL on the configured `PGSERVE_PORT`
- *      when the stored value is the legacy 5432 default.
+ *      only when the stored value is empty. Any non-empty stored URL is
+ *      honored verbatim — operators may opt into an external database by
+ *      passing `--database-url` to `omni install`, and silently rewriting
+ *      a URL they explicitly chose would violate that opt-in contract.
  *   4. Always include `OMNI_PACKAGES_DIR` (drift-fix between install.ts and
  *      restart.ts) and honor the dynamic `nodeEnv` / `logLevel` from config.
  */
@@ -47,16 +50,12 @@ export type RuntimeEnv = {
   LOG_LEVEL: string;
 };
 
-/** Legacy default — anything pointing at this was inherited from pre-embedded pgserve days. */
-const LEGACY_DEFAULT_DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/omni';
-
 /** Default pgserve port when none is set explicitly. */
 export const DEFAULT_PGSERVE_PORT = 8432;
 
 /**
  * Build the canonical embedded-mode `DATABASE_URL` from the configured
- * pgserve port. Used when the stored `server.databaseUrl` is empty or is
- * the legacy 5432 default.
+ * pgserve port. Used when the stored `server.databaseUrl` is empty.
  */
 export function buildEmbeddedDatabaseUrl(pgservePort: number = DEFAULT_PGSERVE_PORT): string {
   return `postgresql://postgres:postgres@localhost:${pgservePort}/omni`;
@@ -80,14 +79,18 @@ export function resolvePgservePort(serverConfig: ServerConfig): number {
  * Resolve the effective `DATABASE_URL` for the omni-api process.
  *
  * Precedence:
- *   1. `serverConfig.databaseUrl`, if it's a non-empty, non-legacy value.
+ *   1. `serverConfig.databaseUrl`, if it is a non-empty string. Any
+ *      non-empty value is honored verbatim — the operator opted into it
+ *      via `omni install --database-url`, and silently rewriting that URL
+ *      (even when it happens to match the pre-embedded 5432 default) would
+ *      break explicit external-DB intent.
  *   2. Otherwise, the canonical embedded URL on the configured pgserve port.
  *
  * This function never reads `process.env.DATABASE_URL`.
  */
 export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
   const stored = serverConfig.databaseUrl?.trim() ?? '';
-  if (stored && stored !== LEGACY_DEFAULT_DATABASE_URL) {
+  if (stored) {
     return stored;
   }
   return buildEmbeddedDatabaseUrl(resolvePgservePort(serverConfig));

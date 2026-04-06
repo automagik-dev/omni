@@ -15,7 +15,14 @@ import { describe, expect, test } from 'bun:test';
 import { DEFAULT_SERVER_CONFIG } from '../config.js';
 import { DEFAULT_PGSERVE_PORT, buildEmbeddedDatabaseUrl, buildRuntimeEnv, resolveDatabaseUrl } from '../runtime-env.js';
 
-const LEGACY_DEFAULT = 'postgresql://postgres:postgres@localhost:5432/omni';
+/**
+ * External-DB sentinel that literally matches the pre-embedded 5432 default.
+ * Before the HIGH-1 fix, resolveDatabaseUrl silently rewrote this URL to the
+ * embedded 8432 port, which broke operators who passed this exact string via
+ * `omni install --database-url` to opt into an external database running on
+ * the conventional 5432 port. The resolver must now honor it verbatim.
+ */
+const EXPLICIT_5432_URL = 'postgresql://postgres:postgres@localhost:5432/omni';
 
 function clearShellDbUrl(): void {
   // Use computed-key form so biome's noDelete lint (which only fires on
@@ -35,13 +42,22 @@ describe('buildEmbeddedDatabaseUrl', () => {
 });
 
 describe('resolveDatabaseUrl', () => {
-  test('returns the embedded URL when server.databaseUrl is the legacy 5432 default', () => {
-    const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: LEGACY_DEFAULT };
-    expect(resolveDatabaseUrl(config)).toBe(buildEmbeddedDatabaseUrl());
+  test('preserves an explicit 5432 URL (opt-in external DB, HIGH-1 regression)', () => {
+    // Before the fix, this literal string matched LEGACY_DEFAULT_DATABASE_URL
+    // and was silently rewritten to the embedded :8432 URL. After the fix,
+    // any non-empty stored URL is honored verbatim — the operator opted into
+    // this by passing --database-url, and we must not second-guess them.
+    const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: EXPLICIT_5432_URL };
+    expect(resolveDatabaseUrl(config)).toBe(EXPLICIT_5432_URL);
   });
 
   test('returns the embedded URL when server.databaseUrl is empty', () => {
     const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
+    expect(resolveDatabaseUrl(config)).toBe(buildEmbeddedDatabaseUrl());
+  });
+
+  test('returns the embedded URL when server.databaseUrl is whitespace-only', () => {
+    const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '   ' };
     expect(resolveDatabaseUrl(config)).toBe(buildEmbeddedDatabaseUrl());
   });
 
@@ -55,7 +71,9 @@ describe('resolveDatabaseUrl', () => {
     clearShellDbUrl();
     process.env.DATABASE_URL = 'postgresql://garbage:1234@evil.invalid/wrong';
     try {
-      const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: LEGACY_DEFAULT };
+      // Empty stored URL → should fall through to the embedded URL,
+      // regardless of the polluted shell env.
+      const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
       expect(resolveDatabaseUrl(config)).toBe(buildEmbeddedDatabaseUrl());
     } finally {
       clearShellDbUrl();
@@ -64,11 +82,11 @@ describe('resolveDatabaseUrl', () => {
 });
 
 describe('buildRuntimeEnv', () => {
-  test('produces the full hermetic env for embedded mode', () => {
+  test('produces the full hermetic env for embedded mode (empty stored URL)', () => {
     const serverConfig = {
       ...DEFAULT_SERVER_CONFIG,
       port: 8882,
-      databaseUrl: LEGACY_DEFAULT,
+      databaseUrl: '',
       dataDir: '/tmp/omni-test',
       nodeEnv: 'production',
       logLevel: 'info',
@@ -115,7 +133,7 @@ describe('buildRuntimeEnv', () => {
 
   test('does NOT read process.env.DATABASE_URL — mutation mid-test has no effect', () => {
     clearShellDbUrl();
-    const serverConfig = { ...DEFAULT_SERVER_CONFIG, databaseUrl: LEGACY_DEFAULT };
+    const serverConfig = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
 
     const first = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
 
