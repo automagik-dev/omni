@@ -31,6 +31,7 @@ import { getHealthCheckUrl } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
+import { type CleanupResult, cleanupSidecars, cleanupSucceeded, formatCleanupSummary } from '../sidecar-cleanup.js';
 import { VERSION } from '../version.js';
 
 const PACKAGE_NAME = '@automagik/omni';
@@ -43,6 +44,7 @@ const VERIFY_POLL_INTERVAL_MS = 500;
 interface UpdateOptions {
   yes?: boolean;
   restart?: boolean;
+  sidecarCleanup?: boolean;
 }
 
 type Pm2ProcessName = (typeof PM2_PROCESSES)[keyof typeof PM2_PROCESSES];
@@ -265,13 +267,42 @@ function printVerifyBanner(latest: string): void {
 }
 
 /**
+ * Run the legacy `nats-reply-sidecar.mjs` cleanup. Detects pm2-managed and
+ * raw sidecar processes and stops them. Always returns — never throws.
+ *
+ * This runs AFTER the restart so the new in-process subscription is already
+ * active when the sidecar exits. The brief overlap (typically <2s) produces
+ * at-most-once duplicate replies, which is preferable to the alternative
+ * (stop sidecar first → silent reply loss until restart finishes).
+ *
+ * See docs/migration/nats-genie-sidecar-decommission.md for the manual
+ * runbook operators can fall back to.
+ */
+async function runSidecarCleanup(): Promise<CleanupResult> {
+  const cleanupSpinner = ora('Checking for legacy nats-reply-sidecar processes...').start();
+  const result = await cleanupSidecars();
+  cleanupSpinner.stop();
+
+  const summary = formatCleanupSummary(result);
+  if (summary.length > 0) {
+    // biome-ignore lint/suspicious/noConsole: CLI output — operator-visible cleanup report
+    console.log(summary);
+  }
+  return result;
+}
+
+/**
  * Restart selected services, then run the three-step verification.
  *
  * The orchestration here is impure (spawns pm2, fetches, exits) but the
  * decision logic lives in `decideUpdateVerify` so tests can exercise every
  * branch without spinning up the network.
  */
-async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], latest: string): Promise<void> {
+async function restartServicesAndVerify(
+  servicesToRestart: Pm2ProcessName[],
+  latest: string,
+  options: { sidecarCleanup: boolean },
+): Promise<void> {
   const apiPort = loadServerConfig().port;
   const restartSpinner = ora('Restarting services...').start();
   const restartSucceeded = await restartPm2Services(servicesToRestart);
@@ -280,6 +311,14 @@ async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], lat
   if (!restartSucceeded) {
     output.warn(`omni CLI updated to v${latest}, but one or more service restarts failed. Run \`omni status\`.`);
     process.exit(1);
+  }
+
+  // Stop the legacy sidecar AFTER the restart so the new in-process
+  // subscription is already handling replies — prevents silent loss during
+  // the cleanup window. This block is opt-out via --no-sidecar-cleanup.
+  let sidecarCleanupResult: CleanupResult | null = null;
+  if (options.sidecarCleanup) {
+    sidecarCleanupResult = await runSidecarCleanup();
   }
 
   const verifySpinner = ora('Verifying server version...').start();
@@ -295,6 +334,15 @@ async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], lat
   switch (result.kind) {
     case 'ok':
       printVerifyBanner(result.cliVersion);
+      // If the sidecar cleanup partially failed we still consider the
+      // update healthy (server is up + auth works), but warn loudly so
+      // the operator can finish the manual cleanup.
+      if (sidecarCleanupResult !== null && !cleanupSucceeded(sidecarCleanupResult)) {
+        output.warn(
+          'One or more legacy nats-reply-sidecar processes could not be stopped automatically. ' +
+            'See messages above and docs/migration/nats-genie-sidecar-decommission.md.',
+        );
+      }
       return;
     case 'health-unreachable':
       output.warn(
@@ -375,11 +423,16 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     // On success, restartServicesAndVerify prints the three-line banner and
     // returns. On failure it exits non-zero before returning here, so we
     // deliberately skip the legacy `omni updated` summary in that path.
-    await restartServicesAndVerify(servicesToRestart, latest);
+    await restartServicesAndVerify(servicesToRestart, latest, {
+      sidecarCleanup: options.sidecarCleanup !== false,
+    });
     return;
   }
 
-  // --no-restart path: nothing to verify server-side.
+  // --no-restart path: nothing to verify server-side. We deliberately skip
+  // sidecar cleanup here too — `--no-restart` means "don't touch services"
+  // and the sidecar is a service. Operators using `--no-restart` are
+  // expected to manage the sidecar themselves.
   output.success(`omni updated to v${latest}`);
 }
 
@@ -388,6 +441,7 @@ export function createUpdateCommand(): Command {
     .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
     .option('--no-restart', 'Update CLI only; skip service restarts and verification')
+    .option('--no-sidecar-cleanup', 'Skip the legacy nats-reply-sidecar.mjs cleanup step')
     .addHelpText(
       'after',
       `
@@ -405,7 +459,14 @@ Behavior:
       "Server version mismatch: cli=v<X> server=v<Y>. Run: omni doctor"
   - On auth failure, exits non-zero with:
       "Auth key invalid after restart. Run: omni doctor --fix"
-  - Use --no-restart to skip restart + verification entirely.
+  - After a successful restart, scans for any legacy nats-reply-sidecar.mjs
+    process (PM2-managed or raw) and stops it. The sidecar was an external
+    workaround for bugs that were fixed in #362; leaving it running causes
+    every agent reply to be delivered twice. Skippable with
+    --no-sidecar-cleanup. Manual runbook:
+      docs/migration/nats-genie-sidecar-decommission.md
+  - Use --no-restart to skip restart + verification entirely. --no-restart
+    also skips sidecar cleanup; manage the sidecar manually.
   - Verify runtime health after update with: omni status
 `,
     )
