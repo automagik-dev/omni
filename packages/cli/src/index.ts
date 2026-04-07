@@ -23,6 +23,7 @@ import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
+import { createDoctorCommand } from './commands/doctor.js';
 import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
 import { createFilmCommand } from './commands/film.js';
@@ -308,6 +309,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
+  },
+  {
+    create: createDoctorCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Diagnose and repair the embedded omni runtime',
   },
   {
     create: createMediaCommand,

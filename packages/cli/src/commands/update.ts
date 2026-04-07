@@ -6,27 +6,45 @@
  * Self-update from npm: checks latest @automagik/omni version, prompts the
  * user (unless --yes), installs with `bun add -g`, and restarts PM2 services
  * only if they were already running. When that restart path runs, update
- * checks API health on the configured API port; if restart or health checks
- * fail, exits non-zero and points operators to `omni status`.
+ * performs a 3-step visible verification:
+ *
+ *   1. CLI version matches `package.json` (trivial — known at compile time).
+ *   2. Server version matches the newly-installed CLI version (fetched from
+ *      `/api/v2/health`). If not, update exits non-zero and tells the
+ *      operator to run `omni doctor`.
+ *   3. The stored API key still validates against the (restarted) server. If
+ *      not, update exits non-zero and tells the operator to run
+ *      `omni doctor --fix`.
+ *
+ * This replaces the previous silent-success path where the CLI would report
+ * "updated to vX" even when the server was still running the old version or
+ * when the stored key no longer validated.
  */
 
 import { createInterface } from 'node:readline';
+import { createOmniClient } from '@omni/sdk';
+import chalk from 'chalk';
 import { Command } from 'commander';
 import ora from 'ora';
-import { loadServerConfig } from '../config.js';
-import { waitForHealth } from '../health.js';
+import { loadConfig, loadServerConfig } from '../config.js';
+import { getHealthCheckUrl } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
+import { buildRuntimeEnv } from '../runtime-env.js';
+import { type CleanupResult, cleanupSidecars, cleanupSucceeded, formatCleanupSummary } from '../sidecar-cleanup.js';
 import { VERSION } from '../version.js';
 
 const PACKAGE_NAME = '@automagik/omni';
 
 /** update uses a shorter timeout — services should restart quickly */
 const UPDATE_HEALTH_TIMEOUT_MS = 10_000;
+/** Pause between poll attempts while waiting for the server to come back up */
+const VERIFY_POLL_INTERVAL_MS = 500;
 
 interface UpdateOptions {
   yes?: boolean;
   restart?: boolean;
+  sidecarCleanup?: boolean;
 }
 
 type Pm2ProcessName = (typeof PM2_PROCESSES)[keyof typeof PM2_PROCESSES];
@@ -99,14 +117,29 @@ async function installLatest(): Promise<boolean> {
   return exitCode === 0;
 }
 
-/** Restart provided PM2 processes. Returns true when all restarts succeed. */
+/**
+ * Restart provided PM2 processes. Returns true when all restarts succeed.
+ *
+ * The pm2 invocation runs in a sanitized environment built from
+ * `~/.omni/config.json` (via `buildRuntimeEnv`). We do NOT inherit the
+ * calling shell's DATABASE_URL / OMNI_API_KEY — that's the exact leakage
+ * that caused the 2026-04-06 cross-DB incident.
+ */
 async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boolean> {
+  const serverConfig = loadServerConfig();
+  const cliConfig = loadConfig();
+  const runtimeEnv = buildRuntimeEnv(serverConfig, cliConfig);
+
   let allSucceeded = true;
   for (const name of processNames) {
     const proc = Bun.spawn({
       cmd: ['pm2', 'restart', name],
       stdout: 'pipe',
       stderr: 'pipe',
+      // Spread process.env so PATH / HOME are preserved for the pm2 binary
+      // itself, then apply our hermetic overrides last — this guarantees
+      // the load-bearing keys come from config, not the shell.
+      env: { ...process.env, ...runtimeEnv },
     });
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
@@ -116,24 +149,218 @@ async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boole
   return allSucceeded;
 }
 
-/** Restart selected services and verify API health; exits non-zero on partial failure. */
-async function restartServicesAndVerify(servicesToRestart: Pm2ProcessName[], latest: string): Promise<void> {
+/** Shape of the `/api/v2/health` response we care about. */
+export interface HealthBody {
+  status?: string;
+  version?: string;
+}
+
+/**
+ * Normalize a version string for comparison. Strips a git-hash suffix
+ * (e.g. `2.20260218.18+abc1234` → `2.20260218.18`) so build metadata doesn't
+ * trigger a spurious mismatch.
+ */
+export function normalizeVersion(version: string): string {
+  return version.split('+')[0] ?? version;
+}
+
+/**
+ * Result of the pure 3-step update verification. Exported so tests can
+ * exercise the logic without mocking pm2 / fetch / process.exit.
+ */
+export type UpdateVerifyResult =
+  | { kind: 'ok'; cliVersion: string; serverVersion: string }
+  | { kind: 'health-unreachable'; apiPort: number }
+  | { kind: 'version-mismatch'; cliVersion: string; serverVersion: string | null }
+  | { kind: 'auth-invalid' };
+
+/**
+ * Pure decision function for update verification. Given the raw inputs
+ * (health body + key-valid flag + CLI version + port), return a tagged
+ * union describing the outcome. The caller decides how to render and
+ * whether to exit non-zero.
+ */
+export function decideUpdateVerify(args: {
+  latest: string;
+  apiPort: number;
+  healthBody: HealthBody | null;
+  keyValid: boolean;
+}): UpdateVerifyResult {
+  const cliVersion = normalizeVersion(args.latest);
+  if (args.healthBody === null) {
+    return { kind: 'health-unreachable', apiPort: args.apiPort };
+  }
+  const serverVersion = args.healthBody.version ? normalizeVersion(args.healthBody.version) : null;
+  if (!serverVersion || serverVersion !== cliVersion) {
+    return { kind: 'version-mismatch', cliVersion, serverVersion };
+  }
+  if (!args.keyValid) {
+    return { kind: 'auth-invalid' };
+  }
+  return { kind: 'ok', cliVersion, serverVersion };
+}
+
+/** Error message strings — exported for tests and documentation. */
+export function updateErrorVersionMismatch(cli: string, server: string | null): string {
+  return `Server version mismatch: cli=v${cli} server=v${server ?? 'unknown'}. Run: omni doctor`;
+}
+
+export const UPDATE_ERROR_AUTH_INVALID = 'Auth key invalid after restart. Run: omni doctor --fix';
+
+/**
+ * Poll the health endpoint until it responds with a parseable JSON body
+ * or the deadline passes. Returns the parsed body, or null on failure.
+ *
+ * We hit the endpoint with `Accept-Encoding: identity` so any brotli/gzip
+ * proxy in front of us doesn't mangle the body on a short-lived fetch.
+ */
+async function fetchHealthBody(apiPort: number, timeoutMs: number): Promise<HealthBody | null> {
+  const url = getHealthCheckUrl(apiPort);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch(url, {
+        signal: AbortSignal.timeout(1500),
+        headers: { 'Accept-Encoding': 'identity' },
+      });
+      if (resp.ok) {
+        const body = (await resp.json()) as HealthBody;
+        return body;
+      }
+    } catch {
+      // keep polling
+    }
+    await Bun.sleep(VERIFY_POLL_INTERVAL_MS);
+  }
+  return null;
+}
+
+/**
+ * Validate the stored CLI API key against the just-restarted server.
+ * Returns true if the key validates, false otherwise. The caller decides
+ * what to do on failure (typically exit non-zero and point at `omni doctor`).
+ */
+async function validateStoredKey(apiPort: number): Promise<boolean> {
+  const cliConfig = loadConfig();
+  if (!cliConfig.apiKey) {
+    return false;
+  }
+  const baseUrl = cliConfig.apiUrl ?? `http://localhost:${apiPort}`;
+  try {
+    const client = createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION });
+    const result = await client.auth.validate();
+    return result.valid === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Print the three-line success banner (cli + server + auth). */
+function printVerifyBanner(latest: string): void {
+  // biome-ignore lint/suspicious/noConsole: CLI output — green checks are the product
+  console.log(`${chalk.green('✓')} CLI:    v${latest}`);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(`${chalk.green('✓')} Server: v${latest} (healthy)`);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(`${chalk.green('✓')} Auth:   key valid`);
+}
+
+/**
+ * Run the legacy `nats-reply-sidecar.mjs` cleanup. Detects pm2-managed and
+ * raw sidecar processes and stops them. Always returns — never throws.
+ *
+ * This runs AFTER the restart so the new in-process subscription is already
+ * active when the sidecar exits. The brief overlap (typically <2s) produces
+ * at-most-once duplicate replies, which is preferable to the alternative
+ * (stop sidecar first → silent reply loss until restart finishes).
+ *
+ * See docs/migration/nats-genie-sidecar-decommission.md for the manual
+ * runbook operators can fall back to.
+ */
+async function runSidecarCleanup(): Promise<CleanupResult> {
+  const cleanupSpinner = ora('Checking for legacy nats-reply-sidecar processes...').start();
+  const result = await cleanupSidecars();
+  cleanupSpinner.stop();
+
+  const summary = formatCleanupSummary(result);
+  if (summary.length > 0) {
+    // biome-ignore lint/suspicious/noConsole: CLI output — operator-visible cleanup report
+    console.log(summary);
+  }
+  return result;
+}
+
+/**
+ * Restart selected services, then run the three-step verification.
+ *
+ * The orchestration here is impure (spawns pm2, fetches, exits) but the
+ * decision logic lives in `decideUpdateVerify` so tests can exercise every
+ * branch without spinning up the network.
+ */
+async function restartServicesAndVerify(
+  servicesToRestart: Pm2ProcessName[],
+  latest: string,
+  options: { sidecarCleanup: boolean },
+): Promise<void> {
   const apiPort = loadServerConfig().port;
   const restartSpinner = ora('Restarting services...').start();
   const restartSucceeded = await restartPm2Services(servicesToRestart);
   restartSpinner.stop();
 
-  const healthy = await waitForHealth(apiPort, UPDATE_HEALTH_TIMEOUT_MS);
-  if (restartSucceeded && healthy) {
-    output.success('Services restarted successfully.');
-    return;
+  if (!restartSucceeded) {
+    output.warn(`omni CLI updated to v${latest}, but one or more service restarts failed. Run \`omni status\`.`);
+    process.exit(1);
   }
 
-  const failures: string[] = [];
-  if (!restartSucceeded) failures.push('one or more service restarts failed');
-  if (!healthy) failures.push(`health check failed on port ${apiPort}`);
-  output.warn(`omni CLI updated to v${latest}, but ${failures.join(' and ')}. Run \`omni status\`.`);
-  process.exit(1);
+  // Stop the legacy sidecar AFTER the restart so the new in-process
+  // subscription is already handling replies — prevents silent loss during
+  // the cleanup window. This block is opt-out via --no-sidecar-cleanup.
+  let sidecarCleanupResult: CleanupResult | null = null;
+  if (options.sidecarCleanup) {
+    sidecarCleanupResult = await runSidecarCleanup();
+  }
+
+  const verifySpinner = ora('Verifying server version...').start();
+  const healthBody = await fetchHealthBody(apiPort, UPDATE_HEALTH_TIMEOUT_MS);
+  verifySpinner.stop();
+
+  // Only probe auth once we have a reachable health endpoint — no point
+  // calling /auth/validate against a server that isn't up.
+  const keyValid = healthBody !== null ? await validateStoredKey(apiPort) : false;
+
+  const result = decideUpdateVerify({ latest, apiPort, healthBody, keyValid });
+
+  switch (result.kind) {
+    case 'ok':
+      printVerifyBanner(result.cliVersion);
+      // If the sidecar cleanup partially failed we still consider the
+      // update healthy (server is up + auth works), but warn loudly so
+      // the operator can finish the manual cleanup.
+      if (sidecarCleanupResult !== null && !cleanupSucceeded(sidecarCleanupResult)) {
+        output.warn(
+          'One or more legacy nats-reply-sidecar processes could not be stopped automatically. ' +
+            'See messages above and docs/migration/nats-genie-sidecar-decommission.md.',
+        );
+      }
+      return;
+    case 'health-unreachable':
+      output.warn(
+        `omni CLI updated to v${latest}, but health check failed on port ${result.apiPort}. Run \`omni status\`.`,
+      );
+      process.exit(1);
+      break;
+    case 'version-mismatch':
+      // biome-ignore lint/suspicious/noConsole: CLI output — user-facing failure marker
+      console.error(`${chalk.red('✗')} ${updateErrorVersionMismatch(result.cliVersion, result.serverVersion)}`);
+      process.exit(1);
+      break;
+    case 'auth-invalid':
+      // biome-ignore lint/suspicious/noConsole: CLI output — user-facing failure marker
+      console.error(`${chalk.red('✗')} ${UPDATE_ERROR_AUTH_INVALID}`);
+      process.exit(1);
+      break;
+  }
 }
 
 /** Prompt the user for y/n confirmation. Returns true if user confirms. */
@@ -193,9 +420,19 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
   }
 
   if (servicesToRestart.length > 0) {
-    await restartServicesAndVerify(servicesToRestart, latest);
+    // On success, restartServicesAndVerify prints the three-line banner and
+    // returns. On failure it exits non-zero before returning here, so we
+    // deliberately skip the legacy `omni updated` summary in that path.
+    await restartServicesAndVerify(servicesToRestart, latest, {
+      sidecarCleanup: options.sidecarCleanup !== false,
+    });
+    return;
   }
 
+  // --no-restart path: nothing to verify server-side. We deliberately skip
+  // sidecar cleanup here too — `--no-restart` means "don't touch services"
+  // and the sidecar is a service. Operators using `--no-restart` are
+  // expected to manage the sidecar themselves.
   output.success(`omni updated to v${latest}`);
 }
 
@@ -203,16 +440,33 @@ export function createUpdateCommand(): Command {
   return new Command('update')
     .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
-    .option('--no-restart', 'Update CLI only; skip service restarts and API health check on configured API port')
+    .option('--no-restart', 'Update CLI only; skip service restarts and verification')
+    .option('--no-sidecar-cleanup', 'Skip the legacy nats-reply-sidecar.mjs cleanup step')
     .addHelpText(
       'after',
       `
 Behavior:
   - Installs the latest CLI package first.
   - Restarts tracked Omni services only when they were online before the update.
-  - When that restart path runs, update checks API health on the configured API port.
-  - Use --no-restart to skip restart and API health-check steps.
-  - Exits non-zero if install succeeds but restart or API health check fails in that restart path.
+  - When that restart path runs, update performs 3-step verification:
+      1. Server version matches the new CLI version (via /api/v2/health).
+      2. Stored CLI API key still validates against the server.
+      3. On success, prints:
+           ✓ CLI:    v<latest>
+           ✓ Server: v<latest> (healthy)
+           ✓ Auth:   key valid
+  - On mismatch, exits non-zero with:
+      "Server version mismatch: cli=v<X> server=v<Y>. Run: omni doctor"
+  - On auth failure, exits non-zero with:
+      "Auth key invalid after restart. Run: omni doctor --fix"
+  - After a successful restart, scans for any legacy nats-reply-sidecar.mjs
+    process (PM2-managed or raw) and stops it. The sidecar was an external
+    workaround for bugs that were fixed in #362; leaving it running causes
+    every agent reply to be delivered twice. Skippable with
+    --no-sidecar-cleanup. Manual runbook:
+      docs/migration/nats-genie-sidecar-decommission.md
+  - Use --no-restart to skip restart + verification entirely. --no-restart
+    also skips sidecar cleanup; manage the sidecar manually.
   - Verify runtime health after update with: omni status
 `,
     )
