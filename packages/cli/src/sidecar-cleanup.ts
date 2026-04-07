@@ -171,8 +171,13 @@ export function parseRawSidecarMatches(rawPgrep: string): RawSidecarMatch[] {
 /**
  * List pm2-managed sidecar processes by shelling out to `pm2 jlist`.
  * Returns `[]` when pm2 is not installed, jlist fails, or nothing matches.
+ *
+ * Internal — orchestrated by `cleanupSidecars()`. Not exported because the
+ * subprocess-spawning paths aren't unit-tested (mocking `Bun.spawn` against
+ * the real CLI runtime is more brittle than it's worth — the pure parsers
+ * are the load-bearing logic).
  */
-export async function detectPm2Sidecars(): Promise<Pm2SidecarMatch[]> {
+async function detectPm2Sidecars(): Promise<Pm2SidecarMatch[]> {
   try {
     const proc = Bun.spawn({
       cmd: ['pm2', 'jlist'],
@@ -195,7 +200,7 @@ export async function detectPm2Sidecars(): Promise<Pm2SidecarMatch[]> {
  * ever invoked from a process whose argv mentions the sidecar (e.g. a
  * test harness).
  */
-export async function detectRawSidecars(): Promise<RawSidecarMatch[]> {
+async function detectRawSidecars(): Promise<RawSidecarMatch[]> {
   try {
     const proc = Bun.spawn({
       cmd: ['pgrep', '-fa', SIDECAR_BASENAME],
@@ -221,7 +226,7 @@ export async function detectRawSidecars(): Promise<RawSidecarMatch[]> {
  * Stop and delete a single pm2 process. Prefers the name; falls back to
  * the numeric pm_id if name is empty. Returns true on success.
  */
-export async function stopPm2Sidecar(match: Pm2SidecarMatch): Promise<boolean> {
+async function stopPm2Sidecar(match: Pm2SidecarMatch): Promise<boolean> {
   const target = match.name.length > 0 ? match.name : match.pmId !== null ? String(match.pmId) : null;
   if (target === null) return false;
 
@@ -249,7 +254,7 @@ export async function stopPm2Sidecar(match: Pm2SidecarMatch): Promise<boolean> {
  * because the new in-process subscription has already taken over by the
  * time this runs.
  */
-export async function killRawSidecar(match: RawSidecarMatch): Promise<boolean> {
+async function killRawSidecar(match: RawSidecarMatch): Promise<boolean> {
   try {
     process.kill(match.pid, 'SIGTERM');
     return true;
