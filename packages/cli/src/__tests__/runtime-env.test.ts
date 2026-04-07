@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import { DEFAULT_SERVER_CONFIG } from '../config.js';
 import { DEFAULT_PGSERVE_PORT, buildEmbeddedDatabaseUrl, buildRuntimeEnv, resolveDatabaseUrl } from '../runtime-env.js';
-import { POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
+import { FAKE_EXTERNAL_DB_URL, FAKE_EXTERNAL_DB_URL_2, POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
 
 /**
  * External-DB sentinel that literally matches the pre-embedded 5432 default.
@@ -63,9 +63,8 @@ describe('resolveDatabaseUrl', () => {
   });
 
   test('passes a non-default configured URL through verbatim', () => {
-    const external = 'postgresql://omni:omni@db.example.com:5432/omni_prod';
-    const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: external };
-    expect(resolveDatabaseUrl(config)).toBe(external);
+    const config = { ...DEFAULT_SERVER_CONFIG, databaseUrl: FAKE_EXTERNAL_DB_URL };
+    expect(resolveDatabaseUrl(config)).toBe(FAKE_EXTERNAL_DB_URL);
   });
 
   test('ignores process.env.DATABASE_URL (hermeticity)', () => {
@@ -110,10 +109,9 @@ describe('buildRuntimeEnv', () => {
   });
 
   test('respects an explicit external-DB URL from config', () => {
-    const external = 'postgresql://omni:hunter2@db.prod.example.com:5432/omni';
-    const serverConfig = { ...DEFAULT_SERVER_CONFIG, databaseUrl: external };
+    const serverConfig = { ...DEFAULT_SERVER_CONFIG, databaseUrl: FAKE_EXTERNAL_DB_URL_2 };
     const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
-    expect(env.DATABASE_URL).toBe(external);
+    expect(env.DATABASE_URL).toBe(FAKE_EXTERNAL_DB_URL_2);
   });
 
   test('honors dynamic nodeEnv and logLevel from server config (drift-fix)', () => {

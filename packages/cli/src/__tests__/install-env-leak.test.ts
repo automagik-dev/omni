@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { buildEmbeddedDatabaseUrl } from '../runtime-env.js';
-import { POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
+import { FAKE_EXTERNAL_DB_URL_2, POLLUTED_DATABASE_URL } from './_fixtures/polluted-env.js';
 
 function clearShellDbUrl(): void {
   // Computed-key form keeps biome's noDelete lint quiet (it only fires on
@@ -61,9 +61,8 @@ describe('install command — DATABASE_URL leak prevention', () => {
     const { resolveInstallDatabaseUrl } = await import('../commands/install.js');
 
     process.env.DATABASE_URL = POLLUTED_DATABASE_URL;
-    const explicit = 'postgresql://omni:hunter2@db.example.com:5432/omni_prod';
-    const resolved = resolveInstallDatabaseUrl({ databaseUrlFlag: explicit });
-    expect(resolved).toBe(explicit);
+    const resolved = resolveInstallDatabaseUrl({ databaseUrlFlag: FAKE_EXTERNAL_DB_URL_2 });
+    expect(resolved).toBe(FAKE_EXTERNAL_DB_URL_2);
     // The explicit URL is what the operator opted into, NOT the shell env.
     expect(resolved).not.toContain('GARBAGE');
   });

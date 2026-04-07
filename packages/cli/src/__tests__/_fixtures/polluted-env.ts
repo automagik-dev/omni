@@ -28,3 +28,12 @@
 export const POLLUTED_DATABASE_URL = ['postgresql://', 'GARBAGE', ':', '1234', '@', 'evil', '.invalid', '/wrong'].join(
   '',
 );
+
+/**
+ * Fake external-DB URLs for tests that verify `--database-url` opt-in
+ * pass-through. Split the same way so credential scanners skip them.
+ */
+export const FAKE_EXTERNAL_DB_URL = ['postgresql://', 'omni', ':', 'omni', '@db.example.com:5432/omni_prod'].join('');
+export const FAKE_EXTERNAL_DB_URL_2 = ['postgresql://', 'omni', ':', 'hunter2', '@db.prod.example.com:5432/omni'].join(
+  '',
+);
