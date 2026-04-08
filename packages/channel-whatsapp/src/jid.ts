@@ -10,6 +10,8 @@
  * - Status: status@broadcast
  */
 
+import { computeWaid } from './senders/contact';
+
 /**
  * WhatsApp JID suffixes
  */
@@ -44,9 +46,10 @@ export function toJid(identifier: string, lidCache?: Map<string, string>): strin
     return identifier;
   }
 
-  // Clean phone number: remove all non-digits
+  // Clean phone number: remove all non-digits, normalize BR 9th digit
   const cleaned = identifier.replace(/\D/g, '');
-  const phoneJid = `${cleaned}${JID_SUFFIX.USER}`;
+  const normalized = computeWaid(cleaned);
+  const phoneJid = `${normalized}${JID_SUFFIX.USER}`;
 
   // Try LID resolution: phone→LID lookup
   if (lidCache) {

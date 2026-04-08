@@ -77,8 +77,20 @@ mock.module('nats', () => ({
   })),
 }));
 
-// Import AFTER mocks are registered
-import { NatsGenieProvider } from '../nats-genie-provider';
+// Import AFTER mocks are registered.
+//
+// We MUST use a dynamic import here, not a static one. Static imports are
+// hoisted to the top of the module by the ESM transform, which means
+// `import { NatsGenieProvider } from '../nats-genie-provider'` would run
+// BEFORE `mock.module('nats', ...)` above. The provider would then bind to
+// the real `nats` module. Whether the resulting class still appears to
+// "work" depends on whether some other test in the same Bun process has
+// already loaded `nats-genie-provider.ts` first — a test-discovery-order
+// flake we hit on CI when an unrelated PR perturbed the file order.
+//
+// Top-level await + dynamic import keeps the load AFTER the mock is in
+// place regardless of how the module is reached.
+const { NatsGenieProvider } = await import('../nats-genie-provider');
 import type { AgentTrigger } from '../types';
 
 // ---------------------------------------------------------------------------
