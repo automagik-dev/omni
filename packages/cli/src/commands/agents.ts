@@ -4,6 +4,7 @@
  * omni agents list [--provider <p>] [--inactive-only] [--limit <n>]
  * omni agents get <id>
  * omni agents create --name <name> --provider <provider> [--agent-provider <id>] [--model <model>] [--type <type>]
+ * omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
  * omni agents delete <id>
  */
 
@@ -16,6 +17,54 @@ type AgentProvider = (typeof VALID_PROVIDERS)[number];
 
 const VALID_TYPES = ['assistant', 'workflow', 'team', 'tool'] as const;
 type AgentType = (typeof VALID_TYPES)[number];
+
+interface UpdateAgentOptions {
+  name?: string;
+  model?: string;
+  provider?: string;
+  agentProvider?: string;
+  type?: string;
+  active?: boolean;
+  inactive?: boolean;
+}
+
+interface UpdateAgentBody {
+  name?: string;
+  model?: string;
+  provider?: AgentProvider;
+  agentProviderId?: string;
+  agentType?: AgentType;
+  isActive?: boolean;
+}
+
+/**
+ * Build the PATCH body from CLI options, validating enums and flag conflicts.
+ * Calls output.error (which exits) on any validation failure.
+ */
+function buildUpdateAgentBody(options: UpdateAgentOptions): UpdateAgentBody {
+  if (options.active && options.inactive) {
+    output.error('Cannot combine --active and --inactive.');
+  }
+
+  if (options.provider && !VALID_PROVIDERS.includes(options.provider as AgentProvider)) {
+    output.error(`Invalid provider: ${options.provider}. Valid: ${VALID_PROVIDERS.join(', ')}`);
+  }
+
+  if (options.type && !VALID_TYPES.includes(options.type as AgentType)) {
+    output.error(`Invalid type: ${options.type}. Valid: ${VALID_TYPES.join(', ')}`);
+  }
+
+  const body: UpdateAgentBody = {};
+  if (options.name !== undefined) body.name = options.name;
+  if (options.model !== undefined) body.model = options.model;
+  if (options.provider !== undefined) body.provider = options.provider as AgentProvider;
+  if (options.agentProvider !== undefined) body.agentProviderId = options.agentProvider;
+  if (options.type !== undefined) body.agentType = options.type as AgentType;
+  if (options.active) body.isActive = true;
+  if (options.inactive) body.isActive = false;
+
+  return body;
+}
 
 export function createAgentsCommand(): Command {
   const agents = new Command('agents').description('Manage AI agent entities');
@@ -129,6 +178,35 @@ export function createAgentsCommand(): Command {
         }
       },
     );
+
+  // omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
+  agents
+    .command('update <id>')
+    .description('Update an existing agent (partial patch; omitted fields are preserved)')
+    .option('--name <name>', 'Agent name')
+    .option('--model <model>', 'Model identifier (e.g. claude-sonnet-4-6)')
+    .option('--provider <provider>', `AI provider (${VALID_PROVIDERS.join(', ')})`)
+    .option('--agent-provider <agentProviderId>', 'Link to an agent provider configuration')
+    .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`)
+    .option('--active', 'Mark agent as active')
+    .option('--inactive', 'Mark agent as inactive')
+    .action(async (id: string, options: UpdateAgentOptions) => {
+      const body = buildUpdateAgentBody(options);
+
+      if (Object.keys(body).length === 0) {
+        output.error(
+          'No fields to update. Pass at least one of --name, --model, --provider, --agent-provider, --type, --active, --inactive.',
+        );
+      }
+
+      try {
+        const agent = await getClient().agents.update(id, body);
+        output.data(agent);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update agent: ${message}`, undefined, 3);
+      }
+    });
 
   // omni agents delete <id>
   agents

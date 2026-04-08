@@ -210,6 +210,26 @@ describe('Logger', () => {
 
       expect(received.length).toBe(2);
     });
+
+    it('should preserve rich error context (stack, agent/chat IDs) in buffered entries', () => {
+      const logger = createLogger('test:error');
+      logger.error('Failed to authenticate', {
+        agentId: 'agent-uuid-123',
+        chatId: 'chat-uuid-456',
+        stack: 'Error: session expired\n    at authenticate (test.ts:1:1)',
+      });
+
+      const entries = getLogBuffer().getRecent({ level: 'error' });
+      expect(entries.length).toBe(1);
+      const entry = entries[0];
+      expect(entry?.msg).toBe('Failed to authenticate');
+      // Rich context must survive redaction + buffer push, so the API's
+      // /logs/recent reshape can surface them under `data`.
+      expect(entry?.agentId).toBe('agent-uuid-123');
+      expect(entry?.chatId).toBe('chat-uuid-456');
+      expect(typeof entry?.stack).toBe('string');
+      expect(entry?.stack as string).toContain('at authenticate');
+    });
   });
 });
 
