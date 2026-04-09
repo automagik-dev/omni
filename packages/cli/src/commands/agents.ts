@@ -46,11 +46,11 @@ function buildUpdateAgentBody(options: UpdateAgentOptions): UpdateAgentBody {
     output.error('Cannot combine --active and --inactive.');
   }
 
-  if (options.provider && !VALID_PROVIDERS.includes(options.provider as AgentProvider)) {
+  if (options.provider !== undefined && !VALID_PROVIDERS.includes(options.provider as AgentProvider)) {
     output.error(`Invalid provider: ${options.provider}. Valid: ${VALID_PROVIDERS.join(', ')}`);
   }
 
-  if (options.type && !VALID_TYPES.includes(options.type as AgentType)) {
+  if (options.type !== undefined && !VALID_TYPES.includes(options.type as AgentType)) {
     output.error(`Invalid type: ${options.type}. Valid: ${VALID_TYPES.join(', ')}`);
   }
 
