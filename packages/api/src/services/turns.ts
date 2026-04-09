@@ -239,7 +239,7 @@ export class TurnService {
   }
 
   /**
-   * Admin force-close a turn regardless of current state.
+   * Admin force-close an open turn.
    */
   async forceClose(turnId: string, reason?: string): Promise<Turn | null> {
     const now = new Date();

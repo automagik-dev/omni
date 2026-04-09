@@ -315,6 +315,19 @@ turnsRoutes.post('/:id/close', zValidator('json', adminForceCloseSchema), async 
     return c.json({ error: { code: 'NOT_FOUND', message: 'Turn not found or already closed' } }, 404);
   }
 
+  // Publish NATS turn.done event (same as agent close path)
+  const durationMs = closed.closedAt
+    ? closed.closedAt.getTime() - closed.startedAt.getTime()
+    : Date.now() - closed.startedAt.getTime();
+  publishTurnDone(closed.instanceId, closed.chatId, {
+    turnId: closed.id,
+    action: 'skip',
+    reason: body.reason ?? 'admin force-close',
+    duration: durationMs,
+    nudgeCount: closed.nudgeCount,
+    messagesSent: closed.messagesSent,
+  });
+
   return c.json({
     data: {
       turnId: closed.id,
@@ -343,6 +356,11 @@ turnsRoutes.post('/close-all', zValidator('json', bulkCloseSchema), async (c) =>
 
   const services = c.get('services');
   const closedCount = await services.turns.bulkClose(body.reason);
+
+  // Note: bulk close does not publish individual turn.done events because
+  // bulkClose returns only the count, not full turn rows needed for event payloads.
+  // This is intentional for admin emergency operations — downstream systems should
+  // treat bulk close as a reset, not as N individual turn completions.
 
   return c.json({
     data: {

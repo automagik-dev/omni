@@ -3514,7 +3514,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/turns/${id}`);
         const json = (await resp.json()) as { data?: TurnItem };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
-        return json?.data as TurnItem;
+        if (!json?.data) throw new OmniApiError('Turn not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
       },
 
       /**
@@ -3531,7 +3532,8 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         const json = (await resp.json()) as { data?: { turnId: string; status: string; closedAt: string | null } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
-        return json?.data as { turnId: string; status: string; closedAt: string | null };
+        if (!json?.data) throw new OmniApiError('Turn not found or already closed', 'NOT_FOUND', undefined, 404);
+        return json.data;
       },
 
       /**
@@ -3545,7 +3547,8 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         const json = (await resp.json()) as { data?: { closedCount: number; message: string } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
-        return json?.data as { closedCount: number; message: string };
+        if (!json?.data) throw new OmniApiError('Bulk close failed', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
       },
 
       /**
@@ -3555,7 +3558,8 @@ export function createOmniClient(config: OmniClientConfig) {
         const resp = await apiFetch(`${baseUrl}/api/v2/turns/stats`);
         const json = (await resp.json()) as { data?: TurnStats };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
-        return json?.data as TurnStats;
+        if (!json?.data) throw new OmniApiError('Stats unavailable', 'INTERNAL_ERROR', undefined, 500);
+        return json.data;
       },
     },
 

@@ -3184,7 +3184,8 @@ async function processReactionTrigger(
 
     if (provider) {
       // Build AgentTrigger for the provider
-      const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
+      const effectivePersonId = reactionPersonId ?? metadata.personId;
+      const senderName = await services.agentRunner.getSenderName(effectivePersonId, undefined);
       const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
 
       const trigger: AgentTrigger = {
@@ -3199,7 +3200,7 @@ async function processReactionTrigger(
         },
         sender: {
           platformUserId: payload.from,
-          personId: metadata.personId,
+          personId: effectivePersonId,
           displayName: senderName,
         },
         content: {
