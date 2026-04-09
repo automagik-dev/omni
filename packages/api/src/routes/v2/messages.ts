@@ -1099,16 +1099,17 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Soft-validate that the target message exists.
-  // `messageId` here is the channel/external message id (not the DB UUID).
-  // This is a best-effort check — if the message isn't in the DB yet
-  // (e.g. new Slack channel, history not synced), we still send the
-  // reaction and let the channel plugin handle it directly.
+  // Look up the target message to determine fromMe (critical for WhatsApp reactions).
+  // Baileys needs key.fromMe to locate the correct message — if wrong, the reaction
+  // is silently dropped by WhatsApp.
+  let fromMe = false; // Default: reacting to someone else's message
   const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (!target) {
       log.warn('Target message not found in DB, sending reaction anyway', { messageId, chatId: chat.id });
+    } else {
+      fromMe = target.isFromMe === true;
     }
   }
 
@@ -1120,6 +1121,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
       emoji,
       targetMessageId: messageId,
     } as OutgoingContent,
+    metadata: { fromMe },
   };
 
   // Send via channel plugin
