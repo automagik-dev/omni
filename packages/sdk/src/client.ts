@@ -6,7 +6,7 @@
 
 import createClient, { type Middleware } from 'openapi-fetch';
 import { OmniApiError, OmniConfigError } from './errors';
-import type { components, paths } from './types.generated';
+import type { components, operations, paths } from './types.generated';
 
 // Re-export schema types for convenience
 export type Instance = components['schemas']['Instance'];
@@ -1894,6 +1894,18 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       /**
+       * Get a single event by ID
+       */
+      async get(id: string): Promise<Event> {
+        const { data, error, response } = await client.GET('/events/{id}', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Event not found', 'NOT_FOUND', undefined, 404);
+        return data.data as Event;
+      },
+
+      /**
        * Get event analytics
        */
       async analytics(params?: { granularity?: 'hourly' | 'daily' }): Promise<EventAnalytics> {
@@ -3473,6 +3485,23 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         if (!data?.data) throw new OmniApiError('Failed to create agent', 'CREATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      /**
+       * Update an existing agent (partial patch).
+       * Only fields present in `body` are changed; UUID and omitted fields are preserved.
+       */
+      async update(
+        id: string,
+        body: NonNullable<operations['updateAgent']['requestBody']>['content']['application/json'],
+      ): Promise<components['schemas']['Agent']> {
+        const { data, error, response } = await client.PATCH('/agents/{id}', {
+          params: { path: { id } },
+          body,
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Failed to update agent', 'UPDATE_FAILED', undefined, response.status);
         return data.data;
       },
 

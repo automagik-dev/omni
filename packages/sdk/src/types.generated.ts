@@ -3406,10 +3406,9 @@ export interface components {
              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
              *     - **webhook**: `{ mode?, retries? }`
-             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-             *       - `targetAgent`: which team member inbox to deliver to
-             *       - Optional: `teamName` (default "genie")
+             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+             *       - `agentName`: genie agent name (from genie directory)
+             *       - Optional: `natsUrl` (default "localhost:4222")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -3476,10 +3475,9 @@ export interface components {
              *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
              *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
              *     - **webhook**: optional `{ mode, retries }`
-             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-             *       - `targetAgent`: which team member inbox to deliver to
-             *       - Optional: `teamName` (default "genie")
+             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+             *       - `agentName`: genie agent name (from genie directory)
+             *       - Optional: `natsUrl` (default "localhost:4222")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -3504,11 +3502,8 @@ export interface components {
              * @default true
              */
             supportsStreaming: boolean;
-            /**
-             * @description Supports images
-             * @default false
-             */
-            supportsImages: boolean;
+            /** @description Supports images (defaults to true for claude-code, false otherwise) */
+            supportsImages?: boolean;
             /**
              * @description Supports audio
              * @default false
@@ -3604,6 +3599,45 @@ export interface components {
             agentGateModel: string | null;
             /** @description Response gate prompt override */
             agentGatePrompt: string | null;
+            /**
+             * @description Debounce mode override
+             * @enum {string|null}
+             */
+            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+            /** @description Debounce min delay (ms) override */
+            messageDebounceMinMs: number | null;
+            /** @description Debounce max delay (ms) override */
+            messageDebounceMaxMs: number | null;
+            /** @description Debounce group chat delay (ms) override */
+            messageDebounceGroupMs: number | null;
+            /** @description Restart debounce on typing override */
+            messageDebounceRestartOnTyping: boolean | null;
+            /**
+             * @description Split delay mode override
+             * @enum {string|null}
+             */
+            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+            /** @description Split delay fixed (ms) override */
+            messageSplitDelayFixedMs: number | null;
+            /** @description Split delay min (ms) override */
+            messageSplitDelayMinMs: number | null;
+            /** @description Split delay max (ms) override */
+            messageSplitDelayMaxMs: number | null;
+            /** @description Auto-split messages override */
+            enableAutoSplit: boolean | null;
+            /**
+             * @description Reaction ack toggle override
+             * @enum {string|null}
+             */
+            reactionAck: "off" | "on" | null;
+            /** @description Reaction ack emoji per-channel override */
+            reactionAckEmoji: {
+                [key: string]: string;
+            } | null;
+            /** @description Ack timeout (ms) override */
+            ackTimeoutMs: number | null;
+            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+            agentAckMessage: string | null;
             /** @description Human-readable label for this route (e.g., "VIP Support") */
             label: string | null;
             /** @description Priority (higher = higher priority, default: 0) */
@@ -3683,6 +3717,45 @@ export interface components {
             agentGateModel?: string;
             /** @description Response gate prompt */
             agentGatePrompt?: string;
+            /**
+             * @description Debounce mode
+             * @enum {string}
+             */
+            messageDebounceMode?: "disabled" | "fixed" | "randomized";
+            /** @description Debounce min delay (ms) */
+            messageDebounceMinMs?: number;
+            /** @description Debounce max delay (ms) */
+            messageDebounceMaxMs?: number;
+            /** @description Debounce group chat delay (ms) */
+            messageDebounceGroupMs?: number;
+            /** @description Restart debounce on typing */
+            messageDebounceRestartOnTyping?: boolean;
+            /**
+             * @description Split delay mode
+             * @enum {string}
+             */
+            messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+            /** @description Split delay fixed (ms) */
+            messageSplitDelayFixedMs?: number;
+            /** @description Split delay min (ms) */
+            messageSplitDelayMinMs?: number;
+            /** @description Split delay max (ms) */
+            messageSplitDelayMaxMs?: number;
+            /** @description Auto-split messages */
+            enableAutoSplit?: boolean;
+            /**
+             * @description Reaction ack toggle
+             * @enum {string}
+             */
+            reactionAck?: "off" | "on";
+            /** @description Reaction ack emoji per-channel */
+            reactionAckEmoji?: {
+                [key: string]: string;
+            };
+            /** @description Ack timeout (ms) */
+            ackTimeoutMs?: number;
+            /** @description Agent ack message (omit = inherit from instance, empty string = disabled) */
+            agentAckMessage?: string;
             /** @description Human-readable label */
             label?: string;
             /**
@@ -3743,6 +3816,45 @@ export interface components {
             agentGateModel?: string | null;
             /** @description Response gate prompt */
             agentGatePrompt?: string | null;
+            /**
+             * @description Debounce mode
+             * @enum {string|null}
+             */
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+            /** @description Debounce min delay (ms) */
+            messageDebounceMinMs?: number | null;
+            /** @description Debounce max delay (ms) */
+            messageDebounceMaxMs?: number | null;
+            /** @description Debounce group chat delay (ms) */
+            messageDebounceGroupMs?: number | null;
+            /** @description Restart debounce on typing */
+            messageDebounceRestartOnTyping?: boolean | null;
+            /**
+             * @description Split delay mode
+             * @enum {string|null}
+             */
+            messageSplitDelayMode?: "disabled" | "fixed" | "randomized" | null;
+            /** @description Split delay fixed (ms) */
+            messageSplitDelayFixedMs?: number | null;
+            /** @description Split delay min (ms) */
+            messageSplitDelayMinMs?: number | null;
+            /** @description Split delay max (ms) */
+            messageSplitDelayMaxMs?: number | null;
+            /** @description Auto-split messages */
+            enableAutoSplit?: boolean | null;
+            /**
+             * @description Reaction ack toggle
+             * @enum {string|null}
+             */
+            reactionAck?: "off" | "on" | null;
+            /** @description Reaction ack emoji per-channel */
+            reactionAckEmoji?: {
+                [key: string]: string;
+            } | null;
+            /** @description Ack timeout (ms) */
+            ackTimeoutMs?: number | null;
+            /** @description Agent ack message (null = inherit from instance, empty string = disabled) */
+            agentAckMessage?: string | null;
             /** @description Human-readable label */
             label?: string | null;
             /** @description Priority (higher = higher priority) */
@@ -3785,6 +3897,10 @@ export interface components {
             module: string;
             /** @description Log message */
             msg: string;
+            /** @description Additional contextual data (stack traces, agent/chat IDs, error details) */
+            data?: {
+                [key: string]: unknown;
+            };
         };
         DeadLetter: {
             /**
@@ -10390,10 +10506,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10474,10 +10589,9 @@ export interface operations {
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
-                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                     *       - `targetAgent`: which team member inbox to deliver to
-                     *       - Optional: `teamName` (default "genie")
+                     *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                     *       - `agentName`: genie agent name (from genie directory)
+                     *       - Optional: `natsUrl` (default "localhost:4222")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -10502,10 +10616,7 @@ export interface operations {
                      * @default true
                      */
                     supportsStreaming?: boolean;
-                    /**
-                     * @description Supports images
-                     * @default false
-                     */
+                    /** @description Supports images (defaults to true for claude-code, false otherwise) */
                     supportsImages?: boolean;
                     /**
                      * @description Supports audio
@@ -10563,10 +10674,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10680,10 +10790,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10835,10 +10944,9 @@ export interface operations {
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
-                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                     *       - `targetAgent`: which team member inbox to deliver to
-                     *       - Optional: `teamName` (default "genie")
+                     *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                     *       - `agentName`: genie agent name (from genie directory)
+                     *       - Optional: `natsUrl` (default "localhost:4222")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -10863,10 +10971,7 @@ export interface operations {
                      * @default true
                      */
                     supportsStreaming?: boolean;
-                    /**
-                     * @description Supports images
-                     * @default false
-                     */
+                    /** @description Supports images (defaults to true for claude-code, false otherwise) */
                     supportsImages?: boolean;
                     /**
                      * @description Supports audio
@@ -10924,10 +11029,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -11181,6 +11285,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11297,6 +11440,45 @@ export interface operations {
                     agentGateModel?: string;
                     /** @description Response gate prompt */
                     agentGatePrompt?: string;
+                    /**
+                     * @description Debounce mode
+                     * @enum {string}
+                     */
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Debounce min delay (ms) */
+                    messageDebounceMinMs?: number;
+                    /** @description Debounce max delay (ms) */
+                    messageDebounceMaxMs?: number;
+                    /** @description Debounce group chat delay (ms) */
+                    messageDebounceGroupMs?: number;
+                    /** @description Restart debounce on typing */
+                    messageDebounceRestartOnTyping?: boolean;
+                    /**
+                     * @description Split delay mode
+                     * @enum {string}
+                     */
+                    messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Split delay fixed (ms) */
+                    messageSplitDelayFixedMs?: number;
+                    /** @description Split delay min (ms) */
+                    messageSplitDelayMinMs?: number;
+                    /** @description Split delay max (ms) */
+                    messageSplitDelayMaxMs?: number;
+                    /** @description Auto-split messages */
+                    enableAutoSplit?: boolean;
+                    /**
+                     * @description Reaction ack toggle
+                     * @enum {string}
+                     */
+                    reactionAck?: "off" | "on";
+                    /** @description Reaction ack emoji per-channel */
+                    reactionAckEmoji?: {
+                        [key: string]: string;
+                    };
+                    /** @description Ack timeout (ms) */
+                    ackTimeoutMs?: number;
+                    /** @description Agent ack message (omit = inherit from instance, empty string = disabled) */
+                    agentAckMessage?: string;
                     /** @description Human-readable label */
                     label?: string;
                     /**
@@ -11392,6 +11574,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11568,6 +11789,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11758,6 +12018,45 @@ export interface operations {
                     agentGateModel?: string | null;
                     /** @description Response gate prompt */
                     agentGatePrompt?: string | null;
+                    /**
+                     * @description Debounce mode
+                     * @enum {string|null}
+                     */
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+                    /** @description Debounce min delay (ms) */
+                    messageDebounceMinMs?: number | null;
+                    /** @description Debounce max delay (ms) */
+                    messageDebounceMaxMs?: number | null;
+                    /** @description Debounce group chat delay (ms) */
+                    messageDebounceGroupMs?: number | null;
+                    /** @description Restart debounce on typing */
+                    messageDebounceRestartOnTyping?: boolean | null;
+                    /**
+                     * @description Split delay mode
+                     * @enum {string|null}
+                     */
+                    messageSplitDelayMode?: "disabled" | "fixed" | "randomized" | null;
+                    /** @description Split delay fixed (ms) */
+                    messageSplitDelayFixedMs?: number | null;
+                    /** @description Split delay min (ms) */
+                    messageSplitDelayMinMs?: number | null;
+                    /** @description Split delay max (ms) */
+                    messageSplitDelayMaxMs?: number | null;
+                    /** @description Auto-split messages */
+                    enableAutoSplit?: boolean | null;
+                    /**
+                     * @description Reaction ack toggle
+                     * @enum {string|null}
+                     */
+                    reactionAck?: "off" | "on" | null;
+                    /** @description Reaction ack emoji per-channel */
+                    reactionAckEmoji?: {
+                        [key: string]: string;
+                    } | null;
+                    /** @description Ack timeout (ms) */
+                    ackTimeoutMs?: number | null;
+                    /** @description Agent ack message (null = inherit from instance, empty string = disabled) */
+                    agentAckMessage?: string | null;
                     /** @description Human-readable label */
                     label?: string | null;
                     /** @description Priority (higher = higher priority) */
@@ -11847,6 +12146,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -12052,6 +12390,10 @@ export interface operations {
                             module: string;
                             /** @description Log message */
                             msg: string;
+                            /** @description Additional contextual data (stack traces, agent/chat IDs, error details) */
+                            data?: {
+                                [key: string]: unknown;
+                            };
                         }[];
                         meta: {
                             total: number;

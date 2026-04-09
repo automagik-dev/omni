@@ -41,42 +41,40 @@ type NatsGenieConfig = {
 const capturedConfigs: NatsGenieConfig[] = [];
 const startReplySubscriptionSpy = mock(async () => {});
 
-mock.module('@omni/core', () => {
-  class MockNatsGenieProvider {
-    readonly schema = 'nats-genie' as const;
-    readonly mode = 'fire-and-forget' as const;
-    constructor(
-      readonly id: string,
-      readonly name: string,
-      public config: NatsGenieConfig,
-    ) {
-      capturedConfigs.push(config);
-    }
-    canHandle() {
-      return true;
-    }
-    async trigger() {
-      return { parts: [], metadata: { runId: 'r', providerId: this.id, durationMs: 0 } };
-    }
-    async checkHealth() {
-      return { healthy: true, latencyMs: 0 };
-    }
-    async startReplySubscription() {
-      return startReplySubscriptionSpy();
-    }
-    async dispose() {}
+// NOTE: We intentionally do NOT mock NatsGenieProvider via mock.module('@omni/core').
+// Bun's mock.module poisons the barrel-resolved module cache process-wide,
+// contaminating nats-genie-provider.test.ts (which needs the real class).
+// Instead we inject the mock via __test__.NatsGenieProviderClass (DI hook).
+
+class MockNatsGenieProvider {
+  readonly schema = 'nats-genie' as const;
+  readonly mode = 'fire-and-forget' as const;
+  constructor(
+    readonly id: string,
+    readonly name: string,
+    public config: NatsGenieConfig,
+  ) {
+    capturedConfigs.push(config);
   }
+  canHandle() {
+    return true;
+  }
+  async trigger() {
+    return { parts: [], metadata: { runId: 'r', providerId: this.id, durationMs: 0 } };
+  }
+  async checkHealth() {
+    return { healthy: true, latencyMs: 0 };
+  }
+  async startReplySubscription() {
+    return startReplySubscriptionSpy();
+  }
+  async dispose() {}
+}
 
-  // Minimal stubs for the other exports agent-dispatcher imports.
-  // bun's mock.module merges with the real module, so anything we don't stub
-  // here passes through from the real @omni/core.
-  return {
-    NatsGenieProvider: MockNatsGenieProvider,
-  };
-});
-
-// Import __test__ AFTER the mocks are registered.
 import { __test__ } from '../agent-dispatcher';
+
+// Inject mock via DI hook instead of module mock
+__test__.NatsGenieProviderClass = MockNatsGenieProvider as any;
 
 // ---------------------------------------------------------------------------
 // Test fixtures

@@ -11,7 +11,10 @@ export const LogEntrySchema = z.object({
   level: z.enum(['debug', 'info', 'warn', 'error']).openapi({ description: 'Log level' }),
   module: z.string().openapi({ description: 'Module name' }),
   msg: z.string().openapi({ description: 'Log message' }),
-  // Additional fields are dynamic
+  data: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .openapi({ description: 'Additional contextual data (stack traces, agent/chat IDs, error details)' }),
 });
 
 export function registerLogSchemas(registry: OpenAPIRegistry): void {

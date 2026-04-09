@@ -132,6 +132,25 @@ describe('SDK Integration', () => {
     expect(result.meta).toBeDefined();
   });
 
+  test('events.get returns full event payload', async () => {
+    const seedEventId = '00000000-0000-0000-0000-0000000000e1';
+    const event = await client.events.get(seedEventId);
+    expect(event.id).toBe(seedEventId);
+    expect(event.eventType).toBe('message.received');
+    expect(event.direction).toBe('inbound');
+  });
+
+  test('events.get throws OmniApiError for missing id', async () => {
+    const missingId = '00000000-0000-0000-0000-00000000dead';
+    try {
+      await client.events.get(missingId);
+      throw new Error('Expected events.get to throw for missing id');
+    } catch (err) {
+      expect(err).toBeInstanceOf(OmniApiError);
+      expect((err as OmniApiError).status).toBe(404);
+    }
+  });
+
   test('providers.list returns array', async () => {
     const result = await client.providers.list();
     expect(result).toBeInstanceOf(Array);
@@ -145,5 +164,22 @@ describe('SDK Integration', () => {
   test('access.listRules returns array', async () => {
     const result = await client.access.listRules();
     expect(result).toBeInstanceOf(Array);
+  });
+
+  test('logs.recent returns entries with optional data field preserved', async () => {
+    const result = await client.logs.recent({ level: 'error', limit: 50 });
+    expect(result.items).toBeInstanceOf(Array);
+    expect(result.meta).toBeDefined();
+    expect(typeof result.meta.total).toBe('number');
+    expect(typeof result.meta.bufferSize).toBe('number');
+    expect(typeof result.meta.limit).toBe('number');
+
+    // Error entry should carry rich context under `data` (stack, agent/chat IDs)
+    const errorEntry = result.items.find((e) => e.level === 'error');
+    expect(errorEntry).toBeDefined();
+    expect(errorEntry?.data).toBeDefined();
+    expect(typeof errorEntry?.data?.stack).toBe('string');
+    expect(errorEntry?.data?.agentId).toBeDefined();
+    expect(errorEntry?.data?.chatId).toBeDefined();
   });
 });
