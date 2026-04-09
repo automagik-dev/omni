@@ -2592,3 +2592,43 @@ export const turnsRelations = relations(turns, ({ one }) => ({
     references: [apiKeys.id],
   }),
 }));
+
+// ============================================================================
+// WHATSAPP LABELS (Label Definitions)
+// ============================================================================
+
+/**
+ * WhatsApp Business label definitions.
+ * Stores label metadata (id, name, color) scoped per instance.
+ * The chats.labels field references these label IDs.
+ *
+ * @see whatsapp-labels-sync wish
+ */
+export const whatsappLabels = pgTable(
+  'whatsapp_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    labelId: varchar('label_id', { length: 50 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    color: varchar('color', { length: 20 }),
+    predefined: boolean('predefined').notNull().default(false),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    instanceLabelIdx: uniqueIndex('whatsapp_labels_instance_label_idx').on(table.instanceId, table.labelId),
+  }),
+);
+
+export type WhatsappLabel = typeof whatsappLabels.$inferSelect;
+export type NewWhatsappLabel = typeof whatsappLabels.$inferInsert;
+
+export const whatsappLabelsRelations = relations(whatsappLabels, ({ one }) => ({
+  instance: one(instances, {
+    fields: [whatsappLabels.instanceId],
+    references: [instances.id],
+  }),
+}));
