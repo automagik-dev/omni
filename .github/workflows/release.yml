@@ -30,7 +30,10 @@ jobs:
           git fetch --tags --force
 
           # Latest v* tag — the one the Version workflow just created
-          TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          # Use creatordate sort (not version:refname) because the calver format
+          # changed from v2.YYYYMMDD.N to v2.YYMMDD.N — old tags sort higher
+          # numerically but are older chronologically.
+          TAG=$(git tag --list 'v*' --sort=-creatordate | head -1)
           if [ -z "$TAG" ]; then
             echo "::error::No v* tags found — cannot release."
             exit 1
