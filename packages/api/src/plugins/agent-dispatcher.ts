@@ -92,6 +92,14 @@ import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
 
+/**
+ * Test-only DI hook for NatsGenieProvider constructor. In production this is
+ * always the real class imported above. Tests can override via __test__ to
+ * avoid `mock.module('@omni/core')` which poisons the barrel-resolved module
+ * cache and contaminates nats-genie-provider.test.ts (Bun test-ordering flake).
+ */
+let _natsGenieProviderCtor: typeof NatsGenieProvider | null = NatsGenieProvider;
+
 /** Maximum characters to include when quoting a replied-to message. */
 const QUOTED_MESSAGE_MAX_CHARS = 4000;
 
@@ -2842,7 +2850,9 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
   const providerMode = schemaConfig.mode === 'turn-based' ? ('turn-based' as const) : ('fire-and-forget' as const);
   const channel = instance.channel as ChannelType;
 
-  const natsProvider = new NatsGenieProvider(provider.id, provider.name, {
+  // biome-ignore lint/style/noNonNullAssertion: test-only DI hook, always NatsGenieProvider in production
+  const Ctor = _natsGenieProviderCtor!;
+  const natsProvider = new Ctor(provider.id, provider.name, {
     agentName,
     natsUrl,
     instanceId: instance.id,
@@ -4244,4 +4254,12 @@ export const __test__ = {
   mergeRouteOverrides,
   getDebounceConfig,
   createNatsGenieProviderInstance,
+  /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */
+  set NatsGenieProviderClass(cls: typeof NatsGenieProvider) {
+    _natsGenieProviderCtor = cls;
+  },
+  /** Reset to the real NatsGenieProvider (call in afterEach). */
+  resetNatsGenieProviderClass() {
+    _natsGenieProviderCtor = NatsGenieProvider;
+  },
 };
