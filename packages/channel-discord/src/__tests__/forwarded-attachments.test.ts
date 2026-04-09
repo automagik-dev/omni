@@ -30,7 +30,7 @@ describe('forwarded-attachments', () => {
   test('downloadForwardedAttachment handles network errors gracefully', async () => {
     // Mock fetch to simulate a network error — avoids flaky DNS resolution in CI
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(() => Promise.reject(new Error('Network error'))) as typeof fetch;
+    globalThis.fetch = mock(() => Promise.reject(new Error('Network error'))) as unknown as typeof fetch;
 
     try {
       const attachment: ForwardedAttachment = {
