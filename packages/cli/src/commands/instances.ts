@@ -130,14 +130,10 @@ function applyAckFields(body: Record<string, unknown>, opts: Record<string, unkn
   }
 }
 
-/** Extract agent fallback (turn-monitor stalled-turn notification) fields */
-function applyFallbackFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
-  setBool(body, 'agentFallbackEnabled', opts.agentFallbackEnabled);
-  if (opts.agentFallbackMessage !== undefined) {
-    body.agentFallbackMessage = opts.agentFallbackMessage === 'null' ? null : opts.agentFallbackMessage;
-  }
-  if (opts.agentFallbackTimeoutMs !== undefined) {
-    body.agentFallbackTimeoutMs = Number(opts.agentFallbackTimeoutMs);
+/** Extract stalled-turn threshold (turn-monitor internal event) */
+function applyStalledFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  if (opts.agentStalledTimeoutMs !== undefined) {
+    body.agentStalledTimeoutMs = Number(opts.agentStalledTimeoutMs);
   }
 }
 
@@ -151,7 +147,7 @@ function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknow
   applyGateFields(body, opts);
   applyMiscFields(body, opts);
   applyAckFields(body, opts);
-  applyFallbackFields(body, opts);
+  applyStalledFields(body, opts);
   return body;
 }
 
@@ -314,11 +310,10 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
-    .option('--agent-fallback-enabled', 'Enable fallback message when a turn stalls past the timeout')
-    .option('--no-agent-fallback-enabled', 'Disable fallback message on stalled turns')
-    .option('--agent-fallback-message <text>', 'Override fallback message text (use "null" to reset to default)')
-    .option('--agent-fallback-timeout-ms <ms>', 'Idle threshold in milliseconds before fallback fires', (v) =>
-      Number.parseInt(v, 10),
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
@@ -789,11 +784,10 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
-    .option('--agent-fallback-enabled', 'Enable fallback message when a turn stalls past the timeout')
-    .option('--no-agent-fallback-enabled', 'Disable fallback message on stalled turns')
-    .option('--agent-fallback-message <text>', 'Override fallback message text (use "null" to reset to default)')
-    .option('--agent-fallback-timeout-ms <ms>', 'Idle threshold in milliseconds before fallback fires', (v) =>
-      Number.parseInt(v, 10),
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')

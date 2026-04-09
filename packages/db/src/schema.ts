@@ -781,13 +781,9 @@ export const instances = pgTable(
     /** Timestamp of when the instance was last seen connected (used as replay window start) */
     lastSeenAt: timestamp('last_seen_at'),
 
-    // ---- Agent Fallback (turn-monitor stalled-turn user notification) ----
-    /** Send fallback message to the user when a turn stalls past the timeout */
-    agentFallbackEnabled: boolean('agent_fallback_enabled').notNull().default(true),
-    /** Override the fallback message text sent to the user (null = use default) */
-    agentFallbackMessage: text('agent_fallback_message'),
-    /** Idle threshold in ms before fallback fires */
-    agentFallbackTimeoutMs: integer('agent_fallback_timeout_ms').notNull().default(600000),
+    // ---- Agent Stalled-Turn Detection (internal event only — no channel message) ----
+    /** Idle threshold in ms before a stalled turn emits the internal turn.stalled event */
+    agentStalledTimeoutMs: integer('agent_stalled_timeout_ms').notNull().default(600000),
 
     // ---- Agent Chaining ----
     /** Target instance for agent-to-agent chaining */
