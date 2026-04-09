@@ -242,6 +242,11 @@ const CLI_COMMANDS: Record<string, string> = {
   // TURNS
   // ============================================================================
   'turns.close': 'done "text" / done --react / done --skip',
+  'turns.list': 'turns list',
+  'turns.get': 'turns get <id>',
+  'turns.forceClose': 'turns close <id>',
+  'turns.bulkClose': 'turns close-all --confirm',
+  'turns.stats': 'turns stats',
 
   // ============================================================================
   // MEDIA (multimodal verbs — tts/stt/vision/imagegen/videogen)
