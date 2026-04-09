@@ -108,6 +108,95 @@ function handleProviderHealth(path: string): Response {
   return json({ healthy: true, latency: 42, error: null });
 }
 
+/** Agents created during test run (mutable state for create/update/delete cycle) */
+let dynamicAgents: Array<{
+  id: string;
+  name: string;
+  provider: string;
+  model: string | null;
+  agentType: string;
+  capabilities: string[];
+  agentProviderId: string | null;
+  isInternal: boolean;
+  isActive: boolean;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}> = [];
+
+function makeAgent(
+  id: string,
+  name: string,
+  provider: string,
+  opts?: { model?: string; agentType?: string; agentProviderId?: string | null; isActive?: boolean },
+) {
+  return {
+    id,
+    name,
+    provider,
+    model: opts?.model ?? null,
+    agentType: opts?.agentType ?? 'assistant',
+    capabilities: [],
+    agentProviderId: opts?.agentProviderId ?? null,
+    isInternal: false,
+    isActive: opts?.isActive ?? true,
+    metadata: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function handleCreateAgent(req: Request): Promise<Response> {
+  const body = (await req.json()) as {
+    name?: string;
+    provider?: string;
+    model?: string;
+    agentType?: string;
+    agentProviderId?: string;
+    isActive?: boolean;
+  };
+  const id = crypto.randomUUID();
+  const agent = makeAgent(id, body.name ?? 'unnamed', body.provider ?? 'claude', {
+    model: body.model,
+    agentType: body.agentType,
+    agentProviderId: body.agentProviderId,
+    isActive: body.isActive,
+  });
+  dynamicAgents.push(agent);
+  return json({ data: agent }, 201);
+}
+
+function handleGetAgent(path: string): Response {
+  const match = path.match(/^\/api\/v2\/agents\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicAgents.find((a) => a.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Agent not found' } }, 404);
+  return json({ data: found });
+}
+
+async function handleUpdateAgent(req: Request, path: string): Promise<Response> {
+  const match = path.match(/^\/api\/v2\/agents\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicAgents.find((a) => a.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Agent not found' } }, 404);
+  const body = (await req.json()) as Record<string, unknown>;
+  if (body.name !== undefined) found.name = body.name as string;
+  if (body.provider !== undefined) found.provider = body.provider as string;
+  if (body.model !== undefined) found.model = body.model as string;
+  if (body.agentType !== undefined) found.agentType = body.agentType as string;
+  if (body.agentProviderId !== undefined) found.agentProviderId = body.agentProviderId as string | null;
+  if (body.isActive !== undefined) found.isActive = body.isActive as boolean;
+  found.updatedAt = new Date().toISOString();
+  return json({ data: found });
+}
+
+function handleDeleteAgent(path: string): Response {
+  const match = path.match(/^\/api\/v2\/agents\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  dynamicAgents = dynamicAgents.filter((a) => a.id !== id);
+  return json({ success: true });
+}
+
 /** Instances created during test run (mutable state for create/delete cycle) */
 let dynamicInstances: Array<{
   id: string;
@@ -205,6 +294,83 @@ function handleDeleteInstance(path: string): Response {
   return json({ success: true });
 }
 
+// ── Event fixtures ──
+
+const SEED_EVENT_ID = '00000000-0000-0000-0000-0000000000e1';
+
+function makeSeedEvent() {
+  return {
+    id: SEED_EVENT_ID,
+    eventType: 'message.received',
+    contentType: 'text',
+    instanceId: SEED_INSTANCE_ID,
+    personId: null,
+    direction: 'inbound',
+    textContent: 'hello from mock',
+    transcription: null,
+    imageDescription: null,
+    chatUuid: null,
+    agentId: null,
+    conversationId: null,
+    receivedAt: new Date().toISOString(),
+    processedAt: null,
+  };
+}
+
+function handleGetEvent(path: string): Response {
+  const match = path.match(/^\/api\/v2\/events\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  if (id !== SEED_EVENT_ID) {
+    return json({ error: { code: 'NOT_FOUND', message: 'Event not found' } }, 404);
+  }
+  return json({ data: makeSeedEvent() });
+}
+
+// ── Log fixtures ──
+
+/**
+ * Seed log entries mirroring the shape the real /logs/recent route produces
+ * after the G3 reshape: {time, level, module, msg, data?}. Includes one
+ * error entry with a stack trace and agent/chat IDs in `data` so CLI tests
+ * can assert the rich context survives serialization.
+ */
+function makeSeedLogs() {
+  return [
+    {
+      time: Date.now() - 2000,
+      level: 'info',
+      module: 'api:startup',
+      msg: 'Server listening on 0.0.0.0:8882',
+    },
+    {
+      time: Date.now() - 1000,
+      level: 'error',
+      module: 'whatsapp:auth',
+      msg: 'Failed to authenticate session',
+      data: {
+        agentId: '00000000-0000-0000-0000-0000000000a1',
+        chatId: '00000000-0000-0000-0000-0000000000c1',
+        stack:
+          'Error: session expired\n    at authenticate (whatsapp/auth.ts:42:7)\n    at handleConnect (whatsapp/socket.ts:118:5)',
+      },
+    },
+  ];
+}
+
+function handleRecentLogs(req: Request): Response {
+  const url = new URL(req.url);
+  const level = url.searchParams.get('level') ?? 'info';
+  const limit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+  const levels: Record<string, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+  const minLevel = levels[level] ?? levels.info;
+  const all = makeSeedLogs();
+  const items = all.filter((e) => (levels[e.level] ?? 0) >= minLevel).slice(0, limit);
+  return json({
+    items,
+    meta: { total: items.length, bufferSize: 1000, limit },
+  });
+}
+
 // ── Auth middleware ──
 
 function checkAuth(req: Request, path: string): Response | null {
@@ -241,6 +407,9 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'GET /api/v2/context': () => json({ instanceId: null, chatId: null, messageId: null }),
   'POST /api/v2/messages/send': () => json({ data: { messageId: 'mock-msg-id' } }),
   'POST /api/v2/messages/send/reaction': () => json({ data: { messageId: 'mock-reaction-msg', success: true } }),
+  'GET /api/v2/agents': () => json({ items: dynamicAgents }),
+  'POST /api/v2/agents': handleCreateAgent,
+  'GET /api/v2/logs/recent': handleRecentLogs,
 };
 
 /** Pattern routes: regex-matched paths */
@@ -274,6 +443,16 @@ const patternRoutes: Array<{
     handler: (req, path) => handleUpdateProvider(req, path),
   },
   { method: 'DELETE', pattern: /^\/api\/v2\/providers\/[^/]+$/, handler: (_req, path) => handleDeleteProvider(path) },
+  // Agent routes
+  { method: 'GET', pattern: /^\/api\/v2\/agents\/[^/]+$/, handler: (_req, path) => handleGetAgent(path) },
+  { method: 'PATCH', pattern: /^\/api\/v2\/agents\/[^/]+$/, handler: (req, path) => handleUpdateAgent(req, path) },
+  { method: 'DELETE', pattern: /^\/api\/v2\/agents\/[^/]+$/, handler: (_req, path) => handleDeleteAgent(path) },
+  // Event routes (exclude reserved sub-paths handled by static or other patterns)
+  {
+    method: 'GET',
+    pattern: /^\/api\/v2\/events\/(?!analytics$|search$|timeline\/|by-sender\/|trigger$)[^/]+$/,
+    handler: (_req, path) => handleGetEvent(path),
+  },
 ];
 
 async function handleRequest(req: Request): Promise<Response> {
@@ -320,6 +499,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
   // Reset state
   dynamicInstances = [];
   dynamicProviders = [];
+  dynamicAgents = [];
 
   const server = Bun.serve({
     port: 0, // OS-assigned random port
@@ -336,6 +516,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
       handle = null;
       dynamicInstances = [];
       dynamicProviders = [];
+      dynamicAgents = [];
     },
   };
 

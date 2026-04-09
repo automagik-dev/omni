@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-dream-87",
+  "messages": [
+    {
+      "id": "msg-834ad39b-31a3-4da7-b84e-33718b9b6a40",
+      "from": "team-lead",
+      "to": "omni-dream-87",
+      "body": "DREAM WORKER — Issue #87: Add A2A Journey Timing\n\n## Instructions\n1. Read the wish file: .wishes/087-a2a-journey-timing-wish.md\n2. Branch from dev: git checkout dev && git pull origin dev && git checkout -b feat/a2a-journey-timing\n3. Execute ALL execution groups in order (A → B → C):\n   - Group A: Expose timing methods on A2AChannelPlugin, update A2AHandlerContext with plugin reference\n   - Group B: Add T0/T1/T2 capture to message/send and message/stream handler paths. Document that A2A T0 is synthetic (Date.now() at request receipt) since A2A is synchronous HTTP with no platform timestamp\n   - Group C: Run make check validation\n4. Run the validation commands from the wish file after each group\n5. Run make check — if it fails, fix and retry (max 3 attempts)\n6. Once CI green, create PR: gh pr create --base dev --title \"feat(channel-a2a): add T0/T1/T2 journey timing (GH#87)\" --body \"...\"\n7. Report back: DONE with PR URL, or BLOCKED with reason\n\nIMPORTANT: Do NOT push to main. PR must target dev.",
+      "createdAt": "2026-03-11T06:58:53.744Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:58:53.747Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:58:53.747Z"
+}

@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-90",
+  "messages": [
+    {
+      "id": "msg-9a2ba93b-fa5b-4886-9dd6-26de20507158",
+      "from": "team-lead",
+      "to": "omni-council-90",
+      "body": "RELEVANCE REVIEW — Issue #90: Move Baileys logger adapter from core to channel-whatsapp\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .genie/wishes/remove-baileys-logger-from-core/WISH.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - Does packages/core/src/logger/adapters/baileys.ts still exist?\n   - Is it still dead code (not exported from core index, not imported by anyone)?\n   - Previous council unanimously recommended DELETION not relocation\n3. Run /council with this question: \"Issue #90 proposes moving Baileys logger from core. Previous council found its dead code — not exported, not imported. Should we just DELETE it? Given current dev state, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:28:04.967Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:28:04.969Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:28:04.969Z"
+}

@@ -434,6 +434,42 @@ describe('CLI Integration Tests', () => {
       const events = JSON.parse(result.stdout);
       expect(Array.isArray(events)).toBe(true);
     });
+
+    test('events get returns full event payload as JSON', async () => {
+      const seedEventId = '00000000-0000-0000-0000-0000000000e1';
+      const result = await runCli(['events', 'get', seedEventId], { OMNI_FORMAT: 'json' });
+
+      assertSuccess(result, 'events get');
+      const event = JSON.parse(result.stdout) as {
+        id: string;
+        eventType: string;
+        instanceId: string;
+        direction: string;
+        textContent: string | null;
+      };
+      expect(event.id).toBe(seedEventId);
+      expect(event.eventType).toBe('message.received');
+      expect(event.direction).toBe('inbound');
+      expect(typeof event.instanceId).toBe('string');
+    });
+
+    test('events get respects --json flag', async () => {
+      const seedEventId = '00000000-0000-0000-0000-0000000000e1';
+      const result = await runCli(['events', 'get', seedEventId, '--json']);
+
+      assertSuccess(result, 'events get --json');
+      const event = JSON.parse(result.stdout) as { id: string };
+      expect(event.id).toBe(seedEventId);
+    });
+
+    test('events get <missing-id> exits non-zero with not-found message', async () => {
+      const missingId = '00000000-0000-0000-0000-00000000dead';
+      const result = await runCli(['events', 'get', missingId]);
+
+      expect(result.exitCode).not.toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output.toLowerCase()).toContain('not found');
+    });
   });
 
   describe('chats', () => {
@@ -443,6 +479,121 @@ describe('CLI Integration Tests', () => {
       assertSuccess(result, 'chats list');
       const chats = JSON.parse(result.stdout);
       expect(Array.isArray(chats)).toBe(true);
+    });
+  });
+
+  describe('agents', () => {
+    let testAgentId: string | null = null;
+
+    test('agents create seeds an agent via direct API call', async () => {
+      // Seed via raw fetch so we don't depend on the CLI's JSON output shape
+      // (agents create currently emits success+data, which is two JSON blocks).
+      const resp = await fetch(`${MOCK_URL}/api/v2/agents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': MOCK_API_KEY,
+        },
+        body: JSON.stringify({
+          name: `test-agent-${Date.now()}`,
+          provider: 'claude',
+          model: 'claude-sonnet-4-6',
+          agentType: 'assistant',
+        }),
+      });
+      expect(resp.ok).toBe(true);
+      const body = (await resp.json()) as { data: { id: string; model: string } };
+      expect(body.data.id).toBeDefined();
+      expect(body.data.model).toBe('claude-sonnet-4-6');
+      testAgentId = body.data.id;
+    });
+
+    test('agents update patches model and preserves UUID', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--model', 'claude-opus-4-6'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'agents update --model');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.id).toBe(testAgentId);
+      expect(agent.model).toBe('claude-opus-4-6');
+    });
+
+    test('agents update patches multiple fields atomically', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(
+        ['agents', 'update', testAgentId, '--name', 'renamed-agent', '--model', 'claude-sonnet-4-6'],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'agents update --name --model');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.name).toBe('renamed-agent');
+      expect(agent.model).toBe('claude-sonnet-4-6');
+    });
+
+    test('agents update with --inactive flag deactivates the agent', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--inactive'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'agents update --inactive');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.isActive).toBe(false);
+    });
+
+    test('agents update with no field flags fails before hitting the API', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('No fields to update');
+    });
+
+    test('agents update with invalid provider fails with validation error', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--provider', 'invalid-provider']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('Invalid provider');
+    });
+
+    test('agents update rejects combining --active and --inactive', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--active', '--inactive']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--active');
+    });
+
+    test('agents update --help renders', async () => {
+      const result = await runCli(['agents', 'update', '--help']);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('--name');
+      expect(result.stdout).toContain('--model');
+      expect(result.stdout).toContain('--provider');
+      expect(result.stdout).toContain('--active');
+      expect(result.stdout).toContain('--inactive');
+    });
+
+    test('agents delete removes agent', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'delete', testAgentId]);
+      assertSuccess(result, 'agents delete');
+      testAgentId = null;
     });
   });
 
@@ -463,6 +614,73 @@ describe('CLI Integration Tests', () => {
       assertSuccess(result, 'settings list');
       const settings = JSON.parse(result.stdout);
       expect(Array.isArray(settings)).toBe(true);
+    });
+  });
+
+  describe('logs', () => {
+    test('logs --json emits raw LogEntry[] with data fields preserved', async () => {
+      const result = await runCli(['logs', 'error', '--json']);
+
+      assertSuccess(result, 'logs error --json');
+      const entries = JSON.parse(result.stdout) as Array<{
+        time: number;
+        level: string;
+        module: string;
+        msg: string;
+        data?: Record<string, unknown>;
+      }>;
+      expect(Array.isArray(entries)).toBe(true);
+      expect(entries.length).toBeGreaterThan(0);
+      // All entries should be error level (filtered by arg)
+      const errorEntry = entries.find((e) => e.level === 'error');
+      expect(errorEntry).toBeDefined();
+      expect(errorEntry?.data).toBeDefined();
+      // Rich context must survive JSON serialization end-to-end
+      expect(errorEntry?.data?.agentId).toBe('00000000-0000-0000-0000-0000000000a1');
+      expect(errorEntry?.data?.chatId).toBe('00000000-0000-0000-0000-0000000000c1');
+      expect(typeof errorEntry?.data?.stack).toBe('string');
+      expect(errorEntry?.data?.stack as string).toContain('at authenticate');
+    });
+
+    test('logs --json emits valid parseable JSON with no summary line', async () => {
+      const result = await runCli(['logs', '--json']);
+
+      assertSuccess(result, 'logs --json');
+      // stdout should be a single JSON array, nothing else
+      const parsed = JSON.parse(result.stdout);
+      expect(Array.isArray(parsed)).toBe(true);
+      // Summary line from default mode must NOT appear
+      expect(result.stdout).not.toContain('Showing ');
+      expect(result.stdout).not.toContain('buffer:');
+    });
+
+    test('logs --verbose shows multi-line entries with stack traces', async () => {
+      const result = await runCli(['logs', 'error', '--verbose']);
+
+      assertSuccess(result, 'logs error --verbose');
+      // Multi-line body: module, msg, and each data key on its own line
+      expect(result.stdout).toContain('whatsapp:auth');
+      expect(result.stdout).toContain('Failed to authenticate session');
+      expect(result.stdout).toContain('agentId:');
+      expect(result.stdout).toContain('chatId:');
+      expect(result.stdout).toContain('at authenticate');
+    });
+
+    test('logs (default mode) renders truncated table unchanged', async () => {
+      const result = await runCli(['logs']);
+
+      assertSuccess(result, 'logs');
+      // Default mode still emits the summary line
+      expect(result.stdout).toContain('Showing ');
+      expect(result.stdout).toContain('buffer:');
+    });
+
+    test('logs --help renders with --json and --verbose flags documented', async () => {
+      const result = await runCli(['logs', '--help']);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('--json');
+      expect(result.stdout).toContain('--verbose');
     });
   });
 

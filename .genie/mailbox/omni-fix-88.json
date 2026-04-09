@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-fix-88",
+  "messages": [
+    {
+      "id": "msg-53b637b9-4957-4793-a5d5-163714a347cf",
+      "from": "team-lead",
+      "to": "omni-fix-88",
+      "body": "UPDATE WISH FILE based on council review, then run /review on the updated wish.\n\n## Wish to update: .genie/wishes/remove-channel-leaks-from-core/WISH.md\n\n## Council Verdict: MODIFY — Phase 1 only, defer Phases 2-4\n\nThe council (1 APPROVE, 6 REJECT, 3 MODIFY) STRONGLY rejected the full JSONB migration:\n- No measured problem (3 schema touches/year for 4 channels)\n- DX regression (instance.readReceipts → getChannelConfig helper)\n- Disproportionate cost (4-phase migration for <50 deployments)\n- Operational risk (auto-migrate-on-startup + bad migration = all instances offline)\n\n### NEW SCOPE (Phase 1 only):\n\n**Drop 8 confirmed-dead columns + clean up:**\n\nDead columns (zero runtime references outside schema.ts):\n1. discordClientId\n2. discordGuildIds\n3. discordDefaultChannelId\n4. discordVoiceEnabled\n5. discordSlashCommandsEnabled\n6. discordWebhookUrl\n7. discordPermissions\n8. slackTeamId\n\n**Execution groups (2, not 4):**\n\n1. **Drop dead columns** — Generate Drizzle migration to drop 8 columns. Update schema.ts. Update Zod schemas in packages/core/src/schemas/instance.ts. Update docs/api/v1-compatibility-layer.md if it references these columns.\n\n2. **Validate** — Run make check. Verify API starts. Verify no broken references to dropped columns.\n\n**REMOVED from scope (deferred):**\n- Phase 2: channelConfig JSONB column\n- Phase 3: Data migration + dual-read\n- Phase 4: Drop old non-sensitive columns\n- Baileys logger move (separate issue #90)\n\n**Key files:**\n- packages/db/src/schema.ts\n- packages/core/src/schemas/instance.ts\n- packages/db/drizzle/ (new migration)\n\nUpdate the WISH.md with this Phase-1-only scope. Then run /review on it.\n\nYou are DONE when the wish is updated AND the review verdict is delivered.",
+      "createdAt": "2026-03-11T06:41:47.585Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:41:47.589Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:41:47.589Z"
+}

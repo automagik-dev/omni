@@ -1,0 +1,24 @@
+{
+  "workerId": "genie-implementor-2",
+  "messages": [
+    {
+      "id": "msg-422fd179-50bb-47d0-ae98-9842ae77c257",
+      "from": "cli",
+      "to": "genie-implementor-2",
+      "body": "You are a RESEARCH agent. Do NOT write any code or edit files (except the output file). Your job is to explore Sentry documentation and report findings.\n\nTASK: Explore https://docs.sentry.io/product/ recursively (follow sub-page links).\n\nWe're evaluating which Sentry PRODUCT features to enable for the Omni project — a Bun-based omnichannel messaging platform.\n\nFor EACH product feature, report:\n1. What it does\n2. Whether it requires SDK-side configuration or is UI/server-only\n3. Whether it's relevant to a backend-only Bun API server (no browser frontend)\n4. Privacy implications (does it capture user data?)\n\nCover ALL of these:\n- Issues (error grouping, Seer AI, Autofix)\n- Performance / Tracing\n- Profiling\n- Releases & Release Health\n- Alerts & Notifications\n- Dashboards & Discover\n- Cron Monitoring\n- Uptime Monitoring\n- User Feedback\n- Metrics\n- Session Replay (relevant for backend?)\n- AI features (Seer, Autofix, AI Agent Monitoring)\n- Logs\n\nWrite your findings to /home/genie/agents/namastexlabs/projects/omni/.genie/brainstorms/sentry-mcp/research-product-features.md\n\nBe EXHAUSTIVE.",
+      "createdAt": "2026-03-10T18:17:29.035Z",
+      "read": false,
+      "deliveredAt": "2026-03-10T18:17:29.037Z"
+    },
+    {
+      "id": "msg-1b22cf48-7b9b-4717-bd15-e8df0acb5f8e",
+      "from": "cli",
+      "to": "genie-implementor-2",
+      "body": "You are implementing Group 4 (Cron Monitoring) of the sentry-integration wish.\n\n## Goal\nWrap all 6 scheduled jobs with `Sentry.withMonitor()` so missed/failed runs alert in Sentry.\n\n## Prerequisites\n- @sentry/bun is installed in packages/api\n- Sentry is initialized in packages/api/src/instrument.ts\n- The `sentryEnabled()` helper is exported from packages/api/src/lib/sentry-scrub.ts\n\n## Deliverables\n\n### Modify: packages/api/src/scheduler.ts\n\n1. Read the file first to understand how jobs are registered\n2. Add `import * as Sentry from '@sentry/bun'`\n3. Add `import { sentryEnabled } from './lib/sentry-scrub'`\n4. Wrap each job handler with `Sentry.withMonitor()` using this config:\n\n| Job | Slug | Cron | checkinMargin (min) | maxRuntime (min) |\n|-----|------|------|---------------------|-----------------|\n| Dead letter retry | `dead-letter-auto-retry` | `*/15 * * * *` | 5 | 10 |\n| Payload cleanup | `payload-cleanup` | `0 3 * * *` | 10 | 30 |\n| Dead letter cleanup | `dead-letter-cleanup` | `0 3 * * *` | 10 | 15 |\n| Contacts sync | `contacts-sync-daily` | `0 4 * * *` | 15 | 60 |\n| Groups sync | `groups-sync-daily` | `0 5 * * *` | 15 | 60 |\n| Unread refresh | `unread-count-refresh` | `0 * * * *` | 5 | 5 |\n\nThe wrapping pattern:\n```typescript\nif (sentryEnabled()) {\n  Sentry.withMonitor('slug-name', async () => {\n    await originalHandler();\n  }, {\n    schedule: { type: 'crontab', value: '*/15 * * * *' },\n    checkinMargin: 5,\n    maxRuntime: 10,\n  });\n} else {\n  await originalHandler();\n}\n```\n\nOr create a helper function to reduce repetition:\n```typescript\nasync function withSentryMonitor(slug: string, cron: string, checkinMargin: number, maxRuntime: number, handler: () => Promise<void>) {\n  if (sentryEnabled()) {\n    await Sentry.withMonitor(slug, handler, {\n      schedule: { type: 'crontab', value: cron },\n      checkinMargin,\n      maxRuntime,\n    });\n  } else {\n    await handler();\n  }\n}\n```\n\n## Important Notes\n- Read packages/api/src/scheduler.ts first to understand the job registration pattern\n- Look at how cron expressions are defined (might use a CronExpressions enum or similar)\n- Match the slug names to the actual job names\n- The cron values in the table must match what's already in the scheduler (translate from any enum to string)\n- Without SENTRY_DSN, the scheduler must work exactly as before — no regressions\n- Verify compilation: `bun build packages/api/src/scheduler.ts --no-bundle 2>&1 | head -10`",
+      "createdAt": "2026-03-10T19:15:40.602Z",
+      "read": false,
+      "deliveredAt": "2026-03-10T19:15:40.604Z"
+    }
+  ],
+  "lastUpdated": "2026-03-10T19:15:40.604Z"
+}

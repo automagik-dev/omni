@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-dream-85",
+  "messages": [
+    {
+      "id": "msg-ea3fa7d1-4062-433e-9135-9a6ef277451e",
+      "from": "team-lead",
+      "to": "omni-dream-85",
+      "body": "DREAM WORKER — Issue #85: Extract publishEventInternal Helper\n\n## Instructions\n1. Read the wish file: .wishes/085-replace-emit-with-publishevent-wish.md\n2. Branch from dev: git checkout dev && git pull origin dev && git checkout -b refactor/emit-helper-extraction\n3. Execute ALL execution groups:\n\n   **Group A: Extract helper + rewrite facades**\n   - Add a private `publishEventInternal<K>()` method in BaseChannelPlugin containing the shared logic: correlationId generation, eventBus.publish, recordActivity (with a NO_ACTIVITY_EVENTS set to skip instance events), logging\n   - Handle the emitMessageReceived return type — it returns Promise<string> (correlationId), others return Promise<void>. publishEventInternal should always return correlationId, and emitMessageReceived passes it through\n   - Rewrite all 14 emit* methods as thin ~3-line facades calling publishEventInternal\n   - Keep ALL public method signatures UNCHANGED — zero breaking changes\n   - Scope covers all 6 channel plugins (WhatsApp, Discord, Telegram, Slack, A2A, Internal) — but since we are NOT changing call sites, only BaseChannelPlugin.ts changes\n\n   **Group B: Validation**\n   - Run make check (typecheck + lint + tests)\n   - Verify no call site changes needed across any channel plugin\n\n4. Run make check — if it fails, fix and retry (max 3 attempts)\n5. Once CI green, create PR: gh pr create --base dev --title \"refactor(channel-sdk): extract publishEventInternal helper in BaseChannelPlugin (GH#85)\" --body \"...\"\n6. Report back: DONE with PR URL, or BLOCKED with reason\n\nIMPORTANT: Do NOT push to main. PR must target dev. Do NOT change any channel plugin files — only BaseChannelPlugin.ts and optionally events.ts.",
+      "createdAt": "2026-03-11T07:16:09.326Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T07:16:09.329Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T07:16:09.329Z"
+}

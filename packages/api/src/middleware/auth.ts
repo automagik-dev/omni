@@ -105,41 +105,6 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
 });
 
 /**
- * Create a scope-checking middleware
- */
-export function requireScope(scope: string) {
-  return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-    const apiKey = c.get('apiKey');
-
-    if (!apiKey) {
-      return c.json(
-        {
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'Authentication required',
-          },
-        },
-        401,
-      );
-    }
-
-    if (!ApiKeyService.scopeAllows(apiKey.scopes, scope)) {
-      return c.json(
-        {
-          error: {
-            code: 'FORBIDDEN',
-            message: `Insufficient permissions. Required scope: ${scope}`,
-          },
-        },
-        403,
-      );
-    }
-
-    return next();
-  });
-}
-
-/**
  * Check if API key has access to a specific instance.
  * Use on routes with :id param for instance-scoped access control.
  */

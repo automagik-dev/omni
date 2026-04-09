@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-wish-92",
+  "messages": [
+    {
+      "id": "msg-f2a08340-2997-47ef-9c73-f007dfe27fbf",
+      "from": "team-lead",
+      "to": "omni-wish-92",
+      "body": "You are working on GitHub issue #92: \"[P3][feature] Create channel plugin template/generator\"\n\n## Issue Details\nNew channel implementations require copying patterns from existing channels, leading to inconsistent SDK adoption (14 inconsistencies across 4 channels). No scaffolding ensures new channels start compliant.\n\n### Blocked by\n- #82 (compliance test suite defines what \"compliant\" means)\n\n### Fix\nCreate a generator script that produces a channel plugin skeleton with:\n1. BaseChannelPlugin extension with required abstract method stubs\n2. createInboundDedupeCache, createDownloadGuard, sanitizeMessage initialized\n3. Error class extending ChannelError from core\n4. Journey timing hooks (T0, T1, T2, T10, T11) in message handlers\n5. sendTyping with standard pattern\n6. createStreamSender stub\n7. Basic test suite matching compliance tests\n8. CLAUDE.md with channel-specific notes\n\nUsage: bun run scripts/create-channel.ts --name instagram --display \"Instagram\"\nOutput: packages/channel-instagram/ with full skeleton\n\n### Acceptance Criteria\n- Generator script at scripts/create-channel.ts\n- Generated channel passes compliance tests\n- Includes CLAUDE.md, types, tests, plugin skeleton\n- make check green\n\n## YOUR TASK\n1. First run /council to analyze this issue — get architectural review and recommendations\n2. Then run /wish to generate a structured wish plan file with scope, acceptance criteria, and execution groups\n3. You are DONE when the wish file is written to disk",
+      "createdAt": "2026-03-11T05:11:37.477Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:11:37.480Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:11:37.480Z"
+}

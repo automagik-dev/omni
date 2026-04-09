@@ -261,6 +261,22 @@ export function createEventsCommand(): Command {
       },
     );
 
+  // omni events get <id>
+  events
+    .command('get <id>')
+    .description('Get full details for a single event by ID')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const event = await client.events.get(id);
+        output.data(event);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get event: ${message}`);
+      }
+    });
+
   // omni events search <query>
   events
     .command('search <query>')

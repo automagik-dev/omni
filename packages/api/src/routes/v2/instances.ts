@@ -9,6 +9,7 @@ import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
+import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { Services } from '../../services';
@@ -609,10 +610,14 @@ async function handleAgentKeyProvisioning(
         }
       } else {
         // Create new scoped API key for this agent
+        // Use agent's declared omniScopes if available, otherwise fall back to DEFAULT_TURN_SCOPES
+        const agentScopes = Array.isArray(agent.metadata?.omniScopes)
+          ? (agent.metadata.omniScopes as string[])
+          : [...DEFAULT_TURN_SCOPES];
         const result = await services.apiKeys.create({
           name: keyName,
           description: `Auto-provisioned scoped key for agent ${agent.name}`,
-          scopes: ['*'],
+          scopes: agentScopes,
           instanceIds: [instanceId],
           createdBy: 'system:auto-provision',
         });

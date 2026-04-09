@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-fix-85",
+  "messages": [
+    {
+      "id": "msg-9087b886-6416-4ea8-8c2e-9244426fc303",
+      "from": "team-lead",
+      "to": "omni-fix-85",
+      "body": "UPDATE WISH FILE based on council review, then run /review on the updated wish.\n\n## Wish to update: .wishes/085-replace-emit-with-publishevent-wish.md\n\n## Council Verdict: MODIFY — Internal helper, not full replacement\n\nThe council (0 APPROVE, 1 APPROVE-mod, 5 MODIFY) found:\n- The emit* methods are a FEATURE (discoverability, JSDoc, type safety, security)\n- The IMPLEMENTATION duplication is the real waste\n- Replacing the public API would require 50+ call site changes across 6 plugins\n- Generic string-based publishEvent creates security risks (EventPayloadMap has 35+ types, only 14 are channel-safe)\n\n### NEW SCOPE:\n\n**Approach:** Extract internal helper, keep emit* facades.\n\n**Execution groups (2, not 3):**\n\n1. **Extract publishEventInternal<K>()** — Private helper in BaseChannelPlugin containing shared logic: correlationId generation, eventBus.publish, recordActivity (with INSTANCE_EVENTS skip set), logging. Handle the emitMessageReceived return type (Promise<string> for correlationId).\n\n2. **Rewrite emit* as thin facades** — Each of the 14 emit methods becomes ~3 lines calling publishEventInternal. Keep the public method signatures UNCHANGED. Zero breaking changes to any channel plugin. Update scope to cover all 6 plugins (add A2A + Internal). Optionally remove EmitXxxParams if they purely duplicate EventPayloadMap.\n\n**Key differences from original:**\n| | Original | Modified |\n|---|---|---|\n| Lines removed | ~720 | ~400 |\n| Call sites changed | ~50+ | 0 |\n| Breaking changes | Yes | None |\n| Risk | High | Low |\n\n**Key files:**\n- packages/channel-sdk/src/base/BaseChannelPlugin.ts (main change)\n- packages/channel-sdk/src/helpers/events.ts (optionally simplify EmitXxxParams)\n\nUpdate the WISH.md with this modified scope. Then run /review on it.\n\nYou are DONE when the wish is updated AND the review verdict is delivered.",
+      "createdAt": "2026-03-11T06:41:35.573Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:41:35.577Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:41:35.577Z"
+}

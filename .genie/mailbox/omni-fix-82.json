@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-fix-82",
+  "messages": [
+    {
+      "id": "msg-9202da2d-2ee4-4377-bd98-2ed91a46e601",
+      "from": "team-lead",
+      "to": "omni-fix-82",
+      "body": "UPDATE WISH FILE based on council review, then run /review on the updated wish.\n\n## Wish to update: .genie/wishes/sdk-compliance-tests/WISH.md\n\n## Council Verdict: MODIFY — Reduce to ~20% of original scope\n\nThe council (0 APPROVE, 2 MODIFY, 4 REJECT) found the original 7-group plan is overengineered because:\n- All 4 channels are already consistent (4/4 on every dimension)\n- Runtime validator already exists at packages/channel-sdk/src/discovery/validator.ts\n- Source-level grep tests are fragile and weak signals\n- All 3 blockers (#81, #85, #86) still open\n\n### NEW SCOPE:\n\n**Focus on the ONE thing not caught by TypeScript or the runtime validator:**\nCapability-method consistency — \"if you declare canStreamResponse=true, you must implement createStreamSender()\"\n\n**Execution groups (2, not 7):**\n1. **Enhance existing validator.ts** — add capability-method pairing validation to validatePluginInterface(). If canStreamResponse=true, check createStreamSender exists. If canFetchHistory=true, check fetchHistory exists. Etc. This gives RUNTIME enforcement, not just test-time.\n2. **Parameterized test** — single test file that loads all 6 channel plugins (add a2a + internal to scope) and runs validatePluginInterface() on each. Plus capability-method consistency assertions.\n\n**DROP from scope:**\n- Groups 4-5 (source-level grep for utility usage and journey timing)\n- Group 6 (todo stubs for open blockers)\n- Most of Groups 2-3 (structural tests that duplicate validator.ts)\n\n**Key files:**\n- packages/channel-sdk/src/discovery/validator.ts (enhance)\n- packages/channel-sdk/src/__tests__/compliance.test.ts (new, slim)\n\nUpdate the WISH.md with this reduced scope. Then run /review on it.\n\nYou are DONE when the wish is updated AND the review verdict is delivered.",
+      "createdAt": "2026-03-11T06:41:23.621Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:41:23.623Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:41:23.623Z"
+}

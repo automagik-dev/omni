@@ -98,6 +98,7 @@ const CLI_COMMANDS: Record<string, string> = {
   // EVENTS
   // ============================================================================
   'events.list': 'events list',
+  'events.get': 'events get <id>',
   'events.analytics': 'events analytics',
 
   // ============================================================================
@@ -257,6 +258,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'agents.list': 'agents list',
   'agents.get': 'agents get <id>',
   'agents.create': 'agents create --name <name> --provider <id> --instance <id>',
+  'agents.update': 'agents update <id> [--name <name>] [--model <model>] [--provider <p>] [--active|--inactive]',
   'agents.delete': 'agents delete <id>',
 
   // ============================================================================
