@@ -4,21 +4,31 @@
  * Runs on a 10-second interval:
  *   - 120s idle  → emit nudge (first)
  *   - 240s idle  → emit nudge (second)
- *   - 600s idle  → send fallback message to user ("Still processing...")
+ *   - agentStalledTimeoutMs idle (default 600s) → emit internal `turn.stalled` event
  *   - 1800s idle → force-close turn, emit timeout event
  *
  * Activity = any API call from the scoped key (tracked via auth middleware).
+ *
+ * Diagnostic messages MUST NEVER be sent to the user channel. Stalled turns are
+ * surfaced as internal `turn.stalled` NATS events that downstream consumers
+ * (ops dashboards, alerting) can subscribe to. There is no channel fallback.
+ *
+ * Instance config loading strategy:
+ *   Per-instance stalled-timeout config (`agentStalledTimeoutMs`) is re-read at
+ *   the start of every tick via `instanceService.getById()` — it is NOT cached.
+ *   A CLI change takes effect on the next tick without requiring a serve restart.
  */
 
 import { createLogger } from '@omni/core';
-import { publishTurnDone, publishTurnNudge, publishTurnTimeout } from './turn-events';
+import type { InstanceService } from './instances';
+import { publishTurnDone, publishTurnNudge, publishTurnStalled, publishTurnTimeout } from './turn-events';
 import type { TurnService } from './turns';
 
 const log = createLogger('turn-monitor');
 
 /** Inactivity thresholds in milliseconds */
 const NUDGE_THRESHOLD_MS = 120_000; // 120s
-const FALLBACK_THRESHOLD_MS = 600_000; // 600s (10 min)
+const DEFAULT_STALLED_THRESHOLD_MS = 600_000; // 600s (10 min)
 const TIMEOUT_THRESHOLD_MS = 1_800_000; // 1800s (30 min)
 
 /** Polling interval */
@@ -26,8 +36,8 @@ const POLL_INTERVAL_MS = 10_000; // 10s
 
 export interface TurnMonitorDeps {
   turnService: TurnService;
-  /** Send a fallback message to the user (uses existing send infrastructure) */
-  sendFallback?: (instanceId: string, chatId: string, text: string) => Promise<void>;
+  /** Instance service for per-instance stalled-timeout config lookup (live, not cached). */
+  instanceService: InstanceService;
 }
 
 export class TurnMonitor {
@@ -45,7 +55,7 @@ export class TurnMonitor {
     log.info('Turn monitor started', {
       pollIntervalMs: POLL_INTERVAL_MS,
       nudgeMs: NUDGE_THRESHOLD_MS,
-      fallbackMs: FALLBACK_THRESHOLD_MS,
+      defaultStalledMs: DEFAULT_STALLED_THRESHOLD_MS,
       timeoutMs: TIMEOUT_THRESHOLD_MS,
     });
 
@@ -78,19 +88,23 @@ export class TurnMonitor {
         const idleMs = Date.now() - turn.lastActivityAt.getTime();
         const idleSec = Math.round(idleMs / 1000);
 
-        // Force-close at 900s
+        // Force-close at TIMEOUT_THRESHOLD_MS
         if (idleMs >= TIMEOUT_THRESHOLD_MS) {
           await this.handleTimeout(turn.id, turn.instanceId, turn.chatId, idleSec, turn.nudgeCount);
           continue;
         }
 
-        // Send fallback message at 300s (only once — when nudgeCount is exactly 2)
-        if (idleMs >= FALLBACK_THRESHOLD_MS && turn.nudgeCount === 2) {
-          await this.handleFallback(turn.id, turn.instanceId, turn.chatId, idleSec);
+        // Per-instance stalled-timeout config (live — re-read every tick, no caching).
+        const instance = await this.deps.instanceService.getById(turn.instanceId).catch(() => null);
+        const stalledThresholdMs = instance?.agentStalledTimeoutMs ?? DEFAULT_STALLED_THRESHOLD_MS;
+
+        // Emit internal turn.stalled event once — when nudgeCount is exactly 2 and idle crosses the per-instance threshold
+        if (idleMs >= stalledThresholdMs && turn.nudgeCount === 2) {
+          await this.handleStalled(turn.id, turn.instanceId, turn.chatId, idleMs, stalledThresholdMs);
           continue;
         }
 
-        // Nudge at 60s intervals (nudgeCount 0 → nudge 1, nudgeCount 1 → nudge 2)
+        // Nudge at 120s intervals (nudgeCount 0 → nudge 1, nudgeCount 1 → nudge 2)
         // Only nudge if idle exceeds the threshold for the *next* nudge
         const expectedNudges = Math.floor(idleMs / NUDGE_THRESHOLD_MS);
         if (turn.nudgeCount < expectedNudges && turn.nudgeCount < 2) {
@@ -123,19 +137,20 @@ export class TurnMonitor {
     log.info('Turn nudge emitted', { turnId, nudgeCount, idleSec });
   }
 
-  private async handleFallback(turnId: string, instanceId: string, chatId: string, idleSec: number): Promise<void> {
-    // Increment nudge count to 3 to mark fallback as sent
+  private async handleStalled(
+    turnId: string,
+    instanceId: string,
+    chatId: string,
+    stalledAtMs: number,
+    threshold: number,
+  ): Promise<void> {
+    // Increment nudge count to 3 to mark stalled as emitted so we never retry.
     await this.deps.turnService.incrementNudge(turnId);
 
-    // Send fallback message to the user via existing send infrastructure
-    if (this.deps.sendFallback) {
-      try {
-        await this.deps.sendFallback(instanceId, chatId, '⏱ Still processing your request...');
-        log.info('Fallback message sent', { turnId, idleSec });
-      } catch (error) {
-        log.error('Failed to send fallback message', { turnId, error: String(error) });
-      }
-    }
+    const payload = { turnId, instanceId, chatId, stalledAtMs, threshold };
+
+    publishTurnStalled(instanceId, chatId, payload);
+    log.warn('Turn stalled — internal event emitted (no channel message sent)', payload);
   }
 
   private async handleTimeout(
@@ -154,21 +169,10 @@ export class TurnMonitor {
 
     const duration = closed.closedAt ? closed.closedAt.getTime() - closed.startedAt.getTime() : idleSec * 1000;
 
-    // Send a timeout fallback to the user
-    const fallbackSent = !!this.deps.sendFallback;
-    if (this.deps.sendFallback) {
-      try {
-        await this.deps.sendFallback(instanceId, chatId, '⏱ Request timed out. Please try again.');
-      } catch (error) {
-        log.error('Failed to send timeout fallback', { turnId, error: String(error) });
-      }
-    }
-
     publishTurnTimeout(instanceId, chatId, {
       turnId,
       duration,
       nudgeCount,
-      fallbackSent,
     });
 
     // Also emit turn.done for consistent lifecycle tracking

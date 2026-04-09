@@ -781,6 +781,10 @@ export const instances = pgTable(
     /** Timestamp of when the instance was last seen connected (used as replay window start) */
     lastSeenAt: timestamp('last_seen_at'),
 
+    // ---- Agent Stalled-Turn Detection (internal event only — no channel message) ----
+    /** Idle threshold in ms before a stalled turn emits the internal turn.stalled event */
+    agentStalledTimeoutMs: integer('agent_stalled_timeout_ms').notNull().default(600000),
+
     // ---- Agent Chaining ----
     /** Target instance for agent-to-agent chaining */
     agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {

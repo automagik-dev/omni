@@ -113,6 +113,20 @@
       "when": 1775404179968,
       "tag": "0015_burly_trauma",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1775767816830,
+      "tag": "0016_instance_fallback_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1775772342374,
+      "tag": "0017_drop_agent_fallback",
+      "breakpoints": true
     }
   ]
 }

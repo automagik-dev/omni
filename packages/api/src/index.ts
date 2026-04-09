@@ -337,13 +337,7 @@ async function setupEventBusServices(
   try {
     globalTurnMonitor = new TurnMonitor({
       turnService: services.turns,
-      sendFallback: async (instanceId, chatId, text) => {
-        const instance = await services.instances.getById(instanceId);
-        if (!instance) return;
-        const plugin = await getPlugin(instance.channel);
-        if (!plugin) return;
-        await plugin.sendMessage(instanceId, { to: chatId, content: { type: 'text', text } });
-      },
+      instanceService: services.instances,
     });
     globalTurnMonitor.start();
     log.info('Turn monitor started');
