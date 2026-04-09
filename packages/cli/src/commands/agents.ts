@@ -3,8 +3,8 @@
  *
  * omni agents list [--provider <p>] [--inactive-only] [--limit <n>]
  * omni agents get <id>
- * omni agents create --name <name> --provider <provider> [--agent-provider <id>] [--model <model>] [--type <type>]
- * omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
+ * omni agents create --name <name> --provider <provider> [--agent-provider <id>] [--model <model>] [--type <type>] [--config-path <path>] [--metadata <json>] [--provider-agent-id <id>]
+ * omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive] [--config-path <path>] [--metadata <json>] [--provider-agent-id <id>]
  * omni agents delete <id>
  */
 
@@ -26,6 +26,9 @@ interface UpdateAgentOptions {
   type?: string;
   active?: boolean;
   inactive?: boolean;
+  configPath?: string;
+  metadata?: string;
+  providerAgentId?: string;
 }
 
 interface UpdateAgentBody {
@@ -35,6 +38,8 @@ interface UpdateAgentBody {
   agentProviderId?: string;
   agentType?: AgentType;
   isActive?: boolean;
+  configPath?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -54,6 +59,19 @@ function buildUpdateAgentBody(options: UpdateAgentOptions): UpdateAgentBody {
     output.error(`Invalid type: ${options.type}. Valid: ${VALID_TYPES.join(', ')}`);
   }
 
+  let parsedMetadata: Record<string, unknown> | undefined;
+  if (options.metadata !== undefined) {
+    try {
+      parsedMetadata = JSON.parse(options.metadata) as Record<string, unknown>;
+    } catch {
+      output.error(`Invalid JSON for --metadata: ${options.metadata}`);
+    }
+  }
+
+  if (options.providerAgentId !== undefined) {
+    parsedMetadata = { ...parsedMetadata, providerAgentId: options.providerAgentId };
+  }
+
   const body: UpdateAgentBody = {};
   if (options.name !== undefined) body.name = options.name;
   if (options.model !== undefined) body.model = options.model;
@@ -62,6 +80,8 @@ function buildUpdateAgentBody(options: UpdateAgentOptions): UpdateAgentBody {
   if (options.type !== undefined) body.agentType = options.type as AgentType;
   if (options.active) body.isActive = true;
   if (options.inactive) body.isActive = false;
+  if (options.configPath !== undefined) body.configPath = options.configPath;
+  if (parsedMetadata !== undefined) body.metadata = parsedMetadata;
 
   return body;
 }
@@ -140,6 +160,9 @@ export function createAgentsCommand(): Command {
     .option('--model <model>', 'Model identifier (e.g. claude-sonnet-4-6)')
     .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`, 'assistant')
     .option('--agent-provider <agentProviderId>', 'Link to an agent provider configuration')
+    .option('--config-path <path>', 'Path to agent config file')
+    .option('--metadata <json>', 'Agent metadata as JSON string')
+    .option('--provider-agent-id <id>', 'Provider-internal agent identifier (stored in metadata.providerAgentId)')
     .action(
       async (options: {
         name: string;
@@ -147,6 +170,9 @@ export function createAgentsCommand(): Command {
         model?: string;
         type?: string;
         agentProvider?: string;
+        configPath?: string;
+        metadata?: string;
+        providerAgentId?: string;
       }) => {
         const client = getClient();
 
@@ -158,6 +184,19 @@ export function createAgentsCommand(): Command {
           output.error(`Invalid type: ${options.type}. Valid: ${VALID_TYPES.join(', ')}`);
         }
 
+        let parsedMetadata: Record<string, unknown> | undefined;
+        if (options.metadata !== undefined) {
+          try {
+            parsedMetadata = JSON.parse(options.metadata) as Record<string, unknown>;
+          } catch {
+            output.error(`Invalid JSON for --metadata: ${options.metadata}`);
+          }
+        }
+
+        if (options.providerAgentId !== undefined) {
+          parsedMetadata = { ...parsedMetadata, providerAgentId: options.providerAgentId };
+        }
+
         try {
           const agent = await client.agents.create({
             name: options.name,
@@ -165,6 +204,8 @@ export function createAgentsCommand(): Command {
             model: options.model,
             agentType: (options.type ?? 'assistant') as AgentType,
             agentProviderId: options.agentProvider,
+            configPath: options.configPath,
+            metadata: parsedMetadata,
             capabilities: [],
             isInternal: false,
             isActive: true,
@@ -190,12 +231,15 @@ export function createAgentsCommand(): Command {
     .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`)
     .option('--active', 'Mark agent as active')
     .option('--inactive', 'Mark agent as inactive')
+    .option('--config-path <path>', 'Path to agent config file')
+    .option('--metadata <json>', 'Agent metadata as JSON string')
+    .option('--provider-agent-id <id>', 'Provider-internal agent identifier (stored in metadata.providerAgentId)')
     .action(async (id: string, options: UpdateAgentOptions) => {
       const body = buildUpdateAgentBody(options);
 
       if (Object.keys(body).length === 0) {
         output.error(
-          'No fields to update. Pass at least one of --name, --model, --provider, --agent-provider, --type, --active, --inactive.',
+          'No fields to update. Pass at least one of --name, --model, --provider, --agent-provider, --type, --active, --inactive, --config-path, --metadata, --provider-agent-id.',
         );
       }
 
