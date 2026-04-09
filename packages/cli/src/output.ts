@@ -106,8 +106,7 @@ export function data(value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(value, null, 2));
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
   } else {
     if (Array.isArray(value)) {
       printTable(value);
@@ -133,8 +132,7 @@ export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?:
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(options?.rawData ?? items, null, 2));
+    process.stdout.write(`${JSON.stringify(options?.rawData ?? items, null, 2)}\n`);
     return;
   }
 
@@ -265,10 +263,9 @@ export function dim(text: string): void {
   }
 }
 
-/** Raw console.log (for custom formatting) */
+/** Raw output (for custom formatting) */
 export function raw(text: string): void {
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(text);
+  process.stdout.write(`${text}\n`);
 }
 
 /**
