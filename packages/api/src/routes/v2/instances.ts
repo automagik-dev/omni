@@ -108,6 +108,28 @@ const createInstanceSchema = z.object({
     .nullable()
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .default('randomized')
+    .describe('Message split delay mode: disabled, fixed delay, or randomized delay'),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Fixed split delay in milliseconds (used when mode is fixed)'),
+  messageSplitDelayMinMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(300)
+    .describe('Minimum split delay in milliseconds (used when mode is randomized)'),
+  messageSplitDelayMaxMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(1000)
+    .describe('Maximum split delay in milliseconds (used when mode is randomized)'),
   agentGateEnabled: z.boolean().default(false).describe('Enable LLM response gate (pre-filter before agent dispatch)'),
   agentGateModel: z
     .string()
@@ -187,6 +209,10 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
   markOnlineOnConnect: z.boolean().optional(),
   groupHistorySize: z.number().int().min(0).max(200).optional(),
+  messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+  messageSplitDelayFixedMs: z.number().int().min(0).optional(),
+  messageSplitDelayMinMs: z.number().int().min(0).optional(),
+  messageSplitDelayMaxMs: z.number().int().min(0).optional(),
   reactionAck: z.enum(['on', 'off']).optional(),
   reactionAckEmoji: z.record(z.string()).nullable().optional(),
   ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),

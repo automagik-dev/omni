@@ -88,6 +88,14 @@ function applyDebounceFields(body: Record<string, unknown>, opts: Record<string,
   if (opts.debounceGroup !== undefined) body.messageDebounceGroupMs = opts.debounceGroup;
 }
 
+/** Extract split delay fields from CLI options into body */
+function applySplitDelayFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'messageSplitDelayMode', opts.splitDelayMode);
+  if (opts.splitDelayFixed !== undefined) body.messageSplitDelayFixedMs = opts.splitDelayFixed;
+  if (opts.splitDelayMin !== undefined) body.messageSplitDelayMinMs = opts.splitDelayMin;
+  if (opts.splitDelayMax !== undefined) body.messageSplitDelayMaxMs = opts.splitDelayMax;
+}
+
 /** Extract agent gate fields from CLI options into body */
 function applyGateFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setBool(body, 'agentGateEnabled', opts.agentGate);
@@ -137,6 +145,7 @@ function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknow
   applyReplyFilter(body, opts);
   applyFormatFields(body, opts);
   applyDebounceFields(body, opts);
+  applySplitDelayFields(body, opts);
   applyGateFields(body, opts);
   applyMiscFields(body, opts);
   applyAckFields(body, opts);
@@ -289,6 +298,11 @@ export function createInstancesCommand(): Command {
     .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
     .option('--debounce-group <ms>', 'Group chat debounce in ms', (v) => Number.parseInt(v, 10))
+    // Split delay
+    .option('--split-delay-mode <mode>', 'Split delay mode: disabled, fixed, or randomized')
+    .option('--split-delay-fixed <ms>', 'Fixed split delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-min <ms>', 'Minimum split delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-max <ms>', 'Maximum split delay in ms', (v) => Number.parseInt(v, 10))
     // Agent gate
     .option('--agent-gate', 'Enable LLM response gate')
     .option('--agent-gate-model <model>', 'Model for response gate')
@@ -757,6 +771,11 @@ export function createInstancesCommand(): Command {
     .option('--debounce-group <ms>', 'Group chat debounce in ms (use "null" to inherit)', (v) =>
       v === 'null' ? null : Number.parseInt(v, 10),
     )
+    // Split delay
+    .option('--split-delay-mode <mode>', 'Split delay mode: disabled, fixed, or randomized')
+    .option('--split-delay-fixed <ms>', 'Fixed split delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-min <ms>', 'Minimum split delay in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-max <ms>', 'Maximum split delay in ms', (v) => Number.parseInt(v, 10))
     // Agent gate
     .option('--agent-gate', 'Enable LLM response gate')
     .option('--no-agent-gate', 'Disable LLM response gate')
