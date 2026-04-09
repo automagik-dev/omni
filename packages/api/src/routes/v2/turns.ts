@@ -20,6 +20,11 @@ export const turnsRoutes = new Hono<{ Variables: AppVariables }>();
 const closeTurnSchema = z.object({
   action: z.enum(['message', 'react', 'skip']).describe('How the turn was closed'),
   reason: z.string().optional().describe('Close reason (for skip action)'),
+  turnId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Explicit turn ID to close (fallback when API key has no associated turn)'),
 });
 
 // ============================================================================
@@ -45,15 +50,36 @@ turnsRoutes.post('/close', zValidator('json', closeTurnSchema), async (c) => {
   const body = c.req.valid('json');
   const services = c.get('services');
 
-  // Find the open turn for this API key
-  const openTurn = await services.turns.getOpenByApiKey(keyData.id);
+  // Find the open turn via three-tier fallback:
+  //   1. API key → turn (scoped key path)
+  //   2. Explicit turnId body param (when key doesn't match)
+  //   3. Instance + chat context → latest open turn (when turnId is stale from
+  //      a previous message in the same session — each new message opens a new turn,
+  //      but OMNI_TURN_ID in the agent env is only set once at session creation)
+  let openTurn = await services.turns.getOpenByApiKey(keyData.id);
+
+  if (!openTurn && body.turnId) {
+    const candidateTurn = await services.turns.getById(body.turnId);
+    if (candidateTurn && candidateTurn.status === 'open') {
+      openTurn = candidateTurn;
+    }
+  }
+
+  // Fallback 3: find by instance + chat from OMNI_INSTANCE/OMNI_CHAT headers or context
+  if (!openTurn) {
+    const instanceId = c.req.header('x-omni-instance') ?? keyData.contextInstanceId;
+    const chatId = c.req.header('x-omni-chat') ?? keyData.contextChatId;
+    if (instanceId && chatId) {
+      openTurn = await services.turns.getOpen(instanceId, chatId);
+    }
+  }
 
   if (!openTurn) {
     // Idempotent: no open turn = already closed
     return c.json({
       data: {
         alreadyClosed: true,
-        message: 'No open turn for this API key',
+        message: 'No open turn found',
       },
     });
   }

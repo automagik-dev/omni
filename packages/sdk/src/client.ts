@@ -3413,10 +3413,14 @@ export function createOmniClient(config: OmniClientConfig) {
        * Close the open turn for this API key.
        * Idempotent: closing an already-closed turn returns success with alreadyClosed: true.
        */
-      async close(body: {
-        action: 'message' | 'react' | 'skip';
-        reason?: string;
-      }): Promise<{
+      async close(
+        body: {
+          action: 'message' | 'react' | 'skip';
+          reason?: string;
+          turnId?: string;
+        },
+        extraHeaders?: Record<string, string>,
+      ): Promise<{
         turnId?: string;
         action?: string;
         duration?: number;
@@ -3428,7 +3432,7 @@ export function createOmniClient(config: OmniClientConfig) {
       }> {
         const resp = await apiFetch(`${baseUrl}/api/v2/turns/close`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...extraHeaders },
           body: JSON.stringify(body),
         });
         const json = (await resp.json()) as { data?: Record<string, unknown> };

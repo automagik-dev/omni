@@ -2,10 +2,10 @@
  * Turn monitor — polls for stale turns and emits lifecycle events.
  *
  * Runs on a 10-second interval:
- *   - 60s idle  → emit nudge (first)
- *   - 120s idle → emit nudge (second)
- *   - 300s idle → send fallback message to user ("Still processing...")
- *   - 900s idle → force-close turn, emit timeout event
+ *   - 120s idle  → emit nudge (first)
+ *   - 240s idle  → emit nudge (second)
+ *   - 600s idle  → send fallback message to user ("Still processing...")
+ *   - 1800s idle → force-close turn, emit timeout event
  *
  * Activity = any API call from the scoped key (tracked via auth middleware).
  */
@@ -17,9 +17,9 @@ import type { TurnService } from './turns';
 const log = createLogger('turn-monitor');
 
 /** Inactivity thresholds in milliseconds */
-const NUDGE_THRESHOLD_MS = 60_000; // 60s
-const FALLBACK_THRESHOLD_MS = 300_000; // 300s (5 min)
-const TIMEOUT_THRESHOLD_MS = 900_000; // 900s (15 min)
+const NUDGE_THRESHOLD_MS = 120_000; // 120s
+const FALLBACK_THRESHOLD_MS = 600_000; // 600s (10 min)
+const TIMEOUT_THRESHOLD_MS = 1_800_000; // 1800s (30 min)
 
 /** Polling interval */
 const POLL_INTERVAL_MS = 10_000; // 10s
