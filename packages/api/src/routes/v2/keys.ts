@@ -8,7 +8,6 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { requireScope } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
@@ -72,7 +71,7 @@ const auditQuerySchema = z.object({
  * POST /keys - Create a new API key
  * Returns the plaintext key ONLY in this response.
  */
-keysRoutes.post('/', requireScope('keys:write'), zValidator('json', createKeySchema), async (c) => {
+keysRoutes.post('/', zValidator('json', createKeySchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
@@ -100,7 +99,7 @@ keysRoutes.post('/', requireScope('keys:write'), zValidator('json', createKeySch
 /**
  * GET /keys - List all API keys
  */
-keysRoutes.get('/', requireScope('keys:read'), zValidator('query', listQuerySchema), async (c) => {
+keysRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const { status, limit } = c.req.valid('query');
   const services = c.get('services');
 
@@ -123,7 +122,7 @@ keysRoutes.get('/', requireScope('keys:read'), zValidator('query', listQuerySche
 /**
  * GET /keys/:id - Get a single API key
  */
-keysRoutes.get('/:id', requireScope('keys:read'), async (c) => {
+keysRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -138,7 +137,7 @@ keysRoutes.get('/:id', requireScope('keys:read'), async (c) => {
 /**
  * PATCH /keys/:id - Update an API key
  */
-keysRoutes.patch('/:id', requireScope('keys:write'), zValidator('json', updateKeySchema), async (c) => {
+keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
@@ -166,7 +165,7 @@ keysRoutes.patch('/:id', requireScope('keys:write'), zValidator('json', updateKe
 /**
  * POST /keys/:id/revoke - Revoke an API key
  */
-keysRoutes.post('/:id/revoke', requireScope('keys:write'), zValidator('json', revokeKeySchema), async (c) => {
+keysRoutes.post('/:id/revoke', zValidator('json', revokeKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
@@ -183,7 +182,7 @@ keysRoutes.post('/:id/revoke', requireScope('keys:write'), zValidator('json', re
 /**
  * DELETE /keys/:id - Permanently delete an API key
  */
-keysRoutes.delete('/:id', requireScope('keys:write'), async (c) => {
+keysRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -205,7 +204,7 @@ keysRoutes.delete('/:id', requireScope('keys:write'), async (c) => {
 /**
  * GET /keys/:id/audit - Get audit logs for an API key
  */
-keysRoutes.get('/:id/audit', requireScope('keys:read'), zValidator('query', auditQuerySchema), async (c) => {
+keysRoutes.get('/:id/audit', zValidator('query', auditQuerySchema), async (c) => {
   const id = c.req.param('id');
   const { since, until, path, statusCode, limit, cursor } = c.req.valid('query');
   const services = c.get('services');
