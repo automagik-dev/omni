@@ -5,6 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -609,10 +610,14 @@ async function handleAgentKeyProvisioning(
         }
       } else {
         // Create new scoped API key for this agent
+        // Use agent's declared omniScopes if available, otherwise fall back to DEFAULT_TURN_SCOPES
+        const agentScopes = Array.isArray(agent.metadata?.omniScopes)
+          ? (agent.metadata.omniScopes as string[])
+          : [...DEFAULT_TURN_SCOPES];
         const result = await services.apiKeys.create({
           name: keyName,
           description: `Auto-provisioned scoped key for agent ${agent.name}`,
-          scopes: ['*'],
+          scopes: agentScopes,
           instanceIds: [instanceId],
           createdBy: 'system:auto-provision',
         });
