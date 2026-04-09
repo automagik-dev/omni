@@ -55,6 +55,7 @@ import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
 import { createTtsCommand } from './commands/tts.js';
+import { createTurnsCommand } from './commands/turns.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createUseCommand } from './commands/use.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
@@ -261,6 +262,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Webhook management',
+  },
+  {
+    create: createTurnsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Admin turn management (list, close, stats)',
   },
 
   // System group - Status and configuration
