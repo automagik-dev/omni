@@ -71,4 +71,4 @@ memory/
 version.json
 .beads/*.log.gz
 .rlmx/
-core
+/core
