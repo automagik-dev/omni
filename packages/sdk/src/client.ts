@@ -96,6 +96,42 @@ export interface PaginatedResponse<T> {
 }
 
 // ============================================================================
+// TURN TYPES (admin endpoints)
+// ============================================================================
+
+export interface TurnItem {
+  id: string;
+  instanceId: string;
+  chatId: string;
+  messageId: string;
+  agentId: string;
+  apiKeyId: string;
+  status: string;
+  action: string | null;
+  nudgeCount: number;
+  messagesSent: number;
+  startedAt: string;
+  lastActivityAt: string;
+  closedAt: string | null;
+  closedReason: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TurnListResponse {
+  items: TurnItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface TurnStats {
+  openCount: number;
+  totalCount: number;
+  avgDurationMs: number;
+  timeoutRate: number;
+}
+
+// ============================================================================
 // BATCH JOB TYPES
 // ============================================================================
 
@@ -3413,10 +3449,14 @@ export function createOmniClient(config: OmniClientConfig) {
        * Close the open turn for this API key.
        * Idempotent: closing an already-closed turn returns success with alreadyClosed: true.
        */
-      async close(body: {
-        action: 'message' | 'react' | 'skip';
-        reason?: string;
-      }): Promise<{
+      async close(
+        body: {
+          action: 'message' | 'react' | 'skip';
+          reason?: string;
+          turnId?: string;
+        },
+        extraHeaders?: Record<string, string>,
+      ): Promise<{
         turnId?: string;
         action?: string;
         duration?: number;
@@ -3428,12 +3468,94 @@ export function createOmniClient(config: OmniClientConfig) {
       }> {
         const resp = await apiFetch(`${baseUrl}/api/v2/turns/close`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...extraHeaders },
           body: JSON.stringify(body),
         });
         const json = (await resp.json()) as { data?: Record<string, unknown> };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return (json?.data as Record<string, unknown>) ?? {};
+      },
+
+      /**
+       * List turns with optional filters and pagination. Requires turns:admin scope.
+       */
+      async list(params?: {
+        status?: 'open' | 'done' | 'timeout';
+        instanceId?: string;
+        chatId?: string;
+        agentId?: string;
+        limit?: number;
+        offset?: number;
+      }): Promise<{
+        items: TurnItem[];
+        total: number;
+        limit: number;
+        offset: number;
+      }> {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set('status', params.status);
+        if (params?.instanceId) qs.set('instanceId', params.instanceId);
+        if (params?.chatId) qs.set('chatId', params.chatId);
+        if (params?.agentId) qs.set('agentId', params.agentId);
+        if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+        if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+        const query = qs.toString();
+        const url = `${baseUrl}/api/v2/turns${query ? `?${query}` : ''}`;
+        const resp = await apiFetch(url);
+        const json = (await resp.json()) as { data?: TurnListResponse };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return (json?.data as TurnListResponse) ?? { items: [], total: 0, limit: 50, offset: 0 };
+      },
+
+      /**
+       * Get a single turn by ID. Requires turns:admin scope.
+       */
+      async get(id: string): Promise<TurnItem> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/${id}`);
+        const json = (await resp.json()) as { data?: TurnItem };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as TurnItem;
+      },
+
+      /**
+       * Admin force-close a turn. Requires turns:admin scope.
+       */
+      async forceClose(
+        id: string,
+        reason?: string,
+      ): Promise<{ turnId: string; status: string; closedAt: string | null }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/${id}/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        const json = (await resp.json()) as { data?: { turnId: string; status: string; closedAt: string | null } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as { turnId: string; status: string; closedAt: string | null };
+      },
+
+      /**
+       * Bulk close all open turns. Requires turns:admin scope.
+       */
+      async bulkClose(reason?: string): Promise<{ closedCount: number; message: string }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/close-all`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: true, reason }),
+        });
+        const json = (await resp.json()) as { data?: { closedCount: number; message: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as { closedCount: number; message: string };
+      },
+
+      /**
+       * Get aggregate turn stats. Requires turns:admin scope.
+       */
+      async stats(): Promise<TurnStats> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/turns/stats`);
+        const json = (await resp.json()) as { data?: TurnStats };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data as TurnStats;
       },
     },
 

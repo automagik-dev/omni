@@ -38,7 +38,15 @@ async function closeTurn(
   reason?: string,
 ): Promise<void> {
   try {
-    const result = await client.turns.close({ action, reason });
+    // Pass OMNI_TURN_ID as fallback — when the agent session uses the global API key
+    // but the turn was opened with a scoped key, the key-based lookup won't find it.
+    // Also pass instance+chat headers for a third fallback — OMNI_TURN_ID may be stale
+    // when the session handles multiple messages (each creates a new turn).
+    const turnId = process.env.OMNI_TURN_ID;
+    const extraHeaders: Record<string, string> = {};
+    if (process.env.OMNI_INSTANCE) extraHeaders['x-omni-instance'] = process.env.OMNI_INSTANCE;
+    if (process.env.OMNI_CHAT) extraHeaders['x-omni-chat'] = process.env.OMNI_CHAT;
+    const result = await client.turns.close({ action, reason, turnId }, extraHeaders);
     if (result.alreadyClosed) {
       output.success(`${successMsg} Turn already closed (idempotent).`);
     } else {
@@ -174,8 +182,8 @@ export function createDoneCommand(): Command {
       if (options.media) return handleMedia(client, ctxWithMessage, options.media, options.caption);
       if (text) return handleText(client, ctxWithMessage, text);
 
-      output.error(
-        'Specify what to do: omni done "text", omni done --media <file>, omni done --react <emoji>, or omni done --skip',
-      );
+      // Bare `omni done` (no args) defaults to --skip: close turn with no outbound.
+      // Common pattern: agent already sent messages via `omni say` during the turn.
+      return handleSkip(client, options.reason);
     });
 }

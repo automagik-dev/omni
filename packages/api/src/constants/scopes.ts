@@ -299,6 +299,11 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /settings/:key/history': 'settings:read',
 
   // --- turns ---
+  'GET /turns': 'turns:admin',
+  'GET /turns/stats': 'turns:admin',
+  'GET /turns/:id': 'turns:admin',
+  'POST /turns/:id/close': 'turns:admin',
+  'POST /turns/close-all': 'turns:admin',
   'POST /turns/close': 'turns:close',
 
   // --- webhooks (mounted at root: /webhook-sources/..., /webhooks/:source, /events/trigger) ---

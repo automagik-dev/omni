@@ -1704,7 +1704,7 @@ async function dispatchViaTurnBasedProvider(
     return false;
   }
 
-  // Open turn
+  // Open turn (turns.chat_id is text, accepts external JID)
   const turn = await services.turns.open({
     instanceId: instance.id,
     chatId,
@@ -1713,11 +1713,20 @@ async function dispatchViaTurnBasedProvider(
     apiKeyId: scopedKey.id,
   });
 
+  // Resolve internal UUIDs for the API key context columns (uuid types).
+  // chatId is an external JID (e.g. "54958418317348@lid") and messageId is an
+  // external WhatsApp ID (e.g. "3BB06F44A03A3AE78E5B") — neither is a valid UUID.
+  // The api_keys context columns are uuid-typed, so we must resolve to internal IDs.
+  const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const contextChatId = contextChat?.id ?? null;
+  const contextMsg =
+    contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null;
+
   // Set context on the scoped key so verb commands resolve to this chat
   await services.apiKeys.update(scopedKey.id, {
     contextInstanceId: instance.id,
-    contextChatId: chatId,
-    contextMessageId: messageId || null,
+    contextChatId,
+    contextMessageId: contextMsg?.id ?? null,
   });
 
   // Publish turn.open NATS event
@@ -1728,7 +1737,8 @@ async function dispatchViaTurnBasedProvider(
     timestamp: new Date().toISOString(),
   });
 
-  // Inject env vars into trigger for the agent bridge
+  // Inject env vars into trigger for the agent bridge.
+  // OMNI_TURN_ID allows the agent to close the correct turn via POST /v2/turns/close.
   trigger.env = {
     OMNI_INSTANCE: instance.id,
     OMNI_CHAT: chatId,
@@ -3145,13 +3155,16 @@ async function processReactionTrigger(
   const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
   const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
+  // Resolve person ID for route matching (metadata.personId may not be set yet)
+  const reactionPersonId = await resolvePersonId(services, channel, baseInstance.id, payload.from, metadata.personId);
+
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
     services,
     db,
     baseInstance,
     internalChatId,
-    metadata.personId,
+    reactionPersonId,
   );
 
   log.info('Dispatching reaction trigger', {
@@ -3924,12 +3937,18 @@ export async function setupAgentDispatcher(
           // Early route resolution: resolve route BEFORE debounce so per-user
           // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
           const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+
+          // Resolve person ID for route matching. metadata.personId may not be set yet
+          // (message-persistence runs in parallel), so fall back to identity lookup.
+          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+          const earlyPersonId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
+
           const { instance: resolved, routeId } = await resolveEffectiveInstance(
             services,
             db,
             instance,
             chat?.id,
-            metadata.personId,
+            earlyPersonId,
           );
 
           const debounceConfig = getDebounceConfig(resolved);
@@ -4107,13 +4126,15 @@ export async function setupAgentDispatcher(
           if (!baseInstance?.agentId) return;
 
           // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+          // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
           const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
+          const typingPersonId = metadata.personId;
           const { instance: resolved } = await resolveEffectiveInstance(
             services,
             db,
             baseInstance,
             chat?.id,
-            metadata.personId,
+            typingPersonId,
           );
 
           const debounceConfig = getDebounceConfig(resolved);

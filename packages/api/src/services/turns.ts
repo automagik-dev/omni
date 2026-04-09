@@ -11,7 +11,7 @@
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type NewTurn, type Turn, type TurnAction, type TurnStatus, turns } from '@omni/db';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, count, eq, lt, sql } from 'drizzle-orm';
 
 const log = createLogger('turns');
 
@@ -170,5 +170,116 @@ export class TurnService {
       .update(turns)
       .set({ messagesSent: sql`${turns.messagesSent} + 1` })
       .where(eq(turns.id, turnId));
+  }
+
+  // ==========================================================================
+  // Admin methods
+  // ==========================================================================
+
+  /**
+   * List turns with optional filters and pagination.
+   */
+  async list(options: {
+    status?: string;
+    instanceId?: string;
+    chatId?: string;
+    agentId?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ items: Turn[]; total: number }> {
+    const conditions = [];
+    if (options.status) conditions.push(eq(turns.status, options.status as TurnStatus));
+    if (options.instanceId) conditions.push(eq(turns.instanceId, options.instanceId));
+    if (options.chatId) conditions.push(eq(turns.chatId, options.chatId));
+    if (options.agentId) conditions.push(eq(turns.agentId, options.agentId));
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [items, [totalRow]] = await Promise.all([
+      this.db
+        .select()
+        .from(turns)
+        .where(where)
+        .orderBy(sql`${turns.startedAt} DESC`)
+        .limit(options.limit)
+        .offset(options.offset),
+      this.db.select({ count: count() }).from(turns).where(where),
+    ]);
+
+    return { items, total: totalRow?.count ?? 0 };
+  }
+
+  /**
+   * Aggregate stats across all turns.
+   */
+  async stats(): Promise<{
+    openCount: number;
+    totalCount: number;
+    avgDurationMs: number;
+    timeoutRate: number;
+  }> {
+    const [row] = await this.db
+      .select({
+        totalCount: count(),
+        openCount: sql<number>`count(*) filter (where ${turns.status} = 'open')`,
+        timeoutCount: sql<number>`count(*) filter (where ${turns.status} = 'timeout')`,
+        avgDurationMs: sql<number>`coalesce(avg(extract(epoch from (${turns.closedAt} - ${turns.startedAt})) * 1000) filter (where ${turns.closedAt} is not null), 0)`,
+      })
+      .from(turns);
+
+    const total = row?.totalCount ?? 0;
+    const timeoutCount = Number(row?.timeoutCount ?? 0);
+
+    return {
+      openCount: Number(row?.openCount ?? 0),
+      totalCount: total,
+      avgDurationMs: Math.round(Number(row?.avgDurationMs ?? 0)),
+      timeoutRate: total > 0 ? timeoutCount / total : 0,
+    };
+  }
+
+  /**
+   * Admin force-close a turn regardless of current state.
+   */
+  async forceClose(turnId: string, reason?: string): Promise<Turn | null> {
+    const now = new Date();
+
+    const [closed] = await this.db
+      .update(turns)
+      .set({
+        status: 'done' as TurnStatus,
+        action: 'skip' as TurnAction,
+        closedAt: now,
+        closedReason: reason ?? 'admin force-close',
+      })
+      .where(and(eq(turns.id, turnId), eq(turns.status, 'open')))
+      .returning();
+
+    if (closed) {
+      log.info('Turn force-closed by admin', { turnId });
+    }
+
+    return closed ?? null;
+  }
+
+  /**
+   * Bulk-close all open turns.
+   */
+  async bulkClose(reason?: string): Promise<number> {
+    const now = new Date();
+
+    const closed = await this.db
+      .update(turns)
+      .set({
+        status: 'done' as TurnStatus,
+        action: 'skip' as TurnAction,
+        closedAt: now,
+        closedReason: reason ?? 'admin bulk close',
+      })
+      .where(eq(turns.status, 'open'))
+      .returning({ id: turns.id });
+
+    log.info('Bulk close completed', { closedCount: closed.length });
+    return closed.length;
   }
 }
