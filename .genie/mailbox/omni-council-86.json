@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-86",
+  "messages": [
+    {
+      "id": "msg-9487b02e-e5d2-47d6-a2bb-d4b1e1b17bdb",
+      "from": "team-lead",
+      "to": "omni-council-86",
+      "body": "RELEVANCE REVIEW — Issue #86: Standardize sendTyping across all channels\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .genie/wishes/standardize-sendtyping/WISH.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - Does the dead WhatsApp typing.ts file still exist?\n   - Is Discord/Telegram sendTyping still one-shot without auto-refresh?\n   - Has the TypingManager been deleted already (as council found)?\n3. Run /council with this question: \"Issue #86 proposes standardizing sendTyping. The previous council found TypingManager already deleted and recommended per-channel auto-refresh fixes. Given current dev state, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE? Consider: does typing indicator refresh actually matter for the product?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:27:52.031Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:27:52.034Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:27:52.034Z"
+}

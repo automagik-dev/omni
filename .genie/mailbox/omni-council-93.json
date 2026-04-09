@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-93",
+  "messages": [
+    {
+      "id": "msg-2c9bc5f6-bacb-413d-b160-217e762b7b6e",
+      "from": "team-lead",
+      "to": "omni-council-93",
+      "body": "RELEVANCE REVIEW — Issue #93: Add per-channel performance benchmarks\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .wishes/093-channel-perf-benchmarks-wish.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - Do the existing perf scripts (scripts/perf/) still exist?\n   - Has any benchmark infrastructure been added since the wish?\n   - Are there any known performance issues with any channel?\n3. Run /council with this question: \"Issue #93 proposes per-channel performance benchmarks. Given current dev state, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE? Consider: are there actual performance problems being reported? Is this solving a real problem or a theoretical one? Are the existing perf scripts sufficient?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:28:17.692Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:28:17.695Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:28:17.695Z"
+}

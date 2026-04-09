@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-wish-81",
+  "messages": [
+    {
+      "id": "msg-3a99fae7-50bb-4d41-87fa-ef03865f9b9b",
+      "from": "team-lead",
+      "to": "omni-wish-81",
+      "body": "You are working on GitHub issue #81: \"[P1][feature] Migrate channel error classes to core ChannelError\"\n\n## Issue Details\nThree channels define their own error classes extending plain Error, while core already has ChannelError extends OmniError that none of them use:\n- Core (core/src/errors.ts:155-177): ChannelError extends OmniError with channelType, instanceId, ErrorCode enum + recoverable flag\n- Discord (channel-discord/src/utils/errors.ts:32): extends Error, local ErrorCode enum\n- WhatsApp (channel-whatsapp/src/utils/errors.ts:27): extends Error, local ErrorCode enum\n- Slack (channel-slack/src/types.ts:269): extends Error, retryable instead of recoverable\n- Telegram: No custom error class at all\n\n### Current State (partially done)\nCore ChannelError exists but plugins still use their own error classes.\n\n### Acceptance Criteria\n- All 4 channels use ChannelError or subclass from @omni/core\n- Local error code enums mapped to core ErrorCode\n- retryable → recoverable standardized\n- Telegram has proper error class\n- make check green\n\n## YOUR TASK\n1. First run /council to analyze this issue — get architectural review and recommendations\n2. Then run /wish to generate a structured wish plan file with scope, acceptance criteria, and execution groups\n3. You are DONE when the wish file is written to disk",
+      "createdAt": "2026-03-11T05:10:33.118Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:10:33.120Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:10:33.121Z"
+}

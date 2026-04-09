@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-91",
+  "messages": [
+    {
+      "id": "msg-b102c190-aed9-4dd2-b11f-6c9fa3a0d321",
+      "from": "team-lead",
+      "to": "omni-council-91",
+      "body": "RELEVANCE REVIEW — Issue #91: Add SDK versioning and compatibility checks\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .wishes/091-sdk-versioning-compatibility-checks-wish.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - Is there any SDK_VERSION constant or version checking in channel-sdk?\n   - Do plugins still use workspace:* (meaning version drift is impossible)?\n   - Are there any external/third-party channel plugins?\n3. Run /council with this question: \"Issue #91 proposes SDK versioning and compatibility checks. Previous council noted the monorepo with workspace:* makes version drift impossible today. No external plugins exist. Given current dev state, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE as premature/YAGNI?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:28:08.975Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:28:08.977Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:28:08.977Z"
+}

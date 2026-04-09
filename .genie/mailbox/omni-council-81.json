@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-81",
+  "messages": [
+    {
+      "id": "msg-359274bf-9c13-4c13-964b-f6625d64c60f",
+      "from": "team-lead",
+      "to": "omni-council-81",
+      "body": "RELEVANCE REVIEW — Issue #81: Migrate channel error classes to core ChannelError\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .genie/wishes/channel-error-migration/WISH.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - Does core ChannelError still exist unused at packages/core/src/errors.ts?\n   - Do Discord, WhatsApp, Slack still have their own error classes?\n   - Has anything changed since the wish was written?\n3. Run /council with this question: \"Issue #81 proposes migrating all channel error classes to core ChannelError. Given the current state of dev, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE as wont-fix? Consider: do we even need error class unification in a monorepo where all channels ship together?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:27:38.187Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:27:38.189Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:27:38.189Z"
+}

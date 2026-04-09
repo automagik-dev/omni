@@ -1,0 +1,24 @@
+{
+  "workerId": "genie-implementor-3",
+  "messages": [
+    {
+      "id": "msg-ac57137a-637c-48b7-9811-197fb5e38248",
+      "from": "cli",
+      "to": "genie-implementor-3",
+      "body": "You are a RESEARCH agent. Do NOT write any code or edit files (except the output file). Your job is to explore Sentry documentation and report findings.\n\nTASK: Explore https://docs.sentry.io/product/sentry-mcp/ and https://docs.sentry.io/platforms/javascript/guides/bun/configuration/filtering/ and https://docs.sentry.io/platforms/javascript/data-management/sensitive-data/ recursively.\n\nFOCUS AREA: Privacy, data scrubbing, and the MCP server capabilities.\n\nFor PRIVACY/FILTERING, we need to know:\n1. ALL beforeSend / beforeBreadcrumb / beforeSendTransaction filtering options\n2. How to strip ALL user-identifiable data (phone numbers, message content, chat names)\n3. Server-side scrubbing rules in Sentry UI\n4. sendDefaultPii implications\n5. How to parameterize URLs and transaction names to avoid PII leaks\n6. What data Sentry captures by DEFAULT and how to control each piece\n7. Relay options for on-prem scrubbing\n\nFor SENTRY MCP:\n1. ALL 16+ tools available and what each does\n2. Tool groups and how to select them\n3. OAuth flow details\n4. How it integrates with Claude Code specifically\n5. Can it create issues, or only read?\n6. Seer AI capabilities via MCP\n\nWrite your findings to /home/genie/agents/namastexlabs/projects/omni/.genie/brainstorms/sentry-mcp/research-privacy-and-mcp.md\n\nBe EXHAUSTIVE.",
+      "createdAt": "2026-03-10T18:17:37.592Z",
+      "read": false,
+      "deliveredAt": "2026-03-10T18:17:37.594Z"
+    },
+    {
+      "id": "msg-74c097ab-54a9-413c-b677-2fc0d6a15546",
+      "from": "cli",
+      "to": "genie-implementor-3",
+      "body": "You are implementing Group 5 (Custom Tags + Metrics) of the sentry-integration wish.\n\n## Goal\nAdd per-request tags and business metrics for usage analytics.\n\n## Prerequisites\n- @sentry/bun is installed in packages/api\n- Sentry is initialized in packages/api/src/instrument.ts\n- `sentryEnabled()` helper is exported from packages/api/src/lib/sentry-scrub.ts\n\n## Deliverables\n\n### 1. Agent dispatcher metrics\nModify `packages/api/src/plugins/agent-dispatcher.ts`:\n- Add `import * as Sentry from '@sentry/bun'`\n- Add `import { sentryEnabled } from '../lib/sentry-scrub'`\n- After each agent dispatch call, emit:\n  ```typescript\n  if (sentryEnabled()) {\n    Sentry.metrics.count('agent.dispatch', 1, { tags: { provider_type: agentType, model: modelName } });\n  }\n  ```\n- After each agent response, emit latency:\n  ```typescript\n  if (sentryEnabled()) {\n    Sentry.metrics.distribution('agent.dispatch.latency', durationMs, { unit: 'millisecond', tags: { provider_type: agentType } });\n  }\n  ```\n  You'll need to measure the duration (Date.now() before/after the dispatch call).\n\n### 2. Message received metric\nFind the event persistence plugin or message received handler:\n- Search for where incoming messages are persisted/processed\n- Add: `Sentry.metrics.count('messages.received', 1, { tags: { channel_type: channelType } })`\n- Guard with sentryEnabled()\n\n### 3. Message sent metric\nFind the message send routes (likely in `packages/api/src/routes/v2/messages.ts`):\n- After successful message send, add: `Sentry.metrics.count('messages.sent', 1, { tags: { channel_type: channelType } })`\n- Guard with sentryEnabled()\n\n### 4. Instance connection gauge\nFind the instance health monitor or connection tracking code:\n- Add: `Sentry.metrics.gauge('instance.connections', count, { tags: { channel_type: channelType } })`\n- Guard with sentryEnabled()\n\n### 5. Request-level Sentry tags (optional middleware)\nIf there's a natural place to add per-request Sentry context (like a middleware), add tags:\n- `cli_version` from `x-omni-cli-version` header\n- `channel_type` when available from route context\nThis might overlap with Group 3's error handler — only add it if there's a clean middleware spot.\n\n## Important Notes\n- Read each file before modifying\n- ONLY use enum/string values as metric tags — NEVER phone numbers, JIDs, message content, user names\n- Metric attributes should be low-cardinality: provider_type is an enum like 'agno'|'openclaw'|'webhook'|'claude-code'|'genie', channel_type is 'whatsapp'|'discord'|'telegram'|'slack', etc.\n- The Sentry metrics API might use `tags` or `attributes` — check what @sentry/bun@10.43.0 actually accepts. Try `Sentry.metrics.count` and check the TypeScript types.\n- All metric calls MUST be guarded with sentryEnabled() check\n- Verify no compile errors after modifications",
+      "createdAt": "2026-03-10T19:16:01.755Z",
+      "read": false,
+      "deliveredAt": "2026-03-10T19:16:01.757Z"
+    }
+  ],
+  "lastUpdated": "2026-03-10T19:16:01.757Z"
+}

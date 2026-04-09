@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-dream-90",
+  "messages": [
+    {
+      "id": "msg-416620cd-05c2-468c-92ba-8c34d92ef5c7",
+      "from": "team-lead",
+      "to": "omni-dream-90",
+      "body": "DREAM WORKER — Issue #90: Delete Dead Baileys Logger from Core\n\n## Instructions\n1. Read the wish file: .genie/wishes/remove-baileys-logger-from-core/WISH.md\n2. Branch from dev: git checkout dev && git pull origin dev && git checkout -b chore/remove-baileys-logger\n3. Execute ALL deliverables from Group 1:\n   - Delete file packages/core/src/logger/adapters/baileys.ts\n   - Delete empty directory packages/core/src/logger/adapters/\n   - Remove ./logger/adapters/baileys export from packages/core/package.json\n   - Remove src/logger/adapters/baileys.ts ignore from knip.json\n4. Run the validation commands from the wish file\n5. Run make check — if it fails, fix and retry (max 3 attempts)\n6. Once CI green, create PR: gh pr create --base dev --title \"chore(core): remove dead Baileys logger adapter (GH#90)\" --body \"...\"\n7. Report back: DONE with PR URL, or BLOCKED with reason\n\nIMPORTANT: Do NOT push to main. PR must target dev.",
+      "createdAt": "2026-03-11T06:58:47.779Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:58:47.781Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:58:47.781Z"
+}
