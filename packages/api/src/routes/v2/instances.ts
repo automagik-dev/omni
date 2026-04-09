@@ -5,11 +5,11 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
+import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { Services } from '../../services';
