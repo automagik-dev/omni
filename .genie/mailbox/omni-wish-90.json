@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-wish-90",
+  "messages": [
+    {
+      "id": "msg-7c96b7a5-5038-431e-a094-9fb00ddbc325",
+      "from": "team-lead",
+      "to": "omni-wish-90",
+      "body": "You are working on GitHub issue #90: \"[P3][task] Move Baileys logger adapter from core to channel-whatsapp\"\n\n## Issue Details\npackages/core/src/logger/adapters/baileys.ts contains createBaileysLogger() (lines 113-138) — a Pino-compatible logger adapter specific to WhatsApps Baileys library.\n\nThis is channel-specific code in @omni/core, violating plugin isolation. Any package importing @omni/core transitively gains awareness of Baileys, which is a WhatsApp-only dependency.\n\n### Current State\n- File at: packages/core/src/logger/adapters/baileys.ts\n- Contains createBaileysLogger() and createSilentLogger()\n- Only used by WhatsApp plugin\n- Not used by core logic itself\n\n### Fix\n1. Move baileys.ts to packages/channel-whatsapp/src/utils/baileys-logger.ts\n2. Update imports in channel-whatsapp\n3. Remove from core exports\n4. Verify no other package imports createBaileysLogger from core\n\n### Acceptance Criteria\n- baileys.ts lives in channel-whatsapp\n- No Baileys references in @omni/core\n- make check green\n\n## YOUR TASK\n1. First run /council to analyze this issue — get architectural review and recommendations\n2. Then run /wish to generate a structured wish plan file with scope, acceptance criteria, and execution groups\n3. You are DONE when the wish file is written to disk",
+      "createdAt": "2026-03-11T05:11:23.087Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:11:23.090Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:11:23.090Z"
+}

@@ -1,0 +1,15 @@
+{
+  "workerId": "genie-implementor-4",
+  "messages": [
+    {
+      "id": "msg-7e235df8-9022-44ff-baa0-79d7d3437952",
+      "from": "cli",
+      "to": "genie-implementor-4",
+      "body": "You are a RESEARCH agent. Do NOT edit production code. Your job is to analyze the Omni codebase and map out WHERE Sentry should be integrated.\n\nTASK: Read the Omni API codebase and identify ALL integration points for Sentry.\n\nRead these files:\n- packages/api/src/index.ts (entry point — where Sentry.init goes)\n- packages/api/src/app.ts (Hono app — middleware setup)\n- packages/api/src/middleware/error.ts (error handler — where captureException goes)\n- packages/api/src/scheduler.ts (scheduled jobs — Sentry Crons integration)\n- packages/core/src/ (shared utilities, logger, errors)\n- packages/api/src/plugins/ (event listeners, agent dispatcher, etc.)\n\nFor each integration point, document:\n1. File path and line numbers\n2. What Sentry feature applies (error capture, tracing, crons, metrics, breadcrumbs)\n3. What data flows through that point (any PII risks?)\n4. Recommended integration approach\n\nAlso identify:\n- Where sensitive data (message content, phone numbers, chat names) flows\n- What custom tags/context would be useful (instanceId, channelType, eventType)\n- Which scheduled jobs should be monitored with Sentry Crons\n- Where custom metrics would add value\n\nWrite your findings to /home/genie/agents/namastexlabs/projects/omni/.genie/brainstorms/sentry-mcp/research-codebase-mapping.md\n\nBe EXHAUSTIVE.",
+      "createdAt": "2026-03-10T18:17:45.761Z",
+      "read": false,
+      "deliveredAt": "2026-03-10T18:17:45.764Z"
+    }
+  ],
+  "lastUpdated": "2026-03-10T18:17:45.764Z"
+}
