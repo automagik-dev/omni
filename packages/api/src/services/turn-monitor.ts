@@ -4,21 +4,33 @@
  * Runs on a 10-second interval:
  *   - 120s idle  → emit nudge (first)
  *   - 240s idle  → emit nudge (second)
- *   - 600s idle  → send fallback message to user ("Still processing...")
+ *   - agentFallbackTimeoutMs idle (default 600s) → send fallback message to user
  *   - 1800s idle → force-close turn, emit timeout event
  *
  * Activity = any API call from the scoped key (tracked via auth middleware).
+ *
+ * Instance config loading strategy:
+ *   Per-instance fallback config (`agentFallbackEnabled`, `agentFallbackMessage`,
+ *   `agentFallbackTimeoutMs`) is re-read at the start of every fallback evaluation
+ *   tick via `instanceService.getById()` — it is NOT cached. A CLI change to any
+ *   of these fields takes effect on the next tick without requiring a serve restart.
+ *   If this proves too expensive under load a short-TTL cache (≤5s) is acceptable,
+ *   but the live-reload behavior must be preserved and documented here.
  */
 
 import { createLogger } from '@omni/core';
+import type { InstanceService } from './instances';
 import { publishTurnDone, publishTurnNudge, publishTurnTimeout } from './turn-events';
 import type { TurnService } from './turns';
 
 const log = createLogger('turn-monitor');
 
+/** Default fallback message — the single canonical copy of this string in the repo. */
+export const DEFAULT_AGENT_FALLBACK_MESSAGE = '⏱ Still processing your request...';
+
 /** Inactivity thresholds in milliseconds */
 const NUDGE_THRESHOLD_MS = 120_000; // 120s
-const FALLBACK_THRESHOLD_MS = 600_000; // 600s (10 min)
+const DEFAULT_FALLBACK_THRESHOLD_MS = 600_000; // 600s (10 min)
 const TIMEOUT_THRESHOLD_MS = 1_800_000; // 1800s (30 min)
 
 /** Polling interval */
@@ -26,6 +38,8 @@ const POLL_INTERVAL_MS = 10_000; // 10s
 
 export interface TurnMonitorDeps {
   turnService: TurnService;
+  /** Instance service for per-instance fallback config lookup (live, not cached). */
+  instanceService: InstanceService;
   /** Send a fallback message to the user (uses existing send infrastructure) */
   sendFallback?: (instanceId: string, chatId: string, text: string) => Promise<void>;
 }
@@ -45,7 +59,7 @@ export class TurnMonitor {
     log.info('Turn monitor started', {
       pollIntervalMs: POLL_INTERVAL_MS,
       nudgeMs: NUDGE_THRESHOLD_MS,
-      fallbackMs: FALLBACK_THRESHOLD_MS,
+      defaultFallbackMs: DEFAULT_FALLBACK_THRESHOLD_MS,
       timeoutMs: TIMEOUT_THRESHOLD_MS,
     });
 
@@ -84,9 +98,13 @@ export class TurnMonitor {
           continue;
         }
 
-        // Send fallback message at 300s (only once — when nudgeCount is exactly 2)
-        if (idleMs >= FALLBACK_THRESHOLD_MS && turn.nudgeCount === 2) {
-          await this.handleFallback(turn.id, turn.instanceId, turn.chatId, idleSec);
+        // Per-instance fallback config (live — re-read every tick, no caching).
+        const instance = await this.deps.instanceService.getById(turn.instanceId).catch(() => null);
+        const fallbackThresholdMs = instance?.agentFallbackTimeoutMs ?? DEFAULT_FALLBACK_THRESHOLD_MS;
+
+        // Send fallback message once — when nudgeCount is exactly 2 and idle crosses the per-instance threshold
+        if (idleMs >= fallbackThresholdMs && turn.nudgeCount === 2) {
+          await this.handleFallback(turn.id, turn.instanceId, turn.chatId, idleSec, instance ?? undefined);
           continue;
         }
 
@@ -123,14 +141,27 @@ export class TurnMonitor {
     log.info('Turn nudge emitted', { turnId, nudgeCount, idleSec });
   }
 
-  private async handleFallback(turnId: string, instanceId: string, chatId: string, idleSec: number): Promise<void> {
-    // Increment nudge count to 3 to mark fallback as sent
+  private async handleFallback(
+    turnId: string,
+    instanceId: string,
+    chatId: string,
+    idleSec: number,
+    instance?: { agentFallbackEnabled: boolean; agentFallbackMessage: string | null },
+  ): Promise<void> {
+    // Increment nudge count to 3 to mark fallback as sent (or "considered") so we never retry.
     await this.deps.turnService.incrementNudge(turnId);
+
+    // Opt-out: if the instance has fallback disabled, do not call sendFallback at all.
+    if (instance && instance.agentFallbackEnabled === false) {
+      log.info('Fallback message skipped (disabled per instance)', { turnId, instanceId, idleSec });
+      return;
+    }
 
     // Send fallback message to the user via existing send infrastructure
     if (this.deps.sendFallback) {
+      const text = instance?.agentFallbackMessage ?? DEFAULT_AGENT_FALLBACK_MESSAGE;
       try {
-        await this.deps.sendFallback(instanceId, chatId, '⏱ Still processing your request...');
+        await this.deps.sendFallback(instanceId, chatId, text);
         log.info('Fallback message sent', { turnId, idleSec });
       } catch (error) {
         log.error('Failed to send fallback message', { turnId, error: String(error) });
