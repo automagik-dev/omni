@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["Version"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +12,10 @@ permissions:
 jobs:
   release:
     name: Create Release
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # Run when Version succeeded (automatic) or on manual dispatch
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
@@ -19,19 +23,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read version from package.json
+      - name: Resolve release tag
         id: pkg
         run: |
-          VERSION=$(jq -r '.version' package.json)
+          # Ensure all tags are fetched (actions/checkout may skip them)
+          git fetch --tags --force
+
+          # Latest v* tag — the one the Version workflow just created
+          TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::No v* tags found — cannot release."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version from package.json: ${VERSION}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: ${TAG} (version: ${VERSION})"
 
       - name: Check if release already exists
         id: exists
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
 
           if gh release view "${TAG}" > /dev/null 2>&1; then
             echo "Release ${TAG} already exists — skipping."
@@ -40,13 +55,17 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout release tag
+        if: steps.exists.outputs.skip != 'true'
+        run: git checkout "${{ steps.pkg.outputs.tag }}"
+
       - name: Find previous release tag
         id: prev
         if: steps.exists.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
           PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREV:-none}"
@@ -57,7 +76,7 @@ jobs:
         with:
           config: cliff.toml
           args: >-
-            ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
+            ${{ steps.prev.outputs.tag && format('{0}..{1}', steps.prev.outputs.tag, steps.pkg.outputs.tag) || '' }}
             --output /tmp/release-notes.md
         env:
           GITHUB_REPO: ${{ github.repository }}
@@ -67,9 +86,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
           gh release create "${TAG}" \
-            --target "${{ github.sha }}" \
             --title "${TAG}" \
             --notes-file /tmp/release-notes.md
 
