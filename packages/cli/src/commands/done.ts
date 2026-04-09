@@ -42,7 +42,7 @@ async function closeTurn(
     // but the turn was opened with a scoped key, the key-based lookup won't find it.
     // Also pass instance+chat headers for a third fallback — OMNI_TURN_ID may be stale
     // when the session handles multiple messages (each creates a new turn).
-    const turnId = process.env.OMNI_TURN_ID;
+    const turnId = process.env.OMNI_TURN_ID || undefined;
     const extraHeaders: Record<string, string> = {};
     if (process.env.OMNI_INSTANCE) extraHeaders['x-omni-instance'] = process.env.OMNI_INSTANCE;
     if (process.env.OMNI_CHAT) extraHeaders['x-omni-chat'] = process.env.OMNI_CHAT;
