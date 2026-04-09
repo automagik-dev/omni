@@ -1285,12 +1285,12 @@ describe('agent-dispatcher', () => {
       expect(agentRunner.getSenderName).toHaveBeenCalled();
     });
 
-    it('skips messages when reply filter is null (no agent response)', async () => {
+    it('processes messages when reply filter is null (reply to all by default)', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>
           createMockInstance({
-            agentReplyFilter: null, // No filter = no reply
+            agentReplyFilter: null, // No filter = reply to all
           }),
         ),
         getSenderName: mock(async () => 'User'),
@@ -1306,7 +1306,7 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', createMessageEvent());
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(agentRunner.run).not.toHaveBeenCalled();
+      expect(agentRunner.run).toHaveBeenCalled();
     });
   });
 

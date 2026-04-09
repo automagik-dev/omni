@@ -3534,7 +3534,7 @@ async function shouldProcessMessage(
   );
 
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', {
+    log.info('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,
