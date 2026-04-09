@@ -60,7 +60,9 @@ export type CheckId =
   | 'omni-db-exists'
   | 'orphaned-data-dirs'
   | 'version-match'
-  | 'pm2-status';
+  | 'pm2-status'
+  | 'pm2-max-restarts'
+  | 'pm2-logrotate-installed';
 
 export interface CheckResult {
   id: CheckId;
@@ -93,6 +95,7 @@ interface Pm2Entry {
     pm_exec_path?: string;
     args?: string[];
     interpreter?: string;
+    max_restarts?: number;
     OMNI_API_KEY?: string;
     DATABASE_URL?: string;
     PGSERVE_DATA?: string;
@@ -165,6 +168,8 @@ export interface DoctorDeps {
   generateApiKey: () => string;
   /** Sleep briefly after a pm2 restart. Tests stub to zero-delay. */
   sleepMs: (ms: number) => Promise<void>;
+  /** Capture `pm2 conf` stdout (or null on error). Used by pm2-logrotate check. */
+  capturePm2Conf: () => Promise<string | null>;
 }
 
 /** Default production deps — each is a thin shim around the real call. */
@@ -248,6 +253,11 @@ function productionDeps(): DoctorDeps {
     reloadCliConfig: loadConfig,
     generateApiKey,
     sleepMs: (ms: number) => Bun.sleep(ms),
+    capturePm2Conf: async () => {
+      const { code, stdout } = await capturePm2('conf');
+      if (code !== 0) return null;
+      return stdout;
+    },
   };
 }
 

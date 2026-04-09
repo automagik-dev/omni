@@ -1,0 +1,410 @@
+/**
+ * Tests for embedded pgserve lifecycle — focus on orphan-process guards.
+ *
+ * Each test injects a fake `SystemCalls` so real `ss`/`lsof`/`ps`/`process.kill`
+ * are never executed. This makes the tests deterministic, CI-safe, and fast.
+ *
+ * Covers the acceptance criteria for wish `omni-install-resilience` Group 1:
+ *   - findProcessOnPort parses ss + lsof outputs
+ *   - killPostgresByPid refuses non-pgserve cmdlines (word-boundary + path prefix)
+ *   - ensureInternalPortFree throws PgserveInternalPortConflict by default
+ *   - ensureInternalPortFree kills orphan when OMNI_PGSERVE_FORCE_CLEANUP=true
+ *   - killOrphanedPostgres (postmaster.pid path) still works
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  PgserveInternalPortConflict,
+  type SystemCalls,
+  ensureInternalPortFree,
+  findProcessOnPort,
+  killOrphanedPostgres,
+  killPostgresByPid,
+} from '../pgserve';
+
+/**
+ * Build a SystemCalls fake with deterministic behavior. Each field defaults to
+ * a no-op or throw so tests only have to override what they care about.
+ */
+interface FakeSysArgs {
+  runCommand?: (file: string, args: string[]) => string;
+  sendSignal?: (pid: number, signal: NodeJS.Signals | 0) => void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+function makeFakeSys(overrides: FakeSysArgs = {}): SystemCalls {
+  return {
+    runCommand:
+      overrides.runCommand ??
+      (() => {
+        throw new Error('runCommand not stubbed');
+      }),
+    sendSignal: overrides.sendSignal ?? (() => {}),
+    sleep: overrides.sleep ?? (async () => {}),
+  };
+}
+
+describe('findProcessOnPort', () => {
+  test('parses ss -tlnp output and returns pid + cmdline', async () => {
+    const sys = makeFakeSys({
+      runCommand: (file, _args) => {
+        if (file === 'ss') {
+          return (
+            'State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process\n' +
+            'LISTEN 0      128    0.0.0.0:9432        0.0.0.0:*         users:(("postgres",pid=12345,fd=6))\n'
+          );
+        }
+        if (file === 'ps') {
+          return `${join(homedir(), '.pgserve', 'bin', 'linux-x64', 'bin', 'postgres')} -D /home/user/.omni/data/pgserve\n`;
+        }
+        throw new Error(`unexpected command: ${file}`);
+      },
+    });
+
+    const result = await findProcessOnPort(9432, sys);
+    expect(result).not.toBeNull();
+    expect(result?.pid).toBe(12345);
+    expect(result?.cmdline).toContain('postgres');
+  });
+
+  test('returns null when ss reports no listeners and lsof is absent', async () => {
+    const sys = makeFakeSys({
+      runCommand: (file, _args) => {
+        if (file === 'ss') return 'State  Recv-Q Send-Q Local Address:Port\n'; // header only
+        if (file === 'lsof') throw new Error('command not found');
+        throw new Error(`unexpected command: ${file}`);
+      },
+    });
+
+    const result = await findProcessOnPort(9432, sys);
+    expect(result).toBeNull();
+  });
+
+  test('falls back to lsof when ss is unavailable (macOS path)', async () => {
+    const sys = makeFakeSys({
+      runCommand: (file, _args) => {
+        if (file === 'ss') throw new Error('ss: command not found');
+        if (file === 'lsof') {
+          return (
+            'COMMAND   PID USER   FD TYPE DEVICE SIZE/OFF NODE NAME\n' +
+            'postgres 67890 user    6u IPv4 0x1234       0t0  TCP *:9432 (LISTEN)\n'
+          );
+        }
+        if (file === 'ps') {
+          return `${join(homedir(), '.pgserve', 'bin', 'darwin-arm64', 'bin', 'postgres')} -D /Users/user/.omni/data/pgserve\n`;
+        }
+        throw new Error(`unexpected command: ${file}`);
+      },
+    });
+
+    const result = await findProcessOnPort(9432, sys);
+    expect(result).not.toBeNull();
+    expect(result?.pid).toBe(67890);
+    expect(result?.cmdline).toContain('postgres');
+  });
+
+  test('returns null when both ss and lsof fail', async () => {
+    const sys = makeFakeSys({
+      runCommand: () => {
+        throw new Error('tool missing');
+      },
+    });
+
+    const result = await findProcessOnPort(9432, sys);
+    expect(result).toBeNull();
+  });
+});
+
+describe('killPostgresByPid — cmdline validation', () => {
+  test('refuses to kill when cmdline has postgres only as substring in shell echo', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+      },
+    });
+
+    // Shell script that echoes "postgres" — word boundary matches but no pgserve bin path
+    const killed = await killPostgresByPid(9999, '/bin/sh -c "echo postgres /tmp/foo"', sys);
+
+    expect(killed).toBe(false);
+    expect(sentSignals.length).toBe(0);
+  });
+
+  test('refuses to kill a system-installed postgres outside pgserve cache', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+      },
+    });
+
+    const killed = await killPostgresByPid(
+      9999,
+      '/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql/15/main',
+      sys,
+    );
+
+    expect(killed).toBe(false);
+    expect(sentSignals.length).toBe(0);
+  });
+
+  test('refuses to kill when cmdline contains no postgres word', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+      },
+    });
+
+    const killed = await killPostgresByPid(9999, 'mypostgreslike --daemon', sys);
+
+    expect(killed).toBe(false);
+    expect(sentSignals.length).toBe(0);
+  });
+
+  test('kills when cmdline points to pgserve binary cache (SIGTERM, exits cleanly)', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    let alive = true;
+    const sys = makeFakeSys({
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+        if (signal === 'SIGTERM') alive = false;
+        if (signal === 0 && !alive) throw new Error('ESRCH');
+      },
+    });
+
+    const pgserveCmd = `${join(homedir(), '.pgserve', 'bin', 'linux-x64', 'bin', 'postgres')} -D ${join(homedir(), '.omni', 'data', 'pgserve')}`;
+    const killed = await killPostgresByPid(12345, pgserveCmd, sys);
+
+    expect(killed).toBe(true);
+    expect(sentSignals[0]).toEqual({ pid: 12345, signal: 'SIGTERM' });
+  });
+
+  test('escalates to SIGKILL when SIGTERM is ignored for 5+ seconds', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+        // Process refuses to die — liveness probes always succeed
+      },
+    });
+
+    const pgserveCmd = `${join(homedir(), '.pgserve', 'bin', 'linux-x64', 'bin', 'postgres')} -D /tmp/foo`;
+    const killed = await killPostgresByPid(12345, pgserveCmd, sys);
+
+    expect(killed).toBe(true);
+    const signals = sentSignals.map((s) => s.signal);
+    expect(signals).toContain('SIGTERM');
+    expect(signals).toContain('SIGKILL');
+  });
+
+  test('treats ESRCH on SIGTERM (process already dead) as success', async () => {
+    const sys = makeFakeSys({
+      sendSignal: (_pid, signal) => {
+        if (signal === 'SIGTERM') throw new Error('ESRCH: no such process');
+      },
+    });
+
+    const pgserveCmd = `${join(homedir(), '.pgserve', 'bin', 'linux-x64', 'bin', 'postgres')} -D /tmp/foo`;
+    const killed = await killPostgresByPid(12345, pgserveCmd, sys);
+
+    expect(killed).toBe(true);
+  });
+});
+
+describe('ensureInternalPortFree', () => {
+  const originalEnv = process.env.OMNI_PGSERVE_FORCE_CLEANUP;
+
+  beforeEach(() => {
+    process.env.OMNI_PGSERVE_FORCE_CLEANUP = undefined;
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env.OMNI_PGSERVE_FORCE_CLEANUP = originalEnv;
+    } else {
+      process.env.OMNI_PGSERVE_FORCE_CLEANUP = undefined;
+    }
+  });
+
+  test('no-op when internal port is free', async () => {
+    const sys = makeFakeSys({
+      runCommand: () => '', // empty output — no listeners
+    });
+
+    await expect(ensureInternalPortFree(8432, sys)).resolves.toBeUndefined();
+  });
+
+  test('throws PgserveInternalPortConflict when orphan is listening and force-cleanup is off', async () => {
+    const sys = makeFakeSys({
+      runCommand: (file) => {
+        if (file === 'ss') {
+          return 'LISTEN 0 128 0.0.0.0:9432 0.0.0.0:* users:(("postgres",pid=12345,fd=6))\n';
+        }
+        if (file === 'ps') {
+          return '/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql\n';
+        }
+        return '';
+      },
+    });
+
+    let caught: PgserveInternalPortConflict | undefined;
+    try {
+      await ensureInternalPortFree(8432, sys);
+    } catch (err) {
+      caught = err as PgserveInternalPortConflict;
+    }
+
+    expect(caught).toBeInstanceOf(PgserveInternalPortConflict);
+    expect(caught?.port).toBe(9432);
+    expect(caught?.pid).toBe(12345);
+    expect(caught?.message).toContain('omni install --force-cleanup');
+    expect(caught?.message).toContain('OMNI_PGSERVE_FORCE_CLEANUP=true');
+  });
+
+  test('kills orphan and proceeds when OMNI_PGSERVE_FORCE_CLEANUP=true', async () => {
+    process.env.OMNI_PGSERVE_FORCE_CLEANUP = 'true';
+
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    let alive = true;
+    let pollCount = 0;
+
+    const pgserveCmd = `${join(homedir(), '.pgserve', 'bin', 'linux-x64', 'bin', 'postgres')} -D ${join(homedir(), '.omni', 'data', 'pgserve')}`;
+
+    const sys = makeFakeSys({
+      runCommand: (file) => {
+        if (file === 'ss') {
+          // First two calls: orphan present. After kill + one post-kill probe: port free.
+          pollCount++;
+          if (!alive) return ''; // port free after kill
+          return 'LISTEN 0 128 0.0.0.0:9432 0.0.0.0:* users:(("postgres",pid=12345,fd=6))\n';
+        }
+        if (file === 'ps') return `${pgserveCmd}\n`;
+        return '';
+      },
+      sendSignal: (pid, signal) => {
+        sentSignals.push({ pid, signal });
+        if (signal === 'SIGTERM') alive = false;
+        if (signal === 0 && !alive) throw new Error('ESRCH');
+      },
+    });
+
+    await expect(ensureInternalPortFree(8432, sys)).resolves.toBeUndefined();
+    expect(sentSignals.some((s) => s.signal === 'SIGTERM')).toBe(true);
+    expect(pollCount).toBeGreaterThan(0);
+  });
+
+  test('throws PgserveInternalPortConflict when force-cleanup is on but cmdline fails validation', async () => {
+    process.env.OMNI_PGSERVE_FORCE_CLEANUP = 'true';
+
+    const sys = makeFakeSys({
+      runCommand: (file) => {
+        if (file === 'ss') {
+          return 'LISTEN 0 128 0.0.0.0:9432 0.0.0.0:* users:(("weird",pid=54321,fd=6))\n';
+        }
+        if (file === 'ps') {
+          // A system postgres — word boundary matches but not in pgserve cache
+          return '/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql/15/main\n';
+        }
+        return '';
+      },
+    });
+
+    let caught: PgserveInternalPortConflict | undefined;
+    try {
+      await ensureInternalPortFree(8432, sys);
+    } catch (err) {
+      caught = err as PgserveInternalPortConflict;
+    }
+
+    expect(caught).toBeInstanceOf(PgserveInternalPortConflict);
+    expect(caught?.pid).toBe(54321);
+  });
+});
+
+describe('killOrphanedPostgres — postmaster.pid path (preserved legacy behavior)', () => {
+  let tmpDataDir: string;
+
+  beforeEach(() => {
+    tmpDataDir = mkdtempSync(join(tmpdir(), 'pgserve-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDataDir, { recursive: true, force: true });
+  });
+
+  test('kills a valid postgres orphan discovered via postmaster.pid', async () => {
+    const pid = 77777;
+    writeFileSync(join(tmpDataDir, 'postmaster.pid'), `${pid}\n/some/data/dir\n`);
+
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    let alive = true;
+
+    const sys = makeFakeSys({
+      runCommand: (file, args) => {
+        if (file === 'ps' && args[0] === '-o') {
+          return '/home/user/.pgserve/bin/linux-x64/bin/postgres -D /home/user/.omni/data/pgserve\n';
+        }
+        if (file === 'ss') return ''; // no internal-port orphan
+        return '';
+      },
+      sendSignal: (p, signal) => {
+        sentSignals.push({ pid: p, signal });
+        if (signal === 0) {
+          if (!alive) throw new Error('ESRCH');
+          return;
+        }
+        if (signal === 'SIGTERM') alive = false;
+      },
+    });
+
+    await killOrphanedPostgres(tmpDataDir, sys);
+
+    // SIGTERM was sent (once liveness check via signal=0 passed, then the kill)
+    expect(sentSignals.some((s) => s.pid === pid && s.signal === 'SIGTERM')).toBe(true);
+  });
+
+  test('skips kill when postmaster.pid is absent (clean state)', async () => {
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      runCommand: (file) => {
+        if (file === 'ss') return '';
+        return '';
+      },
+      sendSignal: (p, signal) => {
+        sentSignals.push({ pid: p, signal });
+      },
+    });
+
+    await killOrphanedPostgres(tmpDataDir, sys);
+    // Only possible signal calls would come from the port-scan path finding nothing
+    expect(sentSignals.length).toBe(0);
+  });
+
+  test('refuses to kill when postmaster.pid points to a non-postgres process', async () => {
+    const pid = 88888;
+    writeFileSync(join(tmpDataDir, 'postmaster.pid'), `${pid}\n`);
+
+    const sentSignals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    const sys = makeFakeSys({
+      runCommand: (file) => {
+        if (file === 'ps') return '/usr/bin/firefox --no-sandbox\n';
+        if (file === 'ss') return '';
+        return '';
+      },
+      sendSignal: (p, signal) => {
+        sentSignals.push({ pid: p, signal });
+      },
+    });
+
+    await killOrphanedPostgres(tmpDataDir, sys);
+
+    // Only the liveness probe (signal 0) should have fired — never SIGTERM
+    const termSent = sentSignals.some((s) => s.signal === 'SIGTERM' || s.signal === 'SIGKILL');
+    expect(termSent).toBe(false);
+  });
+});
