@@ -14,6 +14,50 @@ import type { AppVariables } from '../../types';
 export const turnsRoutes = new Hono<{ Variables: AppVariables }>();
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+/**
+ * Resolve the open turn via three-tier fallback:
+ *   1. API key → turn (scoped key path)
+ *   2. Explicit turnId body param (when key doesn't match)
+ *   3. Instance + chat context → latest open turn
+ */
+async function resolveOpenTurn(
+  services: AppVariables['services'],
+  keyId: string,
+  turnId: string | undefined,
+  headerInstanceId: string | undefined,
+  headerChatId: string | undefined,
+) {
+  // Tier 1: scoped API key → turn
+  const byKey = await services.turns.getOpenByApiKey(keyId);
+  if (byKey) return byKey;
+
+  // Tier 2: explicit turnId body param
+  if (turnId) {
+    const candidate = await services.turns.getById(turnId);
+    if (candidate && candidate.status === 'open') return candidate;
+  }
+
+  // Tier 3: instance + chat from headers or key context columns
+  let instanceId = headerInstanceId;
+  let chatId = headerChatId;
+  if (!instanceId || !chatId) {
+    const fullKey = await services.apiKeys.getById(keyId);
+    if (fullKey) {
+      instanceId = instanceId ?? fullKey.contextInstanceId ?? undefined;
+      chatId = chatId ?? fullKey.contextChatId ?? undefined;
+    }
+  }
+  if (instanceId && chatId) {
+    return services.turns.getOpen(instanceId, chatId);
+  }
+
+  return null;
+}
+
+// ============================================================================
 // SCHEMAS
 // ============================================================================
 
@@ -50,29 +94,14 @@ turnsRoutes.post('/close', zValidator('json', closeTurnSchema), async (c) => {
   const body = c.req.valid('json');
   const services = c.get('services');
 
-  // Find the open turn via three-tier fallback:
-  //   1. API key → turn (scoped key path)
-  //   2. Explicit turnId body param (when key doesn't match)
-  //   3. Instance + chat context → latest open turn (when turnId is stale from
-  //      a previous message in the same session — each new message opens a new turn,
-  //      but OMNI_TURN_ID in the agent env is only set once at session creation)
-  let openTurn = await services.turns.getOpenByApiKey(keyData.id);
-
-  if (!openTurn && body.turnId) {
-    const candidateTurn = await services.turns.getById(body.turnId);
-    if (candidateTurn && candidateTurn.status === 'open') {
-      openTurn = candidateTurn;
-    }
-  }
-
-  // Fallback 3: find by instance + chat from OMNI_INSTANCE/OMNI_CHAT headers or context
-  if (!openTurn) {
-    const instanceId = c.req.header('x-omni-instance') ?? keyData.contextInstanceId;
-    const chatId = c.req.header('x-omni-chat') ?? keyData.contextChatId;
-    if (instanceId && chatId) {
-      openTurn = await services.turns.getOpen(instanceId, chatId);
-    }
-  }
+  // Resolve the open turn via three-tier fallback
+  const openTurn = await resolveOpenTurn(
+    services,
+    keyData.id,
+    body.turnId,
+    c.req.header('x-omni-instance'),
+    c.req.header('x-omni-chat'),
+  );
 
   if (!openTurn) {
     // Idempotent: no open turn = already closed
