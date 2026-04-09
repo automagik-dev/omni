@@ -4126,15 +4126,9 @@ export async function setupAgentDispatcher(
           if (!baseInstance?.agentId) return;
 
           // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+          // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
           const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          const typingChannel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-          const typingPersonId = await resolvePersonId(
-            services,
-            typingChannel,
-            metadata.instanceId,
-            payload.from,
-            metadata.personId,
-          );
+          const typingPersonId = metadata.personId;
           const { instance: resolved } = await resolveEffectiveInstance(
             services,
             db,

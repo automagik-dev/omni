@@ -241,12 +241,17 @@ function createMockServices(overrides: Record<string, unknown> = {}) {
     findByExternalIdSmart: mock(async () => null),
   };
 
+  const persons = {
+    getIdentityByPlatformId: mock(async () => null),
+  };
+
   return {
     agentRunner,
     access,
     providers,
     routeResolver,
     chats,
+    persons,
     ...overrides,
   } as unknown as import('../../services').Services;
 }
