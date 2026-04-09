@@ -105,11 +105,24 @@ export function publishTurnNudge(instanceId: string, chatId: string, event: Turn
   log.debug('Published turn.nudge', { turnId: event.turnId, nudgeCount: event.nudgeCount, instanceId });
 }
 
+export interface TurnStalledEvent {
+  turnId: string;
+  instanceId: string;
+  chatId: string;
+  stalledAtMs: number;
+  threshold: number;
+}
+
+export function publishTurnStalled(instanceId: string, chatId: string, event: TurnStalledEvent): void {
+  const topic = `omni.turn.stalled.${instanceId}.${chatId}`;
+  publish(topic, event);
+  log.debug('Published turn.stalled', { turnId: event.turnId, instanceId, chatId });
+}
+
 export interface TurnTimeoutEvent {
   turnId: string;
   duration: number;
   nudgeCount: number;
-  fallbackSent: boolean;
 }
 
 export function publishTurnTimeout(instanceId: string, chatId: string, event: TurnTimeoutEvent): void {

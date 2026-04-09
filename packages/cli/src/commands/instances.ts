@@ -130,6 +130,13 @@ function applyAckFields(body: Record<string, unknown>, opts: Record<string, unkn
   }
 }
 
+/** Extract stalled-turn threshold (turn-monitor internal event) */
+function applyStalledFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  if (opts.agentStalledTimeoutMs !== undefined) {
+    body.agentStalledTimeoutMs = Number(opts.agentStalledTimeoutMs);
+  }
+}
+
 /** Build instance body from all CLI options */
 function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -140,6 +147,7 @@ function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknow
   applyGateFields(body, opts);
   applyMiscFields(body, opts);
   applyAckFields(body, opts);
+  applyStalledFields(body, opts);
   return body;
 }
 
@@ -302,6 +310,11 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
+    )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token')
@@ -771,6 +784,11 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
+    )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')

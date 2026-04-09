@@ -159,6 +159,12 @@ const createInstanceSchema = z.object({
     .max(120_000)
     .default(30_000)
     .describe('Ack timeout in milliseconds (max 120000)'),
+  agentStalledTimeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(600_000)
+    .describe('Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)'),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -190,6 +196,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   reactionAck: z.enum(['on', 'off']).optional(),
   reactionAckEmoji: z.record(z.string()).nullable().optional(),
   ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
+  agentStalledTimeoutMs: z.number().int().min(0).optional(),
 });
 
 /**
