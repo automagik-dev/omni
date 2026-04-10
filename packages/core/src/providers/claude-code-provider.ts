@@ -228,6 +228,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      ...(context.sender.platformUserId ? { mcpUrlParams: { chat_id: context.sender.platformUserId } } : {}),
     };
 
     log.info('Triggering Claude Code agent', {
@@ -293,6 +294,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      ...(context.sender.platformUserId ? { mcpUrlParams: { chat_id: context.sender.platformUserId } } : {}),
     };
 
     log.info('Triggering Claude Code agent (stream)', {

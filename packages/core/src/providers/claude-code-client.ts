@@ -43,8 +43,13 @@ export interface ClaudeCodeConfig {
   /** System prompt — prepended to Claude Code's own */
   systemPrompt?: string;
 
-  /** MCP servers to connect (in addition to project's .claude config) */
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  /** MCP servers to connect (in addition to project's .claude config).
+   *  Supports both stdio servers (command) and HTTP servers (type: "http", url). */
+  mcpServers?: Record<
+    string,
+    | { command: string; args?: string[]; env?: Record<string, string> }
+    | { type: 'http'; url: string; headers?: Record<string, string> }
+  >;
 
   /** Max turns per query (safety limit, default: 10) */
   maxTurns?: number;
@@ -551,7 +556,32 @@ function buildQueryOptions(
   if (config.allowedTools) options.allowedTools = config.allowedTools;
   if (config.model) options.model = config.model;
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
-  if (config.mcpServers) options.mcpServers = config.mcpServers;
+
+  // MCP servers: if mcpUrlParams present and config has HTTP servers, deep-clone
+  // and append params to each HTTP server URL (avoids mutating original config).
+  if (config.mcpServers) {
+    if (request.mcpUrlParams && Object.keys(request.mcpUrlParams).length > 0) {
+      const hasHttpServer = Object.values(config.mcpServers).some(
+        (s) => 'url' in s && typeof (s as Record<string, unknown>).url === 'string',
+      );
+      if (hasHttpServer) {
+        const cloned = JSON.parse(JSON.stringify(config.mcpServers)) as typeof config.mcpServers;
+        const params = new URLSearchParams(request.mcpUrlParams).toString();
+        for (const server of Object.values(cloned)) {
+          if ('url' in server && typeof (server as Record<string, unknown>).url === 'string') {
+            const httpServer = server as { url: string };
+            const separator = httpServer.url.includes('?') ? '&' : '?';
+            httpServer.url = `${httpServer.url}${separator}${params}`;
+          }
+        }
+        options.mcpServers = cloned;
+      } else {
+        options.mcpServers = config.mcpServers;
+      }
+    } else {
+      options.mcpServers = config.mcpServers;
+    }
+  }
 
   // Build clean env: always clear CLAUDECODE to prevent the SDK from thinking
   // it's already inside a Claude Code session (happens when Omni is spawned
