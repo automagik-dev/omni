@@ -65,15 +65,17 @@ voiceRoutes.post('/join', zValidator('json', joinSchema), async (c) => {
   try {
     const session = await voiceManager.joinChannel(guildId, channelId);
 
-    // Publish session started event
+    // Publish session started event (fire-and-forget — don't block response)
     const eventBus = c.get('eventBus');
     if (eventBus) {
-      await eventBus.publish('voice.session_started', {
-        sessionId: (session as { sessionId: string }).sessionId,
-        channelId,
-        instanceId,
-        guildId,
-      });
+      eventBus
+        .publish('voice.session_started', {
+          sessionId: (session as { sessionId: string }).sessionId,
+          channelId,
+          instanceId,
+          guildId,
+        })
+        .catch(() => {});
     }
 
     return c.json({ data: session }, 201);
@@ -110,7 +112,7 @@ voiceRoutes.post('/leave', zValidator('json', leaveSchema), async (c) => {
 
     const eventBus = c.get('eventBus');
     if (eventBus) {
-      await eventBus.publish('voice.session_ended', { sessionId, reason: 'manual' });
+      eventBus.publish('voice.session_ended', { sessionId, reason: 'manual' }).catch(() => {});
     }
 
     return c.json({ success: true });

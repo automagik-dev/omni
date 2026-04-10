@@ -58,6 +58,7 @@ import { createTtsCommand } from './commands/tts.js';
 import { createTurnsCommand } from './commands/turns.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createUseCommand } from './commands/use.js';
+import { createVoiceCommand } from './commands/voice.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
 import { createWhereCommand } from './commands/where.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
@@ -199,6 +200,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Core',
     helpDescription: 'Close turn (send final message + emit turn.done)',
+  },
+  {
+    create: createVoiceCommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'Voice channel operations (join, stream, sessions)',
   },
 
   // Management group - Configuration and setup
