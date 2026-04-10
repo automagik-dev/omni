@@ -923,6 +923,12 @@ export function setupMessageHandlers(
 ): void {
   const cache = dedupeCache ?? fallbackDedupeCache;
 
+  // Track JIDs we've already subscribed to for presence updates.
+  // Baileys requires an explicit presenceSubscribe(jid) before typing
+  // indicators are delivered for DM chats. We only need to call it once
+  // per JID per connection lifecycle.
+  const presenceSubscribed = new Set<string>();
+
   sock.ev.on('messages.upsert', async (upsert: { messages: WAMessage[]; type: MessageUpsertType }) => {
     // Log all message types to diagnose missing messages
     log.debug('messages.upsert received', {
@@ -942,6 +948,17 @@ export function setupMessageHandlers(
     // 'append' = outgoing messages sent from this device
     // We need both to capture all conversation activity
     for (const msg of upsert.messages) {
+      // Subscribe to presence updates for DM chats so Baileys delivers
+      // typing indicators (composing/recording). Without this, the WA
+      // server never pushes chatstate nodes for 1-on-1 conversations.
+      const chatJid = msg.key.remoteJid;
+      if (chatJid && isUserJid(chatJid) && !presenceSubscribed.has(chatJid)) {
+        presenceSubscribed.add(chatJid);
+        sock
+          .presenceSubscribe(chatJid)
+          .catch((err) => log.debug('presenceSubscribe failed (non-fatal)', { chatJid, error: String(err) }));
+      }
+
       if (shouldProcessMessage(plugin, instanceId, msg)) {
         await processMessage(plugin, instanceId, msg, cache);
       }
