@@ -113,7 +113,8 @@ export class VoiceStreamRegistry {
 
   /** Push a tagged audio frame to all matching clients for a session. */
   pushAudio(sessionId: string, userId: string, audioData: Uint8Array, format: AudioFormat): void {
-    const userIdBuf = Buffer.from(userId, 'utf8');
+    const userIdBuf = Buffer.from(userId.slice(0, 255), 'utf8');
+    if (userIdBuf.length > 255) return;
     // Build tagged frame: [userIdLen: u8][userId: N][audio: rest]
     const frame = Buffer.alloc(1 + userIdBuf.length + audioData.length);
     frame[0] = userIdBuf.length;

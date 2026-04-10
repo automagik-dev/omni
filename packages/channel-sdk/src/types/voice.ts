@@ -49,6 +49,7 @@ export function isVoiceCapable(plugin: unknown): plugin is VoiceCapable {
     typeof plugin === 'object' &&
     'voiceJoin' in plugin &&
     'voiceLeave' in plugin &&
-    'voiceSessions' in plugin
+    'voiceSessions' in plugin &&
+    'voiceSession' in plugin
   );
 }
