@@ -105,6 +105,7 @@
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
+        "@omni/voice-client": "workspace:*",
         "discord.js": "^14.18.0",
       },
       "devDependencies": {

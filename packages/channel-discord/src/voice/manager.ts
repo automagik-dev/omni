@@ -1,0 +1,310 @@
+/**
+ * VoiceManager — manages Discord voice sessions for an instance.
+ *
+ * Hooks into the discord.js Client to receive VOICE_STATE_UPDATE and
+ * VOICE_SERVER_UPDATE events, then orchestrates DiscordVoiceSession
+ * connections from @omni/voice-client.
+ *
+ * Each voice channel the bot joins gets a separate session with its own
+ * WebSocket gateway, UDP socket, and SRTP decryptor.
+ */
+
+import { createLogger } from '@omni/core';
+import { DiscordVoiceSession } from '@omni/voice-client';
+import type { Client, VoiceState } from 'discord.js';
+
+const log = createLogger('discord:voice');
+
+export interface VoiceSessionInfo {
+  sessionId: string;
+  instanceId: string;
+  guildId: string;
+  channelId: string;
+  state: string;
+  participants: string[];
+  createdAt: number;
+}
+
+/** Pending voice connection waiting for both gateway events. */
+interface PendingConnection {
+  guildId: string;
+  channelId: string;
+  sessionId?: string;
+  token?: string;
+  endpoint?: string;
+}
+
+export class VoiceManager {
+  private instanceId: string;
+  private client: Client;
+
+  /** Active voice sessions keyed by a generated session ID. */
+  private sessions = new Map<string, DiscordVoiceSession>();
+  /** Session metadata. */
+  private sessionInfo = new Map<string, VoiceSessionInfo>();
+  /** Pending connections waiting for VOICE_SERVER_UPDATE. */
+  private pending = new Map<string, PendingConnection>();
+  /** guildId → sessionId reverse lookup. */
+  private guildToSession = new Map<string, string>();
+
+  constructor(instanceId: string, client: Client) {
+    this.instanceId = instanceId;
+    this.client = client;
+    this.setupEventListeners();
+  }
+
+  /**
+   * Join a voice channel.
+   * Sends the voice state update via the Discord gateway, then waits for
+   * VOICE_STATE_UPDATE + VOICE_SERVER_UPDATE to complete the handshake.
+   */
+  async joinChannel(guildId: string, channelId: string): Promise<VoiceSessionInfo> {
+    // Check if already in this guild
+    const existingSessionId = this.guildToSession.get(guildId);
+    if (existingSessionId) {
+      const existing = this.sessionInfo.get(existingSessionId);
+      if (existing) return existing;
+    }
+
+    const sessionId = `voice-${guildId}-${Date.now()}`;
+
+    // Set up pending connection
+    this.pending.set(guildId, { guildId, channelId });
+
+    // Send voice state update via Discord gateway (opcode 4)
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) {
+      this.pending.delete(guildId);
+      throw new Error(`Guild ${guildId} not found`);
+    }
+
+    // Discord.js voice state update — tells Discord we want to join the channel
+    // This sends Gateway Opcode 4 (Voice State Update) with self_mute=false, self_deaf=false
+    guild.shard.send({
+      op: 4,
+      d: {
+        guild_id: guildId,
+        channel_id: channelId,
+        self_mute: false,
+        self_deaf: false,
+      },
+    });
+
+    // Wait for the connection to complete (voice server update arrives)
+    const info = await this.waitForConnection(guildId, sessionId, channelId);
+    return info;
+  }
+
+  /**
+   * Leave a voice session by session ID.
+   */
+  async leaveChannel(sessionId: string): Promise<void> {
+    const info = this.sessionInfo.get(sessionId);
+    if (!info) return;
+
+    // Send voice state update to leave
+    const guild = this.client.guilds.cache.get(info.guildId);
+    if (guild) {
+      guild.shard.send({
+        op: 4,
+        d: {
+          guild_id: info.guildId,
+          channel_id: null,
+          self_mute: false,
+          self_deaf: false,
+        },
+      });
+    }
+
+    // Clean up
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      await session.disconnect();
+    }
+    this.cleanup(sessionId);
+  }
+
+  /** Get all active voice sessions. */
+  getSessions(): VoiceSessionInfo[] {
+    // Update participant lists from live sessions
+    for (const [id, session] of this.sessions) {
+      const info = this.sessionInfo.get(id);
+      if (info) {
+        info.participants = session.listParticipants();
+        info.state = session.state;
+      }
+    }
+    return [...this.sessionInfo.values()];
+  }
+
+  /** Get a specific session by ID. */
+  getSession(sessionId: string): VoiceSessionInfo | undefined {
+    const info = this.sessionInfo.get(sessionId);
+    if (!info) return undefined;
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      info.participants = session.listParticipants();
+      info.state = session.state;
+    }
+    return info;
+  }
+
+  /** Get the underlying DiscordVoiceSession for advanced usage. */
+  getVoiceSession(sessionId: string): DiscordVoiceSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /** Clean up all sessions (called on plugin disconnect). */
+  async destroy(): Promise<void> {
+    for (const [id, session] of this.sessions) {
+      await session.disconnect();
+      this.cleanup(id);
+    }
+  }
+
+  // ─── internal ───────────────────────────────────────────────
+
+  private setupEventListeners(): void {
+    // VOICE_STATE_UPDATE — fires when we or others join/leave voice
+    this.client.on('voiceStateUpdate', (oldState: VoiceState, newState: VoiceState) => {
+      this.handleVoiceStateUpdate(oldState, newState);
+    });
+
+    // VOICE_SERVER_UPDATE — raw gateway event with token + endpoint
+    // discord.js doesn't emit this as a typed event, so we listen on 'raw'
+    this.client.on('raw', (packet: { t: string; d: Record<string, unknown> }) => {
+      if (packet.t === 'VOICE_SERVER_UPDATE') {
+        this.handleVoiceServerUpdate(packet.d);
+      }
+    });
+  }
+
+  private handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): void {
+    // Only care about our own voice state updates (for connection flow)
+    const botId = this.client.user?.id;
+    if (newState.id !== botId) return;
+
+    const guildId = newState.guild.id;
+    const pending = this.pending.get(guildId);
+    if (!pending) return;
+
+    // Store session ID from Discord
+    if (newState.sessionId) {
+      pending.sessionId = newState.sessionId;
+      this.tryConnect(guildId);
+    }
+
+    // If we left the channel (channelId is null), clean up
+    if (!newState.channelId && oldState.channelId) {
+      const sessionId = this.guildToSession.get(guildId);
+      if (sessionId) {
+        log.info('Bot disconnected from voice channel', { guildId, sessionId });
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.disconnect().catch(() => {});
+        }
+        this.cleanup(sessionId);
+      }
+    }
+  }
+
+  private handleVoiceServerUpdate(data: Record<string, unknown>): void {
+    const guildId = data.guild_id as string;
+    const token = data.token as string;
+    const endpoint = data.endpoint as string | null;
+
+    if (!guildId || !token || !endpoint) return;
+
+    const pending = this.pending.get(guildId);
+    if (!pending) return;
+
+    pending.token = token;
+    pending.endpoint = endpoint;
+    this.tryConnect(guildId);
+  }
+
+  /** Try to complete the connection once we have both session ID and server info. */
+  private tryConnect(guildId: string): void {
+    const pending = this.pending.get(guildId);
+    if (!pending?.sessionId || !pending.token || !pending.endpoint) return;
+
+    const sessionId = `voice-${guildId}-${Date.now()}`;
+    const session = new DiscordVoiceSession();
+
+    this.sessions.set(sessionId, session);
+    this.guildToSession.set(guildId, sessionId);
+
+    const info: VoiceSessionInfo = {
+      sessionId,
+      instanceId: this.instanceId,
+      guildId: pending.guildId,
+      channelId: pending.channelId,
+      state: 'connecting',
+      participants: [],
+      createdAt: Date.now(),
+    };
+    this.sessionInfo.set(sessionId, info);
+
+    // Remove from pending
+    this.pending.delete(guildId);
+
+    // Connect the voice session
+    session
+      .connect({
+        channelId: pending.channelId,
+        guildId: pending.guildId,
+        token: pending.token,
+        endpoint: pending.endpoint,
+        userId: this.client.user?.id,
+        sessionId: pending.sessionId,
+      })
+      .then(() => {
+        info.state = 'ready';
+        log.info('Voice session connected', { sessionId, guildId, channelId: pending.channelId });
+
+        // Resolve any waiters
+        const resolve = this.connectionWaiters.get(guildId);
+        if (resolve) {
+          resolve(info);
+          this.connectionWaiters.delete(guildId);
+        }
+      })
+      .catch((err) => {
+        log.error('Voice session connection failed', { sessionId, error: String(err) });
+        this.cleanup(sessionId);
+
+        const resolve = this.connectionWaiters.get(guildId);
+        if (resolve) {
+          // Reject by resolving with error info
+          this.connectionWaiters.delete(guildId);
+        }
+      });
+  }
+
+  /** Waiters for joinChannel() promise resolution. */
+  private connectionWaiters = new Map<string, (info: VoiceSessionInfo) => void>();
+
+  private waitForConnection(guildId: string, _sessionId: string, _channelId: string): Promise<VoiceSessionInfo> {
+    return new Promise<VoiceSessionInfo>((resolve, reject) => {
+      this.connectionWaiters.set(guildId, resolve);
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        if (this.connectionWaiters.has(guildId)) {
+          this.connectionWaiters.delete(guildId);
+          this.pending.delete(guildId);
+          reject(new Error(`Voice connection timed out for guild ${guildId}`));
+        }
+      }, 10000);
+    });
+  }
+
+  private cleanup(sessionId: string): void {
+    const info = this.sessionInfo.get(sessionId);
+    if (info) {
+      this.guildToSession.delete(info.guildId);
+    }
+    this.sessions.delete(sessionId);
+    this.sessionInfo.delete(sessionId);
+  }
+}

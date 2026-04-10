@@ -32,6 +32,7 @@ import { personsRoutes } from './persons';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
 import { turnsRoutes } from './turns';
+import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -65,3 +66,4 @@ v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:sour
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
+v2Routes.route('/voice', voiceRoutes); // Voice session management
