@@ -312,7 +312,7 @@ export class DiscordVoiceSession implements VoiceTransport {
         if (userId) {
           const daveResult = this.dave.decryptAudio(userId, decrypted);
           if (daveResult) {
-            decrypted = daveResult;
+            decrypted = Buffer.from(daveResult);
           } else if (!this.dave.canPassthrough(userId)) {
             return;
           }
