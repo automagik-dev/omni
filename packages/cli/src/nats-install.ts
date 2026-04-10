@@ -14,7 +14,7 @@ import * as output from './output.js';
 
 const OMNI_DIR = join(homedir(), '.omni');
 export const NATS_BINARY_PATH = join(OMNI_DIR, 'nats-server');
-export const NATS_VERSION = 'v2.12.4';
+const NATS_VERSION = 'v2.12.4';
 
 function platformInfo(): { os: string; arch: string } | null {
   const platform = process.platform;
@@ -27,7 +27,7 @@ function platformInfo(): { os: string; arch: string } | null {
 }
 
 /** Download and install NATS binary. Returns true on success. */
-export async function downloadNats(): Promise<boolean> {
+async function downloadNats(): Promise<boolean> {
   const info = platformInfo();
   if (!info) {
     output.warn('Unsupported platform for automatic NATS download — install manually');
