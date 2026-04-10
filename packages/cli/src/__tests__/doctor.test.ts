@@ -39,6 +39,10 @@ interface HarnessState {
   serverVersion: string | null;
   apiStatus: 'online' | 'stopped' | 'errored' | 'missing';
   natsStatus: 'online' | 'stopped' | 'errored' | 'missing';
+  /** omni-api pm2 max_restarts value. `undefined` simulates "no flag set". */
+  apiMaxRestarts: number | undefined;
+  /** Canned `pm2 conf` stdout. `null` simulates pm2 conf unreachable. */
+  pm2ConfOutput: string | null;
   serverConfig: ServerConfig;
   cliConfig: Config;
   fixesInvoked: string[];
@@ -52,7 +56,20 @@ interface HarnessState {
   keyFixApplied: boolean;
   /** Whether pm2-drift clears after a fix attempt. */
   pm2DriftAfterFix: boolean;
+  /** Whether max_restarts becomes healthy after a fix attempt. */
+  maxRestartsAfterFix: number | undefined;
+  /** Whether pm2 conf becomes healthy after a fix attempt. */
+  pm2ConfAfterFix: string | null;
 }
+
+/** Canonical healthy `pm2 conf` output — matches PM2_LOGROTATE_SETTINGS. */
+const HEALTHY_PM2_CONF = `
+Module: pm2-logrotate
+  max_size                 10M
+  retain                   5
+  compress                 true
+  rotateInterval           0 0 * * *
+`;
 
 function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
   return {
@@ -64,6 +81,8 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     serverVersion: '2.20260218.18',
     apiStatus: 'online',
     natsStatus: 'online',
+    apiMaxRestarts: 10,
+    pm2ConfOutput: HEALTHY_PM2_CONF,
     serverConfig: {
       port: 8882,
       databaseUrl: 'postgresql://postgres:postgres@localhost:8432/omni',
@@ -78,6 +97,8 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     keyValidAfterFix: false,
     keyFixApplied: false,
     pm2DriftAfterFix: false,
+    maxRestartsAfterFix: undefined,
+    pm2ConfAfterFix: null,
     ...overrides,
   };
 }
@@ -104,6 +125,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
           pm2_env: {
             status: state.apiStatus,
             env: pm2StoredEnv,
+            max_restarts: state.apiMaxRestarts,
           },
         },
         {
@@ -137,6 +159,14 @@ function mkDeps(state: HarnessState): DoctorDeps {
         if (state.pm2DriftAfterFix) {
           state.pm2Drift = false;
         }
+        if (state.maxRestartsAfterFix !== undefined) {
+          state.apiMaxRestarts = state.maxRestartsAfterFix;
+        }
+      }
+      // The pm2-logrotate-installed fix re-runs `pm2 set pm2-logrotate:*`;
+      // flip pm2ConfOutput to the post-fix state when the last key is set.
+      if (args[0] === 'set' && args[1]?.startsWith('pm2-logrotate:') && state.pm2ConfAfterFix !== null) {
+        state.pm2ConfOutput = state.pm2ConfAfterFix;
       }
       return state.pm2ExitCode;
     },
@@ -148,6 +178,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
     sleepMs: async () => {
       // No real sleep in tests — we're deterministic.
     },
+    capturePm2Conf: async () => state.pm2ConfOutput,
   };
 }
 
@@ -156,7 +187,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 7 checks with OK when state is healthy', async () => {
+  test('reports all 9 checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -165,7 +196,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(7);
+    expect(report.checks).toHaveLength(9);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -175,11 +206,13 @@ describe('runDoctor — read-only mode', () => {
       'orphaned-data-dirs',
       'version-match',
       'pm2-status',
+      'pm2-max-restarts',
+      'pm2-logrotate-installed',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 7, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 9, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -258,6 +291,100 @@ describe('runDoctor — read-only mode', () => {
     expect(pm2?.level).toBe('FAIL');
     expect(pm2?.detail).toContain('omni-api=stopped');
   });
+
+  test('flags pm2-max-restarts as FAIL when apiMaxRestarts is 0', async () => {
+    const state = mkHarness({ apiMaxRestarts: 0 });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('max_restarts=0');
+  });
+
+  test('flags pm2-max-restarts as FAIL when apiMaxRestarts is >= 1000', async () => {
+    const state = mkHarness({ apiMaxRestarts: 1000 });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('max_restarts=1000');
+  });
+
+  test('flags pm2-max-restarts as FAIL when no max_restarts is set', async () => {
+    const state = mkHarness({ apiMaxRestarts: undefined });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('no max_restarts set');
+  });
+
+  test('pm2-max-restarts accepts the hardened 5..50 range', async () => {
+    for (const n of [5, 10, 25, 50]) {
+      const state = mkHarness({ apiMaxRestarts: n });
+      const deps = mkDeps(state);
+      const report = await runDoctor({ fix: false }, deps);
+      const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+      expect(check?.level).toBe('OK');
+    }
+  });
+
+  test('pm2-max-restarts warns on values outside 5..50 but below 1000', async () => {
+    const state = mkHarness({ apiMaxRestarts: 100 });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('expected 5..50');
+  });
+
+  test('flags pm2-logrotate-installed as FAIL when the module is missing', async () => {
+    const state = mkHarness({ pm2ConfOutput: 'Module: other-module\n' });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-logrotate-installed');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('not installed');
+  });
+
+  test('flags pm2-logrotate-installed as FAIL when max_size is wrong', async () => {
+    const state = mkHarness({
+      pm2ConfOutput: `
+Module: pm2-logrotate
+  max_size                 50M
+  retain                   5
+  compress                 true
+  rotateInterval           0 0 * * *
+`,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-logrotate-installed');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('max_size');
+  });
+
+  test('flags pm2-logrotate-installed as WARN when pm2 conf unreachable', async () => {
+    const state = mkHarness({ pm2ConfOutput: null });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-logrotate-installed');
+    expect(check?.level).toBe('WARN');
+  });
 });
 
 describe('runDoctor — --fix mode', () => {
@@ -335,6 +462,60 @@ describe('runDoctor — --fix mode', () => {
     // cli-key-valid still FAIL — the fix didn't take.
     const key = report.checks.find((c) => c.id === 'cli-key-valid');
     expect(key?.level).toBe('FAIL');
+  });
+
+  test('pm2-max-restarts fix reissues delete + start with hardened flags', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      apiMaxRestarts: 0,
+      maxRestartsAfterFix: 10,
+      serverVersion: VERSION,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    const deleteCall = state.pm2Calls.find((c) => c.args[0] === 'delete' && c.args[1] === 'omni-api');
+    const startCall = state.pm2Calls.find((c) => c.args[0] === 'start');
+    expect(deleteCall).toBeDefined();
+    expect(startCall).toBeDefined();
+    // Must carry the hardened flags
+    expect(startCall?.args).toContain('--max-restarts');
+    expect(startCall?.args).toContain('10');
+    expect(startCall?.args).toContain('--restart-delay');
+    expect(startCall?.args).toContain('5000');
+    expect(startCall?.args).toContain('--max-memory-restart');
+    expect(startCall?.args).toContain('2G');
+    // Recheck passes
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('OK');
+    expect(report.fixesApplied.some((f) => f.includes('--max-restarts'))).toBe(true);
+  });
+
+  test('pm2-logrotate-installed fix reinstalls module + sets all four keys', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      pm2ConfOutput: 'Module: other-module\n',
+      pm2ConfAfterFix: HEALTHY_PM2_CONF,
+      serverVersion: VERSION,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    const installCall = state.pm2Calls.find((c) => c.args[0] === 'install' && c.args[1] === 'pm2-logrotate');
+    expect(installCall).toBeDefined();
+    // All four settings keys must have been pushed via `pm2 set pm2-logrotate:*`
+    const setCalls = state.pm2Calls.filter((c) => c.args[0] === 'set' && c.args[1]?.startsWith('pm2-logrotate:'));
+    const setKeys = setCalls.map((c) => c.args[1]);
+    expect(setKeys).toContain('pm2-logrotate:max_size');
+    expect(setKeys).toContain('pm2-logrotate:retain');
+    expect(setKeys).toContain('pm2-logrotate:compress');
+    expect(setKeys).toContain('pm2-logrotate:rotateInterval');
+    // Recheck passes
+    const check = report.checks.find((c) => c.id === 'pm2-logrotate-installed');
+    expect(check?.level).toBe('OK');
+    expect(report.fixesApplied.some((f) => f.includes('reinstalled and configured pm2-logrotate'))).toBe(true);
   });
 });
 

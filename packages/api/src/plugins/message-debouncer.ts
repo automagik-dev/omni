@@ -83,16 +83,18 @@ export class MessageDebouncer {
     if (this.inFlight.has(chatKey)) return;
     if (config.restartOnTyping && this.buffers.has(chatKey)) {
       log.debug('Restarting debounce timer on user typing', { chatKey });
-      this.restartTimer(chatKey, config);
+      this.restartTimer(chatKey, config, true);
     }
   }
 
-  private restartTimer(chatKey: string, config: DebounceConfig): void {
+  private restartTimer(chatKey: string, config: DebounceConfig, force = false): void {
     const existing = this.timers.get(chatKey);
 
     // In 'fixed' mode, the timer is a fixed collection window from the first
     // message — do NOT restart it when subsequent messages arrive.
-    if (config.mode === 'fixed' && existing) return;
+    // However, typing events force-restart even in fixed mode so the user
+    // has time to finish composing before the agent is dispatched.
+    if (config.mode === 'fixed' && existing && !force) return;
 
     if (existing) clearTimeout(existing);
 

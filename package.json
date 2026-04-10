@@ -1,6 +1,6 @@
 {
   "name": "omni-v2",
-  "version": "2.260409.5",
+  "version": "2.260409.6",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
@@ -17,7 +17,8 @@
     "generate:sdk": "bun scripts/generate-sdk.ts",
     "generate:sdk-python": "bun scripts/generate-sdk-python.ts",
     "generate:sdk-go": "bun scripts/generate-sdk-go.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "postinstall": "node scripts/ensure-libicu-symlinks.cjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

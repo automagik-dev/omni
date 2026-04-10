@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260409.5",
+  "version": "2.260409.6",
   "type": "module",
   "exports": {
     ".": {
@@ -21,7 +21,8 @@
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "fix-persons": "bun run scripts/fix-person-duplicates.ts"
+    "fix-persons": "bun run scripts/fix-person-duplicates.ts",
+    "postinstall": "node ../../scripts/ensure-libicu-symlinks.cjs"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
