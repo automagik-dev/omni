@@ -18,6 +18,14 @@
     "./stream": {
       "types": "./src/stream/index.ts",
       "default": "./src/stream/index.ts"
+    },
+    "./transports/discord": {
+      "types": "./src/transports/discord/index.ts",
+      "default": "./src/transports/discord/index.ts"
+    },
+    "./crypto": {
+      "types": "./src/crypto/index.ts",
+      "default": "./src/crypto/index.ts"
     }
   },
   "scripts": {
