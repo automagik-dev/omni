@@ -8,13 +8,15 @@
  * mismatch or an auth failure after a restart.
  *
  * Checks performed, in order:
- *   1. pm2-env-drift   — pm2-stored env for omni-api vs. buildRuntimeEnv()
- *   2. cli-key-valid   — stored CLI key still validates against the server
- *   3. pgserve-reachable — TCP connect to localhost:PGSERVE_PORT
- *   4. omni-db-exists  — `omni` database exists on the embedded pgserve
- *   5. orphaned-data-dirs — `.pgserve-data/` directories under cwd
- *   6. version-match   — CLI version vs. /api/v2/health `version` field
- *   7. pm2-status      — omni-api and omni-nats both `online` in pm2
+ *   1. pm2-env-drift           — pm2-stored env for omni-api vs. buildRuntimeEnv()
+ *   2. cli-key-valid           — stored CLI key still validates against the server
+ *   3. pgserve-reachable       — TCP connect to localhost:PGSERVE_PORT
+ *   4. omni-db-exists          — `omni` database exists on the embedded pgserve
+ *   5. orphaned-data-dirs      — `.pgserve-data/` directories under cwd
+ *   6. version-match           — CLI version vs. /api/v2/health `version` field
+ *   7. pm2-status              — omni-api and omni-nats both `online` in pm2
+ *   8. pm2-max-restarts        — omni-api has bounded restarts (not 0 or >= 1000)
+ *   9. pm2-logrotate-installed — pm2-logrotate module configured correctly
  *
  * Each check returns OK / WARN / FAIL with a one-line detail. `--fix`
  * attempts repair for checks with a known repair path. The fix flow
@@ -22,13 +24,17 @@
  * load-bearing and has a dedicated mutation-safety test.
  *
  * Repair paths:
- *   - pm2-env-drift:   `pm2 delete omni-api` + re-launch via the same code
- *                      path used by `omni start`, with a sanitized env.
- *   - cli-key-valid:   Delete `__primary__` from api_keys, restart with a
- *                      freshly generated OMNI_API_KEY, re-validate, write
- *                      the new key to `~/.omni/config.json`.
- *   - orphaned-data-dirs: Print `rm -rf` commands for the user to review
- *                      (we never auto-delete data directories).
+ *   - pm2-env-drift:           `pm2 delete omni-api` + re-launch with a
+ *                              sanitized env via `buildPm2StartArgs()`.
+ *   - cli-key-valid:           Delete `__primary__` from api_keys, restart
+ *                              with a freshly generated OMNI_API_KEY, re-
+ *                              validate, write new key to ~/.omni/config.json.
+ *   - orphaned-data-dirs:      Print `rm -rf` commands for the user to review
+ *                              (we never auto-delete data directories).
+ *   - pm2-max-restarts:        `pm2 delete` + re-launch via `buildPm2StartArgs()`
+ *                              so the hardened `--max-restarts` flag takes effect.
+ *   - pm2-logrotate-installed: Re-run `pm2 install pm2-logrotate` + the four
+ *                              `pm2 set pm2-logrotate:*` commands.
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -38,8 +44,9 @@ import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { type Config, type ServerConfig, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
+import { PM2_LOGROTATE_SETTINGS } from '../install-helpers.js';
 import * as output from '../output.js';
-import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
+import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
 import { getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey } from '../utils/keys.js';
@@ -60,7 +67,9 @@ export type CheckId =
   | 'omni-db-exists'
   | 'orphaned-data-dirs'
   | 'version-match'
-  | 'pm2-status';
+  | 'pm2-status'
+  | 'pm2-max-restarts'
+  | 'pm2-logrotate-installed';
 
 export interface CheckResult {
   id: CheckId;
@@ -93,6 +102,7 @@ interface Pm2Entry {
     pm_exec_path?: string;
     args?: string[];
     interpreter?: string;
+    max_restarts?: number;
     OMNI_API_KEY?: string;
     DATABASE_URL?: string;
     PGSERVE_DATA?: string;
@@ -165,6 +175,8 @@ export interface DoctorDeps {
   generateApiKey: () => string;
   /** Sleep briefly after a pm2 restart. Tests stub to zero-delay. */
   sleepMs: (ms: number) => Promise<void>;
+  /** Capture `pm2 conf` stdout (or null on error). Used by pm2-logrotate check. */
+  capturePm2Conf: () => Promise<string | null>;
 }
 
 /** Default production deps — each is a thin shim around the real call. */
@@ -248,6 +260,11 @@ function productionDeps(): DoctorDeps {
     reloadCliConfig: loadConfig,
     generateApiKey,
     sleepMs: (ms: number) => Bun.sleep(ms),
+    capturePm2Conf: async () => {
+      const { code, stdout } = await capturePm2('conf');
+      if (code !== 0) return null;
+      return stdout;
+    },
   };
 }
 
@@ -396,6 +413,90 @@ async function checkPm2Status(deps: DoctorDeps): Promise<CheckResult> {
   };
 }
 
+/**
+ * Check 8: omni-api pm2 max_restarts is in the hardened range.
+ *
+ * The 2026-04-09 incident crash-looped omni-api and grew logs to 283 GB
+ * because pm2 had `max_restarts: 0` (the default = unbounded). The
+ * hardened flag sets it to 10. Values 5..50 pass; 0 or >= 1000 fail.
+ */
+async function checkPm2MaxRestarts(deps: DoctorDeps): Promise<CheckResult> {
+  const processes = await deps.getPm2Processes();
+  if (!processes) {
+    return { id: 'pm2-max-restarts', level: 'WARN', detail: 'pm2 not reachable' };
+  }
+  const apiEntry = processes.find((p) => p.name === PM2_PROCESSES.api);
+  if (!apiEntry) {
+    return { id: 'pm2-max-restarts', level: 'WARN', detail: `${PM2_PROCESSES.api} not found in pm2` };
+  }
+  const maxRestarts = apiEntry.pm2_env?.max_restarts;
+  if (typeof maxRestarts !== 'number') {
+    return {
+      id: 'pm2-max-restarts',
+      level: 'FAIL',
+      detail: `${PM2_PROCESSES.api} has no max_restarts set — crash loops are unbounded`,
+    };
+  }
+  if (maxRestarts === 0 || maxRestarts >= 1000) {
+    return {
+      id: 'pm2-max-restarts',
+      level: 'FAIL',
+      detail: `${PM2_PROCESSES.api} max_restarts=${maxRestarts} — crash loops are effectively unbounded`,
+    };
+  }
+  if (maxRestarts >= 5 && maxRestarts <= 50) {
+    return {
+      id: 'pm2-max-restarts',
+      level: 'OK',
+      detail: `${PM2_PROCESSES.api} max_restarts=${maxRestarts}`,
+    };
+  }
+  return {
+    id: 'pm2-max-restarts',
+    level: 'WARN',
+    detail: `${PM2_PROCESSES.api} max_restarts=${maxRestarts} — expected 5..50`,
+  };
+}
+
+/**
+ * Check 9: pm2-logrotate module installed with the expected settings.
+ *
+ * The install command wires logrotate during boot. If pm2 conf drifts
+ * (operator ran `pm2 unset ...` or reinstalled pm2), logs will grow
+ * unbounded. FAIL if the module is missing or any required key is wrong.
+ */
+async function checkPm2LogrotateInstalled(deps: DoctorDeps): Promise<CheckResult> {
+  const conf = await deps.capturePm2Conf();
+  if (conf === null) {
+    return { id: 'pm2-logrotate-installed', level: 'WARN', detail: 'pm2 conf unreachable' };
+  }
+  if (!conf.includes('pm2-logrotate')) {
+    return {
+      id: 'pm2-logrotate-installed',
+      level: 'FAIL',
+      detail: 'pm2-logrotate module not installed — logs will grow unbounded',
+    };
+  }
+  const missing: string[] = [];
+  for (const [key, value] of Object.entries(PM2_LOGROTATE_SETTINGS)) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`${key}\\s+${escaped}`);
+    if (!pattern.test(conf)) missing.push(key);
+  }
+  if (missing.length > 0) {
+    return {
+      id: 'pm2-logrotate-installed',
+      level: 'FAIL',
+      detail: `pm2-logrotate misconfigured: ${missing.join(', ')}`,
+    };
+  }
+  return {
+    id: 'pm2-logrotate-installed',
+    level: 'OK',
+    detail: 'pm2-logrotate installed with expected settings',
+  };
+}
+
 // ============================================================================
 // FIX HANDLERS
 // ============================================================================
@@ -413,15 +514,59 @@ async function fixPm2EnvDrift(deps: DoctorDeps): Promise<string> {
   // Best-effort delete — if the process doesn't exist we still want the
   // subsequent start to succeed.
   await deps.runPm2(['delete', PM2_PROCESSES.api], env);
-  const launcherPath = getServerLauncherPath();
-  const startCode = await deps.runPm2(
-    ['start', launcherPath, '--name', PM2_PROCESSES.api, '--interpreter', 'bash'],
-    env,
-  );
+  const startArgs = buildPm2StartArgs({
+    kind: 'api',
+    script: getServerLauncherPath(),
+    name: PM2_PROCESSES.api,
+    interpreter: 'bash',
+  });
+  const startCode = await deps.runPm2(startArgs, env);
   if (startCode !== 0) {
     throw new Error(`pm2 start ${PM2_PROCESSES.api} exited ${startCode}`);
   }
-  return `relaunched ${PM2_PROCESSES.api} with sanitized env`;
+  return `relaunched ${PM2_PROCESSES.api} with sanitized env and hardened flags`;
+}
+
+/**
+ * Fix pm2-max-restarts by deleting and re-launching omni-api with the
+ * hardened `buildPm2StartArgs()` flags. Identical in structure to
+ * fixPm2EnvDrift — the difference is the failure signal that triggers it.
+ */
+async function fixPm2MaxRestarts(deps: DoctorDeps): Promise<string> {
+  const { serverConfig, cliConfig } = deps.loadState();
+  const env = buildRuntimeEnv(serverConfig, cliConfig);
+  await deps.runPm2(['delete', PM2_PROCESSES.api], env);
+  const startArgs = buildPm2StartArgs({
+    kind: 'api',
+    script: getServerLauncherPath(),
+    name: PM2_PROCESSES.api,
+    interpreter: 'bash',
+  });
+  const startCode = await deps.runPm2(startArgs, env);
+  if (startCode !== 0) {
+    throw new Error(`pm2 start ${PM2_PROCESSES.api} exited ${startCode}`);
+  }
+  return `relaunched ${PM2_PROCESSES.api} with --max-restarts ${PM2_HARDENED_DEFAULTS.maxRestarts}`;
+}
+
+/**
+ * Fix pm2-logrotate-installed by re-running `pm2 install pm2-logrotate` and
+ * the four `pm2 set pm2-logrotate:*` commands. Matches the installer.
+ */
+async function fixPm2LogrotateInstalled(deps: DoctorDeps): Promise<string> {
+  const installCode = await deps.runPm2(['install', 'pm2-logrotate']);
+  if (installCode !== 0) {
+    throw new Error(`pm2 install pm2-logrotate exited ${installCode}`);
+  }
+  const failures: string[] = [];
+  for (const [key, value] of Object.entries(PM2_LOGROTATE_SETTINGS)) {
+    const code = await deps.runPm2(['set', `pm2-logrotate:${key}`, value]);
+    if (code !== 0) failures.push(key);
+  }
+  if (failures.length > 0) {
+    throw new Error(`pm2-logrotate set failed for: ${failures.join(', ')}`);
+  }
+  return 'reinstalled and configured pm2-logrotate';
 }
 
 /**
@@ -477,7 +622,7 @@ function fixOrphanedDataDirs(deps: DoctorDeps): string {
 // MAIN
 // ============================================================================
 
-/** Run the full 7-check battery sequentially. */
+/** Run the full 9-check battery sequentially. */
 async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
   return [
     await checkPm2EnvDrift(deps),
@@ -487,6 +632,8 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     checkOrphanedDataDirs(deps),
     await checkVersionMatch(deps),
     await checkPm2Status(deps),
+    await checkPm2MaxRestarts(deps),
+    await checkPm2LogrotateInstalled(deps),
   ];
 }
 
@@ -496,6 +643,8 @@ async function applyFix(deps: DoctorDeps, check: CheckResult): Promise<string | 
     if (check.id === 'pm2-env-drift') return await fixPm2EnvDrift(deps);
     if (check.id === 'cli-key-valid') return await fixCliKeyValid(deps);
     if (check.id === 'orphaned-data-dirs') return fixOrphanedDataDirs(deps);
+    if (check.id === 'pm2-max-restarts') return await fixPm2MaxRestarts(deps);
+    if (check.id === 'pm2-logrotate-installed') return await fixPm2LogrotateInstalled(deps);
     return null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -573,13 +722,15 @@ export function createDoctorCommand(): Command {
       'after',
       `
 Checks:
-  pm2-env-drift      pm2 stored env vs. buildRuntimeEnv() from config
-  cli-key-valid      CLI-stored key validates against running server
-  pgserve-reachable  TCP connect to embedded pgserve port
-  omni-db-exists     omni database is reachable on embedded pgserve
-  orphaned-data-dirs .pgserve-data directories outside ~/.omni
-  version-match      CLI version vs. /api/v2/health version field
-  pm2-status         omni-api and omni-nats both online in pm2
+  pm2-env-drift            pm2 stored env vs. buildRuntimeEnv() from config
+  cli-key-valid            CLI-stored key validates against running server
+  pgserve-reachable        TCP connect to embedded pgserve port
+  omni-db-exists           omni database is reachable on embedded pgserve
+  orphaned-data-dirs       .pgserve-data directories outside ~/.omni
+  version-match            CLI version vs. /api/v2/health version field
+  pm2-status               omni-api and omni-nats both online in pm2
+  pm2-max-restarts         omni-api max_restarts is in the hardened range
+  pm2-logrotate-installed  pm2-logrotate module installed with expected settings
 
 Safety:
   --fix NEVER touches ~/.omni/data/pgserve — it only operates on the pm2

@@ -21,7 +21,8 @@
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "fix-persons": "bun run scripts/fix-person-duplicates.ts"
+    "fix-persons": "bun run scripts/fix-person-duplicates.ts",
+    "postinstall": "node ../../scripts/ensure-libicu-symlinks.cjs"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
