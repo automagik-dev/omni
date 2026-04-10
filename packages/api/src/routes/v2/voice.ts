@@ -1,5 +1,8 @@
 /**
- * Voice REST API routes.
+ * Voice REST API routes — platform-agnostic.
+ *
+ * Uses VoiceCapable interface from channel-sdk. Works with any channel
+ * plugin that implements voice (Discord today, Twilio/LiveKit/WebRTC tomorrow).
  *
  * POST /v2/voice/join   — Join a voice channel
  * POST /v2/voice/leave  — Leave a voice session
@@ -8,6 +11,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
+import { isVoiceCapable } from '@omni/channel-sdk';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppVariables } from '../../types';
@@ -19,7 +23,7 @@ export const voiceRoutes = new Hono<{ Variables: AppVariables }>();
 const joinSchema = z.object({
   instanceId: z.string().min(1),
   channelId: z.string().min(1),
-  guildId: z.string().min(1),
+  guildId: z.string().optional(),
 });
 
 const leaveSchema = z.object({
@@ -30,85 +34,63 @@ const sessionIdParamSchema = z.object({
   id: z.string().min(1),
 });
 
+/** Find the first voice-capable plugin in the registry. */
+function findVoicePlugin(channelRegistry: AppVariables['channelRegistry']) {
+  if (!channelRegistry) return null;
+  for (const plugin of channelRegistry.getAll()) {
+    if (isVoiceCapable(plugin)) return plugin;
+  }
+  return null;
+}
+
 // ─── Routes ───────────────────────────────────────────────
 
-/**
- * POST /v2/voice/join
- * Join a Discord voice channel.
- */
 voiceRoutes.post('/join', zValidator('json', joinSchema), async (c) => {
   const { instanceId, channelId, guildId } = c.req.valid('json');
-  const channelRegistry = c.get('channelRegistry');
+  const plugin = findVoicePlugin(c.get('channelRegistry'));
 
-  if (!channelRegistry) {
-    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Channel registry not available' } }, 503);
-  }
-
-  const plugin = channelRegistry.get('discord');
   if (!plugin) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Discord plugin not available' } }, 404);
-  }
-
-  // Access the voice manager from the plugin (per-instance)
-  const voiceManager = (
-    plugin as {
-      voiceManagers?: Map<string, { joinChannel: (guildId: string, channelId: string) => Promise<unknown> }>;
-    }
-  ).voiceManagers?.get(instanceId);
-  if (!voiceManager) {
-    return c.json(
-      { error: { code: 'NOT_AVAILABLE', message: `Voice manager not initialized for instance ${instanceId}` } },
-      400,
-    );
+    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'No voice-capable channel plugin found' } }, 400);
   }
 
   try {
-    const session = await voiceManager.joinChannel(guildId, channelId);
+    const session = await plugin.voiceJoin(channelId, { instanceId, guildId });
 
-    // Publish session started event (fire-and-forget — don't block response)
     const eventBus = c.get('eventBus');
     if (eventBus) {
       eventBus
-        .publish('voice.session_started', {
-          sessionId: (session as { sessionId: string }).sessionId,
-          channelId,
-          instanceId,
-          guildId,
-        })
+        .publish('voice.session_started', { sessionId: session.id, channelId, instanceId, guildId })
         .catch(() => {});
     }
 
-    return c.json({ data: session }, 201);
+    return c.json(
+      {
+        data: {
+          sessionId: session.id,
+          instanceId: session.instanceId,
+          channelId: session.channelId,
+          state: session.state,
+          participants: session.participants,
+          createdAt: session.createdAt,
+        },
+      },
+      201,
+    );
   } catch (err) {
     return c.json({ error: { code: 'VOICE_JOIN_FAILED', message: String(err) } }, 500);
   }
 });
 
-/**
- * POST /v2/voice/leave
- * Leave a voice session.
- */
 voiceRoutes.post('/leave', zValidator('json', leaveSchema), async (c) => {
   const { sessionId } = c.req.valid('json');
-  const channelRegistry = c.get('channelRegistry');
+  const plugin = findVoicePlugin(c.get('channelRegistry'));
 
-  if (!channelRegistry) {
-    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Channel registry not available' } }, 503);
-  }
-
-  const plugin = channelRegistry.get('discord');
   if (!plugin) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Discord plugin not available' } }, 404);
-  }
-
-  const voiceManager = (plugin as { voiceManager?: { leaveChannel: (sessionId: string) => Promise<void> } })
-    .voiceManager;
-  if (!voiceManager) {
-    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Voice manager not initialized' } }, 400);
+    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'No voice-capable plugin' } }, 400);
   }
 
   try {
-    await voiceManager.leaveChannel(sessionId);
+    await plugin.voiceLeave(sessionId);
 
     const eventBus = c.get('eventBus');
     if (eventBus) {
@@ -121,57 +103,43 @@ voiceRoutes.post('/leave', zValidator('json', leaveSchema), async (c) => {
   }
 });
 
-/**
- * GET /v2/voice/sessions
- * List all active voice sessions.
- */
 voiceRoutes.get('/sessions', async (c) => {
-  const channelRegistry = c.get('channelRegistry');
+  const plugin = findVoicePlugin(c.get('channelRegistry'));
+  if (!plugin) return c.json({ items: [] });
 
-  if (!channelRegistry) {
-    return c.json({ items: [] });
-  }
+  const sessions = plugin.voiceSessions().map((s) => ({
+    sessionId: s.id,
+    instanceId: s.instanceId,
+    channelId: s.channelId,
+    state: s.state,
+    participants: s.participants,
+    createdAt: s.createdAt,
+  }));
 
-  const plugin = channelRegistry.get('discord');
-  if (!plugin) {
-    return c.json({ items: [] });
-  }
-
-  const voiceManager = (plugin as { voiceManager?: { getSessions: () => unknown[] } }).voiceManager;
-  if (!voiceManager) {
-    return c.json({ items: [] });
-  }
-
-  const sessions = voiceManager.getSessions();
   return c.json({ items: sessions });
 });
 
-/**
- * GET /v2/voice/sessions/:id
- * Get a specific voice session with detail.
- */
 voiceRoutes.get('/sessions/:id', zValidator('param', sessionIdParamSchema), async (c) => {
   const { id } = c.req.valid('param');
-  const channelRegistry = c.get('channelRegistry');
+  const plugin = findVoicePlugin(c.get('channelRegistry'));
 
-  if (!channelRegistry) {
-    return c.json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Channel registry not available' } }, 503);
-  }
-
-  const plugin = channelRegistry.get('discord');
   if (!plugin) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Discord plugin not available' } }, 404);
+    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'No voice-capable plugin' } }, 400);
   }
 
-  const voiceManager = (plugin as { voiceManager?: { getSession: (id: string) => unknown | undefined } }).voiceManager;
-  if (!voiceManager) {
-    return c.json({ error: { code: 'NOT_AVAILABLE', message: 'Voice manager not initialized' } }, 400);
-  }
-
-  const session = voiceManager.getSession(id);
+  const session = plugin.voiceSession(id);
   if (!session) {
     return c.json({ error: { code: 'NOT_FOUND', message: `Voice session ${id} not found` } }, 404);
   }
 
-  return c.json({ data: session });
+  return c.json({
+    data: {
+      sessionId: session.id,
+      instanceId: session.instanceId,
+      channelId: session.channelId,
+      state: session.state,
+      participants: session.participants,
+      createdAt: session.createdAt,
+    },
+  });
 });

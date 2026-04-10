@@ -23,6 +23,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { ActivityType } from 'discord.js';
 import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
 
+import type { VoiceSession as IVoiceSession } from '@omni/channel-sdk';
 import { clearToken, loadToken, saveToken } from './auth';
 import type { InteractionAuthConfig } from './auth/interaction-auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
@@ -359,6 +360,117 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Legacy single voiceManager accessor — returns the first available for now */
   public get voiceManager(): VoiceManager | undefined {
     return this.voiceManagers.values().next().value;
+  }
+
+  // ─── VoiceCapable implementation ─────────────────────────
+
+  async voiceJoin(channelId: string, opts?: Record<string, unknown>): Promise<IVoiceSession> {
+    const instanceId = (opts?.instanceId as string) ?? '';
+    const guildId = (opts?.guildId as string) ?? '';
+    const vm = this.voiceManagers.get(instanceId);
+    if (!vm) throw new Error(`No voice manager for instance ${instanceId}`);
+    const info = await vm.joinChannel(guildId, channelId);
+    const session = vm.getVoiceSession(info.sessionId);
+    if (!session) throw new Error('Voice session created but not found');
+    return {
+      get id() {
+        return info.sessionId;
+      },
+      get state() {
+        return info.state as IVoiceSession['state'];
+      },
+      get channelId() {
+        return info.channelId;
+      },
+      get instanceId() {
+        return info.instanceId;
+      },
+      get participants() {
+        return session.listParticipants();
+      },
+      get createdAt() {
+        return info.createdAt;
+      },
+      onAudio: (cb) => session.onAudio(cb),
+      offAudio: (cb) => session.offAudio(cb),
+      sendAudio: (frame) => session.sendAudio(frame),
+    };
+  }
+
+  async voiceLeave(sessionId: string): Promise<void> {
+    for (const vm of this.voiceManagers.values()) {
+      if (vm.getSession(sessionId)) {
+        await vm.leaveChannel(sessionId);
+        return;
+      }
+    }
+  }
+
+  voiceSessions(): IVoiceSession[] {
+    const sessions: IVoiceSession[] = [];
+    for (const vm of this.voiceManagers.values()) {
+      for (const info of vm.getSessions()) {
+        const session = vm.getVoiceSession(info.sessionId);
+        if (!session) continue;
+        sessions.push({
+          get id() {
+            return info.sessionId;
+          },
+          get state() {
+            return info.state as IVoiceSession['state'];
+          },
+          get channelId() {
+            return info.channelId;
+          },
+          get instanceId() {
+            return info.instanceId;
+          },
+          get participants() {
+            return session.listParticipants();
+          },
+          get createdAt() {
+            return info.createdAt;
+          },
+          onAudio: (cb) => session.onAudio(cb),
+          offAudio: (cb) => session.offAudio(cb),
+          sendAudio: (frame) => session.sendAudio(frame),
+        });
+      }
+    }
+    return sessions;
+  }
+
+  voiceSession(sessionId: string): IVoiceSession | undefined {
+    for (const vm of this.voiceManagers.values()) {
+      const info = vm.getSession(sessionId);
+      if (!info) continue;
+      const session = vm.getVoiceSession(info.sessionId);
+      if (!session) continue;
+      return {
+        get id() {
+          return info.sessionId;
+        },
+        get state() {
+          return info.state as IVoiceSession['state'];
+        },
+        get channelId() {
+          return info.channelId;
+        },
+        get instanceId() {
+          return info.instanceId;
+        },
+        get participants() {
+          return session.listParticipants();
+        },
+        get createdAt() {
+          return info.createdAt;
+        },
+        onAudio: (cb) => session.onAudio(cb),
+        offAudio: (cb) => session.offAudio(cb),
+        sendAudio: (frame) => session.sendAudio(frame),
+      };
+    }
+    return undefined;
   }
 
   /** Per-instance inbound dedup caches */

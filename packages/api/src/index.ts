@@ -8,7 +8,7 @@ import './instrument';
  * Uses Bun.serve with embedded pgserve (PostgreSQL 17) for zero-dependency PostgreSQL.
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
 import { applyMigrations, closeDb, createDb } from '@omni/db';
@@ -134,11 +134,12 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   const result = await loadChannelPlugins({ eventBus, db });
   globalChannelRegistry = result.registry;
 
-  // Wire voice stream registry to Discord plugin for WS audio forwarding
-  const discordPlugin = result.registry.get('discord');
-  if (discordPlugin && 'voiceStreamSink' in discordPlugin) {
-    (discordPlugin as { voiceStreamSink: unknown }).voiceStreamSink = voiceStreamRegistry;
-    pluginLog.info('Voice stream registry wired to Discord plugin');
+  // Wire voice stream registry to any voice-capable plugin for WS audio forwarding
+  for (const plugin of result.registry.getAll()) {
+    if ('voiceStreamSink' in plugin) {
+      (plugin as { voiceStreamSink: unknown }).voiceStreamSink = voiceStreamRegistry;
+      pluginLog.info('Voice stream registry wired to plugin', { pluginId: plugin.id });
+    }
   }
 
   if (result.loaded > 0) {
@@ -234,20 +235,11 @@ function startBunServer(app: App) {
           }
         }
 
-        // Validate session exists
-        const plugin = globalChannelRegistry?.get('discord');
-        const voiceManagers = (plugin as { voiceManagers?: Map<string, unknown> })?.voiceManagers;
-        let sessionFound = false;
-        if (voiceManagers) {
-          for (const [, manager] of voiceManagers) {
-            const mgr = manager as { getSession?: (id: string) => unknown };
-            if (mgr.getSession?.(params.sessionId)) {
-              sessionFound = true;
-              break;
-            }
-          }
-        }
-        if (!sessionFound) {
+        // Validate session exists via VoiceCapable interface
+        const voicePlugin = globalChannelRegistry
+          ?.getAll()
+          .find((p) => isVoiceCapable(p) && p.voiceSession(params.sessionId));
+        if (!voicePlugin) {
           ws.close(4004, `Voice session ${params.sessionId} not found`);
           return;
         }
@@ -282,21 +274,13 @@ function startBunServer(app: App) {
           return;
         }
 
-        // Binary = audio for bot to speak in Discord
-        // Find the voice session and send audio
-        const plugin = globalChannelRegistry?.get('discord');
-        const voiceManagers = (plugin as { voiceManagers?: Map<string, unknown> })?.voiceManagers;
-        if (voiceManagers) {
-          for (const [, manager] of voiceManagers) {
-            const mgr = manager as {
-              getVoiceSession?: (id: string) => { sendAudio?: (buf: Buffer) => void } | undefined;
-            };
-            const session = mgr.getVoiceSession?.(client.params.sessionId);
-            if (session?.sendAudio) {
-              session.sendAudio(Buffer.from(message));
-              break;
-            }
-          }
+        // Binary = audio for bot to speak — find session via VoiceCapable
+        const vPlugin = globalChannelRegistry
+          ?.getAll()
+          .find((p) => isVoiceCapable(p) && p.voiceSession(client.params.sessionId));
+        if (vPlugin && isVoiceCapable(vPlugin)) {
+          const session = vPlugin.voiceSession(client.params.sessionId);
+          session?.sendAudio(Buffer.from(message));
         }
       },
       close(ws) {
