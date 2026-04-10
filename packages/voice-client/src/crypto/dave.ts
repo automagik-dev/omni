@@ -175,6 +175,16 @@ export class DaveManager {
     }
   }
 
+  /** Encrypt an Opus frame with DAVE E2EE. Returns null if session not ready. */
+  encryptAudio(opusFrame: Buffer): Buffer | null {
+    if (!this.session?.ready) return null;
+    try {
+      return this.session.encryptOpus(opusFrame);
+    } catch {
+      return null;
+    }
+  }
+
   /** Check if a user's decryptor is in passthrough mode. */
   canPassthrough(userId: string): boolean {
     return this.session?.canPassthrough(userId) ?? false;

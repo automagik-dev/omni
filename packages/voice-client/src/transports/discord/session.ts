@@ -36,6 +36,10 @@ export class DiscordVoiceSession implements VoiceTransport {
   private decryptor: SrtpDecryptor | null = null;
   private dave = new DaveManager();
   private channelId = '';
+  private sendSeq = 0;
+  private sendTimestamp = 0;
+  private sendNonce = 0;
+  private audioCallbacks = new Set<(userId: string, ssrc: number, opusFrame: Uint8Array) => void>();
 
   private ssrc = 0;
   private options: TransportOptions | null = null;
@@ -281,6 +285,63 @@ export class DiscordVoiceSession implements VoiceTransport {
     this.setState('ready');
   }
 
+  /** Register a callback for decoded audio frames (called per-packet, per-user). */
+  onAudio(cb: (userId: string, ssrc: number, opusFrame: Uint8Array) => void): void {
+    this.audioCallbacks.add(cb);
+  }
+
+  /** Unregister an audio callback. */
+  offAudio(cb: (userId: string, ssrc: number, opusFrame: Uint8Array) => void): void {
+    this.audioCallbacks.delete(cb);
+  }
+
+  /** Send an Opus frame to Discord: DAVE encrypt → RTP header → SRTP encrypt → UDP. */
+  sendAudio(opusFrame: Buffer): void {
+    if (!this.decryptor) return;
+
+    // DAVE encrypt if active
+    let payload = opusFrame;
+    if (this.dave.ready) {
+      const encrypted = this.dave.encryptAudio(opusFrame);
+      if (encrypted) payload = encrypted;
+    }
+
+    // Build RTP header
+    const header = Buffer.alloc(12);
+    header[0] = 0x80; // version 2
+    header[1] = 0x78; // payload type 120 (Opus)
+    header.writeUInt16BE(this.sendSeq & 0xffff, 2);
+    header.writeUInt32BE(this.sendTimestamp, 4);
+    header.writeUInt32BE(this.ssrc, 8);
+    this.sendSeq++;
+    this.sendTimestamp += 960; // 20ms at 48kHz
+
+    // SRTP encrypt
+    const srtpPayload = this.decryptor.encryptRaw(payload, header, this.sendNonce++);
+
+    // Combine header + encrypted payload and send
+    const packet = Buffer.concat([header, srtpPayload]);
+    this.udp.send(packet);
+  }
+
+  /** Enable echo mode: every received Opus frame is sent back. */
+  enableEcho(): void {
+    this.receiver.on('participantJoin', (_userId, stream) => {
+      const reader = stream.subscribe('opus').getReader();
+      const readLoop = (): void => {
+        reader
+          .read()
+          .then(({ done, value }) => {
+            if (done) return;
+            if (value) this.sendAudio(Buffer.from(value));
+            readLoop();
+          })
+          .catch(() => {});
+      };
+      readLoop();
+    });
+  }
+
   /** Decrypt and route a raw UDP packet through SRTP → DAVE → receiver. */
   private handleUdpPacket(msg: Buffer): void {
     if (msg.length <= 8 || !this.decryptor) return;
@@ -320,6 +381,14 @@ export class DiscordVoiceSession implements VoiceTransport {
       }
 
       this.receiver.receivePacket(ssrc, new Uint8Array(decrypted));
+
+      // Notify audio callbacks (for WS stream, recording, etc.)
+      const userId = this.receiver.getUserForSsrc(ssrc);
+      if (userId && this.audioCallbacks.size > 0) {
+        for (const cb of this.audioCallbacks) {
+          cb(userId, ssrc, new Uint8Array(decrypted));
+        }
+      }
     } catch {
       // Keepalive/RTCP packets fail decrypt — expected
     }

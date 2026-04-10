@@ -49,6 +49,7 @@ import {
 } from './plugins';
 import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
+import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { printStartupBanner } from './utils/startup-banner';
@@ -57,6 +58,15 @@ import { printStartupBanner } from './utils/startup-banner';
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
+
+import { VoiceStreamRegistry, parseVoiceStreamParams } from './ws/voice';
+import type { VoiceStreamClient } from './ws/voice';
+
+// Voice stream WebSocket registry (global singleton)
+const voiceStreamRegistry = new VoiceStreamRegistry();
+
+// Exported for voice session integration
+export { voiceStreamRegistry };
 
 // Global references for plugin system
 let globalEventBus: EventBus | null = null;
@@ -124,6 +134,13 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   const result = await loadChannelPlugins({ eventBus, db });
   globalChannelRegistry = result.registry;
 
+  // Wire voice stream registry to Discord plugin for WS audio forwarding
+  const discordPlugin = result.registry.get('discord');
+  if (discordPlugin && 'voiceStreamSink' in discordPlugin) {
+    (discordPlugin as { voiceStreamSink: unknown }).voiceStreamSink = voiceStreamRegistry;
+    pluginLog.info('Voice stream registry wired to Discord plugin');
+  }
+
   if (result.loaded > 0) {
     pluginLog.info('Channel plugins loaded', { count: result.loaded, plugins: result.pluginIds });
   } else {
@@ -161,15 +178,136 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
- * Start the HTTP server using Bun.serve
+ * Start the HTTP server using Bun.serve with WebSocket support.
+ *
+ * Voice stream WebSocket: ws://host/api/v2/voice/stream/{sessionId}?api_key=<key>&format=opus|pcm
+ * Auth is validated on upgrade. Binary frames carry tagged audio per user.
  */
 function startBunServer(app: App) {
-  return Bun.serve({
+  let globalDb: Database | null = null;
+
+  return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
     port: PORT,
     hostname: HOST,
-    fetch: app.fetch,
+    fetch(req, server) {
+      const url = new URL(req.url);
+
+      // Voice stream WebSocket upgrade
+      if (url.pathname.startsWith('/api/v2/voice/stream/')) {
+        const params = parseVoiceStreamParams(url);
+        if (!params?.apiKey) {
+          return new Response('API key required (api_key query parameter)', { status: 401 });
+        }
+
+        // Validate API key synchronously by attempting upgrade — auth check happens in open()
+        // Bun.serve.upgrade() must be called in fetch; async auth validated in open handler
+        const upgraded = server.upgrade(req, { data: { params } });
+        if (!upgraded) {
+          return new Response('WebSocket upgrade failed', { status: 500 });
+        }
+        return undefined as unknown as Response;
+      }
+
+      // All other requests handled by Hono
+      return app.fetch(req, server);
+    },
+    websocket: {
+      async open(ws) {
+        const params = ws.data.params;
+        if (!params) {
+          ws.close(4001, 'Invalid parameters');
+          return;
+        }
+
+        // Validate API key against the database
+        if (!globalDb) {
+          // Lazy init — get db from the first available source
+          globalDb = globalDbRef;
+        }
+        if (globalDb) {
+          try {
+            const apiKeyService = new ApiKeyService(globalDb);
+            await apiKeyService.validate(params.apiKey);
+          } catch {
+            ws.close(4004, 'Invalid API key');
+            return;
+          }
+        }
+
+        // Validate session exists
+        const plugin = globalChannelRegistry?.get('discord');
+        const voiceManagers = (plugin as { voiceManagers?: Map<string, unknown> })?.voiceManagers;
+        let sessionFound = false;
+        if (voiceManagers) {
+          for (const [, manager] of voiceManagers) {
+            const mgr = manager as { getSession?: (id: string) => unknown };
+            if (mgr.getSession?.(params.sessionId)) {
+              sessionFound = true;
+              break;
+            }
+          }
+        }
+        if (!sessionFound) {
+          ws.close(4004, `Voice session ${params.sessionId} not found`);
+          return;
+        }
+
+        const client: VoiceStreamClient = {
+          params,
+          send: (data) => {
+            try {
+              ws.send(data as string | ArrayBuffer | Uint8Array);
+            } catch {
+              // Client slow or disconnected
+            }
+          },
+        };
+        voiceStreamRegistry.add(ws, client);
+        ws.send(JSON.stringify({ type: 'session_ready', sessionId: params.sessionId }));
+      },
+      message(ws, message) {
+        const client = voiceStreamRegistry.get(ws);
+        if (!client) return;
+
+        // Text = JSON control message
+        if (typeof message === 'string') {
+          try {
+            const msg = JSON.parse(message) as { type: string };
+            if (msg.type === 'speaking') {
+              // Toggle bot speaking — handled at session level
+            }
+          } catch {
+            // Invalid JSON — ignore
+          }
+          return;
+        }
+
+        // Binary = audio for bot to speak in Discord
+        // Find the voice session and send audio
+        const plugin = globalChannelRegistry?.get('discord');
+        const voiceManagers = (plugin as { voiceManagers?: Map<string, unknown> })?.voiceManagers;
+        if (voiceManagers) {
+          for (const [, manager] of voiceManagers) {
+            const mgr = manager as {
+              getVoiceSession?: (id: string) => { sendAudio?: (buf: Buffer) => void } | undefined;
+            };
+            const session = mgr.getVoiceSession?.(client.params.sessionId);
+            if (session?.sendAudio) {
+              session.sendAudio(Buffer.from(message));
+              break;
+            }
+          }
+        }
+      },
+      close(ws) {
+        voiceStreamRegistry.remove(ws);
+      },
+    },
   });
 }
+
+// Database reference for WS auth (set during startup)
+let globalDbRef: Database | null = null;
 
 /**
  * Set up graceful shutdown handlers
@@ -383,6 +521,7 @@ async function main() {
   // Create database connection
   log.info('Connecting to database');
   const db = createDb({ url: databaseUrl });
+  globalDbRef = db;
 
   // Register early shutdown handler so SIGINT/SIGTERM during startup still cleans up
   const earlyShutdown = async () => {

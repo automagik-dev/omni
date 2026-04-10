@@ -94,6 +94,32 @@ export class SrtpDecryptor implements EncryptionLayer {
     }
   }
 
+  /** Encrypt plaintext with SRTP. Returns: encrypted payload + 4-byte nonce suffix appended. */
+  encryptRaw(plaintext: Buffer, aad: Buffer, nonceCounter: number): Buffer {
+    const nonceSize = NONCE_SIZES[this.mode];
+    const nonce = Buffer.alloc(nonceSize);
+    nonce.writeUInt32BE(nonceCounter, 0);
+
+    let cipherWithTag: Uint8Array;
+    switch (this.mode) {
+      case 'aead_xchacha20_poly1305_rtpsize':
+        cipherWithTag = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(plaintext, aad, null, nonce, this.secretKey);
+        break;
+      case 'aead_aes256_gcm_rtpsize': {
+        const fn = sodiumAny.crypto_aead_aes256gcm_encrypt as typeof sodium.crypto_aead_xchacha20poly1305_ietf_encrypt;
+        if (!fn) throw new Error('AES-256-GCM not available');
+        cipherWithTag = fn(plaintext, aad, null, nonce, this.secretKey);
+        break;
+      }
+      default:
+        throw new Error(`encryptRaw not supported for mode: ${this.mode}`);
+    }
+
+    const suffix = Buffer.alloc(NONCE_SUFFIX_SIZE);
+    suffix.writeUInt32BE(nonceCounter, 0);
+    return Buffer.concat([Buffer.from(cipherWithTag), suffix]);
+  }
+
   /** Async decrypt that ensures sodium is ready. */
   async decryptAsync(packet: Uint8Array, header: Uint8Array): Promise<Uint8Array> {
     await this.ready;

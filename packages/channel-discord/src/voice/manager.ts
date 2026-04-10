@@ -13,6 +13,12 @@ import { createLogger } from '@omni/core';
 import { DiscordVoiceSession, type TransportOptions } from '@omni/voice-client';
 import type { Client, VoiceState } from 'discord.js';
 
+/** Optional audio stream callback registry. */
+export interface AudioStreamSink {
+  pushAudio(sessionId: string, userId: string, audioData: Uint8Array, format: 'opus' | 'pcm'): void;
+  broadcast(sessionId: string, message: Record<string, unknown>): void;
+}
+
 const log = createLogger('discord:voice');
 
 export interface VoiceSessionInfo {
@@ -37,6 +43,7 @@ interface PendingConnection {
 export class VoiceManager {
   private instanceId: string;
   private client: Client;
+  private streamSink: AudioStreamSink | null;
 
   /** Active voice sessions keyed by a generated session ID. */
   private sessions = new Map<string, DiscordVoiceSession>();
@@ -47,9 +54,10 @@ export class VoiceManager {
   /** guildId → sessionId reverse lookup. */
   private guildToSession = new Map<string, string>();
 
-  constructor(instanceId: string, client: Client) {
+  constructor(instanceId: string, client: Client, streamSink?: AudioStreamSink) {
     this.instanceId = instanceId;
     this.client = client;
+    this.streamSink = streamSink ?? null;
     this.setupEventListeners();
   }
 
@@ -299,6 +307,21 @@ export class VoiceManager {
       .then(() => {
         info.state = 'ready';
         log.info('Voice session connected', { sessionId, guildId, channelId: pending.channelId });
+
+        // Wire audio to stream sink (WS registry) if available
+        if (this.streamSink) {
+          const sink = this.streamSink;
+          session.onAudio((userId, _ssrc, opusFrame) => {
+            sink.pushAudio(sessionId, userId, opusFrame, 'opus');
+          });
+          session.onParticipantEvent('participantJoin', (userId) => {
+            sink.broadcast(sessionId, { type: 'participant_joined', userId });
+          });
+          session.onParticipantEvent('participantLeave', (userId) => {
+            sink.broadcast(sessionId, { type: 'participant_left', userId });
+          });
+          sink.broadcast(sessionId, { type: 'session_ready', sessionId });
+        }
 
         // Resolve any waiters
         const resolve = this.connectionWaiters.get(guildId);

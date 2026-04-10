@@ -52,7 +52,7 @@ import type {
   SlashCommandPayload,
 } from './types';
 import { DiscordError, ErrorCode, mapDiscordError } from './utils/errors';
-import { VoiceManager } from './voice/manager';
+import { type AudioStreamSink, VoiceManager } from './voice/manager';
 
 // ============================================================================
 // Send Message Helpers
@@ -353,6 +353,9 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Voice managers per instance (exposed for voice REST routes) */
   public voiceManagers = new Map<string, VoiceManager>();
 
+  /** Optional audio stream sink for WebSocket forwarding */
+  public voiceStreamSink: AudioStreamSink | null = null;
+
   /** Legacy single voiceManager accessor — returns the first available for now */
   public get voiceManager(): VoiceManager | undefined {
     return this.voiceManagers.values().next().value;
@@ -489,7 +492,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
     this.clients.set(instanceId, client);
 
     // Create voice manager for this instance
-    const voiceManager = new VoiceManager(instanceId, client);
+    const voiceManager = new VoiceManager(instanceId, client, this.voiceStreamSink ?? undefined);
     this.voiceManagers.set(instanceId, voiceManager);
 
     // Login
