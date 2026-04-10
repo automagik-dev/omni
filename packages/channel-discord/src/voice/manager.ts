@@ -10,7 +10,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import { DiscordVoiceSession } from '@omni/voice-client';
+import { DiscordVoiceSession, type TransportOptions } from '@omni/voice-client';
 import type { Client, VoiceState } from 'discord.js';
 
 const log = createLogger('discord:voice');
@@ -66,17 +66,29 @@ export class VoiceManager {
       if (existing) return existing;
     }
 
-    const sessionId = `voice-${guildId}-${Date.now()}`;
+    // Get the guild
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) {
+      throw new Error(`Guild ${guildId} not found`);
+    }
+
+    // If bot is already in a voice channel in this guild, leave first to get fresh credentials
+    const me = await guild.members.fetchMe();
+    if (me.voice?.channelId) {
+      guild.shard.send({
+        op: 4,
+        d: { guild_id: guildId, channel_id: null, self_mute: false, self_deaf: false },
+      });
+      // Wait 500ms for Discord to process the leave
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // Clear any stale pending state
+    this.pending.delete(guildId);
+    this.connectionWaiters.delete(guildId);
 
     // Set up pending connection
     this.pending.set(guildId, { guildId, channelId });
-
-    // Send voice state update via Discord gateway (opcode 4)
-    const guild = this.client.guilds.cache.get(guildId);
-    if (!guild) {
-      this.pending.delete(guildId);
-      throw new Error(`Guild ${guildId} not found`);
-    }
 
     // Discord.js voice state update — tells Discord we want to join the channel
     // This sends Gateway Opcode 4 (Voice State Update) with self_mute=false, self_deaf=false
@@ -91,7 +103,7 @@ export class VoiceManager {
     });
 
     // Wait for the connection to complete (voice server update arrives)
-    const info = await this.waitForConnection(guildId, sessionId, channelId);
+    const info = await this.waitForConnection(guildId, channelId);
     return info;
   }
 
@@ -170,11 +182,22 @@ export class VoiceManager {
       this.handleVoiceStateUpdate(oldState, newState);
     });
 
-    // VOICE_SERVER_UPDATE — raw gateway event with token + endpoint
-    // discord.js doesn't emit this as a typed event, so we listen on 'raw'
+    // Raw events for VOICE_SERVER_UPDATE (not exposed by discord.js) and
+    // VOICE_STATE_UPDATE (to get the authoritative session_id for voice).
     this.client.on('raw', (packet: { t: string; d: Record<string, unknown> }) => {
       if (packet.t === 'VOICE_SERVER_UPDATE') {
         this.handleVoiceServerUpdate(packet.d);
+      } else if (packet.t === 'VOICE_STATE_UPDATE') {
+        const botId = this.client.user?.id;
+        if (packet.d.user_id === botId && packet.d.guild_id && packet.d.session_id) {
+          const guildId = packet.d.guild_id as string;
+          const pending = this.pending.get(guildId);
+          if (pending) {
+            const sessionId = packet.d.session_id as string;
+            pending.sessionId = sessionId;
+            this.tryConnect(guildId);
+          }
+        }
       }
     });
   }
@@ -248,6 +271,20 @@ export class VoiceManager {
     // Remove from pending
     this.pending.delete(guildId);
 
+    // Gather the user IDs already in the voice channel for DAVE
+    // (DAVE rejects proposals for users not in the recognized set)
+    const recognizedUserIds: string[] = [];
+    const guild = this.client.guilds.cache.get(pending.guildId);
+    if (guild) {
+      const voiceChannel = guild.channels.cache.get(pending.channelId);
+      if (voiceChannel && 'members' in voiceChannel) {
+        const members = (voiceChannel as { members: Map<string, { id: string }> }).members;
+        for (const [memberId] of members) {
+          recognizedUserIds.push(memberId);
+        }
+      }
+    }
+
     // Connect the voice session
     session
       .connect({
@@ -257,7 +294,8 @@ export class VoiceManager {
         endpoint: pending.endpoint,
         userId: this.client.user?.id,
         sessionId: pending.sessionId,
-      })
+        recognizedUserIds,
+      } as TransportOptions & { userId?: string; sessionId?: string; recognizedUserIds?: string[] })
       .then(() => {
         info.state = 'ready';
         log.info('Voice session connected', { sessionId, guildId, channelId: pending.channelId });
@@ -284,7 +322,7 @@ export class VoiceManager {
   /** Waiters for joinChannel() promise resolution. */
   private connectionWaiters = new Map<string, (info: VoiceSessionInfo) => void>();
 
-  private waitForConnection(guildId: string, _sessionId: string, _channelId: string): Promise<VoiceSessionInfo> {
+  private waitForConnection(guildId: string, _channelId: string): Promise<VoiceSessionInfo> {
     return new Promise<VoiceSessionInfo>((resolve, reject) => {
       this.connectionWaiters.set(guildId, resolve);
 

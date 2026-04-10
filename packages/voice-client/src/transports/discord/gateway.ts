@@ -1,16 +1,21 @@
 /**
- * Discord Voice Gateway v4 WebSocket client.
+ * Discord Voice Gateway v8 WebSocket client with DAVE (E2EE) support.
  *
- * Handles the voice WebSocket connection lifecycle:
- * Identify → Ready → Heartbeat loop → Session Description → Speaking events
+ * As of March 2026 Discord requires DAVE for all voice connections.
+ * v4 is deprecated; v8 is current. DAVE is negotiated via Identify and
+ * driven by binary opcodes 25-31.
  *
- * Reference: https://discord.com/developers/docs/topics/voice-connections
+ * @see https://discord.com/developers/docs/topics/voice-connections
+ * @see https://daveprotocol.com/
  */
+import { DAVE_PROTOCOL_VERSION } from '../../crypto/dave';
 
-/** Voice Gateway v4 opcodes (client ↔ server) */
+/** Voice Gateway v8 opcodes (client ↔ server). */
 export const VoiceOpcode = {
   /** Client → Server: Begin a voice websocket connection */
   Identify: 0,
+  /** Client → Server: Select the voice protocol and mode */
+  SelectProtocol: 1,
   /** Server → Client: Complete the websocket handshake */
   Ready: 2,
   /** Client → Server: Keep the connection alive */
@@ -29,8 +34,30 @@ export const VoiceOpcode = {
   Resumed: 9,
   /** Server → Client: A client has disconnected from the voice channel */
   ClientDisconnect: 13,
-  /** Client → Server: Select the voice protocol and mode */
-  SelectProtocol: 1,
+
+  // ─── DAVE protocol opcodes (v8) ───────────────────────────────
+  /** Server → Client (JSON): DAVE downgrade upcoming, prepare */
+  DavePrepareTransition: 21,
+  /** Server → Client (JSON): Execute previously prepared transition */
+  DaveExecuteTransition: 22,
+  /** Client → Server (JSON): ACK: client is ready for transition */
+  DaveTransitionReady: 23,
+  /** Server → Client (JSON): New epoch/protocol-version change upcoming */
+  DavePrepareEpoch: 24,
+  /** Server → Client (BINARY): MLS external sender package from server */
+  DaveMlsExternalSender: 25,
+  /** Client → Server (BINARY): Client's MLS key package */
+  DaveMlsKeyPackage: 26,
+  /** Server → Client (BINARY): MLS proposals (append/revoke) */
+  DaveMlsProposals: 27,
+  /** Client → Server (BINARY): Commit+welcome response */
+  DaveMlsCommitWelcome: 28,
+  /** Server → Client (BINARY): Commit with 2-byte BE transition_id prefix */
+  DaveMlsAnnounceCommitTransition: 29,
+  /** Server → Client (BINARY): Welcome with 2-byte BE transition_id prefix */
+  DaveMlsWelcome: 30,
+  /** Client → Server (JSON): Report invalid commit/welcome — triggers reinit */
+  DaveMlsInvalidCommitWelcome: 31,
 } as const;
 
 export type VoiceOpcodeValue = (typeof VoiceOpcode)[keyof typeof VoiceOpcode];
@@ -47,6 +74,7 @@ export interface GatewayReadyPayload {
 export interface SessionDescriptionPayload {
   mode: string;
   secret_key: number[];
+  dave_protocol_version?: number;
 }
 
 export interface SpeakingPayload {
@@ -55,13 +83,26 @@ export interface SpeakingPayload {
   speaking: number;
 }
 
+export interface ClientDisconnectPayload {
+  user_id: string;
+}
+
 export interface GatewayEvents {
   ready: (payload: GatewayReadyPayload) => void;
   sessionDescription: (payload: SessionDescriptionPayload) => void;
   speaking: (payload: SpeakingPayload) => void;
+  clientDisconnect: (payload: ClientDisconnectPayload) => void;
   resumed: () => void;
   close: (code: number, reason: string) => void;
   stateChange: (state: GatewayState) => void;
+  // DAVE events — payload is the binary blob minus the opcode byte
+  daveExternalSender: (payload: Buffer) => void;
+  daveProposals: (payload: Buffer) => void;
+  daveCommitTransition: (payload: Buffer) => void;
+  daveWelcome: (payload: Buffer) => void;
+  davePrepareTransition: (d: { transition_id: number; protocol_version: number }) => void;
+  daveExecuteTransition: (d: { transition_id: number }) => void;
+  davePrepareEpoch: (d: { protocol_version: number; epoch: number }) => void;
 }
 
 type EventKey = keyof GatewayEvents;
@@ -71,6 +112,8 @@ export class VoiceGateway {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatAcked = true;
   private heartbeatNonce = 0;
+  /** Tracks the last received binary frame sequence number (for seq_ack in heartbeats). */
+  private sequence = 0;
   private listeners = new Map<EventKey, Set<GatewayEvents[EventKey]>>();
 
   private _state: GatewayState = 'idle';
@@ -116,13 +159,19 @@ export class VoiceGateway {
     this.sessionId = opts.sessionId;
     this.token = opts.token;
 
-    const url = `wss://${opts.endpoint.replace(/:\d+$/, '')}/?v=4`;
+    // Voice Gateway v8 — current version, DAVE mandatory as of March 2026.
+    const url = `wss://${opts.endpoint}?v=8`;
     this.setState('connecting');
 
     this.ws = new WebSocket(url);
+    // Binary frames arrive as ArrayBuffer in browser/Bun; Node uses Buffer.
+    // Set binaryType to 'arraybuffer' so we can parse uniformly.
+    this.ws.binaryType = 'arraybuffer';
     this.ws.addEventListener('open', () => this.onOpen());
     this.ws.addEventListener('message', (ev) => this.onMessage(ev));
-    this.ws.addEventListener('close', (ev) => this.onClose(ev.code, ev.reason));
+    this.ws.addEventListener('close', (ev) => {
+      this.onClose(ev.code, ev.reason);
+    });
     this.ws.addEventListener('error', () => {
       /* close event follows */
     });
@@ -141,8 +190,28 @@ export class VoiceGateway {
     this.send(VoiceOpcode.Speaking, {
       speaking: speaking ? 1 : 0,
       delay: 0,
-      ssrc: 0, // filled by server from Identify
+      ssrc: 0,
     });
+  }
+
+  /** Send a DAVE MLS key package (Op 26, binary). */
+  sendKeyPackage(keyPackage: Buffer): void {
+    this.sendBinary(VoiceOpcode.DaveMlsKeyPackage, keyPackage);
+  }
+
+  /** Send a DAVE MLS commit+welcome (Op 28, binary). */
+  sendCommitWelcome(payload: Buffer): void {
+    this.sendBinary(VoiceOpcode.DaveMlsCommitWelcome, payload);
+  }
+
+  /** Send DAVE Transition Ready (Op 23, JSON). */
+  sendTransitionReady(transitionId: number): void {
+    this.send(VoiceOpcode.DaveTransitionReady, { transition_id: transitionId });
+  }
+
+  /** Report an invalid commit/welcome (Op 31, JSON). */
+  sendInvalidCommitWelcome(transitionId: number): void {
+    this.send(VoiceOpcode.DaveMlsInvalidCommitWelcome, { transition_id: transitionId });
   }
 
   /** Gracefully close the WebSocket. */
@@ -175,24 +244,48 @@ export class VoiceGateway {
       user_id: this.userId,
       session_id: this.sessionId,
       token: this.token,
+      max_dave_protocol_version: DAVE_PROTOCOL_VERSION,
     });
   }
 
   private onMessage(ev: MessageEvent): void {
+    // v8 binary frames: [seq: u16 BE][op: u8][payload: rest]
+    // Per @discordjs/voice VoiceWebSocket.onMessage:
+    //   seq = buffer.readUInt16BE(0)
+    //   op  = buffer.readUInt8(2)
+    //   payload = buffer.subarray(3)
+    if (ev.data instanceof ArrayBuffer) {
+      const buf = Buffer.from(ev.data);
+      if (buf.length < 3) return;
+      const seq = buf.readUInt16BE(0);
+      const op = buf.readUInt8(2);
+      const payload = buf.subarray(3);
+      this.sequence = seq;
+      this.handleBinaryOp(op, payload);
+      return;
+    }
+
     const data = JSON.parse(String(ev.data)) as { op: number; d: unknown };
-    switch (data.op) {
+    this.handleJsonOp(data.op, data.d);
+  }
+
+  private handleJsonOp(op: number, d: unknown): void {
+    switch (op) {
       case VoiceOpcode.Hello:
-        this.startHeartbeat(data.d as { heartbeat_interval: number });
+        this.startHeartbeat(d as { heartbeat_interval: number });
         break;
       case VoiceOpcode.Ready:
         this.setState('ready');
-        this.emit('ready', data.d as GatewayReadyPayload);
+        this.emit('ready', d as GatewayReadyPayload);
         break;
       case VoiceOpcode.SessionDescription:
-        this.emit('sessionDescription', data.d as SessionDescriptionPayload);
+        this.emit('sessionDescription', d as SessionDescriptionPayload);
         break;
       case VoiceOpcode.Speaking:
-        this.emit('speaking', data.d as SpeakingPayload);
+        this.emit('speaking', d as SpeakingPayload);
+        break;
+      case VoiceOpcode.ClientDisconnect:
+        this.emit('clientDisconnect', d as ClientDisconnectPayload);
         break;
       case VoiceOpcode.HeartbeatAck:
         this.heartbeatAcked = true;
@@ -200,6 +293,34 @@ export class VoiceGateway {
       case VoiceOpcode.Resumed:
         this.setState('ready');
         this.emit('resumed');
+        break;
+      case VoiceOpcode.DavePrepareTransition:
+        this.emit('davePrepareTransition', d as { transition_id: number; protocol_version: number });
+        break;
+      case VoiceOpcode.DaveExecuteTransition:
+        this.emit('daveExecuteTransition', d as { transition_id: number });
+        break;
+      case VoiceOpcode.DavePrepareEpoch:
+        this.emit('davePrepareEpoch', d as { protocol_version: number; epoch: number });
+        break;
+      default:
+        break;
+    }
+  }
+
+  private handleBinaryOp(op: number, payload: Buffer): void {
+    switch (op) {
+      case VoiceOpcode.DaveMlsExternalSender:
+        this.emit('daveExternalSender', payload);
+        break;
+      case VoiceOpcode.DaveMlsProposals:
+        this.emit('daveProposals', payload);
+        break;
+      case VoiceOpcode.DaveMlsAnnounceCommitTransition:
+        this.emit('daveCommitTransition', payload);
+        break;
+      case VoiceOpcode.DaveMlsWelcome:
+        this.emit('daveWelcome', payload);
         break;
       default:
         break;
@@ -219,18 +340,31 @@ export class VoiceGateway {
     }
   }
 
+  /**
+   * Send a binary frame for a DAVE opcode.
+   * Format per @discordjs/voice: [op: u8][payload] — no seq header.
+   */
+  private sendBinary(op: VoiceOpcodeValue, payload: Buffer): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const frame = Buffer.concat([new Uint8Array([op]), payload]);
+    this.ws.send(frame);
+  }
+
   private startHeartbeat(hello: { heartbeat_interval: number }): void {
     this.stopHeartbeat();
     this.heartbeatAcked = true;
     this.heartbeatTimer = setInterval(() => {
       if (!this.heartbeatAcked) {
-        // Missed ACK — connection is likely dead, reconnect
         this.close(4009);
         return;
       }
       this.heartbeatAcked = false;
       this.heartbeatNonce = Date.now();
-      this.send(VoiceOpcode.Heartbeat, this.heartbeatNonce);
+      // v8 heartbeat must include seq_ack (last received binary frame seq)
+      this.send(VoiceOpcode.Heartbeat, {
+        t: this.heartbeatNonce,
+        seq_ack: this.sequence,
+      });
     }, hello.heartbeat_interval);
   }
 

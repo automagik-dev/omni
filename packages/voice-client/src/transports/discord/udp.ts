@@ -188,6 +188,12 @@ export class VoiceUdp {
     this.socket?.send(Buffer.from(data), this.remotePort, this.remoteIp);
   }
 
+  /** Register a callback for raw UDP messages (before RTP parsing). */
+  onRawPacket(cb: (msg: Buffer) => void): void {
+    if (!this.emitter) return;
+    this.emitter.on('message', cb);
+  }
+
   /** Close the UDP socket. */
   close(): void {
     if (this.emitter) {

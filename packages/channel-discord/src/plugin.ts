@@ -52,6 +52,7 @@ import type {
   SlashCommandPayload,
 } from './types';
 import { DiscordError, ErrorCode, mapDiscordError } from './utils/errors';
+import { VoiceManager } from './voice/manager';
 
 // ============================================================================
 // Send Message Helpers
@@ -349,6 +350,14 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Active Discord clients per instance */
   private clients = new Map<string, Client>();
 
+  /** Voice managers per instance (exposed for voice REST routes) */
+  public voiceManagers = new Map<string, VoiceManager>();
+
+  /** Legacy single voiceManager accessor — returns the first available for now */
+  public get voiceManager(): VoiceManager | undefined {
+    return this.voiceManagers.values().next().value;
+  }
+
   /** Per-instance inbound dedup caches */
   private dedupeCaches = new Map<string, DedupeCache>();
 
@@ -380,6 +389,12 @@ export class DiscordPlugin extends BaseChannelPlugin {
   protected override async onDestroy(): Promise<void> {
     // Clear all typing refresh intervals
     this.clearAllTypingIntervals();
+    // Destroy all voice managers first
+    for (const [instanceId, vm] of this.voiceManagers) {
+      this.logger.info('Destroying voice manager', { instanceId });
+      await vm.destroy();
+    }
+    this.voiceManagers.clear();
     // Destroy all clients
     for (const [instanceId, client] of this.clients) {
       this.logger.info('Destroying client', { instanceId });
@@ -473,11 +488,16 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Store client before login (so handlers can access it)
     this.clients.set(instanceId, client);
 
+    // Create voice manager for this instance
+    const voiceManager = new VoiceManager(instanceId, client);
+    this.voiceManagers.set(instanceId, voiceManager);
+
     // Login
     try {
       await client.login(token);
     } catch (error) {
       this.clients.delete(instanceId);
+      this.voiceManagers.delete(instanceId);
       throw mapDiscordError(error);
     }
   }

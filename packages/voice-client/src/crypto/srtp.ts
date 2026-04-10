@@ -76,7 +76,22 @@ export class SrtpDecryptor implements EncryptionLayer {
     if (!sodium.crypto_aead_xchacha20poly1305_ietf_decrypt) {
       throw new Error('libsodium not ready');
     }
-    return this.decryptPacket(packet, header);
+    return this.decryptPacket(Buffer.from(packet), Buffer.from(header));
+  }
+
+  /** Decrypt with pre-built ciphertext+authTag, AAD header, and nonce. */
+  decryptRaw(cipherWithTag: Buffer, aad: Buffer, nonce: Buffer): Uint8Array {
+    switch (this.mode) {
+      case 'aead_xchacha20_poly1305_rtpsize':
+        return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, cipherWithTag, aad, nonce, this.secretKey);
+      case 'aead_aes256_gcm_rtpsize': {
+        const fn = sodiumAny.crypto_aead_aes256gcm_decrypt as typeof sodium.crypto_aead_xchacha20poly1305_ietf_decrypt;
+        if (!fn) throw new Error('AES-256-GCM not available');
+        return fn(null, cipherWithTag, aad, nonce, this.secretKey);
+      }
+      default:
+        throw new Error(`decryptRaw not supported for mode: ${this.mode}`);
+    }
   }
 
   /** Async decrypt that ensures sodium is ready. */

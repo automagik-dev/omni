@@ -49,13 +49,15 @@ voiceRoutes.post('/join', zValidator('json', joinSchema), async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Discord plugin not available' } }, 404);
   }
 
-  // Access the voice manager from the plugin
+  // Access the voice manager from the plugin (per-instance)
   const voiceManager = (
-    plugin as { voiceManager?: { joinChannel: (guildId: string, channelId: string) => Promise<unknown> } }
-  ).voiceManager;
+    plugin as {
+      voiceManagers?: Map<string, { joinChannel: (guildId: string, channelId: string) => Promise<unknown> }>;
+    }
+  ).voiceManagers?.get(instanceId);
   if (!voiceManager) {
     return c.json(
-      { error: { code: 'NOT_AVAILABLE', message: 'Voice manager not initialized for this instance' } },
+      { error: { code: 'NOT_AVAILABLE', message: `Voice manager not initialized for instance ${instanceId}` } },
       400,
     );
   }

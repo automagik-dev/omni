@@ -33,6 +33,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@snazzah/davey": "^0.1.11",
     "libsodium-wrappers": "^0.7.15",
     "opusscript": "^0.1.1"
   },
