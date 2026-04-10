@@ -185,7 +185,11 @@ export class VoiceUdp {
 
   /** Send a raw UDP packet to the remote. */
   send(data: Uint8Array): void {
-    this.socket?.send(Buffer.from(data), this.remotePort, this.remoteIp);
+    try {
+      this.socket?.send(Buffer.from(data), this.remotePort, this.remoteIp);
+    } catch {
+      // Socket may be closed — safe to ignore for fire-and-forget voice packets
+    }
   }
 
   /** Register a callback for raw UDP messages (before RTP parsing). */

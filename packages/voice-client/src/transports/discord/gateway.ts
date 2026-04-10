@@ -346,7 +346,9 @@ export class VoiceGateway {
    */
   private sendBinary(op: VoiceOpcodeValue, payload: Buffer): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const frame = Buffer.concat([new Uint8Array([op]), payload]);
+    const frame = Buffer.allocUnsafe(1 + payload.length);
+    frame[0] = op;
+    payload.copy(frame, 1);
     this.ws.send(frame);
   }
 

@@ -134,10 +134,10 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   const result = await loadChannelPlugins({ eventBus, db });
   globalChannelRegistry = result.registry;
 
-  // Wire voice stream registry to any voice-capable plugin for WS audio forwarding
+  // Wire voice stream registry to voice-capable plugins for WS audio forwarding
   for (const plugin of result.registry.getAll()) {
-    if ('voiceStreamSink' in plugin) {
-      (plugin as { voiceStreamSink: unknown }).voiceStreamSink = voiceStreamRegistry;
+    if (isVoiceCapable(plugin) && 'voiceStreamSink' in plugin) {
+      Object.assign(plugin, { voiceStreamSink: voiceStreamRegistry });
       pluginLog.info('Voice stream registry wired to plugin', { pluginId: plugin.id });
     }
   }
@@ -185,8 +185,6 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
  * Auth is validated on upgrade. Binary frames carry tagged audio per user.
  */
 function startBunServer(app: App) {
-  let globalDb: Database | null = null;
-
   return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
     port: PORT,
     hostname: HOST,
@@ -221,13 +219,9 @@ function startBunServer(app: App) {
         }
 
         // Validate API key against the database
-        if (!globalDb) {
-          // Lazy init — get db from the first available source
-          globalDb = globalDbRef;
-        }
-        if (globalDb) {
+        if (globalDbRef) {
           try {
-            const apiKeyService = new ApiKeyService(globalDb);
+            const apiKeyService = new ApiKeyService(globalDbRef);
             await apiKeyService.validate(params.apiKey);
           } catch {
             ws.close(4004, 'Invalid API key');

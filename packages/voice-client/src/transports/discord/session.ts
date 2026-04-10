@@ -39,6 +39,7 @@ export class DiscordVoiceSession implements VoiceTransport {
   private sendSeq = 0;
   private sendTimestamp = 0;
   private sendNonce = 0;
+  private decryptFailures = 0;
   private audioCallbacks = new Set<(userId: string, ssrc: number, opusFrame: Uint8Array) => void>();
 
   private ssrc = 0;
@@ -390,7 +391,8 @@ export class DiscordVoiceSession implements VoiceTransport {
         }
       }
     } catch {
-      // Keepalive/RTCP packets fail decrypt — expected
+      // Keepalive/RTCP packets (52 bytes) fail SRTP decrypt — expected and harmless.
+      this.decryptFailures++;
     }
   }
 
