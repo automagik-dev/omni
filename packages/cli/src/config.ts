@@ -93,9 +93,9 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   },
 };
 
-/** Get config directory path */
+/** Get config directory path (respects $HOME override for testing) */
 export function getConfigDir(): string {
-  return join(homedir(), '.omni');
+  return join(process.env.HOME || homedir(), '.omni');
 }
 
 /** Get config file path */

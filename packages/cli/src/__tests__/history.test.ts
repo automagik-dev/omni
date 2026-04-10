@@ -289,6 +289,8 @@ describe('history command', () => {
 
   test('errors when no instance in context', async () => {
     clearEnvKey('OMNI_INSTANCE');
+    const savedHome = process.env.HOME;
+    process.env.HOME = '/tmp/.omni-test-no-config';
 
     const cmd = createHistoryCommand();
     try {
@@ -300,6 +302,8 @@ describe('history command', () => {
     expect(mockError).toHaveBeenCalledTimes(1);
     const msg = mockError.mock.calls[0]?.[0] as string;
     expect(msg).toContain('No instance in context');
+    if (savedHome) process.env.HOME = savedHome;
+    else clearEnvKey('HOME');
   });
 
   test('errors when no chat in context', async () => {

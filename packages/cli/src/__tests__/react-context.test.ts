@@ -76,9 +76,12 @@ function withCleanEnv() {
     saved.OMNI_INSTANCE = process.env.OMNI_INSTANCE;
     saved.OMNI_CHAT = process.env.OMNI_CHAT;
     saved.OMNI_MESSAGE = process.env.OMNI_MESSAGE;
+    saved.HOME = process.env.HOME;
     clearEnv('OMNI_INSTANCE');
     clearEnv('OMNI_CHAT');
     clearEnv('OMNI_MESSAGE');
+    // Use a temp HOME so loadConfig() doesn't find the real ~/.omni/config.json
+    process.env.HOME = '/tmp/.omni-test-empty-home';
     mockError.mockClear();
     mockSuccess.mockClear();
     mockContextGet.mockClear();
@@ -87,7 +90,7 @@ function withCleanEnv() {
   });
 
   afterEach(() => {
-    for (const key of ['OMNI_INSTANCE', 'OMNI_CHAT', 'OMNI_MESSAGE']) {
+    for (const key of ['OMNI_INSTANCE', 'OMNI_CHAT', 'OMNI_MESSAGE', 'HOME']) {
       if (saved[key] !== undefined) process.env[key] = saved[key];
       else clearEnv(key);
     }
