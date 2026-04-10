@@ -83,6 +83,11 @@ export const CORE_EVENT_TYPES = [
   'conversation.created',
   'conversation.updated',
   'conversation.deleted',
+  // Voice lifecycle
+  'voice.session_started',
+  'voice.stream_ready',
+  'voice.stream_ended',
+  'voice.session_ended',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -645,6 +650,32 @@ export interface AgentTaskCancelledPayload {
   chatId: string;
 }
 
+// ─── Voice Events ─────────────────────────────────────────
+export interface VoiceSessionStartedPayload {
+  sessionId: string;
+  channelId: string;
+  instanceId: string;
+  guildId?: string;
+}
+
+export interface VoiceStreamReadyPayload {
+  sessionId: string;
+  userId: string;
+  platformUserId: string;
+  ssrc: number;
+}
+
+export interface VoiceStreamEndedPayload {
+  sessionId: string;
+  userId: string;
+  reason: 'left' | 'disconnected' | 'session_ended';
+}
+
+export interface VoiceSessionEndedPayload {
+  sessionId: string;
+  reason: 'disconnected' | 'kicked' | 'channel_deleted' | 'manual';
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -702,6 +733,10 @@ export interface EventPayloadMap {
   'conversation.created': { conversationId: string; title: string | null };
   'conversation.updated': { conversationId: string; title: string | null };
   'conversation.deleted': { conversationId: string };
+  'voice.session_started': VoiceSessionStartedPayload;
+  'voice.stream_ready': VoiceStreamReadyPayload;
+  'voice.stream_ended': VoiceStreamEndedPayload;
+  'voice.session_ended': VoiceSessionEndedPayload;
 }
 
 /**
