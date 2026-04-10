@@ -1,6 +1,6 @@
 import { SrtpDecryptor, selectEncryptionMode } from '../../crypto/srtp';
 /**
- * DiscordVoiceSession — orchestrates Gateway + UDP + SRTP into the VoiceTransport interface.
+ * DiscordVoiceSession — orchestrates Gateway + UDP + SRTP + Receiver.
  *
  * Connection flow:
  * 1. Open Voice Gateway WebSocket, send Identify
@@ -8,20 +8,21 @@ import { SrtpDecryptor, selectEncryptionMode } from '../../crypto/srtp';
  * 3. Create UDP socket, perform IP Discovery
  * 4. Send Select Protocol with discovered IP/port and preferred encryption mode
  * 5. Receive Session Description → get secret key
- * 6. Start receiving encrypted RTP packets, decrypt, demux by SSRC
+ * 6. Start receiving encrypted RTP packets, decrypt, demux by SSRC via PacketReceiver
  *
  * Reconnection:
  * - On gateway close with resumable code (4015, etc.), attempt Resume
  * - On non-resumable close, full reconnect
  */
 import type { TransportOptions, TransportState, VoiceTransport } from '../../interfaces/transport';
-import { AudioStream } from '../../stream/audio-stream';
+import type { AudioStream } from '../../stream/audio-stream';
 import {
   type GatewayReadyPayload,
   type SessionDescriptionPayload,
   type SpeakingPayload,
   VoiceGateway,
 } from './gateway';
+import { PacketReceiver, type ReceiverEvents } from './receiver';
 import { VoiceUdp, rtpHeaderLength } from './udp';
 
 /** Close codes that allow resuming the session. */
@@ -30,6 +31,7 @@ const RESUMABLE_CLOSE_CODES = new Set([4015, 4009]);
 export class DiscordVoiceSession implements VoiceTransport {
   private gateway = new VoiceGateway();
   private udp = new VoiceUdp();
+  private receiver = new PacketReceiver();
   private decryptor: SrtpDecryptor | null = null;
 
   private ssrc = 0;
@@ -37,10 +39,6 @@ export class DiscordVoiceSession implements VoiceTransport {
   private userId = '';
   private sessionId = '';
 
-  /** SSRC → userId mapping from Speaking events. */
-  private ssrcMap = new Map<number, string>();
-  /** userId → AudioStream for per-participant streams. */
-  private streams = new Map<string, AudioStream>();
   /** State change callbacks. */
   private stateCallbacks = new Set<(state: TransportState) => void>();
 
@@ -88,7 +86,7 @@ export class DiscordVoiceSession implements VoiceTransport {
       });
 
       this.gateway.on('speaking', (s: SpeakingPayload) => {
-        this.handleSpeaking(s);
+        this.receiver.handleSpeaking(s.user_id, s.ssrc, s.speaking);
       });
 
       this.gateway.on('close', (code: number, reason: string) => {
@@ -113,11 +111,7 @@ export class DiscordVoiceSession implements VoiceTransport {
   async disconnect(): Promise<void> {
     this.udp.close();
     this.gateway.close(4000);
-    for (const stream of this.streams.values()) {
-      stream.unsubscribe();
-    }
-    this.streams.clear();
-    this.ssrcMap.clear();
+    this.receiver.destroy();
     this.decryptor = null;
     this.setState('disconnected');
   }
@@ -127,11 +121,21 @@ export class DiscordVoiceSession implements VoiceTransport {
   }
 
   getParticipantStream(userId: string): AudioStream | undefined {
-    return this.streams.get(userId);
+    return this.receiver.getStream(userId);
   }
 
   listParticipants(): string[] {
-    return [...this.streams.keys()];
+    return this.receiver.listParticipants();
+  }
+
+  /** Subscribe to participant join/leave/speaking events from the receiver. */
+  onParticipantEvent<K extends keyof ReceiverEvents>(event: K, listener: ReceiverEvents[K]): void {
+    this.receiver.on(event, listener);
+  }
+
+  /** Unsubscribe from participant events. */
+  offParticipantEvent<K extends keyof ReceiverEvents>(event: K, listener: ReceiverEvents[K]): void {
+    this.receiver.off(event, listener);
   }
 
   // ─── internal ───────────────────────────────────────────────
@@ -145,62 +149,32 @@ export class DiscordVoiceSession implements VoiceTransport {
 
   /** After Gateway Ready: set up UDP, do IP Discovery, send Select Protocol. */
   private async handleGatewayReady(ready: GatewayReadyPayload): Promise<void> {
-    // Create UDP socket
     this.udp.createSocket(ready.ip, ready.port);
-
-    // IP Discovery
     const discovered = await this.udp.performIpDiscovery(ready.ssrc);
-
-    // Pick best encryption mode
     const mode = selectEncryptionMode(ready.modes);
-
-    // Send Select Protocol
     this.gateway.selectProtocol(discovered.ip, discovered.port, mode);
   }
 
   /** After Session Description: create decryptor, start receive loop. */
   private handleSessionDescription(desc: SessionDescriptionPayload): void {
     const secretKey = new Uint8Array(desc.secret_key);
-    const mode = desc.mode as Parameters<typeof selectEncryptionMode>[0] extends string[]
-      ? ReturnType<typeof selectEncryptionMode>
-      : never;
-    this.decryptor = new SrtpDecryptor(secretKey, mode as ReturnType<typeof selectEncryptionMode>);
+    this.decryptor = new SrtpDecryptor(secretKey, desc.mode as ReturnType<typeof selectEncryptionMode>);
 
-    // Start listening for UDP packets
+    // Route decrypted packets through the receiver
     this.udp.on('packet', (pkt) => {
       if (!this.decryptor) return;
 
       try {
-        const headerLen = rtpHeaderLength(
-          new Uint8Array([...pkt.headerBytes, ...pkt.payload]).slice(0, pkt.headerBytes.length),
-        );
+        const headerLen = rtpHeaderLength(pkt.headerBytes);
         const rtpHeader = pkt.headerBytes.slice(0, headerLen);
         const decrypted = this.decryptor.decrypt(pkt.payload, rtpHeader);
-
-        // Demux by SSRC → userId
-        const mappedUserId = this.ssrcMap.get(pkt.header.ssrc);
-        if (!mappedUserId) return;
-
-        const stream = this.streams.get(mappedUserId);
-        if (stream) {
-          stream.push(decrypted, 'opus');
-        }
+        this.receiver.receivePacket(pkt.header.ssrc, decrypted);
       } catch {
-        // Decryption failures are expected for non-audio packets (e.g., RTCP)
+        // Decryption failures expected for non-audio packets (RTCP, etc.)
       }
     });
 
     this.setState('ready');
-  }
-
-  /** Map SSRC → userId from Speaking events. Create AudioStream if new. */
-  private handleSpeaking(payload: SpeakingPayload): void {
-    this.ssrcMap.set(payload.ssrc, payload.user_id);
-
-    if (!this.streams.has(payload.user_id)) {
-      const stream = new AudioStream(payload.user_id, payload.ssrc);
-      this.streams.set(payload.user_id, stream);
-    }
   }
 
   /** Handle gateway close — attempt resume or full reconnect. */
@@ -209,7 +183,6 @@ export class DiscordVoiceSession implements VoiceTransport {
 
     if (RESUMABLE_CLOSE_CODES.has(code) && this.options) {
       this.setState('reconnecting');
-      // Re-open and resume
       this.gateway.connect({
         endpoint: this.options.endpoint,
         serverId: this.options.guildId,

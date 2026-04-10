@@ -18,6 +18,8 @@ export type {
 } from './transports/discord/gateway';
 export { VoiceUdp, parseRtpHeader, parseRtpPacket, rtpHeaderLength } from './transports/discord/udp';
 export type { RtpHeader, RtpPacket } from './transports/discord/udp';
+export { PacketReceiver } from './transports/discord/receiver';
+export type { ReceiverEvents } from './transports/discord/receiver';
 
 // Crypto
 export { SrtpDecryptor, ENCRYPTION_MODES, selectEncryptionMode, preferredModes } from './crypto/srtp';
