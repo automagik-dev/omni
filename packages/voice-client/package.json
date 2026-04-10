@@ -1,0 +1,36 @@
+{
+  "name": "@omni/voice-client",
+  "version": "2.260404.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./interfaces": {
+      "types": "./src/interfaces/index.ts",
+      "default": "./src/interfaces/index.ts"
+    },
+    "./codecs": {
+      "types": "./src/codecs/index.ts",
+      "default": "./src/codecs/index.ts"
+    },
+    "./stream": {
+      "types": "./src/stream/index.ts",
+      "default": "./src/stream/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "^0.7.15",
+    "opusscript": "^0.1.1"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "^0.7.14",
+    "bun-types": "^1.1.42",
+    "typescript": "^5.7.3"
+  }
+}
