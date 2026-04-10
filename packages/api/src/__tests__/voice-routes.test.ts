@@ -134,12 +134,11 @@ describe('voice routes', () => {
         state: 'ready',
         participants: [],
       };
+      const mockVoiceManager = { joinChannel: async () => mockSession };
       const app = createTestApp({
         channelRegistry: {
           get: () => ({
-            voiceManager: {
-              joinChannel: async () => mockSession,
-            },
+            voiceManagers: new Map([['inst-1', mockVoiceManager]]),
           }),
         },
       });
