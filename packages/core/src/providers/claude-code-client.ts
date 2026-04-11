@@ -532,6 +532,55 @@ function processRunMessage(
 }
 
 // ---------------------------------------------------------------------------
+// MCP server helpers
+// ---------------------------------------------------------------------------
+
+/** Check if a server config is an HTTP-type MCP server (has `url` field). */
+function isHttpMcpServer(server: unknown): server is { url: string } {
+  return (
+    typeof server === 'object' &&
+    server !== null &&
+    'url' in server &&
+    typeof (server as Record<string, unknown>).url === 'string'
+  );
+}
+
+/** Append query params to an HTTP URL using the native URL API, with string fallback. */
+function appendUrlParams(url: string, params: Record<string, string>): string {
+  try {
+    const parsed = new URL(url);
+    for (const [key, value] of Object.entries(params)) {
+      parsed.searchParams.set(key, value);
+    }
+    return parsed.toString();
+  } catch {
+    // Fallback for non-standard URLs that URL() rejects
+    const qs = new URLSearchParams(params).toString();
+    return `${url}${url.includes('?') ? '&' : '?'}${qs}`;
+  }
+}
+
+/** Resolve mcpServers config: clone and append URL params to HTTP servers if provided. */
+function resolveMcpServers(
+  mcpServers: NonNullable<ClaudeCodeConfig['mcpServers']>,
+  mcpUrlParams: Record<string, string> | undefined,
+): NonNullable<ClaudeCodeConfig['mcpServers']> {
+  if (!mcpUrlParams || Object.keys(mcpUrlParams).length === 0) {
+    return mcpServers;
+  }
+  if (!Object.values(mcpServers).some(isHttpMcpServer)) {
+    return mcpServers;
+  }
+  const cloned = structuredClone(mcpServers);
+  for (const server of Object.values(cloned)) {
+    if (isHttpMcpServer(server)) {
+      server.url = appendUrlParams(server.url, mcpUrlParams);
+    }
+  }
+  return cloned;
+}
+
+// ---------------------------------------------------------------------------
 // Query options builder (module-level so generateStream can use it directly)
 // ---------------------------------------------------------------------------
 
@@ -557,30 +606,8 @@ function buildQueryOptions(
   if (config.model) options.model = config.model;
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
 
-  // MCP servers: if mcpUrlParams present and config has HTTP servers, deep-clone
-  // and append params to each HTTP server URL (avoids mutating original config).
   if (config.mcpServers) {
-    if (request.mcpUrlParams && Object.keys(request.mcpUrlParams).length > 0) {
-      const hasHttpServer = Object.values(config.mcpServers).some(
-        (s) => 'url' in s && typeof (s as Record<string, unknown>).url === 'string',
-      );
-      if (hasHttpServer) {
-        const cloned = JSON.parse(JSON.stringify(config.mcpServers)) as typeof config.mcpServers;
-        const params = new URLSearchParams(request.mcpUrlParams).toString();
-        for (const server of Object.values(cloned)) {
-          if ('url' in server && typeof (server as Record<string, unknown>).url === 'string') {
-            const httpServer = server as { url: string };
-            const separator = httpServer.url.includes('?') ? '&' : '?';
-            httpServer.url = `${httpServer.url}${separator}${params}`;
-          }
-        }
-        options.mcpServers = cloned;
-      } else {
-        options.mcpServers = config.mcpServers;
-      }
-    } else {
-      options.mcpServers = config.mcpServers;
-    }
+    options.mcpServers = resolveMcpServers(config.mcpServers, request.mcpUrlParams);
   }
 
   // Build clean env: always clear CLAUDECODE to prevent the SDK from thinking

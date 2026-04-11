@@ -214,7 +214,7 @@ describe('ClaudeCodeClient', () => {
       const another = options.mcpServers.another as { url: string };
       expect(another.url).toBe('https://other.example.com/api?token=abc&chat_id=456');
 
-      const pw = options.mcpServers.playwright as { command: string };
+      const pw = options.mcpServers.playwright as { command: string; args: string[] };
       expect(pw.command).toBe('npx');
       expect(pw.args).toEqual(['@playwright/mcp@latest']);
     });
