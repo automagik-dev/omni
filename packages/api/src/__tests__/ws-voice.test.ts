@@ -3,7 +3,8 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { VoiceStreamRegistry, parseVoiceStreamParams } from '../ws/voice';
+import { OpusCodec } from '@omni/voice-client';
+import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from '../ws/voice';
 
 describe('parseVoiceStreamParams', () => {
   test('parses valid URL with all params', () => {
@@ -112,22 +113,50 @@ describe('VoiceStreamRegistry', () => {
     expect(received.length).toBe(1);
   });
 
-  test('pushAudio filters by format', () => {
+  test('pushAudio drops frames when transcode fails', () => {
     const reg = new VoiceStreamRegistry();
     const received: unknown[] = [];
 
     reg.add(
       {},
       {
-        params: { sessionId: 'sess-1', apiKey: 'k', format: 'pcm' },
+        params: { sessionId: 'sess-1', apiKey: 'k', format: 'opus' },
         send: (data) => {
           received.push(data);
         },
       },
     );
 
-    reg.pushAudio('sess-1', 'user-1', new Uint8Array([1]), 'opus');
+    reg.pushAudio('sess-1', 'user-1', new Uint8Array([1]), 'pcm');
     expect(received.length).toBe(0);
+  });
+
+  test('pushAudio transcodes opus packets for pcm subscribers', () => {
+    const reg = new VoiceStreamRegistry();
+    const codec = new OpusCodec();
+    const pcm = new Int16Array(codec.frameSize * codec.channels);
+    for (let i = 0; i < pcm.length; i++) {
+      pcm[i] = i % 64 === 0 ? 1200 : 0;
+    }
+
+    const received: Uint8Array[] = [];
+    reg.add(
+      {},
+      {
+        params: { sessionId: 'sess-1', apiKey: 'k', format: 'pcm' },
+        send: (data) => {
+          received.push(data as Uint8Array);
+        },
+      },
+    );
+
+    reg.pushAudio('sess-1', 'user-1', codec.encode(pcm), 'opus');
+
+    expect(received.length).toBe(1);
+    const frame = Buffer.from(received[0]!);
+    const userIdLen = frame[0]!;
+    const audio = frame.subarray(1 + userIdLen);
+    expect(audio.length).toBe(pcm.byteLength);
   });
 
   test('broadcast sends JSON to all session clients', () => {
@@ -164,5 +193,21 @@ describe('VoiceStreamRegistry', () => {
     // Should not throw
     reg.pushAudio('sess-1', 'user-1', new Uint8Array([1]), 'opus');
     reg.broadcast('sess-1', { type: 'test' });
+  });
+});
+
+describe('transcodeAudioFrame', () => {
+  test('encodes pcm websocket frames into opus for session sendAudio', () => {
+    const codec = new OpusCodec();
+    const pcm = new Int16Array(codec.frameSize * codec.channels);
+    for (let i = 0; i < pcm.length; i++) {
+      pcm[i] = i % 2 === 0 ? 1500 : -1500;
+    }
+
+    const opus = transcodeAudioFrame(new Uint8Array(pcm.buffer), 'pcm', 'opus');
+    expect(opus.length).toBeGreaterThan(0);
+
+    const decoded = codec.decode(opus);
+    expect(decoded.length).toBe(pcm.length);
   });
 });

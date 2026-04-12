@@ -59,7 +59,7 @@ const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
-import { VoiceStreamRegistry, parseVoiceStreamParams } from './ws/voice';
+import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
 import type { VoiceStreamClient } from './ws/voice';
 
 // Voice stream WebSocket registry (global singleton)
@@ -274,7 +274,16 @@ function startBunServer(app: App) {
           .find((p) => isVoiceCapable(p) && p.voiceSession(client.params.sessionId));
         if (vPlugin && isVoiceCapable(vPlugin)) {
           const session = vPlugin.voiceSession(client.params.sessionId);
-          session?.sendAudio(Buffer.from(message));
+          try {
+            const opusFrame = transcodeAudioFrame(message as ArrayBuffer | Uint8Array, client.params.format, 'opus');
+            session?.sendAudio(Buffer.from(opusFrame));
+          } catch (error) {
+            try {
+              ws.send(JSON.stringify({ type: 'error', message: String(error) }));
+            } catch {
+              // Client disconnected while receiving the error
+            }
+          }
         }
       },
       close(ws) {

@@ -504,21 +504,15 @@ export class DiscordPlugin extends BaseChannelPlugin {
   protected override async onDestroy(): Promise<void> {
     // Clear all typing refresh intervals
     this.clearAllTypingIntervals();
-    // Destroy all voice managers first
-    for (const [instanceId, vm] of this.voiceManagers) {
-      this.logger.info('Destroying voice manager', { instanceId });
-      await vm.destroy();
+    const instanceIds = new Set([
+      ...this.clients.keys(),
+      ...this.voiceManagers.keys(),
+      ...this.dedupeCaches.keys(),
+      ...this.instanceAuthConfigs.keys(),
+    ]);
+    for (const instanceId of instanceIds) {
+      await this.cleanupInstanceResources(instanceId);
     }
-    this.voiceManagers.clear();
-    // Destroy all clients
-    for (const [instanceId, client] of this.clients) {
-      this.logger.info('Destroying client', { instanceId });
-      await destroyClient(client);
-    }
-    this.clients.clear();
-    // Dispose all per-instance dedup caches
-    for (const cache of this.dedupeCaches.values()) cache.dispose();
-    this.dedupeCaches.clear();
   }
 
   /**
@@ -535,8 +529,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
         return;
       }
       // Client exists but not ready, destroy and reconnect
-      await destroyClient(existingClient);
-      this.clients.delete(instanceId);
+      await this.cleanupInstanceResources(instanceId);
     }
 
     // Update status to connecting
@@ -611,8 +604,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
     try {
       await client.login(token);
     } catch (error) {
-      this.clients.delete(instanceId);
-      this.voiceManagers.delete(instanceId);
+      await this.cleanupInstanceResources(instanceId);
       throw mapDiscordError(error);
     }
   }
@@ -623,32 +615,16 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
-    const client = this.clients.get(instanceId);
-    if (!client) {
+    if (
+      !this.clients.has(instanceId) &&
+      !this.voiceManagers.has(instanceId) &&
+      !this.dedupeCaches.has(instanceId) &&
+      !this.instanceAuthConfigs.has(instanceId)
+    ) {
       return;
     }
 
-    // Clear typing intervals for this instance
-    for (const key of [...this.typingIntervals.keys()]) {
-      if (key.startsWith(`${instanceId}:`)) {
-        this.clearTypingInterval(key);
-      }
-    }
-
-    // Reset connection state
-    resetConnectionState(instanceId);
-
-    // Destroy client
-    await destroyClient(client);
-    this.clients.delete(instanceId);
-    this.instanceAuthConfigs.delete(instanceId);
-
-    // Dispose per-instance dedup cache
-    this.dedupeCaches.get(instanceId)?.dispose();
-    this.dedupeCaches.delete(instanceId);
-
-    // Emit disconnected event
-    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    await this.cleanupInstanceResources(instanceId, { emitDisconnected: true });
   }
 
   /**
@@ -660,6 +636,43 @@ export class DiscordPlugin extends BaseChannelPlugin {
     await this.disconnect(instanceId);
     await clearToken(this.storage, instanceId);
     this.logger.info('Instance logged out and token cleared', { instanceId });
+  }
+
+  private async cleanupInstanceResources(
+    instanceId: string,
+    opts: {
+      emitDisconnected?: boolean;
+    } = {},
+  ): Promise<void> {
+    for (const key of [...this.typingIntervals.keys()]) {
+      if (key.startsWith(`${instanceId}:`)) {
+        this.clearTypingInterval(key);
+      }
+    }
+
+    resetConnectionState(instanceId);
+
+    const voiceManager = this.voiceManagers.get(instanceId);
+    if (voiceManager) {
+      this.logger.info('Destroying voice manager', { instanceId });
+      await voiceManager.destroy();
+      this.voiceManagers.delete(instanceId);
+    }
+
+    const client = this.clients.get(instanceId);
+    if (client) {
+      this.logger.info('Destroying client', { instanceId });
+      await destroyClient(client);
+      this.clients.delete(instanceId);
+    }
+
+    this.instanceAuthConfigs.delete(instanceId);
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
+
+    if (opts.emitDisconnected) {
+      await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    }
   }
 
   /**

@@ -65,10 +65,57 @@
  */
 
 import { createLogger } from '@omni/core';
+import { OpusCodec } from '@omni/voice-client';
 
 const log = createLogger('ws:voice');
 
-type AudioFormat = 'opus' | 'pcm';
+export type AudioFormat = 'opus' | 'pcm';
+
+let opusCodec: OpusCodec | null = null;
+
+function getOpusCodec(): OpusCodec {
+  opusCodec ??= new OpusCodec();
+  return opusCodec;
+}
+
+function toUint8Array(data: ArrayBuffer | Uint8Array): Uint8Array {
+  return data instanceof Uint8Array ? data : new Uint8Array(data);
+}
+
+function toPcmSamples(audioData: Uint8Array): Int16Array {
+  if (audioData.byteLength % 2 !== 0) {
+    throw new Error('PCM audio frames must have an even number of bytes');
+  }
+
+  const buffer = audioData.buffer.slice(audioData.byteOffset, audioData.byteOffset + audioData.byteLength);
+  return new Int16Array(buffer);
+}
+
+function toPcmBytes(samples: Int16Array): Uint8Array {
+  return new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
+}
+
+export function transcodeAudioFrame(
+  audioData: ArrayBuffer | Uint8Array,
+  sourceFormat: AudioFormat,
+  targetFormat: AudioFormat,
+): Uint8Array {
+  const bytes = toUint8Array(audioData);
+  if (sourceFormat === targetFormat) {
+    return bytes;
+  }
+
+  const codec = getOpusCodec();
+  if (sourceFormat === 'opus' && targetFormat === 'pcm') {
+    return toPcmBytes(codec.decode(bytes));
+  }
+
+  if (sourceFormat === 'pcm' && targetFormat === 'opus') {
+    return codec.encode(toPcmSamples(bytes));
+  }
+
+  throw new Error(`Unsupported voice frame transcode: ${sourceFormat} -> ${targetFormat}`);
+}
 
 /** Parsed query params from the WS URL. */
 export interface VoiceStreamParams {
@@ -113,22 +160,21 @@ export class VoiceStreamRegistry {
 
   /** Push a tagged audio frame to all matching clients for a session. */
   pushAudio(sessionId: string, userId: string, audioData: Uint8Array, format: AudioFormat): void {
-    const userIdBuf = Buffer.from(userId.slice(0, 255), 'utf8');
-    if (userIdBuf.length > 255) return;
-    // Build tagged frame: [userIdLen: u8][userId: N][audio: rest]
-    const frame = Buffer.alloc(1 + userIdBuf.length + audioData.length);
-    frame[0] = userIdBuf.length;
-    userIdBuf.copy(frame, 1);
-    Buffer.from(audioData).copy(frame, 1 + userIdBuf.length);
-
     for (const [, client] of this.clients) {
       if (client.params.sessionId !== sessionId) continue;
-      if (client.params.format !== format) continue;
       if (client.params.filterUserId && client.params.filterUserId !== userId) continue;
+
       try {
+        const transcoded = transcodeAudioFrame(audioData, format, client.params.format);
+        const userIdBuf = Buffer.from(userId.slice(0, 255), 'utf8');
+        if (userIdBuf.length > 255) continue;
+        const frame = Buffer.alloc(1 + userIdBuf.length + transcoded.length);
+        frame[0] = userIdBuf.length;
+        userIdBuf.copy(frame, 1);
+        Buffer.from(transcoded).copy(frame, 1 + userIdBuf.length);
         client.send(frame);
       } catch {
-        // Client disconnected or slow — drop frame
+        // Client disconnected, slow, or requested an invalid transcode — drop frame
       }
     }
   }

@@ -40,6 +40,12 @@ interface PendingConnection {
   endpoint?: string;
 }
 
+interface ConnectionWaiter {
+  resolve: (info: VoiceSessionInfo) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export class VoiceManager {
   private instanceId: string;
   private client: Client;
@@ -93,7 +99,7 @@ export class VoiceManager {
 
     // Clear any stale pending state
     this.pending.delete(guildId);
-    this.connectionWaiters.delete(guildId);
+    this.clearConnectionWaiter(guildId);
 
     // Set up pending connection
     this.pending.set(guildId, { guildId, channelId });
@@ -176,6 +182,7 @@ export class VoiceManager {
 
   /** Clean up all sessions (called on plugin disconnect). */
   async destroy(): Promise<void> {
+    this.clearAllConnectionWaiters(new Error(`Voice manager destroyed for instance ${this.instanceId}`));
     for (const [id, session] of this.sessions) {
       await session.disconnect();
       this.cleanup(id);
@@ -326,37 +333,29 @@ export class VoiceManager {
         // Resolve any waiters
         const resolve = this.connectionWaiters.get(guildId);
         if (resolve) {
-          resolve(info);
-          this.connectionWaiters.delete(guildId);
+          this.resolveConnectionWaiter(guildId, info);
         }
       })
       .catch((err) => {
         log.error('Voice session connection failed', { sessionId, error: String(err) });
         this.cleanup(sessionId);
 
-        const resolve = this.connectionWaiters.get(guildId);
-        if (resolve) {
-          // Reject by resolving with error info
-          this.connectionWaiters.delete(guildId);
-        }
+        this.rejectConnectionWaiter(guildId, err instanceof Error ? err : new Error(String(err)));
       });
   }
 
   /** Waiters for joinChannel() promise resolution. */
-  private connectionWaiters = new Map<string, (info: VoiceSessionInfo) => void>();
+  private connectionWaiters = new Map<string, ConnectionWaiter>();
 
   private waitForConnection(guildId: string, _channelId: string): Promise<VoiceSessionInfo> {
     return new Promise<VoiceSessionInfo>((resolve, reject) => {
-      this.connectionWaiters.set(guildId, resolve);
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        if (this.connectionWaiters.has(guildId)) {
-          this.connectionWaiters.delete(guildId);
-          this.pending.delete(guildId);
-          reject(new Error(`Voice connection timed out for guild ${guildId}`));
-        }
+      const timeout = setTimeout(() => {
+        if (!this.connectionWaiters.has(guildId)) return;
+        this.pending.delete(guildId);
+        this.rejectConnectionWaiter(guildId, new Error(`Voice connection timed out for guild ${guildId}`));
       }, 10000);
+
+      this.connectionWaiters.set(guildId, { resolve, reject, timeout });
     });
   }
 
@@ -367,5 +366,29 @@ export class VoiceManager {
     }
     this.sessions.delete(sessionId);
     this.sessionInfo.delete(sessionId);
+  }
+
+  private clearConnectionWaiter(guildId: string): ConnectionWaiter | undefined {
+    const waiter = this.connectionWaiters.get(guildId);
+    if (!waiter) return undefined;
+    clearTimeout(waiter.timeout);
+    this.connectionWaiters.delete(guildId);
+    return waiter;
+  }
+
+  private resolveConnectionWaiter(guildId: string, info: VoiceSessionInfo): void {
+    const waiter = this.clearConnectionWaiter(guildId);
+    waiter?.resolve(info);
+  }
+
+  private rejectConnectionWaiter(guildId: string, error: Error): void {
+    const waiter = this.clearConnectionWaiter(guildId);
+    waiter?.reject(error);
+  }
+
+  private clearAllConnectionWaiters(error: Error): void {
+    for (const guildId of [...this.connectionWaiters.keys()]) {
+      this.rejectConnectionWaiter(guildId, error);
+    }
   }
 }
