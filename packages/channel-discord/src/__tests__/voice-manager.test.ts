@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 
 const sessionConnect = mock(async (_options?: unknown) => {});
+const actualVoiceClient = await import('@omni/voice-client');
 
 class MockDiscordVoiceSession {
   state = 'connecting';
@@ -23,6 +24,7 @@ class MockDiscordVoiceSession {
 }
 
 mock.module('@omni/voice-client', () => ({
+  ...actualVoiceClient,
   DiscordVoiceSession: MockDiscordVoiceSession,
 }));
 
