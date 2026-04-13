@@ -88,6 +88,8 @@ export const CORE_EVENT_TYPES = [
   'voice.stream_ready',
   'voice.stream_ended',
   'voice.session_ended',
+  'voice.user_joined_channel',
+  'voice.user_left_channel',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -676,6 +678,14 @@ export interface VoiceSessionEndedPayload {
   reason: 'disconnected' | 'kicked' | 'channel_deleted' | 'manual';
 }
 
+export interface VoiceUserChannelPayload {
+  userId: string;
+  channelId: string;
+  guildId: string;
+  instanceId: string;
+  displayName?: string;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -737,6 +747,8 @@ export interface EventPayloadMap {
   'voice.stream_ready': VoiceStreamReadyPayload;
   'voice.stream_ended': VoiceStreamEndedPayload;
   'voice.session_ended': VoiceSessionEndedPayload;
+  'voice.user_joined_channel': VoiceUserChannelPayload;
+  'voice.user_left_channel': VoiceUserChannelPayload;
 }
 
 /**

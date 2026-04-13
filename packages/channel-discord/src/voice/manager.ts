@@ -9,7 +9,7 @@
  * WebSocket gateway, UDP socket, and SRTP decryptor.
  */
 
-import { createLogger } from '@omni/core';
+import { type EventBus, createLogger } from '@omni/core';
 import { DiscordVoiceSession, type TransportOptions } from '@omni/voice-client';
 import type { Client, VoiceState } from 'discord.js';
 
@@ -50,6 +50,7 @@ export class VoiceManager {
   private instanceId: string;
   private client: Client;
   private streamSink: AudioStreamSink | null;
+  private eventBus: EventBus | null;
 
   /** Active voice sessions keyed by a generated session ID. */
   private sessions = new Map<string, DiscordVoiceSession>();
@@ -60,10 +61,11 @@ export class VoiceManager {
   /** guildId → sessionId reverse lookup. */
   private guildToSession = new Map<string, string>();
 
-  constructor(instanceId: string, client: Client, streamSink?: AudioStreamSink) {
+  constructor(instanceId: string, client: Client, streamSink?: AudioStreamSink, eventBus?: EventBus) {
     this.instanceId = instanceId;
     this.client = client;
     this.streamSink = streamSink ?? null;
+    this.eventBus = eventBus ?? null;
     this.setupEventListeners();
   }
 
@@ -217,12 +219,45 @@ export class VoiceManager {
     });
   }
 
-  private handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): void {
-    // Only care about our own voice state updates (for connection flow)
-    const botId = this.client.user?.id;
-    if (newState.id !== botId) return;
+  /** Publish a voice event to NATS (fire-and-forget). */
+  private publishVoiceEvent(
+    type: 'voice.user_joined_channel' | 'voice.user_left_channel',
+    payload: { userId: string; channelId: string; guildId: string; displayName?: string },
+  ): void {
+    this.eventBus?.publish(type, { ...payload, instanceId: this.instanceId }).catch(() => {});
+  }
 
+  /** Emit join/leave events when any user changes voice channel. */
+  private emitUserVoiceEvents(oldState: VoiceState, newState: VoiceState): void {
+    const userId = newState.id;
     const guildId = newState.guild.id;
+    const oldChannel = oldState.channelId;
+    const newChannel = newState.channelId;
+    const displayName = newState.member?.displayName ?? userId;
+
+    if (!oldChannel && newChannel) {
+      this.publishVoiceEvent('voice.user_joined_channel', { userId, channelId: newChannel, guildId, displayName });
+    } else if (oldChannel && !newChannel) {
+      this.publishVoiceEvent('voice.user_left_channel', { userId, channelId: oldChannel, guildId, displayName });
+    } else if (oldChannel && newChannel && oldChannel !== newChannel) {
+      this.publishVoiceEvent('voice.user_left_channel', { userId, channelId: oldChannel, guildId, displayName });
+      this.publishVoiceEvent('voice.user_joined_channel', { userId, channelId: newChannel, guildId, displayName });
+    }
+  }
+
+  private handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): void {
+    const userId = newState.id;
+    const botId = this.client.user?.id;
+    const guildId = newState.guild.id;
+
+    // Emit join/leave events for all non-bot users
+    if (userId !== botId) {
+      this.emitUserVoiceEvents(oldState, newState);
+    }
+
+    // Bot's own voice state updates (for connection flow)
+    if (userId !== botId) return;
+
     const pending = this.pending.get(guildId);
     if (!pending) return;
 

@@ -597,7 +597,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
     this.clients.set(instanceId, client);
 
     // Create voice manager for this instance
-    const voiceManager = new VoiceManager(instanceId, client, this.voiceStreamSink ?? undefined);
+    const voiceManager = new VoiceManager(instanceId, client, this.voiceStreamSink ?? undefined, this.eventBus);
     this.voiceManagers.set(instanceId, voiceManager);
 
     // Login
