@@ -3493,6 +3493,13 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Check chat-level agentPaused flag before loading instance — cheap indexed lookup.
+  const chat = await chatsService.findByExternalIdSmart(metadata.instanceId, chatId);
+  if (chat?.settings?.agentPaused) {
+    log.debug('Agent paused for chat', { instanceId: metadata.instanceId, chatId });
+    return null;
+  }
+
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
