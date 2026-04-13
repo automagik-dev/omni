@@ -222,7 +222,7 @@ export function createApp(
     }
 
     const plugin = channelRegistry.get('gupshup');
-    if (!plugin) {
+    if (!plugin?.handleWebhook) {
       return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Gupshup plugin not loaded' } }, 503);
     }
 
