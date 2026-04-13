@@ -33,7 +33,7 @@ import {
   type ProcessingResult,
   createMediaProcessingService,
 } from '@omni/media-processing';
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
@@ -851,7 +851,7 @@ export class BatchJobService {
     const chatConditions = [
       eq(chats.instanceId, instanceId),
       isNull(chats.archivedAt),
-      notInArray(chats.chatType, ['broadcast', 'newsletter'] as const),
+      sql`${chats.chatType} NOT IN ('broadcast', 'newsletter')`,
     ];
 
     if (jobType === 'targeted_chat_sync' && chatId) {
