@@ -1,8 +1,8 @@
 /**
  * Gupshup Channel Plugin for Omni v2
  *
- * Provides WhatsApp messaging via Gupshup BSP (Business Solution Provider).
- * Stateless REST API + webhook-based inbound — no persistent socket.
+ * Provides WhatsApp messaging via Gupshup Custom Integration.
+ * Meta/WA Business API inbound + Gupshup Custom Integration callback outbound.
  *
  * @example
  * ```typescript
@@ -26,13 +26,12 @@ export { GUPSHUP_CAPABILITIES } from './capabilities';
 export { GupshupClient } from './client';
 
 // Handlers
-export { handleGupshupWebhook, verifyWebhookToken } from './handlers/webhooks';
+export { handleGupshupWebhook } from './handlers/webhooks';
 
 // Senders
 export { sendText } from './senders/text';
 export { sendMedia, resolveMediaType } from './senders/media';
-export { sendTemplate } from './senders/template';
-export { sendInteractive } from './senders/interactive';
+export { sendLocation } from './senders/location';
 
 // Errors
 export { GupshupError, GupshupErrorCode, mapGupshupError, isRetryable } from './utils/errors';
@@ -44,16 +43,14 @@ export { normalizePhone, extractUserId, toGupshupPhone } from './utils/identity'
 // Types
 export type {
   GupshupConfig,
-  GupshupInboundPayload,
-  GupshupMessagePayload,
-  GupshupMessageEventPayload,
-  GupshupMessageType,
-  GupshupTextContent,
-  GupshupMediaContent,
-  GupshupLocationContent,
-  GupshupContactContent,
-  GupshupContact,
-  GupshupInteractiveContent,
+  GupshupOutboundMessage,
+  GupshupInboundWebhook,
+  GupshupEntry,
+  GupshupChange,
+  GupshupChangeValue,
+  GupshupInboundContact,
+  GupshupStatusEvent,
+  GupshupInboundMessage,
   GupshupSendResponse,
   GupshupErrorResponse,
 } from './types';

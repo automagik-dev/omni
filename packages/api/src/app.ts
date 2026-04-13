@@ -212,6 +212,23 @@ export function createApp(
     return c.json({ ok: true });
   });
 
+  // Public Gupshup webhook endpoint — auth-exempt, verified by optional ?token= query param.
+  // Must be mounted before protectedApp so Gupshup's servers (no x-api-key) can reach it.
+  app.post('/api/v2/channels/gupshup/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('gupshup');
+    if (!plugin) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Gupshup plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
