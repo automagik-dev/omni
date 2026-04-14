@@ -134,6 +134,20 @@
       "when": 1776108062203,
       "tag": "0018_supreme_puma",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776148086753,
+      "tag": "0019_idle_chat_follow_up",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1776148086754,
+      "tag": "0020_follow_up_config",
+      "breakpoints": true
     }
   ]
 }

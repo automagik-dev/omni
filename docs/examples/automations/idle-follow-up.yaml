@@ -1,0 +1,62 @@
+# Idle-chat follow-up automation
+#
+# Listens for `chat.idle_timeout` events emitted by the follow-up sweeper and
+# asks the agent to produce a customer-facing message. The agent's rendered
+# response is sent as a normal outbound message — the synthetic prompt NEVER
+# appears in chat history.
+#
+# Arming / disarming is handled automatically by the follow-up lifecycle hooks
+# when an outbound agent message is sent. Configure the schedule per agent,
+# per instance, or per chat via the `/v2/follow-up/:scope/:id` REST endpoints
+# or the `omni follow-up set ...` CLI.
+#
+# Placeholders available in this automation (resolved from the event payload):
+#   {{syntheticPrompt}} — rendered prompt from the sweeper
+#   {{minutes}}         — minutes since the agent's last reply
+#   {{sequenceIndex}}   — zero-based follow-up index (0 = first follow-up)
+#   {{chatName}}        — chat display name when known
+#   {{payload.chatId}}, {{payload.instanceId}}, {{payload.agentId}}
+#
+# @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
+
+name: Idle chat follow-up
+description: >
+  When a customer goes idle after an agent reply, ask the agent to draft a
+  follow-up message and send it to the customer. Uses `promptOverride` so the
+  synthetic prompt is passed to the agent but never written to chat history.
+enabled: true
+priority: 100
+
+triggerEventType: chat.idle_timeout
+
+# Optional — narrow which chats this fires for. Omit to match every
+# chat.idle_timeout event.
+triggerConditions: []
+conditionLogic: and
+
+actions:
+  # 1. Ask the agent to produce a customer-facing follow-up message. The
+  #    rendered `promptOverride` is passed as the SOLE message to the agent;
+  #    it is NOT persisted to chat history (the lifecycle service owns that
+  #    invariant).
+  - type: call_agent
+    config:
+      agentId: "{{payload.agentId}}"
+      promptOverride: |
+        The customer has been idle for {{minutes}} minutes since your last
+        reply. This is follow-up #{{sequenceIndex}} in the sequence.
+
+        {{syntheticPrompt}}
+
+        Write a short, warm follow-up message to {{chatName}} in their
+        preferred language. Do not mention that this is an automated
+        follow-up.
+      responseAs: followUpReply
+
+  # 2. Send the agent's response as a normal outbound message. Only the
+  #    rendered reply reaches the customer — never the synthetic prompt.
+  - type: send_message
+    config:
+      instanceId: "{{payload.instanceId}}"
+      to: "{{payload.chatId}}"
+      contentTemplate: "{{followUpReply}}"
