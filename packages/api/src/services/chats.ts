@@ -565,10 +565,12 @@ export class ChatService {
       data.lastMessagePreview = sanitizeText(data.lastMessagePreview) ?? data.lastMessagePreview;
 
     // Snapshot the prior settings so we can detect a handoff (agentPaused
-    // flipping from false → true). Only needed when `settings` is part of the
-    // patch, so avoid an extra query otherwise.
+    // flipping from false → true). Only needed when the incoming patch sets
+    // `agentPaused: true` — any other settings write can't trigger the
+    // transition, so skip the extra SELECT.
     let priorAgentPaused = false;
-    if (data.settings !== undefined) {
+    const incomingAgentPaused = (data.settings as { agentPaused?: boolean } | null | undefined)?.agentPaused === true;
+    if (data.settings !== undefined && incomingAgentPaused) {
       const [prior] = await this.db.select().from(chats).where(eq(chats.id, id)).limit(1);
       priorAgentPaused = (prior?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
     }

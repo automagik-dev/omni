@@ -114,7 +114,7 @@ Every state transition emits a structured event for observability.
 | `chat.idle_timeout`      | Sweeper fires — consumed by user-space automations  | `chatId, instanceId, agentId, sequenceIndex, syntheticPrompt, minutesSinceLastAgentReply, chatName?` |
 | `follow_up.fired`        | Sweeper successfully fired a follow-up              | `chatId, instanceId, agentId, sequenceIndex, firedAt, syntheticPrompt` |
 | `follow_up.skipped`      | Sweeper encountered an error processing a row       | `chatId, instanceId, agentId, sequenceIndex, reason`         |
-| `follow_up.disarmed`     | Sequence disarmed for any reason                    | `chatId, instanceId, agentId, sequenceIndex, reason`         |
+| `follow_up.disarmed`     | Sequence disarmed for any reason                    | `chatId, instanceId, agentId, sequenceIndex, reason`. Note: `sequenceIndex` is `-1` when the active row can't be read at disarm time (e.g. the row was already cleared). |
 | `chat.handoff_activated` | Chat was handed off to a human/other agent          | `chatId, instanceId, ...` (disarms with `handoff`)          |
 | `chat.archived`          | Chat was archived or muted                          | `chatId, instanceId, ...` (disarms with `archived`)         |
 

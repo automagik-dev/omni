@@ -38,7 +38,7 @@ import {
   chats,
   instances,
 } from '@omni/db';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 
 const log = createLogger('follow-up-lifecycle');
 
@@ -183,16 +183,15 @@ export class FollowUpLifecycleService {
         },
       })
       .returning({
-        // `xmax = 0` on Postgres returning rows means INSERT; non-zero means
-        // the row already existed and was updated. Drizzle doesn't expose
-        // `xmax`, but we can infer from `createdAt === updatedAt` — if they
-        // differ, the row existed before this call.
-        createdAt: chatFollowUpState.createdAt,
-        updatedAt: chatFollowUpState.updatedAt,
+        // Postgres sets `xmax = 0` on rows produced by INSERT and a non-zero
+        // xid on rows produced by UPDATE inside an INSERT ... ON CONFLICT.
+        // This is the canonical way to distinguish the two — more reliable
+        // than comparing timestamps, which can collide within a single ms.
+        xmax: sql<string>`xmax::text`,
       });
 
     const row = result[0];
-    const created = row ? row.createdAt.getTime() === row.updatedAt.getTime() : false;
+    const created = row?.xmax === '0';
     return { created };
   }
 

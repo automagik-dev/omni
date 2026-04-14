@@ -39,7 +39,10 @@ async function resolveChatId(services: Services, instanceId: string, externalId:
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
     return chat?.id ?? null;
   } catch (err) {
-    log.debug('follow-up-hooks: failed to resolve chatId', { instanceId, externalId, error: String(err) });
+    // findByExternalIdSmart returns null for not-found, so anything thrown
+    // here is an unexpected infrastructure error (DB connectivity, query
+    // failure, etc.) — log at warn so it doesn't get silently buried.
+    log.warn('follow-up-hooks: failed to resolve chatId', { instanceId, externalId, error: String(err) });
     return null;
   }
 }
