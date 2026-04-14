@@ -79,12 +79,14 @@ DELETE /v2/follow-up/{scope}/:id
 Template placeholders available to `promptTemplate` and to automation actions
 via the `chat.idle_timeout` payload:
 
-| Placeholder         | Meaning                                    |
-|---------------------|--------------------------------------------|
-| `{{syntheticPrompt}}` | The rendered prompt from the sweeper     |
-| `{{minutes}}`         | Minutes since the agent's last reply     |
-| `{{sequenceIndex}}`   | Zero-based follow-up index about to fire |
-| `{{chatName}}`        | Chat display name when known             |
+| Placeholder           | Meaning                                                   |
+|-----------------------|-----------------------------------------------------------|
+| `{{syntheticPrompt}}` | The rendered prompt from the sweeper                      |
+| `{{minutes}}`         | Minutes since the agent's last reply                      |
+| `{{sequenceIndex}}`   | Zero-based follow-up index about to fire                  |
+| `{{attemptNumber}}`   | One-based attempt number — prefer this in LLM prompts     |
+| `{{totalAttempts}}`   | Total attempts configured (`maxFollowUps`) — LLM-friendly |
+| `{{chatName}}`        | Chat display name when known                              |
 
 **Resolution hierarchy.** The closest scope wins. A chat-level `enabled: false`
 disables follow-ups for that chat even if the instance or agent has it on.
@@ -111,7 +113,7 @@ Every state transition emits a structured event for observability.
 | Event                    | When                                                | Key payload fields                                           |
 |--------------------------|-----------------------------------------------------|--------------------------------------------------------------|
 | `follow_up.armed`        | Sequence armed or re-armed after a fire             | `chatId, instanceId, agentId, sequenceIndex, nextFireAt`     |
-| `chat.idle_timeout`      | Sweeper fires — consumed by user-space automations  | `chatId, instanceId, agentId, sequenceIndex, syntheticPrompt, minutesSinceLastAgentReply, chatName?` |
+| `chat.idle_timeout`      | Sweeper fires — consumed by user-space automations  | `chatId, instanceId, agentId, sequenceIndex, attemptNumber, totalAttempts, syntheticPrompt, minutesSinceLastAgentReply, chatName?` |
 | `follow_up.fired`        | Sweeper successfully fired a follow-up              | `chatId, instanceId, agentId, sequenceIndex, firedAt, syntheticPrompt` |
 | `follow_up.skipped`      | Sweeper encountered an error processing a row       | `chatId, instanceId, agentId, sequenceIndex, reason`         |
 | `follow_up.disarmed`     | Sequence disarmed for any reason                    | `chatId, instanceId, agentId, sequenceIndex, reason`. Note: `sequenceIndex` is `-1` when the active row can't be read at disarm time (e.g. the row was already cleared). |

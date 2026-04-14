@@ -704,6 +704,10 @@ export interface ChatIdleTimeoutPayload {
   agentId: string | null;
   /** Zero-based index of the follow-up about to be acted on. */
   sequenceIndex: number;
+  /** One-based attempt number — `sequenceIndex + 1`. Prefer this in LLM-facing prompts. */
+  attemptNumber: number;
+  /** Total attempts configured (`maxFollowUps`). Prefer this in LLM-facing prompts. */
+  totalAttempts: number;
   /** Minutes elapsed since `lastAgentMessageAt`. */
   minutesSinceLastAgentReply: number;
   /** Rendered synthetic prompt passed to the agent. */

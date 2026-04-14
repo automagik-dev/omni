@@ -176,12 +176,16 @@ describe('createTemplateContext', () => {
     const context = createTemplateContext({
       syntheticPrompt: 'Please follow up',
       sequenceIndex: 1,
+      attemptNumber: 2,
+      totalAttempts: 3,
       minutesSinceLastAgentReply: 3,
       chatName: 'VIP Chat',
     });
     expect(context.followUp).toEqual({
       syntheticPrompt: 'Please follow up',
       sequenceIndex: 1,
+      attemptNumber: 2,
+      totalAttempts: 3,
       minutes: 3,
       chatName: 'VIP Chat',
     });
@@ -203,6 +207,8 @@ describe('createTemplateContext', () => {
         followUp: {
           syntheticPrompt: 'explicit',
           sequenceIndex: 9,
+          attemptNumber: 10,
+          totalAttempts: 12,
           minutes: 99,
           chatName: 'override',
         },
@@ -210,6 +216,8 @@ describe('createTemplateContext', () => {
     );
     expect(context.followUp?.syntheticPrompt).toBe('explicit');
     expect(context.followUp?.sequenceIndex).toBe(9);
+    expect(context.followUp?.attemptNumber).toBe(10);
+    expect(context.followUp?.totalAttempts).toBe(12);
     expect(context.followUp?.minutes).toBe(99);
     expect(context.followUp?.chatName).toBe('override');
   });
@@ -220,20 +228,36 @@ describe('deriveFollowUpFromPayload', () => {
     const result = deriveFollowUpFromPayload({
       syntheticPrompt: 'ping',
       sequenceIndex: 0,
+      attemptNumber: 1,
+      totalAttempts: 3,
       minutesSinceLastAgentReply: 5,
     });
     expect(result).toEqual({
       syntheticPrompt: 'ping',
       sequenceIndex: 0,
+      attemptNumber: 1,
+      totalAttempts: 3,
       minutes: 5,
       chatName: null,
     });
+  });
+
+  test('derives attemptNumber from sequenceIndex when absent (legacy payload)', () => {
+    const result = deriveFollowUpFromPayload({
+      syntheticPrompt: 'ping',
+      sequenceIndex: 2,
+      minutesSinceLastAgentReply: 5,
+    });
+    expect(result?.attemptNumber).toBe(3);
+    expect(result?.totalAttempts).toBe(0);
   });
 
   test('chatName is null when not a string', () => {
     const result = deriveFollowUpFromPayload({
       syntheticPrompt: 'ping',
       sequenceIndex: 0,
+      attemptNumber: 1,
+      totalAttempts: 3,
       minutesSinceLastAgentReply: 5,
       chatName: 42,
     });
@@ -266,6 +290,8 @@ describe('follow-up placeholders', () => {
         syntheticPrompt: 'Hey, still there?',
         minutes: 7,
         sequenceIndex: 2,
+        attemptNumber: 3,
+        totalAttempts: 3,
         chatName: 'Alice',
       },
     },
@@ -281,6 +307,12 @@ describe('follow-up placeholders', () => {
 
   test('substitutes {{sequenceIndex}}', () => {
     expect(substituteTemplate('Attempt {{sequenceIndex}}', followUpContext)).toBe('Attempt 2');
+  });
+
+  test('substitutes {{attemptNumber}} (1-based)', () => {
+    expect(substituteTemplate('Attempt {{attemptNumber}} of {{totalAttempts}}', followUpContext)).toBe(
+      'Attempt 3 of 3',
+    );
   });
 
   test('substitutes {{chatName}}', () => {
@@ -299,6 +331,8 @@ describe('follow-up placeholders', () => {
           syntheticPrompt: 'p',
           minutes: 1,
           sequenceIndex: 0,
+          attemptNumber: 1,
+          totalAttempts: 3,
           chatName: null,
         },
       },
@@ -329,6 +363,8 @@ describe('follow-up placeholders', () => {
           syntheticPrompt: 'nudge',
           minutes: 3,
           sequenceIndex: 0,
+          attemptNumber: 1,
+          totalAttempts: 3,
           chatName: 'c',
         },
       },

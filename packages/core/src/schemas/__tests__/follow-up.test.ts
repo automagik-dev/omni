@@ -181,6 +181,8 @@ describe('follow-up schemas', () => {
         instanceId: 'inst-1',
         agentId: null,
         sequenceIndex: 0,
+        attemptNumber: 1,
+        totalAttempts: 3,
         minutesSinceLastAgentReply: 3,
         syntheticPrompt: 'please follow up',
       };

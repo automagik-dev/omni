@@ -155,6 +155,13 @@
       "when": 1776500000000,
       "tag": "0021_idle_follow_up_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1776500100000,
+      "tag": "0022_idle_follow_up_prompt_v2",
+      "breakpoints": true
     }
   ]
 }

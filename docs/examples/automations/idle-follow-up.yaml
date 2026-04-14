@@ -14,6 +14,8 @@
 #   {{syntheticPrompt}} — rendered prompt from the sweeper
 #   {{minutes}}         — minutes since the agent's last reply
 #   {{sequenceIndex}}   — zero-based follow-up index (0 = first follow-up)
+#   {{attemptNumber}}   — one-based attempt number (prefer this in prompts)
+#   {{totalAttempts}}   — total attempts configured (prefer this in prompts)
 #   {{chatName}}        — chat display name when known
 #   {{payload.chatId}}, {{payload.instanceId}}, {{payload.agentId}}
 #
@@ -43,14 +45,14 @@ actions:
     config:
       agentId: "{{payload.agentId}}"
       promptOverride: |
-        The customer has been idle for {{minutes}} minutes since your last
-        reply. This is follow-up #{{sequenceIndex}} in the sequence.
+        Follow-up context: attempt {{attemptNumber}} of {{totalAttempts}} —
+        {{minutes}} minutes of silence since your last message to {{chatName}}.
 
         {{syntheticPrompt}}
 
-        Write a short, warm follow-up message to {{chatName}} in their
-        preferred language. Do not mention that this is an automated
-        follow-up.
+        Respond with ONLY the customer-facing message. Plain text, no italics,
+        no parentheses, no stage directions, no meta-commentary. Do not refer
+        to yourself as an automation or follow-up bot.
       responseAs: followUpReply
 
   # 2. Send the agent's response as a normal outbound message. Only the
