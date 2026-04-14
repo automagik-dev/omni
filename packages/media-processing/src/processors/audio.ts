@@ -62,13 +62,13 @@ export class AudioProcessor extends BaseProcessor {
     return this.openaiClient;
   }
 
-  async process(filePath: string, _mimeType: string, options?: ProcessOptions): Promise<ProcessingResult> {
+  async process(filePath: string, mimeType: string, options?: ProcessOptions): Promise<ProcessingResult> {
     const startTime = performance.now();
     const language = options?.language ?? this.config.defaultLanguage ?? 'pt';
     const durationSeconds = options?.durationSeconds ?? this.estimateDuration(filePath);
 
     // Try Groq first (faster and cheaper)
-    let result = await this.transcribeWithGroq(filePath, language);
+    let result = await this.transcribeWithGroq(filePath, language, mimeType);
 
     // If Groq fails and we have OpenAI configured, try fallback
     if (!result.success && this.config.openaiApiKey) {
@@ -104,7 +104,7 @@ export class AudioProcessor extends BaseProcessor {
   /**
    * Transcribe using Groq Whisper API with retry + circuit breaker
    */
-  private async transcribeWithGroq(filePath: string, language: string): Promise<ProcessingResult> {
+  private async transcribeWithGroq(filePath: string, language: string, mimeType?: string): Promise<ProcessingResult> {
     const client = this.getGroqClient();
     if (!client) {
       return this.createFailedResult('Groq client not configured (missing API key)', 'groq', GROQ_WHISPER_MODEL);
@@ -116,10 +116,14 @@ export class AudioProcessor extends BaseProcessor {
       const text = await this.executeWithResilience(
         'groq',
         async () => {
-          const fileStream = createReadStream(filePath);
+          // Groq infers format from filename — ensure correct extension so .bin files work
+          const ext = mimeTypeToExtension(mimeType ?? '');
+          const filename = ext ? `audio.${ext}` : (filePath.split('/').pop() ?? 'audio');
+          const fileBuffer = await Bun.file(filePath).arrayBuffer();
+          const file = new File([fileBuffer], filename, { type: mimeType?.split(';')[0] ?? 'audio/ogg' });
 
           const transcription = await client.audio.transcriptions.create({
-            file: fileStream as unknown as Uploadable,
+            file: file as unknown as Uploadable,
             model: GROQ_WHISPER_MODEL,
             language,
             response_format: 'text',
@@ -211,4 +215,18 @@ export class AudioProcessor extends BaseProcessor {
       return undefined;
     }
   }
+}
+
+function mimeTypeToExtension(mimeType: string): string {
+  const base = mimeType.split(';')[0]?.trim() ?? '';
+  const map: Record<string, string> = {
+    'audio/ogg': 'ogg',
+    'audio/opus': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/webm': 'webm',
+    'audio/wav': 'wav',
+    'audio/flac': 'flac',
+  };
+  return map[base] ?? '';
 }

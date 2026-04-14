@@ -42,7 +42,8 @@ export class GupshupClient {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, `HTTP ${res.status}`);
-    return res.json() as Promise<GupshupSendResponse>;
+    const text = await res.text();
+    return (text ? JSON.parse(text) : {}) as GupshupSendResponse;
   }
 
   async validateCredentials(): Promise<boolean> {

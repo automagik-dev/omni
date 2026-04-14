@@ -822,6 +822,7 @@ const connectInstanceSchema = z.object({
   slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
   slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+  gupshupCallbackUrl: z.string().optional().describe('Gupshup webhook callback URL (persisted for reconnection)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -2972,70 +2973,5 @@ instancesRoutes.put('/:id/presence', instanceAccess, zValidator('json', presence
 // ============================================================================
 // Telegram Webhook Ingress
 // ============================================================================
-
-// ============================================================================
-// Gupshup — per-user agent toggle
-// ============================================================================
-
-/**
- * GET /instances/:id/gupshup/agent/:phone
- *
- * Returns { isAgentOn: boolean } for a given phone number.
- * Defaults to true (agent on) if the user hasn't messaged yet.
- */
-instancesRoutes.get('/gupshup/agent/:phone', async (c) => {
-  const instanceId = c.req.param('id') as string;
-  const phone = c.req.param('phone') as string;
-  const services = c.get('services');
-
-  const instance = await services.instances.getById(instanceId);
-  if (!instance || instance.channel !== 'gupshup') {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Gupshup instance not found' } }, 404);
-  }
-
-  const chat = await services.chats.findByExternalIdSmart(instanceId, phone);
-  const isAgentOn = chat ? chat.settings?.agentPaused !== true : false;
-
-  return c.json({ phone, isAgentOn });
-});
-
-/**
- * POST /instances/:id/gupshup/agent/:phone
- *
- * Body: { isAgentOn: boolean }
- * Sets agent on/off for a given phone. Returns 404 if user not in DB yet.
- */
-instancesRoutes.post('/gupshup/agent/:phone', async (c) => {
-  const instanceId = c.req.param('id') as string;
-  const phone = c.req.param('phone') as string;
-  const services = c.get('services');
-
-  const instance = await services.instances.getById(instanceId);
-  if (!instance || instance.channel !== 'gupshup') {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Gupshup instance not found' } }, 404);
-  }
-
-  let body: { isAgentOn: boolean };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }, 400);
-  }
-
-  if (typeof body.isAgentOn !== 'boolean') {
-    return c.json({ error: { code: 'BAD_REQUEST', message: 'isAgentOn must be a boolean' } }, 400);
-  }
-
-  const chat = await services.chats.findByExternalIdSmart(instanceId, phone);
-  if (!chat) {
-    return c.json({ phone, isAgentOn: false, created: false });
-  }
-
-  await services.chats.update(chat.id, {
-    settings: { ...chat.settings, agentPaused: !body.isAgentOn },
-  });
-
-  return c.json({ phone, isAgentOn: body.isAgentOn });
-});
 
 export { instancesRoutes };
