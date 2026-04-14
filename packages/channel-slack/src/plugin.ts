@@ -344,6 +344,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         to: message.to,
         content: { type: message.content.type, text: message.content.text },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

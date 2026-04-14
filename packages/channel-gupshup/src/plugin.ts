@@ -189,6 +189,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
           mediaUrl: content.mediaUrl,
         },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

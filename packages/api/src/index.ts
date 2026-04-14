@@ -11,9 +11,9 @@ import './instrument';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { applyMigrations, closeDb, createDb } from '@omni/db';
+import { agents, applyMigrations, closeDb, createDb } from '@omni/db';
 import * as Sentry from '@sentry/bun';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -297,7 +297,76 @@ async function setupEventBusServices(
         if (!instance) throw new Error(`Instance not found: ${instanceId}`);
         const plugin = await getPlugin(instance.channel);
         if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
-        await plugin.sendMessage(instanceId, { to, content: { type: 'text', text: content } });
+        // Resolve internal chat UUID → channel-native external_id (e.g. WA JID).
+        // Automation payloads carry chat UUIDs; plugins expect channel JIDs.
+        let recipient = to;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(to)) {
+          try {
+            const chat = await services.chats.getById(to, { includeHidden: true });
+            recipient = chat.externalId;
+          } catch {
+            throw new Error(`Chat not found for UUID: ${to}`);
+          }
+        }
+        await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
+      },
+      callAgent: async (ctx, cfg) => {
+        const instance = await services.instances.getById(ctx.instanceId);
+        if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
+
+        const agentFkId = ctx.agentId ?? instance.agentId;
+        if (!agentFkId) throw new Error(`No agent configured for instance ${instance.id}`);
+
+        const [agentRow] = await db
+          .select({
+            agentProviderId: agents.agentProviderId,
+            agentType: agents.agentType,
+            metadata: agents.metadata,
+            configPath: agents.configPath,
+          })
+          .from(agents)
+          .where(eq(agents.id, agentFkId))
+          .limit(1);
+        if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+
+        const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
+          assistant: 'agent',
+          tool: 'agent',
+          workflow: 'workflow',
+          team: 'team',
+        };
+        const providerAgentId =
+          ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
+          agentRow.configPath ??
+          undefined;
+
+        const runInstance = {
+          ...instance,
+          agentProviderId: agentRow.agentProviderId ?? null,
+          agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
+          agentInternalId: providerAgentId,
+          agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
+          agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,
+          agentTimeout: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : instance.agentTimeout,
+        };
+
+        const result = await services.agentRunner.run({
+          instance: runInstance,
+          chatId: ctx.chatId,
+          senderId: ctx.senderId,
+          senderName: ctx.senderName,
+          chatType: 'dm',
+          messages: ctx.messages,
+        });
+        return {
+          parts: result.parts,
+          fullResponse: result.parts.join('\n'),
+          metadata: {
+            runId: result.metadata.runId,
+            sessionId: result.metadata.sessionId,
+            status: result.metadata.status,
+          },
+        };
       },
     });
   } catch (error) {

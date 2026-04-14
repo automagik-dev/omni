@@ -42,6 +42,8 @@ export interface AgentRunResult {
 export interface AgentCallContext {
   /** Instance ID (resolved from template) */
   instanceId: string;
+  /** Agent FK ID (resolved from template, may be empty to use instance default) */
+  agentId?: string;
   /** Provider ID (optional, resolved from template or instance default) */
   providerId?: string;
   /** Chat ID for session continuity */
@@ -316,8 +318,11 @@ function extractAgentCallContext(
   // Extract chat and sender info from payload
   const fromObj = context.payload.from as { id?: string; name?: string } | undefined;
   const chatId = (context.payload.chatId as string) ?? fromObj?.id;
-  const senderId = fromObj?.id ?? (context.payload.senderId as string);
-  const senderName = fromObj?.name ?? (context.payload.senderName as string);
+  // System-initiated events (e.g. chat.idle_timeout) have no external sender;
+  // fall back to chatId so the agent can act on behalf of the chat.
+  const senderId = fromObj?.id ?? (context.payload.senderId as string) ?? chatId;
+  const senderName =
+    fromObj?.name ?? (context.payload.senderName as string) ?? (context.payload.chatName as string | undefined);
 
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
@@ -325,13 +330,13 @@ function extractAgentCallContext(
   const messagesResult = extractMessages(context, config.promptOverride);
   if ('error' in messagesResult) return messagesResult;
 
-  // Resolve agentId (may be a template)
-  const agentId = substituteTemplate(config.agentId, context);
-  if (!agentId) return { error: 'agentId is required' };
+  // Resolve agentId (may be a template). Empty string means "use instance default".
+  const agentId = config.agentId ? substituteTemplate(config.agentId, context) : '';
 
   return {
     context: {
       instanceId,
+      agentId: agentId || undefined,
       providerId: config.providerId ? substituteTemplate(config.providerId, context) : undefined,
       chatId,
       senderId,

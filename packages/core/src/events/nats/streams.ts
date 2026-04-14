@@ -103,11 +103,11 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
   },
   [STREAM_NAMES.SYSTEM]: {
     name: STREAM_NAMES.SYSTEM,
-    subjects: ['system.>', 'sync.>', 'batch-job.>', 'presence.>'],
+    subjects: ['system.>', 'sync.>', 'batch-job.>', 'presence.>', 'chat.>', 'follow_up.>'],
     max_age: daysToNs(7),
     storage: StorageType.File,
     retention: RetentionPolicy.Limits,
-    description: 'Internal system events (dead_letter, replay, health, sync, batch-job, presence)',
+    description: 'Internal system events (dead_letter, replay, health, sync, batch-job, presence, chat, follow_up)',
   },
   [STREAM_NAMES.AGENT]: {
     name: STREAM_NAMES.AGENT,
@@ -138,6 +138,8 @@ export function getStreamForEventType(eventType: string): StreamName {
     sync: STREAM_NAMES.SYSTEM,
     'batch-job': STREAM_NAMES.SYSTEM,
     presence: STREAM_NAMES.SYSTEM,
+    chat: STREAM_NAMES.SYSTEM,
+    follow_up: STREAM_NAMES.SYSTEM,
     agent: STREAM_NAMES.AGENT,
   };
 

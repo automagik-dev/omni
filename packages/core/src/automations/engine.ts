@@ -94,6 +94,7 @@ export class AutomationEngine {
     this.deps = {
       eventBus: null,
       sendMessage: undefined,
+      callAgent: undefined,
     };
   }
 
@@ -105,6 +106,7 @@ export class AutomationEngine {
     this.deps = {
       eventBus,
       sendMessage: deps.sendMessage,
+      callAgent: deps.callAgent,
     };
     this.automations = automations.filter((a) => a.enabled);
 
