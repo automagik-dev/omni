@@ -81,7 +81,10 @@ export interface ProviderRequest {
 }
 
 export interface ProviderFile {
-  path: string;
+  /** Local file path (mutually exclusive with url) */
+  path?: string;
+  /** Remote URL to fetch the file from (mutually exclusive with path) */
+  url?: string;
   mimeType: string;
   filename?: string;
 }

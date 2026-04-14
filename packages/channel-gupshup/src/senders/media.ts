@@ -1,33 +1,38 @@
 /**
  * Gupshup media message sender
  *
- * Handles image, audio, video, and document (file) outbound messages.
+ * Handles IMAGE, AUDIO, VIDEO, DOCUMENT, STICKER outbound messages.
  */
 
 import type { GupshupClient } from '../client';
-import type { GupshupSendResponse } from '../types';
+import type { GupshupOutboundMessage, GupshupSendResponse } from '../types';
 
-type MediaType = 'image' | 'audio' | 'video' | 'file';
+type MediaOutboundType = 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER';
 
 /**
- * Map a MIME type or content-type to a Gupshup media type string.
- * Defaults to 'file' for unknown types.
+ * Map a MIME type to a Gupshup media type string.
+ * Defaults to 'DOCUMENT' for unknown types.
  */
-export function resolveMediaType(mimeType?: string): MediaType {
-  if (!mimeType) return 'file';
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-  return 'file';
+export function resolveMediaType(mimeType?: string): MediaOutboundType {
+  if (!mimeType) return 'DOCUMENT';
+  if (mimeType === 'image/webp') return 'STICKER';
+  if (mimeType.startsWith('image/')) return 'IMAGE';
+  if (mimeType.startsWith('audio/')) return 'AUDIO';
+  if (mimeType.startsWith('video/')) return 'VIDEO';
+  return 'DOCUMENT';
 }
 
 export async function sendMedia(
   client: GupshupClient,
   to: string,
-  url: string,
+  mediaUrl: string,
   mimeType?: string,
   caption?: string,
+  filename?: string,
 ): Promise<GupshupSendResponse> {
   const type = resolveMediaType(mimeType);
-  return client.sendMedia(to, type, url, caption);
+  const msg: GupshupOutboundMessage = { type, url: mediaUrl };
+  if (caption) msg.caption = caption;
+  if (filename) msg.filename = filename;
+  return client.send(to, msg);
 }

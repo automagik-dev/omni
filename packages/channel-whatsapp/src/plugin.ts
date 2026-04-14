@@ -2356,7 +2356,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const config = this.instances.get(instanceId)?.config;
     if (config) {
       await this.updateInstanceStatus(instanceId, config, {
-        state: 'connecting',
+        state: 'qr',
         since: new Date(),
         qrCode: { code: qrCode, expiresAt },
       });

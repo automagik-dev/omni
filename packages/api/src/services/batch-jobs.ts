@@ -33,7 +33,7 @@ import {
   type ProcessingResult,
   createMediaProcessingService,
 } from '@omni/media-processing';
-import { and, desc, eq, gte, inArray, isNotNull, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
@@ -847,7 +847,12 @@ export class BatchJobService {
     const conditions = [eq(messages.hasMedia, true), isNotNull(messages.mediaMimeType)];
 
     // Add instance filter via chat join
-    const chatConditions = [eq(chats.instanceId, instanceId)];
+    // Exclude newsletters, broadcasts, and archived chats — no value in processing these
+    const chatConditions = [
+      eq(chats.instanceId, instanceId),
+      isNull(chats.archivedAt),
+      sql`${chats.chatType} NOT IN ('broadcast', 'newsletter')`,
+    ];
 
     if (jobType === 'targeted_chat_sync' && chatId) {
       chatConditions.push(eq(chats.externalId, chatId));

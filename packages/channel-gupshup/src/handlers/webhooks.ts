@@ -1,15 +1,11 @@
 /**
  * Gupshup webhook handler
  *
- * Parses inbound Gupshup webhook payloads, deduplicates, sanitizes,
- * and emits the appropriate Omni events.
- *
- * Gupshup sends two event types:
- * - "message"       → inbound message from a WhatsApp user
- * - "message-event" → delivery/read receipt for an outbound message
+ * Parses inbound Meta/WA Business API format payloads from Gupshup,
+ * deduplicates, and emits the appropriate Omni events.
  *
  * Webhook verification: query param `?token=X` is compared against
- * instance `webhookVerifyToken`. Mismatch returns 401.
+ * instance `webhookVerifyToken`. If not set, skip token check.
  */
 
 import { createDownloadGuard, sanitizeMessage } from '@omni/channel-sdk';
@@ -18,59 +14,53 @@ import { z } from 'zod';
 
 import type { GupshupPlugin } from '../plugin';
 import type {
-  GupshupContact,
-  GupshupContactContent,
-  GupshupInteractiveContent,
-  GupshupLocationContent,
-  GupshupMediaContent,
-  GupshupMessageEventPayload,
-  GupshupMessagePayload,
-  GupshupTextContent,
+  GupshupChange,
+  GupshupChangeValue,
+  GupshupInboundMessage,
+  GupshupInboundWebhook,
+  GupshupStatusEvent,
 } from '../types';
 import { extractUserId } from '../utils/identity';
 
 /**
- * Zod schema for validating inbound Gupshup webhook payloads.
- * Validates top-level shape before processing untrusted input.
+ * Zod schema for validating top-level inbound webhook payload.
  */
-const GupshupInboundPayloadSchema = z.object({
-  app: z.string(),
-  timestamp: z.number(),
-  version: z.number(),
-  type: z.enum(['message', 'message-event']),
-  payload: z.record(z.unknown()),
+const GupshupInboundWebhookSchema = z.object({
+  object: z.string(),
+  gs_app_id: z.string().optional(),
+  entry: z.array(
+    z.object({
+      id: z.string().optional(), // Gupshup omits id in set-callback validation requests
+      changes: z.array(
+        z.object({
+          field: z.string(),
+          value: z.record(z.unknown()),
+        }),
+      ),
+    }),
+  ),
 });
 
-// Download guard for Gupshup CDN media (filemanager.gupshup.io — public URLs)
-const _downloadGuard = createDownloadGuard({ maxSizeBytes: 100 * 1024 * 1024 }); // 100MB
-
-/**
- * Verify the webhook token from the request query param.
- * Returns true if valid, false if mismatch (caller should return 401).
- */
-export function verifyWebhookToken(request: Request, expectedToken: string): boolean {
-  const url = new URL(request.url);
-  const token = url.searchParams.get('token');
-  return token === expectedToken;
-}
+// Download guard for media (100MB limit)
+const _downloadGuard = createDownloadGuard({ maxSizeBytes: 100 * 1024 * 1024 });
 
 /**
  * Handle an inbound Gupshup webhook POST request.
- *
- * - Verifies token
- * - Parses body
- * - Routes to message or receipt handler
  */
 export async function handleGupshupWebhook(
   request: Request,
   plugin: GupshupPlugin,
   instanceId: string,
-  webhookVerifyToken: string,
+  webhookVerifyToken: string | undefined,
   dedupeCache: DedupeCache,
 ): Promise<Response> {
-  // Token verification
-  if (!verifyWebhookToken(request, webhookVerifyToken)) {
-    return new Response('Unauthorized', { status: 401 });
+  // Token verification — only if configured
+  if (webhookVerifyToken) {
+    const url = new URL(request.url);
+    const token = url.searchParams.get('token');
+    if (token !== webhookVerifyToken) {
+      return new Response('Unauthorized', { status: 401 });
+    }
   }
 
   let body: string;
@@ -87,37 +77,85 @@ export async function handleGupshupWebhook(
     return new Response('Bad Request: invalid JSON', { status: 400 });
   }
 
-  const result = GupshupInboundPayloadSchema.safeParse(parsed);
+  const result = GupshupInboundWebhookSchema.safeParse(parsed);
   if (!result.success) {
     return new Response('Bad Request: invalid payload shape', { status: 400 });
   }
-  const payload = result.data;
 
-  if (payload.type === 'message') {
-    await handleInboundMessage(plugin, instanceId, payload.payload as unknown as GupshupMessagePayload, dedupeCache);
-  } else if (payload.type === 'message-event') {
-    await handleMessageEvent(plugin, instanceId, payload.payload as unknown as GupshupMessageEventPayload);
+  const webhook = result.data as unknown as GupshupInboundWebhook;
+
+  for (const entry of webhook.entry) {
+    for (const change of entry.changes) {
+      await processChange(plugin, instanceId, change, dedupeCache);
+    }
   }
 
   return new Response('OK', { status: 200 });
 }
 
 // ─────────────────────────────────────────────────────────────
+// Change routing
+// ─────────────────────────────────────────────────────────────
+
+async function processChange(
+  plugin: GupshupPlugin,
+  instanceId: string,
+  change: GupshupChange,
+  dedupeCache: DedupeCache,
+): Promise<void> {
+  // Ignore non-message fields
+  if (change.field === 'billing-event' || change.field === 'account_update') {
+    return;
+  }
+
+  const value = change.value as GupshupChangeValue;
+
+  if (value.statuses && value.statuses.length > 0) {
+    await processStatus(plugin, instanceId, value.statuses[0] as GupshupStatusEvent);
+    return;
+  }
+
+  if (value.messages && value.messages.length > 0) {
+    const contacts = value.contacts ?? [];
+    await processInboundMessage(plugin, instanceId, value.messages[0] as GupshupInboundMessage, contacts, dedupeCache);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Status events
+// ─────────────────────────────────────────────────────────────
+
+async function processStatus(plugin: GupshupPlugin, instanceId: string, status: GupshupStatusEvent): Promise<void> {
+  // enqueued/sent → ignore
+  if (status.status === 'enqueued' || status.status === 'sent') return;
+
+  const to = status.recipient_id ?? status.destination ?? '';
+  const externalId = status.id;
+
+  if (status.status === 'delivered') {
+    await plugin.handleMessageDelivered({ instanceId, externalId, to });
+  } else if (status.status === 'read') {
+    await plugin.handleMessageRead({ instanceId, externalId, to });
+  } else if (status.status === 'failed') {
+    await plugin.handleMessageFailed({ instanceId, externalId, to, reason: 'Delivery failed' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Inbound message
 // ─────────────────────────────────────────────────────────────
 
-async function handleInboundMessage(
+async function processInboundMessage(
   plugin: GupshupPlugin,
   instanceId: string,
-  msg: GupshupMessagePayload,
+  msg: GupshupInboundMessage,
+  _contacts: { wa_id: string; profile: { name: string } }[],
   dedupeCache: DedupeCache,
 ): Promise<void> {
-  const sourcePhone = extractUserId(msg.source);
+  const from = extractUserId(msg.from);
 
-  // Dedup key: ${sourcePhoneWithoutPlus}:${messageId}
-  // SDK EXTERNAL_ID_RE does not allow '+' — use raw source (no leading +)
-  const rawSource = msg.source.trim();
-  const dedupeKey = `${rawSource}:${msg.id}`;
+  // Dedupe key
+  const dedupeKey = `${msg.from.trim()}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
     return;
   }
@@ -135,33 +173,18 @@ async function handleInboundMessage(
     content.text = sanitized.text;
   }
 
-  const platformTimestamp = msg.payload && 'timestamp' in msg.payload ? undefined : undefined;
+  // Platform timestamp (seconds → milliseconds)
+  const platformTimestamp = msg.timestamp ? Number(msg.timestamp) * 1000 : undefined;
 
   await plugin.handleMessageReceived({
     instanceId,
     externalId: msg.id,
-    chatId: sourcePhone,
-    from: sourcePhone,
+    chatId: from,
+    from,
     content,
     rawPayload: msg as unknown as Record<string, unknown>,
     platformTimestamp,
   });
-}
-
-// ─────────────────────────────────────────────────────────────
-// Delivery/read receipts
-// ─────────────────────────────────────────────────────────────
-
-async function handleMessageEvent(
-  plugin: GupshupPlugin,
-  instanceId: string,
-  event: GupshupMessageEventPayload,
-): Promise<void> {
-  if (event.type === 'delivered') {
-    await plugin.handleMessageDelivered({ instanceId, externalId: event.id, to: event.destination });
-  } else if (event.type === 'read') {
-    await plugin.handleMessageRead({ instanceId, externalId: event.id, to: event.destination });
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -177,72 +200,70 @@ interface ExtractedContent {
   filename?: string;
 }
 
-function extractContent(msg: GupshupMessagePayload): ExtractedContent | null {
+function extractMediaContent(
+  type: string,
+  media: { url: string; mime_type: string; caption?: string; filename?: string } | undefined,
+): ExtractedContent | null {
+  if (!media) return null;
+  return { type, mediaUrl: media.url, mimeType: media.mime_type, caption: media.caption, filename: media.filename };
+}
+
+function extractLocationContent(loc: {
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+}): ExtractedContent {
+  const parts: string[] = [];
+  if (loc.name) parts.push(loc.name);
+  if (loc.address) parts.push(loc.address);
+  const text = parts.length > 0 ? parts.join(', ') : `${loc.latitude},${loc.longitude}`;
+  return { type: 'location', text };
+}
+
+function extractContactContent(contacts: GupshupInboundMessage['contacts']): ExtractedContent {
+  const first = contacts?.[0];
+  const name =
+    first?.name?.formatted_name ??
+    [first?.name?.first_name, first?.name?.last_name].filter(Boolean).join(' ') ??
+    'Unknown';
+  const phone = first?.phones?.[0]?.phone ?? '';
+  return { type: 'text', text: `Contact: ${name}: ${phone}` };
+}
+
+function extractInteractiveContent(interactive: NonNullable<GupshupInboundMessage['interactive']>): ExtractedContent {
+  if (interactive.type === 'button_reply' && interactive.button_reply) {
+    return { type: 'text', text: interactive.button_reply.title };
+  }
+  if (interactive.type === 'list_reply' && interactive.list_reply) {
+    return { type: 'text', text: interactive.list_reply.title };
+  }
+  return { type: 'text', text: '' };
+}
+
+function extractContent(msg: GupshupInboundMessage): ExtractedContent | null {
   switch (msg.type) {
     case 'text':
-      return extractText(msg.payload as GupshupTextContent);
+      return msg.text ? { type: 'text', text: msg.text.body } : null;
     case 'image':
-      return extractMedia(msg.payload as GupshupMediaContent, 'image', 'image/*');
+      return extractMediaContent('image', msg.image);
     case 'audio':
-      return extractMedia(msg.payload as GupshupMediaContent, 'audio', 'audio/*');
+      return extractMediaContent('audio', msg.audio);
     case 'video':
-      return extractMedia(msg.payload as GupshupMediaContent, 'video', 'video/*');
+      return extractMediaContent('video', msg.video);
     case 'document':
-      return extractMedia(msg.payload as GupshupMediaContent, 'document', 'application/octet-stream');
+      return extractMediaContent('document', msg.document);
+    case 'sticker':
+      return msg.sticker ? { type: 'image', mediaUrl: msg.sticker.url, mimeType: msg.sticker.mime_type } : null;
     case 'location':
-      return extractLocation(msg.payload as GupshupLocationContent);
-    case 'contact':
-      return extractContact(msg.payload as GupshupContactContent);
+      return msg.location ? extractLocationContent(msg.location) : null;
+    case 'contacts':
+      return extractContactContent(msg.contacts);
     case 'interactive':
-      return extractInteractive(msg.payload as GupshupInteractiveContent);
+      return msg.interactive ? extractInteractiveContent(msg.interactive) : null;
+    case 'button':
+      return msg.button ? { type: 'text', text: msg.button.text } : null;
     default:
       return null;
   }
-}
-
-function extractText(payload: GupshupTextContent): ExtractedContent {
-  return { type: 'text', text: payload.text };
-}
-
-function extractMedia(payload: GupshupMediaContent, type: string, defaultMime: string): ExtractedContent {
-  // Validate the CDN URL is from Gupshup (filemanager.gupshup.io) or any HTTPS URL
-  const url = payload.url;
-  if (!url || !url.startsWith('https://')) {
-    return { type, mediaUrl: url, mimeType: payload.contentType ?? defaultMime, caption: payload.caption };
-  }
-  // Size check is performed at download time via checkResponse/checkSize
-  return {
-    type,
-    mediaUrl: url,
-    mimeType: payload.contentType ?? defaultMime,
-    caption: payload.caption,
-    filename: payload.filename,
-  };
-}
-
-function extractLocation(payload: GupshupLocationContent): ExtractedContent {
-  const parts: string[] = [];
-  if (payload.name) parts.push(payload.name);
-  if (payload.address) parts.push(payload.address);
-  return {
-    type: 'location',
-    text: parts.join(', ') || `${payload.latitude},${payload.longitude}`,
-  };
-}
-
-function extractContact(payload: GupshupContactContent): ExtractedContent {
-  const first = payload.contacts?.[0] as GupshupContact | undefined;
-  const name = first?.name?.formatted_name ?? 'Unknown';
-  const phone = first?.phones?.[0]?.phone ?? '';
-  return { type: 'contact', text: `${name}: ${phone}` };
-}
-
-function extractInteractive(payload: GupshupInteractiveContent): ExtractedContent {
-  if (payload.button_reply) {
-    return { type: 'text', text: payload.button_reply.title };
-  }
-  if (payload.list_reply) {
-    return { type: 'text', text: payload.list_reply.title };
-  }
-  return { type: 'text', text: '' };
 }

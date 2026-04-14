@@ -6,5 +6,5 @@ import type { GupshupClient } from '../client';
 import type { GupshupSendResponse } from '../types';
 
 export async function sendText(client: GupshupClient, to: string, text: string): Promise<GupshupSendResponse> {
-  return client.sendText(to, text);
+  return client.send(to, { type: 'TEXT', text });
 }

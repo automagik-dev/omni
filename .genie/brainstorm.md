@@ -3,6 +3,9 @@
 ## Raw
 - **session-observatory** — Agent session observability layer (#292). Scope unclear — needs decomposition. Issue closed as stale.
 
+## Ready
+- **gupshup-channel-rewrite** — Full rewrite of channel-gupshup: Meta-format inbound, Custom Integration outbound, 10 msg types, 7 outbound types. DESIGN.md ready.
+
 ## Simmering
 
 ## Ready

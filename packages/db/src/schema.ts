@@ -633,9 +633,9 @@ export const instances = pgTable(
     telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
     // ---- Gupshup Configuration ----
-    gupshupApiKey: text('gupshup_api_key'),
-    gupshupAppName: varchar('gupshup_app_name', { length: 255 }),
-    gupshupSourcePhone: varchar('gupshup_source_phone', { length: 20 }),
+    gupshupCallbackUrl: text('gupshup_callback_url'),
+    gupshupAuthToken: text('gupshup_auth_token'),
+    gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
     webhookVerifyToken: text('webhook_verify_token'),
 
     // ---- Agent Reference ----
