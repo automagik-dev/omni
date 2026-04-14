@@ -43,8 +43,13 @@ export interface ClaudeCodeConfig {
   /** System prompt — prepended to Claude Code's own */
   systemPrompt?: string;
 
-  /** MCP servers to connect (in addition to project's .claude config) */
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  /** MCP servers to connect (in addition to project's .claude config).
+   *  Supports both stdio servers (command) and HTTP servers (type: "http", url). */
+  mcpServers?: Record<
+    string,
+    | { command: string; args?: string[]; env?: Record<string, string> }
+    | { type: 'http'; url: string; headers?: Record<string, string> }
+  >;
 
   /** Max turns per query (safety limit, default: 10) */
   maxTurns?: number;
@@ -527,6 +532,55 @@ function processRunMessage(
 }
 
 // ---------------------------------------------------------------------------
+// MCP server helpers
+// ---------------------------------------------------------------------------
+
+/** Check if a server config is an HTTP-type MCP server (has `url` field). */
+function isHttpMcpServer(server: unknown): server is { url: string } {
+  return (
+    typeof server === 'object' &&
+    server !== null &&
+    'url' in server &&
+    typeof (server as Record<string, unknown>).url === 'string'
+  );
+}
+
+/** Append query params to an HTTP URL using the native URL API, with string fallback. */
+function appendUrlParams(url: string, params: Record<string, string>): string {
+  try {
+    const parsed = new URL(url);
+    for (const [key, value] of Object.entries(params)) {
+      parsed.searchParams.set(key, value);
+    }
+    return parsed.toString();
+  } catch {
+    // Fallback for non-standard URLs that URL() rejects
+    const qs = new URLSearchParams(params).toString();
+    return `${url}${url.includes('?') ? '&' : '?'}${qs}`;
+  }
+}
+
+/** Resolve mcpServers config: clone and append URL params to HTTP servers if provided. */
+function resolveMcpServers(
+  mcpServers: NonNullable<ClaudeCodeConfig['mcpServers']>,
+  mcpUrlParams: Record<string, string> | undefined,
+): NonNullable<ClaudeCodeConfig['mcpServers']> {
+  if (!mcpUrlParams || Object.keys(mcpUrlParams).length === 0) {
+    return mcpServers;
+  }
+  if (!Object.values(mcpServers).some(isHttpMcpServer)) {
+    return mcpServers;
+  }
+  const cloned = structuredClone(mcpServers);
+  for (const server of Object.values(cloned)) {
+    if (isHttpMcpServer(server)) {
+      server.url = appendUrlParams(server.url, mcpUrlParams);
+    }
+  }
+  return cloned;
+}
+
+// ---------------------------------------------------------------------------
 // Query options builder (module-level so generateStream can use it directly)
 // ---------------------------------------------------------------------------
 
@@ -551,7 +605,10 @@ function buildQueryOptions(
   if (config.allowedTools) options.allowedTools = config.allowedTools;
   if (config.model) options.model = config.model;
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
-  if (config.mcpServers) options.mcpServers = config.mcpServers;
+
+  if (config.mcpServers) {
+    options.mcpServers = resolveMcpServers(config.mcpServers, request.mcpUrlParams);
+  }
 
   // Build clean env: always clear CLAUDECODE to prevent the SDK from thinking
   // it's already inside a Claude Code session (happens when Omni is spawned
