@@ -271,8 +271,19 @@ async function executeLogAction(
 /**
  * Build messages array from context: prefer debounce context (multiple messages),
  * fall back to single payload.
+ *
+ * When `promptOverride` is set on the `call_agent` config, the rendered
+ * override replaces any payload- or debounce-derived messages entirely. The
+ * override is not persisted as a chat message (that invariant is the
+ * responsibility of the injected `callAgent` implementation — it should not
+ * write `promptOverride` back to chat history or agent session memory).
  */
-function extractMessages(context: TemplateContext): string[] | { error: string } {
+function extractMessages(context: TemplateContext, promptOverride?: string): string[] | { error: string } {
+  if (promptOverride !== undefined) {
+    const rendered = substituteTemplate(promptOverride, context);
+    if (!rendered) return { error: 'promptOverride rendered to an empty string' };
+    return [rendered];
+  }
   if (context.debounce?.messages && context.debounce.messages.length > 0) {
     const messages = context.debounce.messages.map((m) => m.text).filter((t): t is string => !!t);
     if (messages.length === 0) {
@@ -311,7 +322,7 @@ function extractAgentCallContext(
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
-  const messagesResult = extractMessages(context);
+  const messagesResult = extractMessages(context, config.promptOverride);
   if ('error' in messagesResult) return messagesResult;
 
   // Resolve agentId (may be a template)

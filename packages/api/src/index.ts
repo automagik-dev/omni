@@ -38,6 +38,7 @@ import {
   setupConnectionListener,
   setupContactNamesListener,
   setupEventPersistence,
+  setupFollowUpHooks,
   setupHistoryPushTracker,
   setupLidMappingListener,
   setupMediaProcessor,
@@ -297,6 +298,13 @@ async function setupEventBusServices(
     await setupSessionCleaner(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up session cleaner', { error: String(error) });
+  }
+
+  // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
+  try {
+    await setupFollowUpHooks(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up follow-up hooks', { error: String(error) });
   }
 
   // Sync worker

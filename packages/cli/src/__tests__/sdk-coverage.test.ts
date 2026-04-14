@@ -234,6 +234,19 @@ const CLI_COMMANDS: Record<string, string> = {
   'agents.delete': 'agents delete <id>',
 
   // ============================================================================
+  // FOLLOW-UP (idle-chat follow-up config — issue #404)
+  // ============================================================================
+  'followUp.getAgent': 'follow-up get agents',
+  'followUp.setAgent': 'follow-up set agents',
+  'followUp.unsetAgent': 'follow-up unset agents',
+  'followUp.getInstance': 'follow-up get instances',
+  'followUp.setInstance': 'follow-up set instances',
+  'followUp.unsetInstance': 'follow-up unset instances',
+  'followUp.getChat': 'follow-up get chats',
+  'followUp.setChat': 'follow-up set chats',
+  'followUp.unsetChat': 'follow-up unset chats',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',
