@@ -2667,6 +2667,29 @@ const providerCache = new Map<string, IAgentProvider>();
 /** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
 const openclawClientPool = new Map<string, OpenClawClient>();
 
+/**
+ * Pick the first non-empty agentId from instance → provider schemaConfig.
+ * Throws when neither is set so downstream code never hits upstream APIs
+ * with the literal string "default". The previous silent fallback could
+ * mask a mis-seeded instance as 404s on the upstream provider.
+ */
+function resolveRequiredAgentId(
+  instance: DispatchInstance,
+  schemaConfig: Record<string, unknown>,
+  providerId: string,
+  fieldName: 'agentId' | 'defaultAgentId' = 'agentId',
+): string {
+  const fromInstance = instance.agentInternalId;
+  const fromSchema = schemaConfig[fieldName];
+  const resolved = (fromInstance ?? fromSchema) as string | undefined | null;
+  if (!resolved || typeof resolved !== 'string' || resolved.trim() === '') {
+    throw new Error(
+      `agent-dispatcher: cannot resolve agentId for provider ${providerId} (instance.agentInternalId and schemaConfig.${fieldName} are both empty)`,
+    );
+  }
+  return resolved;
+}
+
 /** Create an OpenClaw-based agent provider */
 function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
   // DEC-3: Reuse shared WS client per provider ID
@@ -2700,7 +2723,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
-    defaultAgentId: (instance.agentInternalId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
+    defaultAgentId: resolveRequiredAgentId(instance, schemaConfig, provider.id, 'defaultAgentId'),
     agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2726,7 +2749,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
 
   return new AgnoAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -2814,7 +2837,7 @@ function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchI
   });
 
   return new AgUiAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2837,7 +2860,7 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
   });
 
   return new A2AAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
