@@ -2562,7 +2562,7 @@ async function processAgentResponse(
 
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
-  const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (firstMessage.metadata.channelType ?? instance.channel) as ChannelType;
   const traceId = firstMessage.metadata.traceId ?? '';
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
@@ -3148,7 +3148,7 @@ async function processReactionTrigger(
   rawEvent: AgentTrigger['event'],
   db: Database,
 ): Promise<void> {
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? baseInstance.channel) as ChannelType;
   const externalChatId = payload.chatId;
 
   // Look up internal chat UUID for route resolution
@@ -3557,7 +3557,7 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
   if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
@@ -3666,7 +3666,7 @@ async function shouldProcessReaction(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
   if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
@@ -3824,7 +3824,7 @@ async function shouldSkipViaGate(
   if (triggerType === 'mention' || triggerType === 'reply') return false;
   const chatType = determineChatType(
     firstMsg.payload.chatId,
-    firstMsg.metadata.channelType ?? 'whatsapp',
+    firstMsg.metadata.channelType ?? instance.channel,
     (firstMsg.payload.rawPayload ?? {}) as Record<string, unknown>,
   );
   const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
@@ -3941,7 +3941,7 @@ export async function setupAgentDispatcher(
 
           // Resolve person ID for route matching. metadata.personId may not be set yet
           // (message-persistence runs in parallel), so fall back to identity lookup.
-          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+          const channel = (metadata.channelType ?? instance.channel) as ChannelType;
           const earlyPersonId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
 
           const { instance: resolved, routeId } = await resolveEffectiveInstance(

@@ -449,7 +449,7 @@ async function processAgentResponse(
 
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
-  const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (firstMessage.metadata.channelType ?? instance.channel) as ChannelType;
 
   // Resolve person ID: metadata first, then identity lookup fallback
   const personId = firstMessage.metadata.personId;
@@ -551,7 +551,7 @@ async function processIncomingMessage(
     return;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
   const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
 
   if (!accessResult.allowed) {
