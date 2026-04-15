@@ -43,13 +43,6 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 const log = createLogger('follow-up-lifecycle');
 
 /**
- * Refuse to arm a follow-up when the triggering message is older than this.
- * Guards against NATS redelivery / consumer replay from re-arming historical
- * chats long after the fact.
- */
-const MAX_ARM_MESSAGE_AGE_MS = 5 * 60_000;
-
-/**
  * Typed reads across the three storage locations — the resolver is DB-agnostic,
  * so the API service does the column/jsonb lookup here and hands plain
  * `FollowUpSequenceConfig | null | undefined` to the resolver.
@@ -110,19 +103,29 @@ export class FollowUpLifecycleService {
   async armForOutbound(input: Omit<ArmSequenceInput, 'config'> & { config?: FollowUpSequenceConfig }): Promise<void> {
     if (!this.eventBus) return;
 
-    const ageMs = Date.now() - input.lastAgentMessageAt.getTime();
-    if (ageMs > MAX_ARM_MESSAGE_AGE_MS) {
-      this.logger.warn('follow-up lifecycle: refusing to arm on stale message', {
-        chatId: input.chatId,
-        instanceId: input.instanceId,
-        ageMs,
-        maxAgeMs: MAX_ARM_MESSAGE_AGE_MS,
-      });
-      return;
-    }
-
     const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
     if (!config || config.enabled === false) return;
+
+    // Refuse to arm when the triggering message is already older than the
+    // first follow-up interval — the initial wait window has elapsed, so
+    // the sequence would fire immediately. Guards against NATS redelivery
+    // re-arming chats whose outbound happened long ago.
+    const firstIntervalMinutes =
+      config.schedule.kind === 'fixed' ? config.schedule.intervalsMinutes[0] : config.schedule.initialMinutes;
+    if (typeof firstIntervalMinutes === 'number' && firstIntervalMinutes > 0) {
+      const maxAgeMs = firstIntervalMinutes * 60_000;
+      const ageMs = Date.now() - input.lastAgentMessageAt.getTime();
+      if (ageMs > maxAgeMs) {
+        this.logger.warn('follow-up lifecycle: refusing to arm on stale message', {
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          ageMs,
+          maxAgeMs,
+          firstIntervalMinutes,
+        });
+        return;
+      }
+    }
 
     try {
       await armSequence(

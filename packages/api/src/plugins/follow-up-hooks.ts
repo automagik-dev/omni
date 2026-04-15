@@ -30,13 +30,6 @@ import type { Services } from '../services';
 const log = createLogger('follow-up-hooks');
 
 /**
- * Drop `message.sent` events older than this before they reach the lifecycle
- * service. Defends against NATS consumer replay re-arming historical chats
- * when weeks-old events get redelivered in a single burst.
- */
-const MAX_EVENT_AGE_MS = 5 * 60_000;
-
-/**
  * Resolve the DB chat UUID from a message event's external chat id.
  * Returns null when the chat has not been persisted yet — the follow-up row
  * can safely be skipped in that case.
@@ -67,17 +60,6 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services)
 
         const senderAgentId = payload.senderAgentId;
         if (!senderAgentId) return; // Only arm on agent-origin messages.
-
-        const ageMs = Date.now() - event.timestamp;
-        if (ageMs > MAX_EVENT_AGE_MS) {
-          log.warn('follow-up-hooks: dropping stale message.sent', {
-            instanceId,
-            chatId: payload.chatId,
-            ageMs,
-            maxAgeMs: MAX_EVENT_AGE_MS,
-          });
-          return;
-        }
 
         const chatId = await resolveChatId(services, instanceId, payload.chatId);
         if (!chatId) return;
