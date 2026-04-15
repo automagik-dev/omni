@@ -34,6 +34,7 @@ export class GupshupClient {
       if (msg.name) payload.name = msg.name;
       if (msg.address) payload.address = msg.address;
     }
+    if (msg.extra_info) payload.extra_info = msg.extra_info;
 
     // POST to callback URL
     const res = await fetch(this.callbackUrl, {

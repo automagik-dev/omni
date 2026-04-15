@@ -13,7 +13,7 @@ export interface GupshupConfig {
 
 // Outbound message shape (internal)
 export interface GupshupOutboundMessage {
-  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION';
+  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF';
   text?: string;
   url?: string;
   caption?: string;
@@ -22,6 +22,7 @@ export interface GupshupOutboundMessage {
   longitude?: number;
   name?: string;
   address?: string;
+  extra_info?: string;
 }
 
 // Meta/WA Business API inbound - top level

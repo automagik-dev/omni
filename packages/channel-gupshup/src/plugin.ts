@@ -22,6 +22,7 @@ import type { ChannelType } from '@omni/core/types';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
 import { handleGupshupWebhook } from './handlers/webhooks';
+import { sendHandoff } from './senders/handoff';
 import { sendLocation } from './senders/location';
 import { sendMedia } from './senders/media';
 import { sendText } from './senders/text';
@@ -36,7 +37,13 @@ async function dispatchContent(
   message: OutgoingMessage,
 ): Promise<GupshupSendResponse> {
   const { content } = message;
+  const meta = message.metadata as Record<string, unknown> | undefined;
   const mediaTypes = new Set(['image', 'audio', 'video', 'document', 'sticker']);
+
+  if (meta?.isHandoff === true) {
+    const extraInfo = meta.extraInfo as string | undefined;
+    return sendHandoff(client, dest, content.text ?? '', extraInfo);
+  }
 
   if (content.type === 'text') {
     return sendText(client, dest, content.text ?? '');
