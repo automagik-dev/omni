@@ -1,6 +1,8 @@
 /**
  * Gupshup-specific types for the channel plugin
- * Based on Meta/WA Business API inbound + Gupshup Custom Integration outbound
+ *
+ * Inbound: Gupshup native format (messageobj/senderobj/contextobj)
+ * Outbound: Custom Integration callback URL
  */
 
 // Instance config
@@ -25,88 +27,85 @@ export interface GupshupOutboundMessage {
   extra_info?: string;
 }
 
-// Meta/WA Business API inbound - top level
-export interface GupshupInboundWebhook {
-  object: string;
-  gs_app_id?: string;
-  entry: GupshupEntry[];
-}
+// ─────────────────────────────────────────────────────────────
+// Inbound — Gupshup native format
+// Content-Type arrives as application/x-www-form-urlencoded but body is raw JSON.
+// Parse with JSON.parse(await request.text()).
+// ─────────────────────────────────────────────────────────────
 
-export interface GupshupEntry {
-  id: string;
-  changes: GupshupChange[];
-}
+export interface GupshupNativeMessageObj {
+  id: string; // wamid — use as message ID
+  type: 'text' | 'audio' | 'image' | 'video' | 'sticker' | 'file' | 'contacts' | 'location' | string;
+  from: string; // sender phone
+  timestamp: number; // unix seconds
 
-export interface GupshupChange {
-  field: 'messages' | 'billing-event' | 'account_update' | string;
-  value: GupshupChangeValue;
-}
+  // text
+  text?: string;
 
-export interface GupshupChangeValue {
-  messaging_product?: string;
-  metadata?: { display_phone_number: string; phone_number_id: string };
-  contacts?: GupshupInboundContact[];
-  messages?: GupshupInboundMessage[];
-  statuses?: GupshupStatusEvent[];
-}
+  // media (audio, image, video, sticker, file)
+  url?: string;
+  contentType?: string; // MIME type
+  mediaId?: string;
+  fileName?: string; // file/document only
 
-export interface GupshupInboundContact {
-  wa_id: string;
-  profile: { name: string };
-}
+  // location — lat/lng arrive as strings, not numbers
+  latitude?: string;
+  longitude?: string;
+  address?: string;
+  name?: string; // place name (location) or contact-related
 
-// Status events
-export interface GupshupStatusEvent {
-  id: string;
-  gs_id?: string;
-  status: 'enqueued' | 'sent' | 'delivered' | 'read' | 'failed';
-  timestamp: string;
-  recipient_id?: string;
-  destination?: string;
-}
-
-// Inbound message — unified
-export interface GupshupInboundMessage {
-  id: string;
-  from: string;
-  type:
-    | 'text'
-    | 'image'
-    | 'audio'
-    | 'video'
-    | 'document'
-    | 'sticker'
-    | 'location'
-    | 'contacts'
-    | 'interactive'
-    | 'button';
-  timestamp: string;
-  context?: { id: string; from: string; gs_id?: string; meta_msg_id?: string };
-  // type-specific payloads
-  text?: { body: string };
-  image?: { id: string; url: string; mime_type: string; sha256?: string; caption?: string };
-  audio?: { id: string; url: string; mime_type: string; voice?: boolean; sha256?: string };
-  video?: { id: string; url: string; mime_type: string; sha256?: string; caption?: string };
-  document?: {
+  // reply context — present when user replies to a prior message
+  replyContext?: {
     id: string;
-    url: string;
-    mime_type: string;
-    sha256?: string;
-    filename?: string;
-    caption?: string;
+    internalId?: string;
   };
-  sticker?: { id: string; url: string; mime_type: string; sha256?: string; animated?: boolean };
-  location?: { latitude: number; longitude: number; name?: string; address?: string };
-  contacts?: Array<{
-    name?: { formatted_name?: string; first_name?: string; last_name?: string };
-    phones?: Array<{ phone: string; type?: string; wa_id?: string }>;
-  }>;
-  interactive?: {
-    type: 'button_reply' | 'list_reply';
-    button_reply?: { id: string; title: string };
-    list_reply?: { id: string; title: string; description?: string };
+
+  raw?: {
+    payload?: Record<string, unknown>;
+    sender?: { name?: string; phone?: string; country_code?: string; dial_code?: string };
+    type?: string;
+    id?: string;
+    source?: string;
+    context?: Record<string, unknown>;
   };
-  button?: { text: string; payload: string };
+}
+
+export interface GupshupNativeSenderObj {
+  channelid: string; // sender phone
+  display?: string; // display name
+  channeltype?: string;
+}
+
+export interface GupshupNativeContextObj {
+  senderName?: string;
+  botname?: string;
+  channeltype?: string;
+  contexttype?: string;
+  contextid?: string;
+  preventReply?: boolean;
+  cc?: string;
+  dc?: string;
+}
+
+export interface GupshupNativeInboundWebhook {
+  source?: string;
+  sender: string; // remetente phone
+  channel: string; // "whatsapp"
+  isGroup?: boolean;
+  destination: string | number;
+  botname: string; // instance identifier
+  event_type: string; // "user_input" for inbound messages
+  message?: string; // redundant — prefer messageobj
+  postbackText?: string | null;
+  senderobj: GupshupNativeSenderObj;
+  contextobj?: GupshupNativeContextObj;
+  messageobj: GupshupNativeMessageObj;
+  messageHeader?: {
+    event_type?: string;
+    nsTraceId?: string;
+    project_id?: string;
+    'x-gs-priority'?: number;
+  };
 }
 
 // API response

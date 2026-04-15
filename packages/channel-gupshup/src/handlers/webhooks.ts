@@ -1,48 +1,106 @@
 /**
  * Gupshup webhook handler
  *
- * Parses inbound Meta/WA Business API format payloads from Gupshup,
- * deduplicates, and emits the appropriate Omni events.
+ * Parses inbound Gupshup native format payloads and emits Omni events.
  *
- * Webhook verification: query param `?token=X` is compared against
- * instance `webhookVerifyToken`. If not set, skip token check.
+ * Wire format: Content-Type is application/x-www-form-urlencoded but the body
+ * is raw JSON — JSON.parse(await request.text()) is the correct parse strategy.
+ *
+ * Only event_type === 'user_input' is processed. All other event types (status
+ * updates, billing, etc.) are acknowledged with 200 and discarded.
+ *
+ * Webhook verification: query param `?token=X` is compared against instance
+ * `webhookVerifyToken`. If not set, skip token check.
  */
 
-import { createDownloadGuard, sanitizeMessage } from '@omni/channel-sdk';
+import { createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
 import { z } from 'zod';
 
 import type { GupshupPlugin } from '../plugin';
-import type {
-  GupshupChange,
-  GupshupChangeValue,
-  GupshupInboundMessage,
-  GupshupInboundWebhook,
-  GupshupStatusEvent,
-} from '../types';
-import { extractUserId } from '../utils/identity';
+import type { GupshupNativeInboundWebhook, GupshupNativeMessageObj } from '../types';
 
-/**
- * Zod schema for validating top-level inbound webhook payload.
- */
-const GupshupInboundWebhookSchema = z.object({
-  object: z.string(),
-  gs_app_id: z.string().optional(),
-  entry: z.array(
-    z.object({
-      id: z.string().optional(), // Gupshup omits id in set-callback validation requests
-      changes: z.array(
-        z.object({
-          field: z.string(),
-          value: z.record(z.unknown()),
-        }),
-      ),
+// ─────────────────────────────────────────────────────────────
+// Schema
+// ─────────────────────────────────────────────────────────────
+
+const GupshupNativeWebhookSchema = z
+  .object({
+    sender: z.string(),
+    botname: z.string(),
+    channel: z.string(),
+    isGroup: z.boolean().optional(),
+    destination: z.union([z.string(), z.number()]),
+    event_type: z.string(),
+    message: z.string().optional(),
+    postbackText: z.string().nullable().optional(),
+    senderobj: z.object({
+      channelid: z.string(),
+      display: z.string().optional(),
+      channeltype: z.string().optional(),
     }),
-  ),
-});
+    contextobj: z
+      .object({
+        senderName: z.string().optional(),
+        botname: z.string().optional(),
+        channeltype: z.string().optional(),
+        contexttype: z.string().optional(),
+        contextid: z.string().optional(),
+        preventReply: z.boolean().optional(),
+        cc: z.string().optional(),
+        dc: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    messageobj: z
+      .object({
+        id: z.string(),
+        type: z.string(),
+        from: z.string(),
+        timestamp: z.number(),
+        text: z.string().optional(),
+        url: z.string().optional(),
+        contentType: z.string().optional(),
+        fileName: z.string().optional(),
+        mediaId: z.string().optional(),
+        // location fields arrive as strings
+        latitude: z.string().optional(),
+        longitude: z.string().optional(),
+        address: z.string().optional(),
+        name: z.string().optional(),
+        replyContext: z
+          .object({
+            id: z.string(),
+            internalId: z.string().optional(),
+          })
+          .optional(),
+        raw: z
+          .object({
+            payload: z.record(z.unknown()).optional(),
+            sender: z.object({ name: z.string().optional() }).passthrough().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough(),
+    messageHeader: z
+      .object({
+        event_type: z.string().optional(),
+        nsTraceId: z.string().optional(),
+        project_id: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    source: z.string().optional(),
+  })
+  .passthrough();
 
 // Download guard for media (100MB limit)
-const _downloadGuard = createDownloadGuard({ maxSizeBytes: 100 * 1024 * 1024 });
+const _downloadGuard = createInboundDedupeCache;
+
+// ─────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────
 
 /**
  * Handle an inbound Gupshup webhook POST request.
@@ -77,68 +135,21 @@ export async function handleGupshupWebhook(
     return new Response('Bad Request: invalid JSON', { status: 400 });
   }
 
-  const result = GupshupInboundWebhookSchema.safeParse(parsed);
+  const result = GupshupNativeWebhookSchema.safeParse(parsed);
   if (!result.success) {
     return new Response('Bad Request: invalid payload shape', { status: 400 });
   }
 
-  const webhook = result.data as unknown as GupshupInboundWebhook;
+  const webhook = result.data as unknown as GupshupNativeInboundWebhook;
 
-  for (const entry of webhook.entry) {
-    for (const change of entry.changes) {
-      await processChange(plugin, instanceId, change, dedupeCache);
-    }
+  // Only process user input events — ignore status, billing, etc.
+  if (webhook.event_type !== 'user_input') {
+    return new Response('OK', { status: 200 });
   }
+
+  await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
 
   return new Response('OK', { status: 200 });
-}
-
-// ─────────────────────────────────────────────────────────────
-// Change routing
-// ─────────────────────────────────────────────────────────────
-
-async function processChange(
-  plugin: GupshupPlugin,
-  instanceId: string,
-  change: GupshupChange,
-  dedupeCache: DedupeCache,
-): Promise<void> {
-  // Ignore non-message fields
-  if (change.field === 'billing-event' || change.field === 'account_update') {
-    return;
-  }
-
-  const value = change.value as GupshupChangeValue;
-
-  if (value.statuses && value.statuses.length > 0) {
-    await processStatus(plugin, instanceId, value.statuses[0] as GupshupStatusEvent);
-    return;
-  }
-
-  if (value.messages && value.messages.length > 0) {
-    const contacts = value.contacts ?? [];
-    await processInboundMessage(plugin, instanceId, value.messages[0] as GupshupInboundMessage, contacts, dedupeCache);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Status events
-// ─────────────────────────────────────────────────────────────
-
-async function processStatus(plugin: GupshupPlugin, instanceId: string, status: GupshupStatusEvent): Promise<void> {
-  // enqueued/sent → ignore
-  if (status.status === 'enqueued' || status.status === 'sent') return;
-
-  const to = status.recipient_id ?? status.destination ?? '';
-  const externalId = status.id;
-
-  if (status.status === 'delivered') {
-    await plugin.handleMessageDelivered({ instanceId, externalId, to });
-  } else if (status.status === 'read') {
-    await plugin.handleMessageRead({ instanceId, externalId, to });
-  } else if (status.status === 'failed') {
-    await plugin.handleMessageFailed({ instanceId, externalId, to, reason: 'Delivery failed' });
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -148,14 +159,14 @@ async function processStatus(plugin: GupshupPlugin, instanceId: string, status: 
 async function processInboundMessage(
   plugin: GupshupPlugin,
   instanceId: string,
-  msg: GupshupInboundMessage,
-  _contacts: { wa_id: string; profile: { name: string } }[],
+  webhook: GupshupNativeInboundWebhook,
   dedupeCache: DedupeCache,
 ): Promise<void> {
-  const from = extractUserId(msg.from);
+  const msg = webhook.messageobj;
+  const from = webhook.sender;
 
-  // Dedupe key
-  const dedupeKey = `${msg.from.trim()}:${msg.id}`;
+  // Dedupe by sender phone + message ID
+  const dedupeKey = `${from.trim()}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
     return;
   }
@@ -163,7 +174,7 @@ async function processInboundMessage(
   const content = extractContent(msg);
   if (!content) return;
 
-  // Sanitize text content
+  // Sanitize text
   if (content.text) {
     const sanitized = sanitizeMessage(content.text, plugin.getLogger() as import('@omni/core').Logger, {
       instanceId,
@@ -173,8 +184,8 @@ async function processInboundMessage(
     content.text = sanitized.text;
   }
 
-  // Platform timestamp (seconds → milliseconds)
-  const platformTimestamp = msg.timestamp ? Number(msg.timestamp) * 1000 : undefined;
+  const platformTimestamp = msg.timestamp * 1000;
+  const replyTo = msg.replyContext?.id;
 
   await plugin.handleMessageReceived({
     instanceId,
@@ -182,8 +193,9 @@ async function processInboundMessage(
     chatId: from,
     from,
     content,
-    rawPayload: msg as unknown as Record<string, unknown>,
+    rawPayload: { ...webhook } as unknown as Record<string, unknown>,
     platformTimestamp,
+    replyTo,
   });
 }
 
@@ -198,72 +210,67 @@ interface ExtractedContent {
   mimeType?: string;
   caption?: string;
   filename?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    name?: string;
+    address?: string;
+  };
 }
 
-function extractMediaContent(
-  type: string,
-  media: { url: string; mime_type: string; caption?: string; filename?: string } | undefined,
-): ExtractedContent | null {
-  if (!media) return null;
-  return { type, mediaUrl: media.url, mimeType: media.mime_type, caption: media.caption, filename: media.filename };
+const MEDIA_TYPES: Record<string, string> = {
+  audio: 'audio',
+  image: 'image',
+  video: 'video',
+  sticker: 'sticker',
+  file: 'document', // Gupshup 'file' = WA 'document'
+};
+
+function extractLocationContent(msg: GupshupNativeMessageObj): ExtractedContent | null {
+  if (!msg.latitude || !msg.longitude) return null;
+  const lat = Number.parseFloat(msg.latitude);
+  const lng = Number.parseFloat(msg.longitude);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  const parts = [msg.name, msg.address].filter(Boolean).join(', ');
+  return {
+    type: 'location',
+    text: parts || `${lat},${lng}`,
+    location: { latitude: lat, longitude: lng, name: msg.name, address: msg.address },
+  };
 }
 
-function extractLocationContent(loc: {
-  latitude: number;
-  longitude: number;
-  name?: string;
-  address?: string;
-}): ExtractedContent {
-  const parts: string[] = [];
-  if (loc.name) parts.push(loc.name);
-  if (loc.address) parts.push(loc.address);
-  const text = parts.length > 0 ? parts.join(', ') : `${loc.latitude},${loc.longitude}`;
-  return { type: 'location', text };
-}
+type ContactPayload = {
+  name?: { formatted_name?: string; first_name?: string; last_name?: string };
+  phones?: Array<{ phone: string }>;
+};
 
-function extractContactContent(contacts: GupshupInboundMessage['contacts']): ExtractedContent {
-  const first = contacts?.[0];
+function extractContactContent(msg: GupshupNativeMessageObj): ExtractedContent {
+  const raw = msg.raw?.payload as { contacts?: ContactPayload[] } | undefined;
+  const first = raw?.contacts?.[0];
+  if (!first) return { type: 'text', text: 'Contact shared' };
   const name =
-    first?.name?.formatted_name ??
-    [first?.name?.first_name, first?.name?.last_name].filter(Boolean).join(' ') ??
+    first.name?.formatted_name ??
+    [first.name?.first_name, first.name?.last_name].filter(Boolean).join(' ') ??
     'Unknown';
-  const phone = first?.phones?.[0]?.phone ?? '';
+  const phone = first.phones?.[0]?.phone ?? '';
   return { type: 'text', text: `Contact: ${name}: ${phone}` };
 }
 
-function extractInteractiveContent(interactive: NonNullable<GupshupInboundMessage['interactive']>): ExtractedContent {
-  if (interactive.type === 'button_reply' && interactive.button_reply) {
-    return { type: 'text', text: interactive.button_reply.title };
-  }
-  if (interactive.type === 'list_reply' && interactive.list_reply) {
-    return { type: 'text', text: interactive.list_reply.title };
-  }
-  return { type: 'text', text: '' };
-}
+function extractContent(msg: GupshupNativeMessageObj): ExtractedContent | null {
+  if (msg.type === 'text') return msg.text ? { type: 'text', text: msg.text } : null;
+  if (msg.type === 'location') return extractLocationContent(msg);
+  if (msg.type === 'contacts') return extractContactContent(msg);
 
-function extractContent(msg: GupshupInboundMessage): ExtractedContent | null {
-  switch (msg.type) {
-    case 'text':
-      return msg.text ? { type: 'text', text: msg.text.body } : null;
-    case 'image':
-      return extractMediaContent('image', msg.image);
-    case 'audio':
-      return extractMediaContent('audio', msg.audio);
-    case 'video':
-      return extractMediaContent('video', msg.video);
-    case 'document':
-      return extractMediaContent('document', msg.document);
-    case 'sticker':
-      return msg.sticker ? { type: 'image', mediaUrl: msg.sticker.url, mimeType: msg.sticker.mime_type } : null;
-    case 'location':
-      return msg.location ? extractLocationContent(msg.location) : null;
-    case 'contacts':
-      return extractContactContent(msg.contacts);
-    case 'interactive':
-      return msg.interactive ? extractInteractiveContent(msg.interactive) : null;
-    case 'button':
-      return msg.button ? { type: 'text', text: msg.button.text } : null;
-    default:
-      return null;
+  const omniType = MEDIA_TYPES[msg.type];
+  if (omniType) {
+    if (!msg.url) return null;
+    return {
+      type: omniType,
+      mediaUrl: msg.url,
+      mimeType: msg.contentType,
+      filename: msg.type === 'file' ? msg.fileName : undefined,
+    };
   }
+
+  return null;
 }

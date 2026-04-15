@@ -2,7 +2,7 @@
  * Gupshup Channel Plugin for Omni v2
  *
  * Provides WhatsApp messaging via Gupshup Custom Integration.
- * Meta/WA Business API inbound + Gupshup Custom Integration callback outbound.
+ * Gupshup native format inbound + Custom Integration callback outbound.
  *
  * @example
  * ```typescript
@@ -44,13 +44,10 @@ export { normalizePhone, extractUserId, toGupshupPhone } from './utils/identity'
 export type {
   GupshupConfig,
   GupshupOutboundMessage,
-  GupshupInboundWebhook,
-  GupshupEntry,
-  GupshupChange,
-  GupshupChangeValue,
-  GupshupInboundContact,
-  GupshupStatusEvent,
-  GupshupInboundMessage,
+  GupshupNativeInboundWebhook,
+  GupshupNativeMessageObj,
+  GupshupNativeSenderObj,
+  GupshupNativeContextObj,
   GupshupSendResponse,
   GupshupErrorResponse,
 } from './types';

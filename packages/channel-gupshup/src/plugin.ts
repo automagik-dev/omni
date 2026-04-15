@@ -245,6 +245,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
     content: { type: string; text?: string; mediaUrl?: string; mimeType?: string; caption?: string; filename?: string };
     rawPayload?: Record<string, unknown>;
     platformTimestamp?: number;
+    replyTo?: string;
   }): Promise<void> {
     const timings = params.platformTimestamp ? this.captureInboundTimings(params.platformTimestamp) : undefined;
 
@@ -260,6 +261,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
         mimeType: params.content.mimeType,
       },
       rawPayload: params.rawPayload,
+      replyToId: params.replyTo,
       timings,
     });
 
