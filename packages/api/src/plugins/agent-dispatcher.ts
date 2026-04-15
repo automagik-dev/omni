@@ -88,6 +88,7 @@ import {
   type DispatchMetadata,
   MessageDebouncer,
 } from './message-debouncer';
+import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
@@ -3481,6 +3482,29 @@ function needsLidMentionCheck(messageContext: MessageContext, instance: Instance
   return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
 }
 
+/**
+ * True when the inbound message's platform-native timestamp
+ * (e.g. WhatsApp `messageTimestamp`) is older than `maxAgeMinutes`.
+ *
+ * Exported so unit tests can exercise the threshold boundary without
+ * wiring up the full dispatcher pipeline. `maxAgeMinutes <= 0` disables
+ * the guard entirely (useful for instances that genuinely want to replay
+ * backlog after a long outage).
+ */
+export function isInboundTooStale(
+  rawPayload: Record<string, unknown> | undefined,
+  maxAgeMinutes: number,
+  now: number = Date.now(),
+): { stale: boolean; ageMs: number; maxAgeMs: number } {
+  const maxAgeMs = maxAgeMinutes * 60_000;
+  if (maxAgeMinutes <= 0) {
+    return { stale: false, ageMs: 0, maxAgeMs };
+  }
+  const platformTs = extractPlatformTimestamp(rawPayload, now);
+  const ageMs = now - platformTs.getTime();
+  return { stale: ageMs > maxAgeMs, ageMs, maxAgeMs };
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -3519,6 +3543,22 @@ async function shouldProcessMessage(
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
+    return null;
+  }
+
+  // Drop events whose platform-native timestamp is older than the instance's
+  // configured threshold. Defends against Baileys history-sync replays and
+  // NATS redelivery resurrecting stale conversations after reconnect/restart.
+  const staleness = isInboundTooStale(payload.rawPayload, instance.inboundMaxAgeMinutes);
+  if (staleness.stale) {
+    log.warn('Dropping stale inbound message', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      externalId: payload.externalId,
+      ageMs: staleness.ageMs,
+      maxAgeMs: staleness.maxAgeMs,
+      maxAgeMinutes: instance.inboundMaxAgeMinutes,
+    });
     return null;
   }
 
