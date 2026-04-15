@@ -162,6 +162,13 @@
       "when": 1776500100000,
       "tag": "0022_idle_follow_up_prompt_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1776528000000,
+      "tag": "0023_dispatcher_inbound_age",
+      "breakpoints": true
     }
   ]
 }

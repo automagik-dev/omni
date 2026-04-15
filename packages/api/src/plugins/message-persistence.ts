@@ -152,7 +152,7 @@ function findLongStrings(obj: unknown, prefix = '', minLength = 200): Record<str
 /**
  * Extract platform timestamp from raw payload
  */
-function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefined, fallback: number): Date {
+export function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefined, fallback: number): Date {
   if (!rawPayload?.messageTimestamp) return new Date(fallback);
 
   const ts = rawPayload.messageTimestamp;

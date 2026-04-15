@@ -670,6 +670,13 @@ export const instances = pgTable(
     triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
     /** Max triggers per user per channel per minute (rate limiting) */
     triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
+    /**
+     * Drop inbound `message.received` events when the platform-native timestamp
+     * (e.g. WhatsApp `messageTimestamp`) is older than this many minutes.
+     * Guards the agent dispatcher against history-sync replays and NATS
+     * redelivery of stale messages after reconnect/restart. Default: 10.
+     */
+    inboundMaxAgeMinutes: integer('inbound_max_age_minutes').notNull().default(10),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
