@@ -1,7 +1,7 @@
 ---
 slug: gupshup-handoff-message
 title: "Gupshup: HANDOFF message type + POST /messages/send/handoff endpoint"
-status: DRAFT
+status: SHIPPED
 priority: P1
 ---
 
@@ -90,15 +90,15 @@ POST /api/v2/messages/send/handoff
 
 ## Success Criteria
 
-- [ ] `POST /messages/send/handoff` sends payload with `msg_type: 'HANDOFF'`, `message_text`, and `extra_info` (when provided) to Gupshup callback URL
-- [ ] After request, chat has `agentPaused: true` in DB
-- [ ] Any active follow-up sequence on the chat is disarmed
-- [ ] `extraInfo` absent in body → `extra_info` field omitted from payload (not sent as null)
-- [ ] Channel type != gupshup → 400 with clear error message
-- [ ] OpenAPI schema documents endpoint with all fields and optionality
-- [ ] `make typecheck` passes clean
-- [ ] `make lint` passes clean (no warnings)
-- [ ] `bun test packages/channel-gupshup` passes
+- [x] `POST /messages/send/handoff` sends payload with `msg_type: 'HANDOFF'`, `message_text`, and `extra_info` (when provided) to Gupshup callback URL
+- [x] After request, chat has `agentPaused: true` in DB
+- [x] Any active follow-up sequence on the chat is disarmed
+- [x] `extraInfo` absent in body → `extra_info` field omitted from payload (not sent as null)
+- [x] Channel type != gupshup → 400 with clear error message
+- [x] OpenAPI schema documents endpoint with all fields and optionality
+- [x] `make typecheck` passes clean
+- [x] `make lint` passes clean (no warnings)
+- [x] `bun test packages/channel-gupshup` passes
 
 ---
 
