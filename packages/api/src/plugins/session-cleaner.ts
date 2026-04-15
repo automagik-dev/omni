@@ -138,6 +138,26 @@ async function handleTrashEmojiMessage(
 
     log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
 
+    // Disarm any active follow-up sequence — clearing the session means the
+    // user has explicitly reset the conversation; queued follow-ups referencing
+    // the cleared context should not fire.
+    try {
+      const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      if (dbChat?.id) {
+        await services.followUpLifecycle.disarm({
+          chatId: dbChat.id,
+          instanceId,
+          reason: 'session_cleared',
+        });
+      }
+    } catch (disarmError) {
+      log.warn('Failed to disarm follow-up after session clear', {
+        instanceId,
+        chatId,
+        error: String(disarmError),
+      });
+    }
+
     // Send confirmation message
     try {
       await sendMessage(services, instanceId, chatId, '✅ Conversa limpa! Sua sessão com o assistente foi resetada.');

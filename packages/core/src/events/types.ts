@@ -667,7 +667,8 @@ export type FollowUpDisarmReason =
   | 'window_expired'
   | 'sequence_complete'
   | 'agent_error'
-  | 'send_failed';
+  | 'send_failed'
+  | 'session_cleared';
 
 /**
  * Fired when a chat is flagged for human takeover. Any armed follow-up

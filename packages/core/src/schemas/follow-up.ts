@@ -20,6 +20,7 @@ import { z } from 'zod';
  * - `sequence_complete` — all configured follow-ups fired.
  * - `agent_error` — agent failed while generating a follow-up.
  * - `send_failed` — outbound send failed after render.
+ * - `session_cleared` — user cleared the agent session (e.g. trash emoji).
  */
 export const DisarmReasonSchema = z.enum([
   'customer_replied',
@@ -29,6 +30,7 @@ export const DisarmReasonSchema = z.enum([
   'sequence_complete',
   'agent_error',
   'send_failed',
+  'session_cleared',
 ]);
 
 export type DisarmReason = z.infer<typeof DisarmReasonSchema>;
