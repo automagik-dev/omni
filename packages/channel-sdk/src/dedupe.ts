@@ -18,7 +18,7 @@ import type { Logger } from '@omni/core';
 import { isValidInstanceId } from './sanitize';
 
 // Validation pattern from wish spec
-const EXTERNAL_ID_RE = /^[a-zA-Z0-9_.@:/-]{1,256}$/;
+const EXTERNAL_ID_RE = /^[a-zA-Z0-9_.@:/=+-]{1,512}$/; // includes base64 chars (=, +) and longer wamids
 
 export interface DedupeConfig {
   maxSize?: number;

@@ -112,6 +112,7 @@ export async function handleGupshupWebhook(
   webhookVerifyToken: string | undefined,
   dedupeCache: DedupeCache,
 ): Promise<Response> {
+  const logger = plugin.getLogger();
   // Token verification — only if configured
   if (webhookVerifyToken) {
     const url = new URL(request.url);
@@ -131,12 +132,23 @@ export async function handleGupshupWebhook(
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
+    // Gupshup sometimes double-encodes the payload: the body is a JSON-encoded string wrapping
+    // another JSON object. Unwrap up to one extra layer.
+    if (typeof parsed === 'string') {
+      logger.debug('[gupshup] unwrapping double-encoded webhook body', { instanceId });
+      parsed = JSON.parse(parsed);
+    }
   } catch {
     return new Response('Bad Request: invalid JSON', { status: 400 });
   }
 
   const result = GupshupNativeWebhookSchema.safeParse(parsed);
   if (!result.success) {
+    logger.warn('[gupshup] webhook payload failed schema validation', {
+      instanceId,
+      errors: result.error.issues,
+      rawBody: body.slice(0, 2000), // truncate to avoid log flood
+    });
     return new Response('Bad Request: invalid payload shape', { status: 400 });
   }
 
