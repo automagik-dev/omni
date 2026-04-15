@@ -11,12 +11,12 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import { GupshupClient } from '../client';
 import { GupshupError } from '../utils/errors';
 
-const API_KEY = 'test-api-key';
-const APP_NAME = 'TestApp';
-const SOURCE_PHONE = '5511999990000';
+const CALLBACK_URL = 'https://callbacks.gupshup.io/custom/abc123';
+const AUTH_TOKEN = 'Bearer test-auth-token';
+const EVENT_ID = 'nx_omni_agent_reply';
 
 function makeClient(): GupshupClient {
-  return new GupshupClient(API_KEY, APP_NAME, SOURCE_PHONE);
+  return new GupshupClient(CALLBACK_URL, AUTH_TOKEN, EVENT_ID);
 }
 
 function makeOkResponse(body: unknown): Response {
@@ -33,171 +33,92 @@ function makeErrorResponse(status: number, body: unknown): Response {
   });
 }
 
-describe('GupshupClient — sendText', () => {
+describe('GupshupClient — send TEXT', () => {
   it('sends correct request format', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeOkResponse({ status: 'submitted', messageId: 'msg_001' }),
-    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
 
     const client = makeClient();
-    const result = await client.sendText('5511888880000', 'Hello!');
+    await client.send('5511888880000', { type: 'TEXT', text: 'Hello!' });
 
-    expect(result.messageId).toBe('msg_001');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://api.gupshup.io/wa/api/v1/msg');
-    expect((init.headers as Record<string, string>).apikey).toBe(API_KEY);
+    expect(url).toBe(CALLBACK_URL);
+    expect((init.headers as Record<string, string>).Authorization).toBe(AUTH_TOKEN);
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
     expect(init.method).toBe('POST');
 
-    const body = new URLSearchParams(init.body as string);
-    expect(body.get('channel')).toBe('whatsapp');
-    expect(body.get('source')).toBe(SOURCE_PHONE);
-    expect(body.get('destination')).toBe('5511888880000');
-    expect(body.get('src.name')).toBe(APP_NAME);
-
-    const msg = JSON.parse(body.get('message') ?? '{}');
-    expect(msg.type).toBe('text');
-    expect(msg.text).toBe('Hello!');
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.customer_id).toBe('5511888880000');
+    expect(body.event_id).toBe(EVENT_ID);
+    expect(body.msg_type).toBe('TEXT');
+    expect(body.message_text).toBe('Hello!');
 
     fetchSpy.mockRestore();
   });
 });
 
-describe('GupshupClient — sendMedia', () => {
-  it('sends image with caption', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeOkResponse({ status: 'submitted', messageId: 'msg_002' }),
-    );
+describe('GupshupClient — send IMAGE', () => {
+  it('sends image with media_url and caption', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
 
     const client = makeClient();
-    await client.sendMedia('5511888880000', 'image', 'https://cdn.example.com/photo.jpg', 'Look at this');
+    await client.send('5511888880000', {
+      type: 'IMAGE',
+      url: 'https://cdn.example.com/photo.jpg',
+      caption: 'Look at this',
+    });
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const body = new URLSearchParams(init.body as string);
-    const msg = JSON.parse(body.get('message') ?? '{}');
-    expect(msg.type).toBe('image');
-    expect(msg.url).toBe('https://cdn.example.com/photo.jpg');
-    expect(msg.caption).toBe('Look at this');
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.msg_type).toBe('IMAGE');
+    expect(body.media_url).toBe('https://cdn.example.com/photo.jpg');
+    expect(body.caption).toBe('Look at this');
 
     fetchSpy.mockRestore();
   });
 });
 
-describe('GupshupClient — sendTemplate', () => {
-  it('sends template with params', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeOkResponse({ status: 'submitted', messageId: 'msg_003' }),
-    );
+describe('GupshupClient — send LOCATION', () => {
+  it('sends location with lat/lng as strings', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
 
     const client = makeClient();
-    await client.sendTemplate('5511888880000', 'welcome_template', { name: 'Alice', code: '1234' });
+    await client.send('5511888880000', {
+      type: 'LOCATION',
+      latitude: -23.5505,
+      longitude: -46.6333,
+      name: 'São Paulo',
+      address: 'Av. Paulista',
+    });
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const body = new URLSearchParams(init.body as string);
-    const msg = JSON.parse(body.get('message') ?? '{}');
-    expect(msg.type).toBe('template');
-    expect(msg.template.id).toBe('welcome_template');
-    expect(msg.template.params).toEqual(['Alice', '1234']);
-
-    fetchSpy.mockRestore();
-  });
-});
-
-describe('GupshupClient — sendLocation', () => {
-  it('sends location with name and address', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeOkResponse({ status: 'submitted', messageId: 'msg_004' }),
-    );
-
-    const client = makeClient();
-    await client.sendLocation('5511888880000', -23.5505, -46.6333, 'São Paulo', 'Av. Paulista');
-
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    const body = new URLSearchParams(init.body as string);
-    const msg = JSON.parse(body.get('message') ?? '{}');
-    expect(msg.type).toBe('location');
-    expect(msg.location.latitude).toBe('-23.5505');
-    expect(msg.location.longitude).toBe('-46.6333');
-    expect(msg.location.name).toBe('São Paulo');
-    expect(msg.location.address).toBe('Av. Paulista');
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.msg_type).toBe('LOCATION');
+    expect(body.latitude).toBe('-23.5505');
+    expect(body.longitude).toBe('-46.6333');
+    expect(body.name).toBe('São Paulo');
+    expect(body.address).toBe('Av. Paulista');
 
     fetchSpy.mockRestore();
   });
 });
 
 describe('GupshupClient — error classification', () => {
-  it('throws retryable GupshupError on HTTP 429', async () => {
+  it('throws GupshupError on non-ok response', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeErrorResponse(429, { status: 'error', message: 'Rate limit exceeded' }),
+      makeErrorResponse(403, { status: 'error', message: 'Forbidden' }),
     );
 
     const client = makeClient();
     let caught: unknown;
     try {
-      await client.sendText('5511888880000', 'hi');
+      await client.send('5511888880000', { type: 'TEXT', text: 'hi' });
     } catch (e) {
       caught = e;
     }
 
     expect(caught).toBeInstanceOf(GupshupError);
-    if (caught instanceof GupshupError) {
-      expect(caught.recoverable).toBe(true);
-    }
-
-    fetchSpy.mockRestore();
-  });
-
-  it('throws non-retryable GupshupError on HTTP 401', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeErrorResponse(401, { status: 'error', message: 'Unauthorized' }),
-    );
-
-    const client = makeClient();
-    try {
-      await client.sendText('5511888880000', 'hi');
-    } catch (e) {
-      expect(e).toBeInstanceOf(GupshupError);
-      if (e instanceof GupshupError) {
-        expect(e.recoverable).toBe(false);
-      }
-    }
-
-    fetchSpy.mockRestore();
-  });
-
-  it('throws non-retryable GupshupError on HTTP 400', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeErrorResponse(400, { status: 'error', message: 'Invalid destination' }),
-    );
-
-    const client = makeClient();
-    try {
-      await client.sendText('5511888880000', 'hi');
-    } catch (e) {
-      expect(e).toBeInstanceOf(GupshupError);
-      if (e instanceof GupshupError) {
-        expect(e.recoverable).toBe(false);
-      }
-    }
-
-    fetchSpy.mockRestore();
-  });
-
-  it('throws retryable GupshupError on HTTP 503', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      makeErrorResponse(503, { status: 'error', message: 'Service Unavailable' }),
-    );
-
-    const client = makeClient();
-    try {
-      await client.sendText('5511888880000', 'hi');
-    } catch (e) {
-      expect(e).toBeInstanceOf(GupshupError);
-      if (e instanceof GupshupError) {
-        expect(e.recoverable).toBe(true);
-      }
-    }
 
     fetchSpy.mockRestore();
   });
@@ -205,7 +126,7 @@ describe('GupshupClient — error classification', () => {
 
 describe('GupshupClient — validateCredentials', () => {
   it('returns true on 200', async () => {
-    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{"balance":100}', { status: 200 }));
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{"status":"ok"}', { status: 200 }));
 
     const client = makeClient();
     expect(await client.validateCredentials()).toBe(true);
@@ -214,6 +135,14 @@ describe('GupshupClient — validateCredentials', () => {
 
   it('returns false on 401', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }));
+
+    const client = makeClient();
+    expect(await client.validateCredentials()).toBe(false);
+    fetchSpy.mockRestore();
+  });
+
+  it('returns false on 403', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('Forbidden', { status: 403 }));
 
     const client = makeClient();
     expect(await client.validateCredentials()).toBe(false);

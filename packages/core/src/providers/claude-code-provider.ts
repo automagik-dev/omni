@@ -228,6 +228,9 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      // Use source.chatId (conversation identifier) — correct for both DMs and groups.
+      // In DMs chatId == platformUserId; in groups chatId identifies the group, not the individual sender.
+      ...(context.source.chatId ? { mcpUrlParams: { chat_id: context.source.chatId } } : {}),
     };
 
     log.info('Triggering Claude Code agent', {
@@ -293,6 +296,8 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      // Use source.chatId (conversation identifier) — correct for both DMs and groups.
+      ...(context.source.chatId ? { mcpUrlParams: { chat_id: context.source.chatId } } : {}),
     };
 
     log.info('Triggering Claude Code agent (stream)', {

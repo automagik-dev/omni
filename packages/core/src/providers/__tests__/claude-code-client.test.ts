@@ -170,6 +170,104 @@ describe('ClaudeCodeClient', () => {
 
       expect(options.mcpServers).toEqual(mcpServers);
     });
+
+    it('appends mcpUrlParams to HTTP MCP server URLs', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '123' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1?chat_id=123');
+    });
+
+    it('skips mcpUrlParams when not provided', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)(baseRequest);
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1');
+    });
+
+    it('handles multiple MCP servers (HTTP + stdio mix)', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+        another: { type: 'http' as const, url: 'https://other.example.com/api?token=abc' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '456' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1?chat_id=456');
+
+      const another = options.mcpServers.another as { url: string };
+      expect(another.url).toBe('https://other.example.com/api?token=abc&chat_id=456');
+
+      const pw = options.mcpServers.playwright as { command: string; args: string[] };
+      expect(pw.command).toBe('npx');
+      expect(pw.args).toEqual(['@playwright/mcp@latest']);
+    });
+
+    it('ignores mcpUrlParams for stdio servers (no url field)', () => {
+      const mcpServers = {
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+        local: { command: 'node', args: ['server.js'], env: { PORT: '3000' } },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '789' },
+      });
+
+      // When no HTTP servers exist, mcpServers is passed through unchanged
+      expect(options.mcpServers).toEqual(mcpServers);
+    });
+
+    it('does not mutate original config.mcpServers', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const originalUrl = mcpServers.gateway.url;
+
+      getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '999' },
+      });
+
+      // Original config must not be mutated
+      expect(mcpServers.gateway.url).toBe(originalUrl);
+      expect(mcpServers.gateway.url).toBe('https://mcp.example.com/v1');
+    });
+
+    it('URL-encodes param values safely', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: 'user with spaces', tag: 'a&b=c' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      // URLSearchParams encodes spaces as + and special chars as %XX
+      expect(gw.url).toContain('chat_id=user+with+spaces');
+      expect(gw.url).toContain('tag=a%26b%3Dc');
+      expect(gw.url).toStartWith('https://mcp.example.com/v1?');
+    });
   });
 
   describe('checkHealth()', () => {

@@ -105,9 +105,9 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'discordBotToken', opts.discordToken);
   setVal(body, 'slackBotToken', opts.slackBotToken);
   setVal(body, 'slackAppToken', opts.slackAppToken);
-  setVal(body, 'gupshupApiKey', opts.gupshupApiKey);
-  setVal(body, 'gupshupAppName', opts.gupshupAppName);
-  setVal(body, 'gupshupSourcePhone', opts.gupshupSourcePhone);
+  setVal(body, 'gupshupCallbackUrl', opts.gupshupCallbackUrl);
+  setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
+  setVal(body, 'gupshupEventId', opts.gupshupEventId);
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
@@ -322,9 +322,9 @@ export function createInstancesCommand(): Command {
     .option('--slack-bot-token <token>', 'Slack bot token')
     .option('--slack-app-token <token>', 'Slack app token')
     // Gupshup
-    .option('--gupshup-api-key <key>', 'Gupshup API key')
-    .option('--gupshup-app-name <name>', 'Gupshup app name')
-    .option('--gupshup-source-phone <phone>', 'Gupshup source phone (E.164)')
+    .option('--gupshup-callback-url <url>', 'Gupshup Custom Integration callback URL')
+    .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
+    .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
     // Default
     .option('--is-default', 'Set as default instance for channel')

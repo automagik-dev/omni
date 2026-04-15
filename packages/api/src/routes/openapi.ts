@@ -31,6 +31,7 @@ import { registerConversationSchemas } from '../schemas/openapi/conversations';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
 import { registerEventOpsSchemas } from '../schemas/openapi/event-ops';
 import { registerEventSchemas } from '../schemas/openapi/events';
+import { registerFollowUpSchemas } from '../schemas/openapi/follow-up';
 import { registerHealthSchemas } from '../schemas/openapi/health';
 import { registerInstanceSchemas } from '../schemas/openapi/instances';
 import { registerJourneySchemas } from '../schemas/openapi/journeys';
@@ -65,6 +66,7 @@ registerAutomationSchemas(registry);
 registerPayloadSchemas(registry);
 registerJourneySchemas(registry);
 registerConversationSchemas(registry);
+registerFollowUpSchemas(registry);
 
 const openapiRoutes = new Hono<{ Variables: AppVariables }>();
 

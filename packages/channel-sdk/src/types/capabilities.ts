@@ -18,7 +18,15 @@ export interface ChannelCapabilities {
   /** Can send reactions to messages */
   canSendReaction: boolean;
 
-  /** Can send typing indicators */
+  /**
+   * Can send typing indicators.
+   *
+   * Consumed by the idle-chat follow-up system (issue #404) — when a
+   * follow-up is about to fire and `FollowUpSequenceConfig.showTypingIndicator`
+   * is true, the runtime calls `ChannelPlugin.sendTyping()` (if implemented)
+   * for ~2.5s before the outbound send. Plugins whose `canSendTyping` is
+   * `false` or which don't implement `sendTyping()` are silently skipped.
+   */
   canSendTyping: boolean;
 
   /** Can receive read receipts */
@@ -96,6 +104,30 @@ export interface ChannelCapabilities {
 
   /** Can stream partial response updates (thinking/content/final/error) */
   canStreamResponse?: boolean;
+
+  // ─────────────────────────────────────────────────────────────
+  // Messaging-window constraints (issue #404)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Whether the channel enforces a bounded messaging window after the
+   * customer's most recent inbound message. Set `true` for WhatsApp BSP /
+   * Cloud (Meta enforces a 24h free-form window; beyond it only approved
+   * templates may be sent).
+   *
+   * Consumed by the idle-chat follow-up system to decide whether to disarm a
+   * sequence with `window_expired` when the window has elapsed. Channels
+   * that leave this `undefined`/`false` are treated as "no window" and
+   * follow-ups fire without a window check.
+   */
+  hasMessagingWindow?: boolean;
+
+  /**
+   * Length of the messaging window in milliseconds. Only meaningful when
+   * `hasMessagingWindow === true`. Defaults to 24h (86_400_000 ms) in the
+   * follow-up runtime if omitted.
+   */
+  messagingWindowMs?: number;
 
   // ─────────────────────────────────────────────────────────────
   // Limits
