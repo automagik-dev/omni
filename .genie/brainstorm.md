@@ -9,6 +9,7 @@
 ## Simmering
 
 ## Ready
+- **gupshup-webhook-native-format** — Rewrite webhook handler: Meta/WA format → Gupshup native format. 7 types mapped, status events ignored. DESIGN.md ready.
 
 ## Poured
 - **gupshup-handoff-message** — Gupshup HANDOFF msg_type: POST /messages/send/handoff, agentPaused chain, follow-up disarm, extra_info field. DESIGN.md ready.
