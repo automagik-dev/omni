@@ -119,6 +119,22 @@ export interface CallAgentActionConfig {
   timeoutMs?: number;
   /** Store agent response as variable for chaining (e.g., "agentResponse") */
   responseAs?: string;
+  /**
+   * Per-invocation synthetic prompt template that replaces the default
+   * user-input prompt for this `call_agent` call only.
+   *
+   * When set, the rendered template is passed as the sole message to the
+   * agent — the synthetic prompt is NOT written to chat history and should
+   * not persist as agent session memory. Supports the same placeholders as
+   * `send_message.contentTemplate` plus the follow-up-specific set:
+   *   - `{{syntheticPrompt}}` — the raw synthetic prompt from the sweeper
+   *   - `{{minutes}}` — minutes since last agent reply
+   *   - `{{sequenceIndex}}` — zero-based follow-up index
+   *   - `{{chatName}}` — chat display name when known
+   *
+   * @see packages/core/src/automations/templates.ts `TemplateContext.followUp`
+   */
+  promptOverride?: string;
 }
 
 /**

@@ -8,9 +8,39 @@
  * - {{messages}} - Special: array of grouped messages (debounce)
  * - {{from}} - Special: sender object (debounce)
  * - {{instanceId}} - Special: instance ID (debounce)
+ * - {{syntheticPrompt}} - Special: synthetic idle-follow-up prompt (follow-up)
+ * - {{minutes}} - Special: minutes since last agent reply (follow-up)
+ * - {{sequenceIndex}} - Special: zero-based follow-up index (follow-up)
+ * - {{attemptNumber}} - Special: one-based attempt number (follow-up)
+ * - {{totalAttempts}} - Special: total attempts configured (follow-up)
+ * - {{chatName}} - Special: chat display name (follow-up)
  */
 
 import { getNestedValue } from './conditions';
+
+/**
+ * Follow-up context surfaced to templates when an automation fires on a
+ * `chat.idle_timeout` event (or is invoked via `call_agent.promptOverride`).
+ *
+ * Auto-derived by `createTemplateContext` from a `chat.idle_timeout`-shaped
+ * payload, or provided explicitly by callers.
+ *
+ * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
+ */
+export interface TemplateFollowUpContext {
+  /** The rendered synthetic prompt from the sweeper. */
+  syntheticPrompt: string;
+  /** Minutes since the agent's last reply to this chat. */
+  minutes: number;
+  /** Zero-based index of the follow-up about to fire. */
+  sequenceIndex: number;
+  /** One-based attempt number (`sequenceIndex + 1`) — prefer this in LLM prompts. */
+  attemptNumber: number;
+  /** Total attempts configured (`maxFollowUps`) — prefer this in LLM prompts. */
+  totalAttempts: number;
+  /** Chat display name when known; null otherwise. */
+  chatName: string | null;
+}
 
 /**
  * Context for template substitution
@@ -35,6 +65,8 @@ export interface TemplateContext {
     };
     instanceId: string;
   };
+  /** Special follow-up context (chat.idle_timeout events / promptOverride) */
+  followUp?: TemplateFollowUpContext;
 }
 
 /**
@@ -58,6 +90,30 @@ function resolveDebounceValue(
 }
 
 /**
+ * Resolve follow-up-specific placeholders. Returns `undefined` when the key
+ * isn't a follow-up placeholder so callers can fall through to the next
+ * resolver.
+ */
+function resolveFollowUpValue(trimmed: string, followUp: TemplateFollowUpContext): unknown {
+  switch (trimmed) {
+    case 'syntheticPrompt':
+      return followUp.syntheticPrompt;
+    case 'minutes':
+      return followUp.minutes;
+    case 'sequenceIndex':
+      return followUp.sequenceIndex;
+    case 'attemptNumber':
+      return followUp.attemptNumber;
+    case 'totalAttempts':
+      return followUp.totalAttempts;
+    case 'chatName':
+      return followUp.chatName;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Resolve a single template path to its value
  */
 function resolveTemplatePath(path: string, context: TemplateContext): unknown {
@@ -72,6 +128,12 @@ function resolveTemplatePath(path: string, context: TemplateContext): unknown {
   if (context.debounce) {
     const debounceValue = resolveDebounceValue(trimmed, rest, context.debounce);
     if (debounceValue !== undefined) return debounceValue;
+  }
+
+  // Handle special follow-up variables
+  if (context.followUp) {
+    const followUpValue = resolveFollowUpValue(trimmed, context.followUp);
+    if (followUpValue !== undefined) return followUpValue;
   }
 
   // Handle payload access
@@ -168,19 +230,63 @@ export function parseJsonTemplate(template: string, context: TemplateContext): R
 }
 
 /**
+ * Derive a `TemplateFollowUpContext` from a `chat.idle_timeout`-shaped
+ * payload. Returns `undefined` when the payload is missing any of the three
+ * mandatory fields (`syntheticPrompt`, `sequenceIndex`,
+ * `minutesSinceLastAgentReply`).
+ *
+ * Exported so the automation engine can explicitly invoke it for synthetic
+ * events (e.g. debounce-driven rebuilds) without reaching into this module's
+ * internals.
+ */
+export function deriveFollowUpFromPayload(payload: Record<string, unknown>): TemplateFollowUpContext | undefined {
+  const syntheticPrompt = payload.syntheticPrompt;
+  const sequenceIndex = payload.sequenceIndex;
+  const minutes = payload.minutesSinceLastAgentReply;
+
+  if (typeof syntheticPrompt !== 'string' || typeof sequenceIndex !== 'number' || typeof minutes !== 'number') {
+    return undefined;
+  }
+
+  const chatName = typeof payload.chatName === 'string' ? payload.chatName : null;
+  // Prefer payload-provided values when the sweeper emits them; fall back to
+  // derivation for older events that predate the attemptNumber/totalAttempts
+  // fields (totalAttempts has no sensible default, so 0 signals "unknown").
+  const attemptNumber = typeof payload.attemptNumber === 'number' ? payload.attemptNumber : sequenceIndex + 1;
+  const totalAttempts = typeof payload.totalAttempts === 'number' ? payload.totalAttempts : 0;
+
+  return {
+    syntheticPrompt,
+    sequenceIndex,
+    attemptNumber,
+    totalAttempts,
+    minutes,
+    chatName,
+  };
+}
+
+/**
  * Create a template context from event data
+ *
+ * Auto-derives `followUp` from the payload when it has the follow-up shape
+ * (see `deriveFollowUpFromPayload`). Callers can override by passing
+ * `options.followUp` explicitly.
  */
 export function createTemplateContext(
   payload: Record<string, unknown>,
   options: {
     variables?: Record<string, unknown>;
     debounce?: TemplateContext['debounce'];
+    followUp?: TemplateFollowUpContext;
   } = {},
 ): TemplateContext {
+  const followUp = options.followUp ?? deriveFollowUpFromPayload(payload);
+
   return {
     payload,
     variables: options.variables ?? {},
     env: process.env as Record<string, string | undefined>,
     debounce: options.debounce,
+    followUp,
   };
 }

@@ -1988,6 +1988,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/follow-up/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an agent
+         * @description Returns the `followUpConfig` stored at the agent scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForAgent"];
+        /**
+         * Set follow-up config for an agent
+         * @description Replaces the `followUpConfig` stored at the agent scope.
+         */
+        put: operations["setFollowUpConfigForAgent"];
+        post?: never;
+        /**
+         * Clear follow-up config for an agent
+         * @description Removes the override at the agent scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForAgent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follow-up/instances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an instance
+         * @description Returns the `followUpConfig` stored at the instance scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForInstance"];
+        /**
+         * Set follow-up config for an instance
+         * @description Replaces the `followUpConfig` stored at the instance scope.
+         */
+        put: operations["setFollowUpConfigForInstance"];
+        post?: never;
+        /**
+         * Clear follow-up config for an instance
+         * @description Removes the override at the instance scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follow-up/chats/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an chat
+         * @description Returns the `followUpConfig` stored at the chat scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForChat"];
+        /**
+         * Set follow-up config for an chat
+         * @description Replaces the `followUpConfig` stored at the chat scope.
+         */
+        put: operations["setFollowUpConfigForChat"];
+        post?: never;
+        /**
+         * Clear follow-up config for an chat
+         * @description Removes the override at the chat scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForChat"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2257,7 +2341,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2300,7 +2384,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2395,7 +2479,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -4650,6 +4734,34 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** @description Follow-up sequence configuration. */
+        FollowUpSequenceConfig: {
+            /** @description Master switch — false turns off follow-ups at this scope. */
+            enabled: boolean;
+            schedule: {
+                /** @enum {string} */
+                kind: "fixed";
+                /** @description Minutes between successive follow-ups, in order. */
+                intervalsMinutes: number[];
+            } | {
+                /** @enum {string} */
+                kind: "exponential";
+                /** @description First interval (minutes). */
+                initialMinutes: number;
+                /** @description Multiplier applied each iteration. */
+                factor: number;
+                /** @description Upper bound on any single interval. */
+                maxMinutes: number;
+            };
+            /** @description Hard cap on follow-ups fired per sequence. */
+            maxFollowUps: number;
+            /** @description Template rendered into the synthetic prompt sent to the agent. */
+            promptTemplate: string;
+            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+            stopOutsideMessagingWindow: boolean;
+            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+            showTypingIndicator: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -5478,7 +5590,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5541,7 +5653,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -5587,7 +5699,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5670,7 +5782,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -5719,7 +5831,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5847,7 +5959,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -5893,7 +6005,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -15799,6 +15911,735 @@ export interface operations {
                 };
             };
             /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description chat not found */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -1275,6 +1275,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           text: message.content.text,
         },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       // Reset rate limit state on successful send
