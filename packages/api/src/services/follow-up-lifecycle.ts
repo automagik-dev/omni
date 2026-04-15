@@ -106,6 +106,27 @@ export class FollowUpLifecycleService {
     const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
     if (!config || config.enabled === false) return;
 
+    // Refuse to arm when the triggering message is already older than the
+    // first follow-up interval — the initial wait window has elapsed, so
+    // the sequence would fire immediately. Guards against NATS redelivery
+    // re-arming chats whose outbound happened long ago.
+    const firstIntervalMinutes =
+      config.schedule.kind === 'fixed' ? config.schedule.intervalsMinutes[0] : config.schedule.initialMinutes;
+    if (typeof firstIntervalMinutes === 'number' && firstIntervalMinutes > 0) {
+      const maxAgeMs = firstIntervalMinutes * 60_000;
+      const ageMs = Date.now() - input.lastAgentMessageAt.getTime();
+      if (ageMs > maxAgeMs) {
+        this.logger.warn('follow-up lifecycle: refusing to arm on stale message', {
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          ageMs,
+          maxAgeMs,
+          firstIntervalMinutes,
+        });
+        return;
+      }
+    }
+
     try {
       await armSequence(
         { repo: this.repo, eventBus: this.eventBus, logger: this.logger },
