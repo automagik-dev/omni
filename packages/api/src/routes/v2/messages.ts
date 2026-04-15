@@ -28,6 +28,7 @@
  * - POST /messages/send/sticker  - Send sticker
  * - POST /messages/send/contact  - Send contact card
  * - POST /messages/send/location - Send location
+ * - POST /messages/send/handoff  - Send handoff message (Gupshup only)
  *
  * @see unified-messages wish
  */
@@ -445,6 +446,14 @@ const sendLocationSchema = z.object({
   longitude: z.number().describe('Longitude'),
   name: z.string().optional().describe('Location name'),
   address: z.string().optional().describe('Address'),
+});
+
+const sendHandoffSchema = z.object({
+  instanceId: z.string().uuid().describe('Gupshup instance ID'),
+  chatId: z.string().min(1).describe('Chat ID to pause agent on'),
+  to: z.string().min(1).describe('Recipient phone number'),
+  text: z.string().min(1).describe('Message text shown to end user'),
+  extraInfo: z.string().optional().describe('Optional metadata string passed to Gupshup handoff pipeline'),
 });
 
 // ============================================================================
@@ -1404,6 +1413,73 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
       data: {
         messageId: result.messageId,
         externalMessageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * POST /messages/send/handoff - Send handoff message (Gupshup only)
+ *
+ * Sends msg_type: HANDOFF to Gupshup, sets agentPaused: true on the chat,
+ * and disarms any active follow-up sequence via the existing event chain.
+ */
+messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
+
+  const instance = await services.instances.getById(data.instanceId);
+
+  if (instance.channel !== 'gupshup') {
+    return c.json({ error: 'Handoff is only supported on Gupshup instances' }, 400);
+  }
+
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
+  }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  const outgoingMessage: OutgoingMessage = {
+    to: resolvedTo,
+    content: { type: 'text', text: data.text } as OutgoingContent,
+    metadata: {
+      isHandoff: true,
+      extraInfo: data.extraInfo,
+    },
+  };
+
+  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send handoff' });
+
+  // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop
+  await services.chats.update(data.chatId, {
+    settings: { agentPaused: true },
+  });
+
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
       },

@@ -6,6 +6,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 import { GupshupClient } from '../client';
+import { sendHandoff } from '../senders/handoff';
 import { sendLocation } from '../senders/location';
 import { resolveMediaType, sendMedia } from '../senders/media';
 import { sendText } from '../senders/text';
@@ -98,5 +99,33 @@ describe('sendLocation', () => {
         address: 'Av. Paulista',
       }),
     );
+  });
+});
+
+describe('sendHandoff', () => {
+  it('calls client.send with HANDOFF type and text', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'send').mockResolvedValueOnce({ status: 'ok' });
+
+    await sendHandoff(client, '5511111111111', 'Transferring to agent');
+
+    expect(spy).toHaveBeenCalledWith('5511111111111', {
+      type: 'HANDOFF',
+      text: 'Transferring to agent',
+      extra_info: undefined,
+    });
+  });
+
+  it('includes extra_info when provided', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'send').mockResolvedValueOnce({ status: 'ok' });
+
+    await sendHandoff(client, '5511111111111', 'Transferring to agent', 'queue=sales');
+
+    expect(spy).toHaveBeenCalledWith('5511111111111', {
+      type: 'HANDOFF',
+      text: 'Transferring to agent',
+      extra_info: 'queue=sales',
+    });
   });
 });
