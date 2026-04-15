@@ -1866,7 +1866,12 @@ async function dispatchViaProvider(
     });
   }
 
-  if (result && result.parts.length > 0) {
+  // If the agent triggered a handoff during this run (agentPaused: true),
+  // suppress the response — the handoff message already notified the user.
+  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+
+  if (result && result.parts.length > 0 && !handoffTriggered) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
     // Apply before_message_write hooks to each response part before sending
@@ -1894,6 +1899,11 @@ async function dispatchViaProvider(
 
     // T10: Agent chaining — forward response to chained instance if configured
     await forwardToChainedInstance(instance, parts, correlationId, messages);
+  } else if (handoffTriggered) {
+    log.info('Agent response suppressed — handoff triggered during run', {
+      instanceId: instance.id,
+      chatId,
+    });
   }
 
   log.info('Agent response via IAgentProvider', {
