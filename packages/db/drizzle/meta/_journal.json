@@ -176,6 +176,13 @@
       "when": 1776528100000,
       "tag": "0024_quiet_gabe_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776528200000,
+      "tag": "0025_panoramic_sinister_six",
+      "breakpoints": true
     }
   ]
 }

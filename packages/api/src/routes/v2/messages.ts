@@ -454,7 +454,11 @@ const sendHandoffSchema = z.object({
   chatId: z.string().min(1).describe('Chat ID to pause agent on'),
   to: z.string().min(1).describe('Recipient phone number'),
   text: z.string().min(1).describe('Message text shown to end user'),
-  extraInfo: z.string().optional().describe('Optional metadata string passed to Gupshup handoff pipeline'),
+  extraInfo: z.string().optional().describe('Free-text briefing for the human attendant'),
+  handoffFields: z
+    .record(z.unknown())
+    .optional()
+    .describe('Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead)'),
 });
 
 // ============================================================================
@@ -1482,6 +1486,7 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     metadata: {
       isHandoff: true,
       extraInfo: data.extraInfo,
+      handoffFields: data.handoffFields,
     },
   };
 
@@ -1504,6 +1509,7 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
       extraInfo: data.extraInfo ?? null,
       agentId: instance.agentId ?? null,
       externalMessageId: result.messageId ?? null,
+      handoffFields: data.handoffFields ?? null,
       sentAt: new Date(),
       metadata: { instanceChannel: instance.channel },
     })

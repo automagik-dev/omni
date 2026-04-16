@@ -1349,6 +1349,7 @@ export const handoffLogs = pgTable(
     extraInfo: text('extra_info'), // optional metadata string from agent (e.g. summary)
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
     sentAt: timestamp('sent_at').notNull().defaultNow(),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
   },

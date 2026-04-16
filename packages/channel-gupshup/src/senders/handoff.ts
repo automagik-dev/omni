@@ -10,6 +10,7 @@ export async function sendHandoff(
   to: string,
   text: string,
   extraInfo?: string,
+  handoffFields?: Record<string, unknown>,
 ): Promise<GupshupSendResponse> {
-  return client.send(to, { type: 'HANDOFF', text, extra_info: extraInfo });
+  return client.send(to, { type: 'HANDOFF', text, extra_info: extraInfo, handoff_fields: handoffFields });
 }
