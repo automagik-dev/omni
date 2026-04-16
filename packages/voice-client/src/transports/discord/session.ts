@@ -1,5 +1,9 @@
 import { DaveManager } from '../../crypto/dave';
 import { SrtpDecryptor, selectEncryptionMode } from '../../crypto/srtp';
+
+// biome-ignore lint/suspicious/noConsole: voice-client is a standalone package without a logger dependency
+const debug = (...args: unknown[]) => console.debug('[voice]', ...args);
+
 /**
  * DiscordVoiceSession — orchestrates Gateway + UDP + SRTP + Receiver.
  *
@@ -116,7 +120,9 @@ export class DiscordVoiceSession implements VoiceTransport {
       this.gateway.on('daveExternalSender', (payload) => {
         try {
           this.dave.setExternalSender(payload);
-        } catch (_err) {}
+        } catch (err) {
+          debug('DAVE setExternalSender failed:', err);
+        }
       });
 
       this.gateway.on('daveProposals', (payload) => {
@@ -125,7 +131,8 @@ export class DiscordVoiceSession implements VoiceTransport {
           if (commitWelcome) {
             this.gateway.sendCommitWelcome(commitWelcome);
           }
-        } catch (_err) {
+        } catch (err) {
+          debug('DAVE processProposals failed, sending invalid commit:', err);
           this.gateway.sendInvalidCommitWelcome(0);
         }
       });
@@ -136,7 +143,8 @@ export class DiscordVoiceSession implements VoiceTransport {
           if (transitionId > 0) {
             this.gateway.sendTransitionReady(transitionId);
           }
-        } catch (_err) {
+        } catch (err) {
+          debug('DAVE processCommit failed, sending invalid commit:', err);
           this.gateway.sendInvalidCommitWelcome(0);
         }
       });
@@ -147,7 +155,8 @@ export class DiscordVoiceSession implements VoiceTransport {
           if (transitionId > 0) {
             this.gateway.sendTransitionReady(transitionId);
           }
-        } catch (_err) {
+        } catch (err) {
+          debug('DAVE processWelcome failed, sending invalid commit:', err);
           this.gateway.sendInvalidCommitWelcome(0);
         }
       });
@@ -170,7 +179,9 @@ export class DiscordVoiceSession implements VoiceTransport {
           try {
             const keyPackage = this.dave.reinit(d.protocol_version, this.userId, this.channelId);
             this.gateway.sendKeyPackage(keyPackage);
-          } catch (_err) {}
+          } catch (err) {
+            debug('DAVE reinit failed for epoch:', d.epoch, err);
+          }
         }
       });
 
@@ -251,7 +262,9 @@ export class DiscordVoiceSession implements VoiceTransport {
       try {
         const keyPackage = this.dave.init(desc.dave_protocol_version, this.userId, this.channelId);
         this.gateway.sendKeyPackage(keyPackage);
-      } catch (_err) {}
+      } catch (err) {
+        debug('DAVE init failed for protocol version:', desc.dave_protocol_version, err);
+      }
     }
 
     // Route decrypted packets through the receiver.

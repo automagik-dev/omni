@@ -70,6 +70,63 @@ describe('SrtpDecryptor', () => {
     expect(result).toEqual(plaintext);
   });
 
+  it('should decrypt aes256gcm encrypted data', async () => {
+    // AES-256-GCM uses a 12-byte nonce (same 4-byte suffix, zero-padded to 12)
+    const sodiumAny = sodium as Record<string, unknown>;
+    const keygen = sodiumAny.crypto_aead_aes256gcm_keygen as (() => Uint8Array) | undefined;
+    const encrypt = sodiumAny.crypto_aead_aes256gcm_encrypt as
+      | ((
+          message: Uint8Array,
+          additionalData: Uint8Array | null,
+          nsec: null,
+          nonce: Uint8Array,
+          key: Uint8Array,
+        ) => Uint8Array)
+      | undefined;
+
+    if (!keygen || !encrypt) {
+      // AES-256-GCM not available in this libsodium build — skip gracefully
+      return;
+    }
+
+    const key = keygen();
+    const plaintext = new Uint8Array([0xaa, 0xbb, 0xcc]);
+    const rtpHeader = new Uint8Array([0x80, 0x78, 0x00, 0x01, 0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x30, 0x39]);
+
+    const nonceSuffix = new Uint8Array([0x00, 0x00, 0x00, 0x03]);
+    const nonce = new Uint8Array(12);
+    nonce.set(nonceSuffix, 0);
+
+    const ciphertext = encrypt(plaintext, rtpHeader, null, nonce, key);
+
+    const wirePayload = new Uint8Array(ciphertext.length + 4);
+    wirePayload.set(ciphertext, 0);
+    wirePayload.set(nonceSuffix, ciphertext.length);
+
+    const dec = new SrtpDecryptor(key, 'aead_aes256_gcm_rtpsize');
+    const result = await dec.decryptAsync(wirePayload, rtpHeader);
+
+    expect(result).toEqual(plaintext);
+  });
+
+  it('should roundtrip encryptRaw/decryptRaw for xchacha20', async () => {
+    const key = sodium.crypto_aead_xchacha20poly1305_ietf_keygen();
+    const plaintext = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    const rtpHeader = Buffer.from([0x80, 0x78, 0x00, 0x05, 0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x30, 0x39]);
+
+    const dec = new SrtpDecryptor(key, 'aead_xchacha20_poly1305_rtpsize');
+    const encrypted = dec.encryptRaw(plaintext, rtpHeader, 42);
+
+    // Encrypted payload = cipherWithTag + 4-byte nonce suffix
+    const cipherWithTag = encrypted.subarray(0, encrypted.length - 4);
+    const nonceSuffix = encrypted.subarray(encrypted.length - 4);
+    const nonce = Buffer.alloc(24);
+    nonceSuffix.copy(nonce, 0);
+
+    const result = dec.decryptRaw(cipherWithTag, rtpHeader, nonce);
+    expect(Buffer.from(result)).toEqual(plaintext);
+  });
+
   it('should decrypt xsalsa20_poly1305_lite encrypted data', async () => {
     const key = sodium.crypto_secretbox_keygen();
     const plaintext = new Uint8Array([0x11, 0x22, 0x33]);
