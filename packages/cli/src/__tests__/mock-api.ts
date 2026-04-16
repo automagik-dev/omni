@@ -117,6 +117,7 @@ let dynamicAgents: Array<{
   agentType: string;
   capabilities: string[];
   agentProviderId: string | null;
+  configPath: string | null;
   isInternal: boolean;
   isActive: boolean;
   metadata: Record<string, unknown> | null;
@@ -128,7 +129,14 @@ function makeAgent(
   id: string,
   name: string,
   provider: string,
-  opts?: { model?: string; agentType?: string; agentProviderId?: string | null; isActive?: boolean },
+  opts?: {
+    model?: string;
+    agentType?: string;
+    agentProviderId?: string | null;
+    configPath?: string | null;
+    isActive?: boolean;
+    metadata?: Record<string, unknown> | null;
+  },
 ) {
   return {
     id,
@@ -138,9 +146,10 @@ function makeAgent(
     agentType: opts?.agentType ?? 'assistant',
     capabilities: [],
     agentProviderId: opts?.agentProviderId ?? null,
+    configPath: opts?.configPath ?? null,
     isInternal: false,
     isActive: opts?.isActive ?? true,
-    metadata: null,
+    metadata: opts?.metadata ?? null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -153,14 +162,18 @@ async function handleCreateAgent(req: Request): Promise<Response> {
     model?: string;
     agentType?: string;
     agentProviderId?: string;
+    configPath?: string;
     isActive?: boolean;
+    metadata?: Record<string, unknown>;
   };
   const id = crypto.randomUUID();
   const agent = makeAgent(id, body.name ?? 'unnamed', body.provider ?? 'claude', {
     model: body.model,
     agentType: body.agentType,
     agentProviderId: body.agentProviderId,
+    configPath: body.configPath ?? null,
     isActive: body.isActive,
+    metadata: body.metadata ?? null,
   });
   dynamicAgents.push(agent);
   return json({ data: agent }, 201);
@@ -186,6 +199,8 @@ async function handleUpdateAgent(req: Request, path: string): Promise<Response> 
   if (body.agentType !== undefined) found.agentType = body.agentType as string;
   if (body.agentProviderId !== undefined) found.agentProviderId = body.agentProviderId as string | null;
   if (body.isActive !== undefined) found.isActive = body.isActive as boolean;
+  if (body.configPath !== undefined) found.configPath = body.configPath as string | null;
+  if (body.metadata !== undefined) found.metadata = body.metadata as Record<string, unknown> | null;
   found.updatedAt = new Date().toISOString();
   return json({ data: found });
 }
