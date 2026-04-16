@@ -819,7 +819,7 @@ export class BatchJobService {
       language: result.language,
       duration: result.duration,
       tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-      costUsd: result.costCents != null ? String(result.costCents / 100) : null,
+      costUsd: result.costCents != null ? Math.round(result.costCents) : null,
       processingTimeMs: result.processingTimeMs,
       batchJobId,
     });

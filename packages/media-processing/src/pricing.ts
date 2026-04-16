@@ -196,7 +196,7 @@ export function calculateCost(
     }
   }
 
-  // Return cost rounded to nearest cent (integer).
-  // costCents is typed as integer — fractional values cause DB insert failures.
-  return Math.round(costUsd * 100);
+  // Return cost in fractional cents for sub-cent precision.
+  // Callers that persist to integer DB columns must round before insert.
+  return costUsd * 100;
 }
