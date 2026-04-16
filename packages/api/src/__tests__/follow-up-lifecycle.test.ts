@@ -284,4 +284,173 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     // Until G6 adds columns, all reads return undefined → resolver returns null.
     expect(result).toBeNull();
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Terminal-disarm guard (#419) — tail agent messages after a user-intent
+  // disarm must not re-arm the sequence until the customer returns.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  test('#419 refuses re-arm after session_cleared when customer has not returned', async () => {
+    const armAt = new Date();
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: armAt,
+      config: config(),
+    });
+
+    // User clears the session → terminal disarm.
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
+    publishedEvents.length = 0;
+
+    // Tail stream chunk / redelivered message.sent fires armForOutbound.
+    // Wall-clock timestamp after the disarm, but the customer has NOT sent
+    // a message since — the sequence must stay disarmed.
+    const tailAt = new Date(armAt.getTime() + 2_000);
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: tailAt,
+      config: config(),
+    });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('session_cleared');
+    expect(row.nextFireAt).toBeNull();
+    expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
+  });
+
+  test('#419 allows re-arm after session_cleared once customer returns', async () => {
+    const armAt = new Date();
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: armAt,
+      config: config(),
+    });
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
+
+    // Customer returns with a new message.
+    const customerReturnAt = new Date(armAt.getTime() + 60_000);
+    await service.touchInboundTimestamp({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      at: customerReturnAt,
+    });
+
+    publishedEvents.length = 0;
+
+    // Agent replies to the returning customer — should arm fresh.
+    const newAgentReplyAt = new Date(customerReturnAt.getTime() + 1_000);
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: newAgentReplyAt,
+      config: config(),
+    });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBeNull();
+    expect(row.nextFireAt).not.toBeNull();
+    expect(publishedEvents.map((e) => e.type)).toContain('follow_up.armed');
+  });
+
+  test('#419 refuses re-arm after handoff / archived / window_expired (symmetric)', async () => {
+    for (const reason of ['handoff', 'archived', 'window_expired'] as const) {
+      await db.delete(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+
+      const armAt = new Date();
+      await service.armForOutbound({
+        chatId: testChatId,
+        instanceId: testInstanceId,
+        agentId: null,
+        lastAgentMessageAt: armAt,
+        config: config(),
+      });
+      await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason });
+      publishedEvents.length = 0;
+
+      await service.armForOutbound({
+        chatId: testChatId,
+        instanceId: testInstanceId,
+        agentId: null,
+        lastAgentMessageAt: new Date(armAt.getTime() + 2_000),
+        config: config(),
+      });
+
+      const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+      expect(row.disarmReason).toBe(reason);
+      expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
+    }
+  });
+
+  test('#419 customer_replied is NOT terminal — next agent message re-arms normally', async () => {
+    const armAt = new Date();
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: armAt,
+      config: config(),
+    });
+    // Normal customer reply flow: follow-up-hooks disarm + touchInbound.
+    const replyAt = new Date(armAt.getTime() + 30_000);
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'customer_replied',
+      lastInboundCustomerMessageAt: replyAt,
+    });
+    publishedEvents.length = 0;
+
+    // Agent replies to the customer — should arm a fresh sequence even
+    // without `touchInboundTimestamp` (customer_replied already set
+    // lastInboundCustomerMessageAt to replyAt).
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(replyAt.getTime() + 1_000),
+      config: config(),
+    });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBeNull();
+    expect(row.nextFireAt).not.toBeNull();
+    expect(publishedEvents.map((e) => e.type)).toContain('follow_up.armed');
+  });
+
+  test('touchInboundTimestamp updates lastInboundCustomerMessageAt even on terminally-disarmed rows', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
+
+    const returnAt = new Date(Date.now() + 60_000);
+    await service.touchInboundTimestamp({ chatId: testChatId, instanceId: testInstanceId, at: returnAt });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.lastInboundCustomerMessageAt?.getTime()).toBe(returnAt.getTime());
+    // Row stays terminally disarmed — touch must not clear the disarm reason.
+    expect(row.disarmReason).toBe('session_cleared');
+  });
+
+  test('touchInboundTimestamp on a missing row is a silent no-op', async () => {
+    await service.touchInboundTimestamp({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      at: new Date(),
+    });
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
 });

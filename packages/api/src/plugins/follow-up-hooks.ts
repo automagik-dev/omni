@@ -96,11 +96,21 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services)
         const chatId = await resolveChatId(services, instanceId, payload.chatId);
         if (!chatId) return;
 
+        const at = new Date(event.timestamp);
+
+        // Touch the inbound timestamp unconditionally — the disarm below is
+        // a no-op when the row is already terminally disarmed (e.g. by
+        // session_cleared), so without this the row's
+        // `lastInboundCustomerMessageAt` would never advance and the
+        // terminal-disarm guard in `armForOutbound` would refuse to re-arm
+        // even after the customer genuinely returns. See #419.
+        await services.followUpLifecycle.touchInboundTimestamp({ chatId, instanceId, at });
+
         await services.followUpLifecycle.disarm({
           chatId,
           instanceId,
           reason: 'customer_replied',
-          lastInboundCustomerMessageAt: new Date(event.timestamp),
+          lastInboundCustomerMessageAt: at,
         });
       },
       {
