@@ -48,6 +48,12 @@ export interface Chat {
   name?: string | null;
   description?: string | null;
   avatarUrl?: string | null;
+  /**
+   * Derived flag: true when the chat is a multi-party conversation
+   * (chatType group/community, or WhatsApp `@g.us` externalId). Computed
+   * server-side so clients can filter groups without platform-specific checks.
+   */
+  isGroup?: boolean;
   isArchived: boolean;
   settings?: ChatSettings | null;
   createdAt: string;

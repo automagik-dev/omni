@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import type { Chat } from '@omni/db';
-import { ChatService } from '../services/chats';
+import { ChatService, isChatGroup, withIsGroup } from '../services/chats';
 
 // Helper to create a mock chat with all required fields
 function createMockChat(overrides: Partial<Chat>): Chat {
@@ -348,5 +348,46 @@ describe('ChatService regression tests', () => {
     expect(result?.id).toBe('545f8ecb-f485-4283-88f1-a4bec20f66be');
     expect(result?.externalId).toBe(lidJid);
     expect(result?.canonicalId).toBe(phoneJid);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// #403 — derived `isGroup` flag on chat responses
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('isChatGroup / withIsGroup', () => {
+  test('returns true for chatType=group regardless of externalId', () => {
+    expect(isChatGroup({ chatType: 'group', externalId: 'anything' })).toBe(true);
+  });
+
+  test('returns true for chatType=community', () => {
+    expect(isChatGroup({ chatType: 'community', externalId: 'x@s.whatsapp.net' })).toBe(true);
+  });
+
+  test('returns true for legacy WhatsApp group still classified as dm (fallback)', () => {
+    // Older rows / migration edge cases may have chatType='dm' despite @g.us.
+    // Fallback keeps consumers working until the row is reclassified.
+    expect(isChatGroup({ chatType: 'dm', externalId: '120363042@g.us' })).toBe(true);
+  });
+
+  test('returns false for WhatsApp DM', () => {
+    expect(isChatGroup({ chatType: 'dm', externalId: '5511999999@s.whatsapp.net' })).toBe(false);
+  });
+
+  test('returns false for Discord channel', () => {
+    expect(isChatGroup({ chatType: 'channel', externalId: 'disc-ch-1' })).toBe(false);
+  });
+
+  test('returns false for broadcast (not multi-party in the WhatsApp sense)', () => {
+    expect(isChatGroup({ chatType: 'broadcast', externalId: 'status@broadcast' })).toBe(false);
+  });
+
+  test('withIsGroup preserves every input field and adds the derived flag', () => {
+    const chat = createMockChat({ chatType: 'group', externalId: '120363042@g.us', name: 'Team Chat' });
+    const augmented = withIsGroup(chat);
+    expect(augmented.isGroup).toBe(true);
+    expect(augmented.id).toBe(chat.id);
+    expect(augmented.externalId).toBe(chat.externalId);
+    expect(augmented.name).toBe('Team Chat');
   });
 });
