@@ -108,6 +108,28 @@ const createInstanceSchema = z.object({
     .nullable()
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .default('randomized')
+    .describe('Between-chunk delay when agent responses are split into multiple messages'),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Fixed delay between split chunks in milliseconds (used when messageSplitDelayMode="fixed")'),
+  messageSplitDelayMinMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(300)
+    .describe('Minimum delay between split chunks in milliseconds (used when messageSplitDelayMode="randomized")'),
+  messageSplitDelayMaxMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(1000)
+    .describe('Maximum delay between split chunks in milliseconds (used when messageSplitDelayMode="randomized")'),
   agentGateEnabled: z.boolean().default(false).describe('Enable LLM response gate (pre-filter before agent dispatch)'),
   agentGateModel: z
     .string()
@@ -197,6 +219,12 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   reactionAckEmoji: z.record(z.string()).nullable().optional(),
   ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
   agentStalledTimeoutMs: z.number().int().min(0).optional(),
+  // Split-delay fields are NOT NULL in DB — override to strip defaults so a
+  // PATCH that omits them doesn't reset the stored values on the row.
+  messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+  messageSplitDelayFixedMs: z.number().int().min(0).optional(),
+  messageSplitDelayMinMs: z.number().int().min(0).optional(),
+  messageSplitDelayMaxMs: z.number().int().min(0).optional(),
 });
 
 /**
