@@ -2598,6 +2598,15 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const isAgentPaused = (chatRecord?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+  if (isAgentPaused) {
+    log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
+    ackHandle.remove();
+    return;
+  }
+
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 

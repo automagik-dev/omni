@@ -216,7 +216,7 @@ export async function handleGupshupWebhook(
   logger.info('[gupshup] raw webhook received', {
     instanceId,
     contentType: request.headers.get('content-type'),
-    bodyPreview: body.slice(0, 500),
+    body,
   });
 
   // Extract the actual Gupshup payload — handles multiple envelope formats:

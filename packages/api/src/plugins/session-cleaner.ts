@@ -141,6 +141,8 @@ async function handleTrashEmojiMessage(
     // Disarm any active follow-up sequence — clearing the session means the
     // user has explicitly reset the conversation; queued follow-ups referencing
     // the cleared context should not fire.
+    // Also resume agent if paused (handoff active) — trash emoji from dev/QA
+    // is the explicit signal to re-enable the agent and start fresh.
     try {
       const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
       if (dbChat?.id) {
@@ -149,6 +151,13 @@ async function handleTrashEmojiMessage(
           instanceId,
           reason: 'session_cleared',
         });
+
+        // Resume agent if handoff had paused it
+        const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+        if (isAgentPaused) {
+          await services.chats.update(dbChat.id, { settings: { agentPaused: false } });
+          log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
+        }
       }
     } catch (disarmError) {
       log.warn('Failed to disarm follow-up after session clear', {
