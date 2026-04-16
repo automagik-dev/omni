@@ -289,13 +289,20 @@ async function processInboundMessage(
   const platformTimestamp = msg.timestamp * 1000;
   const replyTo = msg.replyContext?.id;
 
+  // Normalize sender name to standard pushName key so message-persistence
+  // and agent-dispatcher can find it without knowing Gupshup-specific fields.
+  const senderName =
+    webhook.senderobj?.display ??
+    webhook.contextobj?.senderName ??
+    (webhook.messageobj?.raw?.sender as { name?: string } | undefined)?.name;
+
   await plugin.handleMessageReceived({
     instanceId,
     externalId: msg.id,
     chatId: from,
     from,
     content,
-    rawPayload: { ...webhook } as unknown as Record<string, unknown>,
+    rawPayload: { ...webhook, pushName: senderName } as unknown as Record<string, unknown>,
     platformTimestamp,
     replyTo,
   });

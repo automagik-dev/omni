@@ -2611,7 +2611,11 @@ async function processAgentResponse(
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
-  const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
+  const pushName =
+    (rawPayload.pushName as string | undefined) ??
+    (rawPayload.displayName as string | undefined) ??
+    (rawPayload.senderobj as { display?: string } | undefined)?.display ??
+    (rawPayload.contextobj as { senderName?: string } | undefined)?.senderName;
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
