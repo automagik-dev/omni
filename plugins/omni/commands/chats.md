@@ -50,7 +50,7 @@ Useful flag additions:
 
 ```bash
 omni chats messages "$ARGUMENTS" --since 7d --json \
-  | jq -r '.[] | "\(.timestamp[11:16]) \(.senderDisplayName // "?"): \((.textContent // "[media]") | .[:200])"'
+  | jq -r '.[] | "\(.platformTimestamp[11:16]) \(.senderDisplayName // "?"): \((.textContent // "[media]") | .[:200])"'
 ```
 
 For noisy group chats, add `--search "<keyword>"` or `--audio-only` / `--images-only` / `--docs-only`.
@@ -61,7 +61,7 @@ Pass `$ARGUMENTS` through and pipe JSON when the subcommand returns structured d
 
 ```bash
 omni chats participants <chat-id> --json \
-  | jq -r '.[] | "\(.platformUserId) \(.displayName // "-") [\(.role // "member")]"'
+  | jq -r '.[] | "\(.userId) \(.name // "-") [\(.role // "member")]"'
 ```
 
 Mutations (`archive`, `delete`, `read`, `pin`, `mute`, `label`) typically return a terse status — run them with `--json` and log the result line.
@@ -70,9 +70,9 @@ Mutations (`archive`, `delete`, `read`, `pin`, `mute`, `label`) typically return
 
 ## Output-shape cheat sheet
 
-`chats list` JSON items expose: `id`, `name`, `externalId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`, `messageCount`, `isGroup`, `instanceId`, `channelType`, `canonicalId`.
+`chats list` JSON items expose: `id`, `name`, `externalId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`, `messageCount`, `isGroup`, `instanceId`, `chatType`, `canonicalId`.
 
-`chats messages` JSON items expose: `id`, `timestamp`, `textContent`, `senderDisplayName`, `senderPlatformUserId`, `hasMedia`, `mediaMimeType`, `transcription`, `imageDescription`, `videoDescription`, `documentExtraction`, `isFromMe`.
+`chats messages` JSON items expose: `id`, `platformTimestamp`, `textContent`, `senderDisplayName`, `senderPlatformUserId`, `hasMedia`, `mediaMimeType`, `transcription`, `imageDescription`, `videoDescription`, `documentExtraction`, `isFromMe`.
 
 Select only what you need; skip the rest.
 
