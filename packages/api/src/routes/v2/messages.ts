@@ -42,6 +42,7 @@ import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/ch
 import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import type { Database } from '@omni/db';
+import { handoffLogs } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -1445,6 +1446,7 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
 messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
+  const db = c.get('db');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), data.instanceId);
 
@@ -1490,6 +1492,22 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
   await services.chats.update(data.chatId, {
     settings: { agentPaused: true },
   });
+
+  // Persist full handoff payload for auditing and traceability
+  db.insert(handoffLogs)
+    .values({
+      instanceId: data.instanceId,
+      chatUuid: data.chatId, // chatId in this route is the DB UUID of the chat
+      chatId: data.to, // raw phone/JID used as chat identifier on the channel
+      toPhone: data.to,
+      text: data.text,
+      extraInfo: data.extraInfo ?? null,
+      agentId: instance.agentId ?? null,
+      externalMessageId: result.messageId ?? null,
+      sentAt: new Date(),
+      metadata: { instanceChannel: instance.channel },
+    })
+    .catch((err: unknown) => log.warn('Failed to persist handoff log', { error: String(err) }));
 
   return c.json(
     {
