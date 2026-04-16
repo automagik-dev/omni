@@ -508,6 +508,119 @@ describe('CLI Integration Tests', () => {
       testAgentId = body.data.id;
     });
 
+    test('agents create exposes --provider-agent-id, --config-path, --metadata (#372)', async () => {
+      // Locate the JSON data block from the two-block output (success + data).
+      // We parse the tail JSON object, which is the agent payload.
+      const result = await runCli(
+        [
+          'agents',
+          'create',
+          '--name',
+          `agno-seller-${Date.now()}`,
+          '--provider',
+          'agno',
+          '--provider-agent-id',
+          'eugenia-seller',
+          '--config-path',
+          '/tmp/eugenia.yaml',
+          '--metadata',
+          JSON.stringify({ team: 'sales', tier: 'premium' }),
+        ],
+        { OMNI_FORMAT: 'json' },
+      );
+      assertSuccess(result, 'agents create with new flags');
+
+      const blocks = result.stdout
+        .split(/\n(?=\{)/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const last = blocks[blocks.length - 1] ?? '';
+      const parsed = JSON.parse(last);
+      const agent = parsed.data ?? parsed;
+
+      expect(agent.configPath).toBe('/tmp/eugenia.yaml');
+      expect(agent.metadata).toEqual({
+        team: 'sales',
+        tier: 'premium',
+        providerAgentId: 'eugenia-seller',
+      });
+
+      // Cleanup
+      if (agent.id) {
+        await fetch(`${MOCK_URL}/api/v2/agents/${agent.id}`, {
+          method: 'DELETE',
+          headers: { 'x-api-key': MOCK_API_KEY },
+        });
+      }
+    });
+
+    test('agents create rejects invalid JSON in --metadata', async () => {
+      const result = await runCli([
+        'agents',
+        'create',
+        '--name',
+        'bad-meta',
+        '--provider',
+        'agno',
+        '--metadata',
+        'not-json',
+      ]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata is not valid JSON');
+    });
+
+    test('agents create rejects non-object JSON in --metadata', async () => {
+      const result = await runCli([
+        'agents',
+        'create',
+        '--name',
+        'bad-meta-array',
+        '--provider',
+        'agno',
+        '--metadata',
+        '[1,2,3]',
+      ]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata must be a JSON object');
+    });
+
+    test('agents create --provider-agent-id overrides providerAgentId in --metadata', async () => {
+      const result = await runCli(
+        [
+          'agents',
+          'create',
+          '--name',
+          `override-${Date.now()}`,
+          '--provider',
+          'agno',
+          '--metadata',
+          JSON.stringify({ providerAgentId: 'from-metadata', keep: true }),
+          '--provider-agent-id',
+          'from-flag',
+        ],
+        { OMNI_FORMAT: 'json' },
+      );
+      assertSuccess(result, 'agents create flag overrides metadata');
+
+      const blocks = result.stdout
+        .split(/\n(?=\{)/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const parsed = JSON.parse(blocks[blocks.length - 1] ?? '{}');
+      const agent = parsed.data ?? parsed;
+
+      expect(agent.metadata).toEqual({ providerAgentId: 'from-flag', keep: true });
+
+      if (agent.id) {
+        await fetch(`${MOCK_URL}/api/v2/agents/${agent.id}`, {
+          method: 'DELETE',
+          headers: { 'x-api-key': MOCK_API_KEY },
+        });
+      }
+    });
+
     test('agents update patches model and preserves UUID', async () => {
       if (!testAgentId) return;
 
