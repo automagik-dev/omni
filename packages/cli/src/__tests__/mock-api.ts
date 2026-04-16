@@ -199,6 +199,8 @@ async function handleUpdateAgent(req: Request, path: string): Promise<Response> 
   if (body.agentType !== undefined) found.agentType = body.agentType as string;
   if (body.agentProviderId !== undefined) found.agentProviderId = body.agentProviderId as string | null;
   if (body.isActive !== undefined) found.isActive = body.isActive as boolean;
+  if (body.configPath !== undefined) found.configPath = body.configPath as string | null;
+  if (body.metadata !== undefined) found.metadata = body.metadata as Record<string, unknown> | null;
   found.updatedAt = new Date().toISOString();
   return json({ data: found });
 }

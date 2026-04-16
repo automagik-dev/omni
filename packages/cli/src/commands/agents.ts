@@ -6,6 +6,7 @@
  * omni agents create --name <name> --provider <provider> [--agent-provider <id>] [--model <model>] [--type <type>]
  *                  [--provider-agent-id <id>] [--config-path <path>] [--metadata <json>]
  * omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
+ *                  [--provider-agent-id <id>] [--config-path <path>] [--metadata <json>]
  * omni agents delete <id>
  */
 
@@ -27,6 +28,9 @@ interface UpdateAgentOptions {
   type?: string;
   active?: boolean;
   inactive?: boolean;
+  providerAgentId?: string;
+  configPath?: string;
+  metadata?: string;
 }
 
 interface UpdateAgentBody {
@@ -36,6 +40,8 @@ interface UpdateAgentBody {
   agentProviderId?: string;
   agentType?: AgentType;
   isActive?: boolean;
+  configPath?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface CreateAgentOptions {
@@ -50,33 +56,36 @@ interface CreateAgentOptions {
 }
 
 /**
- * Parse a metadata JSON string and merge providerAgentId (flag wins over embedded value).
- * Calls output.error (which exits) on invalid JSON or non-object payloads.
+ * Parse a --metadata JSON string into a plain object. Exits with a CLI error on
+ * invalid JSON or non-object payloads. Returns undefined when raw is omitted.
  */
-function parseCreateMetadata(raw: string | undefined, providerAgentId?: string): Record<string, unknown> | undefined {
-  let metadata: Record<string, unknown> | undefined;
+function parseMetadataJson(raw: string | undefined): Record<string, unknown> | undefined {
+  if (raw === undefined) return undefined;
 
-  if (raw !== undefined) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      output.error(`--metadata is not valid JSON: ${message}`);
-    }
-
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      output.error('--metadata must be a JSON object.');
-    }
-
-    metadata = parsed as Record<string, unknown>;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.error(`--metadata is not valid JSON: ${message}`);
   }
 
-  if (providerAgentId !== undefined) {
-    metadata = { ...(metadata ?? {}), providerAgentId };
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    output.error('--metadata must be a JSON object.');
   }
 
-  return metadata;
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * Compose metadata for create: parse --metadata (may be undefined) and merge
+ * --provider-agent-id on top (flag wins over any providerAgentId embedded in
+ * --metadata).
+ */
+function composeCreateMetadata(raw: string | undefined, providerAgentId?: string): Record<string, unknown> | undefined {
+  const parsed = parseMetadataJson(raw);
+  if (providerAgentId !== undefined) return { ...(parsed ?? {}), providerAgentId };
+  return parsed;
 }
 
 /**
@@ -102,7 +111,7 @@ function buildCreateAgentBody(options: CreateAgentOptions): {
     output.error(`Invalid type: ${options.type}. Valid: ${VALID_TYPES.join(', ')}`);
   }
 
-  const metadata = parseCreateMetadata(options.metadata, options.providerAgentId);
+  const metadata = composeCreateMetadata(options.metadata, options.providerAgentId);
 
   return {
     name: options.name,
@@ -243,7 +252,8 @@ export function createAgentsCommand(): Command {
       }
     });
 
-  // omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
+  // omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>]
+  //                        [--active|--inactive] [--provider-agent-id <id>] [--config-path <path>] [--metadata <json>]
   agents
     .command('update <id>')
     .description('Update an existing agent (partial patch; omitted fields are preserved)')
@@ -254,17 +264,42 @@ export function createAgentsCommand(): Command {
     .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`)
     .option('--active', 'Mark agent as active')
     .option('--inactive', 'Mark agent as inactive')
+    .option(
+      '--provider-agent-id <id>',
+      'Provider-internal agent identifier (e.g. agno agent name). Merged into metadata.providerAgentId; wins over any value in --metadata.',
+    )
+    .option('--config-path <path>', 'Path to the agent config file (DB column config_path)')
+    .option(
+      '--metadata <json>',
+      'Additional metadata as JSON object. Merged shallowly into existing metadata; omitted keys are preserved. --provider-agent-id wins if both set providerAgentId.',
+    )
     .action(async (id: string, options: UpdateAgentOptions) => {
       const body = buildUpdateAgentBody(options);
+      if (options.configPath !== undefined) body.configPath = options.configPath;
 
-      if (Object.keys(body).length === 0) {
-        output.error(
-          'No fields to update. Pass at least one of --name, --model, --provider, --agent-provider, --type, --active, --inactive.',
-        );
-      }
+      // Validate --metadata JSON up front (fails fast before any network call).
+      const parsedMetadata = parseMetadataJson(options.metadata);
+      const client = getClient();
 
       try {
-        const agent = await getClient().agents.update(id, body);
+        // Metadata is stored as a single JSONB column server-side; to avoid
+        // clobbering keys the user didn't pass, fetch-then-merge whenever
+        // --metadata or --provider-agent-id is supplied.
+        if (parsedMetadata !== undefined || options.providerAgentId !== undefined) {
+          const existing = await client.agents.get(id);
+          const existingMetadata = (existing.metadata ?? {}) as Record<string, unknown>;
+          const merged: Record<string, unknown> = { ...existingMetadata, ...(parsedMetadata ?? {}) };
+          if (options.providerAgentId !== undefined) merged.providerAgentId = options.providerAgentId;
+          body.metadata = merged;
+        }
+
+        if (Object.keys(body).length === 0) {
+          output.error(
+            'No fields to update. Pass at least one of --name, --model, --provider, --agent-provider, --type, --active, --inactive, --config-path, --metadata, --provider-agent-id.',
+          );
+        }
+
+        const agent = await client.agents.update(id, body);
         output.data(agent);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
