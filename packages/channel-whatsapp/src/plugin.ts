@@ -3212,7 +3212,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Cache stores both directions (lid→phone and phone→lid). Only the
     // lid-keyed direction belongs in DB persistence as the canonical mapping.
     const mappings = Array.from(lidCache.entries())
-      .filter(([key]) => key.endsWith('@lid'))
+      .filter(([key]) => isLidJid(key))
       .map(([lidJid, phoneJid]) => ({ lidJid, phoneJid }));
     this.eventBus
       .publishGeneric(
