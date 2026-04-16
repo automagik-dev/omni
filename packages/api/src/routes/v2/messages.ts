@@ -1110,19 +1110,34 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
 
   // Look up the target message to determine fromMe (critical for WhatsApp reactions).
   // Baileys needs key.fromMe to locate the correct message — if wrong, the reaction
-  // is silently dropped by WhatsApp.
-  let fromMe = false; // Default: reacting to someone else's message
+  // is silently dropped by WhatsApp. When the target isn't in our DB (history gap
+  // or unsynced chat), we leave fromMe undefined and let the channel plugin's
+  // heuristic decide — forcing false here breaks bot-to-own-message reactions (#386).
+  let fromMe: boolean | undefined;
   const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
-    if (!target) {
-      log.warn('Target message not found in DB, sending reaction anyway', { messageId, chatId: chat.id });
-    } else {
+    if (target) {
       fromMe = target.isFromMe === true;
+    } else {
+      log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+        instanceId,
+        chatId: chat.id,
+        messageId,
+        fallback: 'plugin-heuristic',
+      });
     }
+  } else {
+    log.warn('Reaction target chat not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+      instanceId,
+      resolvedTo,
+      messageId,
+      fallback: 'plugin-heuristic',
+    });
   }
 
-  // Build outgoing message for reaction
+  // Build outgoing message for reaction. When fromMe is undefined, omit it from
+  // metadata so the plugin applies its own fallback (defaults to true for Baileys).
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: {
@@ -1130,7 +1145,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
       emoji,
       targetMessageId: messageId,
     } as OutgoingContent,
-    metadata: { fromMe },
+    metadata: fromMe === undefined ? {} : { fromMe },
   };
 
   // Send via channel plugin
