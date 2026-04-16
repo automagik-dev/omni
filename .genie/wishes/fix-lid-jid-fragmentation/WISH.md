@@ -2,10 +2,33 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | IN-PROGRESS |
 | **Slug** | `fix-lid-jid-fragmentation` |
 | **Date** | 2026-04-09 |
 | **Design** | Canonicalize in channel-whatsapp plugin (Option 2 from issue) |
+| **Branch** | `fix/374-lid-jid-canonicalize` |
+
+## Implementation notes (2026-04-16)
+
+- `storeLidMapping` now populates both `lid→phone` and `phone→lid` in the
+  same `Map` (the `@lid` / `@s.whatsapp.net` key namespaces don't collide).
+  `publishLidMappings` filters to `@lid`-keyed entries so DB persistence only
+  sees the canonical forward direction.
+- `resolveCanonicalJid` was a no-op; it now upgrades phone JIDs to LID via
+  `remoteJidAlt` first, then the bidirectional cache. Group / broadcast /
+  newsletter JIDs short-circuit unchanged; missing mappings fall back to
+  the phone JID.
+- `resolveChatId` and `resolveSenderJid` call `resolveCanonicalJid` in
+  LID-first mode so the chatId and sender the event publishes are already
+  stable per human — debounce, session computation, and typing debounce
+  all key to a single identity.
+- Raw `remoteJid` is preserved on the raw payload as `rawChatId` (via
+  `annotateLidResolution`) so audit trails still show what Baileys sent.
+- DEC-8 legacy path (`lidFirstEnabled=false`) is untouched.
+- Coverage: new `__tests__/canonicalize-jid.test.ts` asserts same-human
+  collapse across `@lid`/`@s.whatsapp.net`, group passthrough, and legacy
+  mode. Existing `jid.test.ts` cases were updated to reflect the real
+  canonicalization behavior.
 
 ## Summary
 

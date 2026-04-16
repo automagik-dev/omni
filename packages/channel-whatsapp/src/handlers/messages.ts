@@ -16,7 +16,7 @@ import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
-import { fromJid, isLidJid, isUserJid, resolveToPhoneJidLegacy } from '../jid';
+import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
@@ -487,7 +487,7 @@ function isFromMe(msg: WAMessage): boolean {
  * Fixes:
  * - isFromMe in groups: uses the bot's own JID instead of group JID
  */
-function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage, chatId: string): string {
+export function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMessage, chatId: string): string {
   if (isFromMe(msg)) {
     // Use the bot's own JID for own messages (not chatId, which could be a group)
     return plugin.getMeJid(instanceId) || chatId;
@@ -500,6 +500,8 @@ function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMes
   // Always store bidirectional mapping when participantAlt provides the alternate form
   if (isLidJid(senderJid) && participantAlt && isUserJid(participantAlt)) {
     plugin.storeLidMapping(instanceId, senderJid, participantAlt);
+  } else if (isUserJid(senderJid) && participantAlt && isLidJid(participantAlt)) {
+    plugin.storeLidMapping(instanceId, participantAlt, senderJid);
   }
 
   // DEC-8: when lidFirstEnabled is disabled, resolve LID sender → phone (legacy behavior)
@@ -508,8 +510,10 @@ function resolveSenderJid(plugin: WhatsAppPlugin, instanceId: string, msg: WAMes
     return resolveToPhoneJidLegacy(senderJid, participantAlt, lidCache);
   }
 
-  // LID-first: keep sender JID as-is (LID stays LID, phone stays phone)
-  return senderJid;
+  // LID-first: canonicalize to LID so per_user sessions stay stable across
+  // the two JID forms Baileys emits for the same human (#374).
+  const lidCache = plugin.getLidMappingCache(instanceId);
+  return resolveCanonicalJid(senderJid, participantAlt, lidCache);
 }
 
 /**
@@ -660,17 +664,22 @@ async function handleSpecialMessage(
  */
 function annotateLidResolution(msg: WAMessage, rawChatId: string): void {
   const remoteJidAlt = (msg.key as Record<string, unknown>).remoteJidAlt as string | undefined;
+  const annotated = msg as unknown as Record<string, unknown>;
+
+  // Always preserve the raw remoteJid so audit trails and debugging see what
+  // Baileys actually delivered, independent of any canonicalization.
+  annotated.rawChatId = rawChatId;
 
   if (isLidJid(rawChatId)) {
-    (msg as unknown as Record<string, unknown>).originalLidJid = rawChatId;
-    (msg as unknown as Record<string, unknown>).addressingMode = 'lid';
+    annotated.originalLidJid = rawChatId;
+    annotated.addressingMode = 'lid';
     if (remoteJidAlt && isUserJid(remoteJidAlt)) {
-      (msg as unknown as Record<string, unknown>).resolvedPhoneJid = remoteJidAlt;
+      annotated.resolvedPhoneJid = remoteJidAlt;
     }
   } else if (isUserJid(rawChatId) && remoteJidAlt && isLidJid(remoteJidAlt)) {
-    (msg as unknown as Record<string, unknown>).originalLidJid = remoteJidAlt;
-    (msg as unknown as Record<string, unknown>).resolvedPhoneJid = rawChatId;
-    (msg as unknown as Record<string, unknown>).addressingMode = 'phone';
+    annotated.originalLidJid = remoteJidAlt;
+    annotated.resolvedPhoneJid = rawChatId;
+    annotated.addressingMode = 'phone';
   }
 }
 
@@ -680,7 +689,7 @@ function annotateLidResolution(msg: WAMessage, rawChatId: string): void {
  * LID-first: keeps @lid JIDs as canonical chatId (no phone downconversion).
  * Stores bidirectional LID↔phone mapping when remoteJidAlt provides it.
  */
-function resolveChatId(
+export function resolveChatId(
   plugin: WhatsAppPlugin,
   instanceId: string,
   msg: WAMessage,
@@ -705,8 +714,12 @@ function resolveChatId(
     return { chatId, rawChatId };
   }
 
-  // LID-first: use rawChatId as canonical (no resolution to phone)
-  return { chatId: rawChatId, rawChatId };
+  // LID-first: canonicalize to a single stable chatId per human so debounce
+  // and session keys don't fragment across the two JID forms Baileys emits
+  // for the same contact (#374).
+  const lidCache = plugin.getLidMappingCache(instanceId);
+  const chatId = resolveCanonicalJid(rawChatId, remoteJidAlt, lidCache);
+  return { chatId, rawChatId };
 }
 
 /**
