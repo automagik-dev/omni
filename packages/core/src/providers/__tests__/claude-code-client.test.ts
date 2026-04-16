@@ -161,6 +161,22 @@ describe('ClaudeCodeClient', () => {
       expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
     });
 
+    it('passes request env into Claude Code SDK options', () => {
+      const client = new ClaudeCodeClient({ projectPath: '/test' });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        env: {
+          OMNI_INSTANCE: 'instance-123',
+          OMNI_CHAT: 'chat-456',
+          CLAUDECODE: '1',
+        },
+      });
+
+      expect(options.env.OMNI_INSTANCE).toBe('instance-123');
+      expect(options.env.OMNI_CHAT).toBe('chat-456');
+      expect(options.env.CLAUDECODE).toBe('0');
+    });
+
     it('passes mcpServers when configured', () => {
       const mcpServers = {
         playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
@@ -385,6 +401,47 @@ describe('ClaudeCodeAgentProvider', () => {
     );
 
     expect(provider).toBeDefined();
+  });
+
+  it('injects Omni context env into Claude Code requests', async () => {
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {
+      prefixSenderName: false,
+    });
+    let capturedRequest: AnyRecord | undefined;
+    (provider as unknown as AnyRecord).client.run = async (request: AnyRecord) => {
+      capturedRequest = request;
+      return {
+        content: 'ok',
+        runId: 'run-1',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        status: 'completed',
+      };
+    };
+
+    await provider.trigger({
+      type: 'dm',
+      traceId: 'trace-123',
+      sessionId: 'session-chat-456',
+      source: {
+        instanceId: 'instance-123',
+        chatId: 'chat-456',
+        messageId: 'message-789',
+        channelType: 'whatsapp-baileys',
+      },
+      sender: {
+        platformUserId: 'sender-999',
+        personId: 'person-111',
+        displayName: undefined,
+      },
+      content: { text: 'hello' },
+    } as AgentTrigger);
+
+    expect(capturedRequest?.env.OMNI_INSTANCE).toBe('instance-123');
+    expect(capturedRequest?.env.OMNI_CHAT).toBe('chat-456');
+    expect(capturedRequest?.env.OMNI_MESSAGE).toBe('message-789');
+    expect(capturedRequest?.env.OMNI_SESSION).toBe('session-chat-456');
+    expect(capturedRequest?.env.OMNI_SENDER).toBe('sender-999');
+    expect(capturedRequest?.mcpUrlParams).toEqual({ chat_id: 'chat-456' });
   });
 
   it('includes attached file paths in message for image forwarding', () => {

@@ -58,6 +58,21 @@ interface PreparedRequest {
   internalSessionKey: string;
 }
 
+function buildOmniEnv(context: AgentTrigger): Record<string, string> {
+  return {
+    ...(context.env ?? {}),
+    OMNI_INSTANCE: context.source.instanceId,
+    OMNI_CHAT: context.source.chatId,
+    OMNI_MESSAGE: context.source.messageId,
+    OMNI_CHANNEL: context.source.channelType,
+    OMNI_SESSION: context.sessionId,
+    OMNI_TRACE_ID: context.traceId,
+    OMNI_SENDER: context.sender.platformUserId,
+    ...(context.sender.personId ? { OMNI_PERSON_ID: context.sender.personId } : {}),
+    ...(context.source.threadId ? { OMNI_THREAD: context.source.threadId } : {}),
+  };
+}
+
 export class ClaudeCodeAgentProvider implements IAgentProvider {
   readonly schema = 'claude-code' as const;
   readonly mode = 'round-trip' as const;
@@ -228,6 +243,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      env: buildOmniEnv(context),
       // Use source.chatId (conversation identifier) — correct for both DMs and groups.
       // In DMs chatId == platformUserId; in groups chatId identifies the group, not the individual sender.
       ...(context.source.chatId ? { mcpUrlParams: { chat_id: context.source.chatId } } : {}),
@@ -296,6 +312,7 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
       sessionId: resolvedSessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       timeoutMs: this.options.timeoutMs ?? 120_000,
+      env: buildOmniEnv(context),
       // Use source.chatId (conversation identifier) — correct for both DMs and groups.
       ...(context.source.chatId ? { mcpUrlParams: { chat_id: context.source.chatId } } : {}),
     };
