@@ -156,6 +156,15 @@ export class AgentReplayService {
             sql`${messages.senderAgentId} IS NULL`,
             // Only active messages
             sql`${messages.deletedAt} IS NULL`,
+            // Skip messages that already have an agent reply after them in the same chat
+            // — means the agent already handled this message before the restart
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${messages} AS reply
+              WHERE reply.chat_id = ${messages.chatId}
+                AND reply.sender_agent_id IS NOT NULL
+                AND reply.platform_timestamp > ${messages.platformTimestamp}
+                AND reply.deleted_at IS NULL
+            )`,
             // Composite cursor: (timestamp > cursor) OR (timestamp = cursor AND id > cursorId)
             // This avoids skipping messages with identical timestamps at page boundaries
             cursorId
