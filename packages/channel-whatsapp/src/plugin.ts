@@ -1275,6 +1275,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           text: message.content.text,
         },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       // Reset rate limit state on successful send
@@ -2356,7 +2357,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const config = this.instances.get(instanceId)?.config;
     if (config) {
       await this.updateInstanceStatus(instanceId, config, {
-        state: 'connecting',
+        state: 'qr',
         since: new Date(),
         qrCode: { code: qrCode, expiresAt },
       });

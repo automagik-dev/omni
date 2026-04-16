@@ -27,6 +27,28 @@ const log = createLogger('chats');
 /** Label that triggers the "attention" state when present on a chat */
 const ATTENTION_LABEL = 'follow-up';
 
+/** Chat types that represent a multi-party conversation (vs a 1:1 DM). */
+const GROUP_CHAT_TYPES = new Set<ChatType>(['group', 'community']);
+
+/**
+ * True when the chat is a multi-party conversation.
+ *
+ * Derives from `chatType` first (channel-agnostic, already correctly set for
+ * modern rows). Falls back to a WhatsApp JID suffix check for legacy rows
+ * classified as `dm` despite having a `@g.us` externalId — see #403.
+ */
+export function isChatGroup(chat: Pick<Chat, 'chatType' | 'externalId'>): boolean {
+  if (GROUP_CHAT_TYPES.has(chat.chatType)) return true;
+  return typeof chat.externalId === 'string' && chat.externalId.endsWith('@g.us');
+}
+
+export type ChatWithIsGroup<T extends Pick<Chat, 'chatType' | 'externalId'>> = T & { isGroup: boolean };
+
+/** Augment a chat row with the derived `isGroup` flag. */
+export function withIsGroup<T extends Pick<Chat, 'chatType' | 'externalId'>>(chat: T): ChatWithIsGroup<T> {
+  return { ...chat, isGroup: isChatGroup(chat) };
+}
+
 export interface ChatWithParticipants extends Chat {
   participants: ChatParticipant[];
 }
@@ -177,7 +199,7 @@ export class ChatService {
    * List chats with filtering and pagination
    */
   async list(options: ListChatsOptions = {}): Promise<{
-    items: Chat[];
+    items: ChatWithIsGroup<Chat>[];
     hasMore: boolean;
     cursor?: string;
     total: number;
@@ -218,7 +240,10 @@ export class ChatService {
 
     const lastItem = items[items.length - 1];
     return {
-      items,
+      // Derive `isGroup` at the serialization boundary — the DB doesn't store
+      // it explicitly, but clients need a single boolean to filter groups vs
+      // DMs without hard-coding WhatsApp JID suffixes. See #403.
+      items: items.map(withIsGroup),
       hasMore,
       cursor: lastItem?.lastMessageAt?.toISOString(),
       total: items.length + (hasMore ? 1 : 0),
@@ -351,7 +376,7 @@ export class ChatService {
   /**
    * Get chat by ID
    */
-  async getById(id: string, options?: { includeHidden?: boolean }): Promise<Chat> {
+  async getById(id: string, options?: { includeHidden?: boolean }): Promise<ChatWithIsGroup<Chat>> {
     const [result] = await this.db.select().from(chats).where(eq(chats.id, id)).limit(1);
 
     if (!result) {
@@ -362,7 +387,7 @@ export class ChatService {
       throw new NotFoundError('Chat', id);
     }
 
-    return result;
+    return withIsGroup(result);
   }
 
   /**
@@ -563,6 +588,18 @@ export class ChatService {
     if (data.name) data.name = sanitizeText(data.name) ?? data.name;
     if (data.lastMessagePreview)
       data.lastMessagePreview = sanitizeText(data.lastMessagePreview) ?? data.lastMessagePreview;
+
+    // Snapshot the prior settings so we can detect a handoff (agentPaused
+    // flipping from false → true). Only needed when the incoming patch sets
+    // `agentPaused: true` — any other settings write can't trigger the
+    // transition, so skip the extra SELECT.
+    let priorAgentPaused = false;
+    const incomingAgentPaused = (data.settings as { agentPaused?: boolean } | null | undefined)?.agentPaused === true;
+    if (data.settings !== undefined && incomingAgentPaused) {
+      const [prior] = await this.db.select().from(chats).where(eq(chats.id, id)).limit(1);
+      priorAgentPaused = (prior?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+    }
+
     const [updated] = await this.db
       .update(chats)
       .set({ ...data, updatedAt: new Date() })
@@ -571,6 +608,25 @@ export class ChatService {
 
     if (!updated) {
       throw new NotFoundError('Chat', id);
+    }
+
+    // Follow-up sequences disarm on handoff activation — emit only on the
+    // false → true transition so idempotent settings writes don't replay.
+    const nextAgentPaused = (updated.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+    if (this.eventBus && updated.instanceId && data.settings !== undefined && !priorAgentPaused && nextAgentPaused) {
+      const instanceId = updated.instanceId;
+      this.eventBus
+        .publish(
+          'chat.handoff_activated',
+          {
+            chatId: updated.id,
+            instanceId,
+            agentId: null,
+            reason: 'agentPaused',
+          },
+          { instanceId },
+        )
+        .catch((err) => log.debug('Failed to publish chat.handoff_activated', { error: String(err) }));
     }
 
     return updated;
@@ -612,6 +668,15 @@ export class ChatService {
 
     if (!updated) {
       throw new NotFoundError('Chat', id);
+    }
+
+    // Follow-up sequences treat archive as a terminal state — emit so the
+    // lifecycle hook disarms any active row. See issue #404.
+    if (this.eventBus && updated.instanceId) {
+      const instanceId = updated.instanceId;
+      this.eventBus
+        .publish('chat.archived', { chatId: updated.id, instanceId, source: 'archive' }, { instanceId })
+        .catch((err) => log.debug('Failed to publish chat.archived', { error: String(err) }));
     }
 
     return updated;

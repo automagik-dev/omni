@@ -108,6 +108,28 @@ const createInstanceSchema = z.object({
     .nullable()
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
+  messageSplitDelayMode: z
+    .enum(['disabled', 'fixed', 'randomized'])
+    .default('randomized')
+    .describe('Between-chunk delay when agent responses are split into multiple messages'),
+  messageSplitDelayFixedMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Fixed delay between split chunks in milliseconds (used when messageSplitDelayMode="fixed")'),
+  messageSplitDelayMinMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(300)
+    .describe('Minimum delay between split chunks in milliseconds (used when messageSplitDelayMode="randomized")'),
+  messageSplitDelayMaxMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(1000)
+    .describe('Maximum delay between split chunks in milliseconds (used when messageSplitDelayMode="randomized")'),
   agentGateEnabled: z.boolean().default(false).describe('Enable LLM response gate (pre-filter before agent dispatch)'),
   agentGateModel: z
     .string()
@@ -120,9 +142,9 @@ const createInstanceSchema = z.object({
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
   slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
-  gupshupApiKey: z.string().optional().nullable().describe('Gupshup API key'),
-  gupshupAppName: z.string().optional().nullable().describe('Gupshup app name'),
-  gupshupSourcePhone: z.string().optional().nullable().describe('Gupshup source phone (E.164)'),
+  gupshupCallbackUrl: z.string().optional().nullable().describe('Gupshup Custom Integration callback URL'),
+  gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
+  gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
@@ -180,9 +202,9 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   discordBotToken: z.string().nullable().optional(),
   slackBotToken: z.string().nullable().optional(),
   slackAppToken: z.string().nullable().optional(),
-  gupshupApiKey: z.string().nullable().optional(),
-  gupshupAppName: z.string().nullable().optional(),
-  gupshupSourcePhone: z.string().nullable().optional(),
+  gupshupCallbackUrl: z.string().nullable().optional(),
+  gupshupAuthToken: z.string().nullable().optional(),
+  gupshupEventId: z.string().nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
@@ -197,6 +219,12 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   reactionAckEmoji: z.record(z.string()).nullable().optional(),
   ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
   agentStalledTimeoutMs: z.number().int().min(0).optional(),
+  // Split-delay fields are NOT NULL in DB — override to strip defaults so a
+  // PATCH that omits them doesn't reset the stored values on the row.
+  messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+  messageSplitDelayFixedMs: z.number().int().min(0).optional(),
+  messageSplitDelayMinMs: z.number().int().min(0).optional(),
+  messageSplitDelayMaxMs: z.number().int().min(0).optional(),
 });
 
 /**
@@ -244,7 +272,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'slackBotToken',
   'slackAppToken',
   'slackSigningSecret',
-  'gupshupApiKey',
+  'gupshupAuthToken',
   'webhookVerifyToken',
 ] as const;
 
@@ -316,9 +344,9 @@ type InstanceConnectionOptionsInput = {
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
-  gupshupApiKey?: string | null;
-  gupshupAppName?: string | null;
-  gupshupSourcePhone?: string | null;
+  gupshupCallbackUrl?: string | null;
+  gupshupAuthToken?: string | null;
+  gupshupEventId?: string | null;
   webhookVerifyToken?: string | null;
 };
 
@@ -338,9 +366,9 @@ function applyChannelSpecificConnectionOptions(
   }
 
   if (input.channel === 'gupshup') {
-    if (input.gupshupApiKey) options.gupshupApiKey = input.gupshupApiKey;
-    if (input.gupshupAppName) options.gupshupAppName = input.gupshupAppName;
-    if (input.gupshupSourcePhone) options.gupshupSourcePhone = input.gupshupSourcePhone;
+    if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
+    if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
+    if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
     if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
   }
 }
@@ -516,9 +544,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     telegramReactionLevel: instance.telegramReactionLevel,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
-    gupshupApiKey: instance.gupshupApiKey,
-    gupshupAppName: instance.gupshupAppName,
-    gupshupSourcePhone: instance.gupshupSourcePhone,
+    gupshupCallbackUrl: instance.gupshupCallbackUrl,
+    gupshupAuthToken: instance.gupshupAuthToken,
+    gupshupEventId: instance.gupshupEventId,
     webhookVerifyToken: instance.webhookVerifyToken,
   });
 
@@ -822,6 +850,7 @@ const connectInstanceSchema = z.object({
   slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
   slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
+  gupshupCallbackUrl: z.string().optional().describe('Gupshup webhook callback URL (persisted for reconnection)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -862,9 +891,9 @@ instancesRoutes.post(
       slackAppToken: body.slackAppToken ?? instance.slackAppToken,
       slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
       whatsapp: body.whatsapp,
-      gupshupApiKey: instance.gupshupApiKey,
-      gupshupAppName: instance.gupshupAppName,
-      gupshupSourcePhone: instance.gupshupSourcePhone,
+      gupshupCallbackUrl: instance.gupshupCallbackUrl,
+      gupshupAuthToken: instance.gupshupAuthToken,
+      gupshupEventId: instance.gupshupEventId,
       webhookVerifyToken: instance.webhookVerifyToken,
     });
 

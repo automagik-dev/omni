@@ -78,10 +78,15 @@ export interface ProviderRequest {
   files?: ProviderFile[];
   /** Request timeout in milliseconds */
   timeoutMs?: number;
+  /** Dynamic URL params to append to HTTP MCP server URLs (e.g. { chat_id: "123" }) */
+  mcpUrlParams?: Record<string, string>;
 }
 
 export interface ProviderFile {
-  path: string;
+  /** Local file path (mutually exclusive with url) */
+  path?: string;
+  /** Remote URL to fetch the file from (mutually exclusive with path) */
+  url?: string;
   mimeType: string;
   filename?: string;
 }

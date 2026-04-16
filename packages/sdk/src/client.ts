@@ -48,6 +48,12 @@ export interface Chat {
   name?: string | null;
   description?: string | null;
   avatarUrl?: string | null;
+  /**
+   * Derived flag: true when the chat is a multi-party conversation
+   * (chatType group/community, or WhatsApp `@g.us` externalId). Computed
+   * server-side so clients can filter groups without platform-specific checks.
+   */
+  isGroup?: boolean;
   isArchived: boolean;
   settings?: ChatSettings | null;
   createdAt: string;
@@ -3639,6 +3645,89 @@ export function createOmniClient(config: OmniClientConfig) {
           params: { path: { id } },
         });
         throwIfError(response, error);
+      },
+    },
+
+    // ========================================================================
+    // FOLLOW-UP CONFIG (issue #404)
+    // ========================================================================
+
+    /**
+     * Idle-chat follow-up config surface. Three scopes (agent, instance, chat);
+     * closest-defined wins at runtime. See the wish for the full resolution
+     * hierarchy.
+     */
+    followUp: {
+      async getAgent(id: string): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/agents/${id}`);
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async setAgent(
+        id: string,
+        config: components['schemas']['FollowUpSequenceConfig'],
+      ): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/agents/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async unsetAgent(id: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/agents/${id}`, { method: 'DELETE' });
+        if (!resp.ok) throw OmniApiError.from(await resp.json().catch(() => ({})), resp.status);
+      },
+
+      async getInstance(id: string): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/instances/${id}`);
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async setInstance(
+        id: string,
+        config: components['schemas']['FollowUpSequenceConfig'],
+      ): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/instances/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async unsetInstance(id: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/instances/${id}`, { method: 'DELETE' });
+        if (!resp.ok) throw OmniApiError.from(await resp.json().catch(() => ({})), resp.status);
+      },
+
+      async getChat(id: string): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/chats/${id}`);
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async setChat(
+        id: string,
+        config: components['schemas']['FollowUpSequenceConfig'],
+      ): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/chats/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const json = (await resp.json()) as { data?: components['schemas']['FollowUpSequenceConfig'] | null };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async unsetChat(id: string): Promise<void> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/chats/${id}`, { method: 'DELETE' });
+        if (!resp.ok) throw OmniApiError.from(await resp.json().catch(() => ({})), resp.status);
       },
     },
 

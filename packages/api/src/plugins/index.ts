@@ -37,5 +37,8 @@ export { setupHistoryPushTracker, setupSyncWorker } from './sync-worker';
 // Session cleaner (clears agent sessions on trash emoji)
 export { setupSessionCleaner } from './session-cleaner';
 
+// Follow-up lifecycle hooks (arm on outbound agent message, disarm on reply/handoff/archive)
+export { setupFollowUpHooks } from './follow-up-hooks';
+
 // Instance monitoring and robustness
 export { InstanceMonitor, reconnectWithPool } from './instance-monitor';

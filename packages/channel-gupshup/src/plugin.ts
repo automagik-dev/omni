@@ -2,7 +2,7 @@
  * Gupshup channel plugin
  *
  * Full implementation of GupshupPlugin extends BaseChannelPlugin.
- * Stateless REST API outbound + webhook-based inbound.
+ * Stateless REST API outbound (Custom Integration) + Meta/WA Business API inbound.
  */
 
 import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
@@ -22,10 +22,11 @@ import type { ChannelType } from '@omni/core/types';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
 import { handleGupshupWebhook } from './handlers/webhooks';
+import { sendHandoff } from './senders/handoff';
+import { sendLocation } from './senders/location';
 import { sendMedia } from './senders/media';
-import { sendTemplate } from './senders/template';
 import { sendText } from './senders/text';
-import type { GupshupConfig } from './types';
+import type { GupshupConfig, GupshupSendResponse } from './types';
 import { GupshupError, GupshupErrorCode, isRetryable } from './utils/errors';
 import { toGupshupPhone } from './utils/identity';
 
@@ -34,9 +35,15 @@ async function dispatchContent(
   client: GupshupClient,
   dest: string,
   message: OutgoingMessage,
-): Promise<{ messageId?: string }> {
+): Promise<GupshupSendResponse> {
   const { content } = message;
-  const mediaTypes = new Set(['image', 'audio', 'video', 'document']);
+  const meta = message.metadata as Record<string, unknown> | undefined;
+  const mediaTypes = new Set(['image', 'audio', 'video', 'document', 'sticker']);
+
+  if (meta?.isHandoff === true) {
+    const extraInfo = meta.extraInfo as string | undefined;
+    return sendHandoff(client, dest, content.text ?? '', extraInfo);
+  }
 
   if (content.type === 'text') {
     return sendText(client, dest, content.text ?? '');
@@ -46,14 +53,7 @@ async function dispatchContent(
   }
   if (content.type === 'location') {
     const loc = content.location;
-    return client.sendLocation(dest, loc?.latitude ?? 0, loc?.longitude ?? 0, loc?.name, loc?.address);
-  }
-  if (content.type === 'contact') {
-    const contact = content.contact;
-    return client.sendContact(dest, {
-      name: contact?.name ?? '',
-      phone: toGupshupPhone(contact?.phone ?? ''),
-    });
+    return sendLocation(client, dest, loc?.latitude ?? 0, loc?.longitude ?? 0, loc?.name, loc?.address);
   }
   // Fallback: send as text
   return sendText(client, dest, content.text ?? '[Unsupported content]');
@@ -67,7 +67,7 @@ interface GupshupInstanceState {
 
 export class GupshupPlugin extends BaseChannelPlugin {
   readonly id = 'gupshup' as ChannelType;
-  readonly name = 'Gupshup WhatsApp BSP';
+  readonly name = 'Gupshup WhatsApp';
   readonly version = '1.0.0';
   readonly capabilities: ChannelCapabilities = GUPSHUP_CAPABILITIES;
 
@@ -97,29 +97,31 @@ export class GupshupPlugin extends BaseChannelPlugin {
     const creds = config.credentials ?? {};
     const opts = config.options ?? {};
 
-    const apiKey = (creds.gupshupApiKey ?? opts.gupshupApiKey) as string | undefined;
-    const appName = (creds.gupshupAppName ?? opts.gupshupAppName) as string | undefined;
-    const sourcePhone = (creds.gupshupSourcePhone ?? opts.gupshupSourcePhone) as string | undefined;
-    const webhookVerifyToken = (creds.webhookVerifyToken ?? opts.webhookVerifyToken ?? '') as string;
+    const callbackUrl = (creds.gupshupCallbackUrl ?? opts.gupshupCallbackUrl) as string | undefined;
+    const authToken = (creds.gupshupAuthToken ?? opts.gupshupAuthToken) as string | undefined;
+    const eventId = ((creds.gupshupEventId ?? opts.gupshupEventId) as string | undefined) ?? 'nx_omni_agent_reply';
+    const webhookVerifyToken = (creds.webhookVerifyToken ?? opts.webhookVerifyToken) as string | undefined;
 
-    if (!apiKey) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'gupshupApiKey is required');
-    if (!appName) throw new GupshupError(GupshupErrorCode.BAD_REQUEST, 'gupshupAppName is required');
-    if (!sourcePhone) throw new GupshupError(GupshupErrorCode.BAD_REQUEST, 'gupshupSourcePhone is required');
+    if (!callbackUrl) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'gupshupCallbackUrl is required');
+    if (!authToken) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'gupshupAuthToken is required');
 
-    this.logger.info('Connecting Gupshup instance', { instanceId, appName, sourcePhone });
+    this.logger.info('Connecting Gupshup instance', { instanceId, callbackUrl });
 
-    const client = new GupshupClient(apiKey, appName, toGupshupPhone(sourcePhone));
+    const client = new GupshupClient(callbackUrl, authToken, eventId);
 
-    // Validate credentials (lightweight balance check)
+    // Validate credentials
     const valid = await client.validateCredentials();
     if (!valid) {
-      throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'Gupshup API key validation failed — check gupshupApiKey');
+      throw new GupshupError(
+        GupshupErrorCode.AUTH_FAILED,
+        'Gupshup auth token validation failed — check gupshupAuthToken',
+      );
     }
 
     const gupshupConfig: GupshupConfig = {
-      gupshupApiKey: apiKey,
-      gupshupAppName: appName,
-      gupshupSourcePhone: sourcePhone,
+      gupshupCallbackUrl: callbackUrl,
+      gupshupAuthToken: authToken,
+      gupshupEventId: eventId,
       webhookVerifyToken,
     };
     const dedupeCache = createInboundDedupeCache();
@@ -129,15 +131,15 @@ export class GupshupPlugin extends BaseChannelPlugin {
     await this.updateInstanceStatus(instanceId, config, {
       state: 'connected',
       since: new Date(),
-      message: `Connected via Gupshup app ${appName}`,
+      message: 'Connected via Gupshup Custom Integration',
     });
 
     await this.emitInstanceConnected(instanceId, {
-      profileName: appName,
-      ownerIdentifier: sourcePhone,
+      profileName: 'Gupshup',
+      ownerIdentifier: callbackUrl,
     });
 
-    this.logger.info('Gupshup instance connected', { instanceId, appName, sourcePhone });
+    this.logger.info('Gupshup instance connected', { instanceId, callbackUrl });
   }
 
   async disconnect(instanceId: string): Promise<void> {
@@ -178,13 +180,14 @@ export class GupshupPlugin extends BaseChannelPlugin {
 
     try {
       const response = await dispatchContent(client, dest, message);
+      const messageId = typeof response.messageId === 'string' ? response.messageId : undefined;
 
       // Journey timing: T11 (platformDeliveredAt) after API responds
       if (correlationId) this.captureT11(correlationId);
 
       await this.emitMessageSent({
         instanceId,
-        externalId: response.messageId ?? '',
+        externalId: messageId ?? '',
         chatId: to,
         to,
         content: {
@@ -193,9 +196,10 @@ export class GupshupPlugin extends BaseChannelPlugin {
           mediaUrl: content.mediaUrl,
         },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
-      return { success: true, messageId: response.messageId, timestamp: Date.now() };
+      return { success: true, messageId, timestamp: Date.now() };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const retryable = isRetryable(error);
@@ -241,6 +245,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
     content: { type: string; text?: string; mediaUrl?: string; mimeType?: string; caption?: string; filename?: string };
     rawPayload?: Record<string, unknown>;
     platformTimestamp?: number;
+    replyTo?: string;
   }): Promise<void> {
     const timings = params.platformTimestamp ? this.captureInboundTimings(params.platformTimestamp) : undefined;
 
@@ -256,6 +261,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
         mimeType: params.content.mimeType,
       },
       rawPayload: params.rawPayload,
+      replyToId: params.replyTo,
       timings,
     });
 
@@ -282,36 +288,23 @@ export class GupshupPlugin extends BaseChannelPlugin {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Template sending (public, for direct use)
-  // ─────────────────────────────────────────────────────────────
-
-  async sendTemplateMessage(
-    instanceId: string,
-    to: string,
-    templateId: string,
-    params: Record<string, string>,
-  ): Promise<SendResult> {
-    const state = this.gupshupInstances.get(instanceId);
-    if (!state) {
-      return { success: false, error: 'Gupshup instance not connected', retryable: false, timestamp: Date.now() };
-    }
-    try {
-      const dest = toGupshupPhone(to);
-      const response = await sendTemplate(state.client, dest, templateId, params);
-      return { success: true, messageId: response.messageId, timestamp: Date.now() };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-        retryable: isRetryable(error),
-        timestamp: Date.now(),
-      };
-    }
+  async handleMessageFailed(params: {
+    instanceId: string;
+    externalId: string;
+    to: string;
+    reason?: string;
+  }): Promise<void> {
+    await this.emitMessageFailed({
+      instanceId: params.instanceId,
+      externalId: params.externalId,
+      chatId: params.to,
+      error: params.reason ?? 'Delivery failed',
+      retryable: false,
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
-  // History (not supported by Gupshup BSP)
+  // History (not supported)
   // ─────────────────────────────────────────────────────────────
 
   async fetchHistory(_instanceId: string, _options: FetchHistoryOptions): Promise<FetchHistoryResult> {

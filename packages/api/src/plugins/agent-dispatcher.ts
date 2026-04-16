@@ -88,6 +88,7 @@ import {
   type DispatchMetadata,
   MessageDebouncer,
 } from './message-debouncer';
+import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
@@ -1865,7 +1866,12 @@ async function dispatchViaProvider(
     });
   }
 
-  if (result && result.parts.length > 0) {
+  // If the agent triggered a handoff during this run (agentPaused: true),
+  // suppress the response — the handoff message already notified the user.
+  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+
+  if (result && result.parts.length > 0 && !handoffTriggered) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
     // Apply before_message_write hooks to each response part before sending
@@ -1893,6 +1899,11 @@ async function dispatchViaProvider(
 
     // T10: Agent chaining — forward response to chained instance if configured
     await forwardToChainedInstance(instance, parts, correlationId, messages);
+  } else if (handoffTriggered) {
+    log.info('Agent response suppressed — handoff triggered during run', {
+      instanceId: instance.id,
+      chatId,
+    });
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -2562,7 +2573,7 @@ async function processAgentResponse(
 
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
-  const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (firstMessage.metadata.channelType ?? instance.channel) as ChannelType;
   const traceId = firstMessage.metadata.traceId ?? '';
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
@@ -2587,11 +2598,43 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
+  // Also drop messages received before the agent was last resumed (NATS redelivery
+  // of pre-handoff messages that queue up while agentPaused=true).
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
+  const isAgentPaused = chatSettings?.agentPaused === true;
+  if (isAgentPaused) {
+    log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
+    ackHandle.remove();
+    return;
+  }
+  // Drop messages older than agentResumedAt — these are NATS redeliveries of
+  // messages that arrived during the handoff window and should not be processed.
+  if (chatSettings?.agentResumedAt) {
+    const resumedAt = new Date(chatSettings.agentResumedAt).getTime();
+    const msgTimestamp = extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()).getTime();
+    if (msgTimestamp < resumedAt) {
+      log.debug('Dropping pre-resume message (arrived during handoff window)', {
+        instanceId: instance.id,
+        chatId,
+        msgTimestamp: new Date(msgTimestamp).toISOString(),
+        resumedAt: chatSettings.agentResumedAt,
+      });
+      ackHandle.remove();
+      return;
+    }
+  }
+
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
-  const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
+  const pushName =
+    (rawPayload.pushName as string | undefined) ??
+    (rawPayload.displayName as string | undefined) ??
+    (rawPayload.senderobj as { display?: string } | undefined)?.display ??
+    (rawPayload.contextobj as { senderName?: string } | undefined)?.senderName;
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
@@ -2667,6 +2710,29 @@ const providerCache = new Map<string, IAgentProvider>();
 /** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
 const openclawClientPool = new Map<string, OpenClawClient>();
 
+/**
+ * Pick the first non-empty agentId from instance → provider schemaConfig.
+ * Throws when neither is set so downstream code never hits upstream APIs
+ * with the literal string "default". The previous silent fallback could
+ * mask a mis-seeded instance as 404s on the upstream provider.
+ */
+function resolveRequiredAgentId(
+  instance: DispatchInstance,
+  schemaConfig: Record<string, unknown>,
+  providerId: string,
+  fieldName: 'agentId' | 'defaultAgentId' = 'agentId',
+): string {
+  const fromInstance = instance.agentInternalId;
+  const fromSchema = schemaConfig[fieldName];
+  const resolved = (fromInstance ?? fromSchema) as string | undefined | null;
+  if (!resolved || typeof resolved !== 'string' || resolved.trim() === '') {
+    throw new Error(
+      `agent-dispatcher: cannot resolve agentId for provider ${providerId} (instance.agentInternalId and schemaConfig.${fieldName} are both empty)`,
+    );
+  }
+  return resolved;
+}
+
 /** Create an OpenClaw-based agent provider */
 function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
   // DEC-3: Reuse shared WS client per provider ID
@@ -2700,7 +2766,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
-    defaultAgentId: (instance.agentInternalId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
+    defaultAgentId: resolveRequiredAgentId(instance, schemaConfig, provider.id, 'defaultAgentId'),
     agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2726,7 +2792,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
 
   return new AgnoAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -2814,7 +2880,7 @@ function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchI
   });
 
   return new AgUiAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2837,7 +2903,7 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
   });
 
   return new A2AAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -3148,7 +3214,7 @@ async function processReactionTrigger(
   rawEvent: AgentTrigger['event'],
   db: Database,
 ): Promise<void> {
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? baseInstance.channel) as ChannelType;
   const externalChatId = payload.chatId;
 
   // Look up internal chat UUID for route resolution
@@ -3432,6 +3498,10 @@ async function resolveEffectiveReplyFilter(
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
+// Tracks instances we've already logged a "no reply filter configured" warning for,
+// so operators see the notice once per process lifetime instead of per message.
+const nullFilterWarnedInstances = new Set<string>();
+
 /** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
 async function resolveSlackThreadReply(
   chatsService: Services['chats'],
@@ -3456,6 +3526,29 @@ function isBroadcastOrNewsletter(chatId: string): boolean {
 /** True if we need to resolve whether the bot was mentioned via a LID JID. */
 function needsLidMentionCheck(messageContext: MessageContext, instance: Instance): boolean {
   return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
+}
+
+/**
+ * True when the inbound message's platform-native timestamp
+ * (e.g. WhatsApp `messageTimestamp`) is older than `maxAgeMinutes`.
+ *
+ * Exported so unit tests can exercise the threshold boundary without
+ * wiring up the full dispatcher pipeline. `maxAgeMinutes <= 0` disables
+ * the guard entirely (useful for instances that genuinely want to replay
+ * backlog after a long outage).
+ */
+export function isInboundTooStale(
+  rawPayload: Record<string, unknown> | undefined,
+  maxAgeMinutes: number,
+  now: number = Date.now(),
+): { stale: boolean; ageMs: number; maxAgeMs: number } {
+  const maxAgeMs = maxAgeMinutes * 60_000;
+  if (maxAgeMinutes <= 0) {
+    return { stale: false, ageMs: 0, maxAgeMs };
+  }
+  const platformTs = extractPlatformTimestamp(rawPayload, now);
+  const ageMs = now - platformTs.getTime();
+  return { stale: ageMs > maxAgeMs, ageMs, maxAgeMs };
 }
 
 async function shouldProcessMessage(
@@ -3496,6 +3589,22 @@ async function shouldProcessMessage(
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
+    return null;
+  }
+
+  // Drop events whose platform-native timestamp is older than the instance's
+  // configured threshold. Defends against Baileys history-sync replays and
+  // NATS redelivery resurrecting stale conversations after reconnect/restart.
+  const staleness = isInboundTooStale(payload.rawPayload, instance.inboundMaxAgeMinutes);
+  if (staleness.stale) {
+    log.warn('Dropping stale inbound message', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      externalId: payload.externalId,
+      ageMs: staleness.ageMs,
+      maxAgeMs: staleness.maxAgeMs,
+      maxAgeMinutes: instance.inboundMaxAgeMinutes,
+    });
     return null;
   }
 
@@ -3547,8 +3656,18 @@ async function shouldProcessMessage(
     instance.agentReplyFilter,
   );
 
+  // #371: null filter now means "allow all" instead of silently dropping every
+  // message. Surface a one-time warning so operators know they're running without
+  // explicit gating and can configure a filter if that's not what they want.
+  if (!effectiveReplyFilter && !nullFilterWarnedInstances.has(instance.id)) {
+    nullFilterWarnedInstances.add(instance.id);
+    log.warn('instance has no agent_reply_filter configured — allowing all inbound messages', {
+      instanceId: instance.id,
+    });
+  }
+
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', {
+    log.info('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,
@@ -3557,7 +3676,7 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
   if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
@@ -3666,7 +3785,7 @@ async function shouldProcessReaction(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
   const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
   if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
     log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
@@ -3824,7 +3943,7 @@ async function shouldSkipViaGate(
   if (triggerType === 'mention' || triggerType === 'reply') return false;
   const chatType = determineChatType(
     firstMsg.payload.chatId,
-    firstMsg.metadata.channelType ?? 'whatsapp',
+    firstMsg.metadata.channelType ?? instance.channel,
     (firstMsg.payload.rawPayload ?? {}) as Record<string, unknown>,
   );
   const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
@@ -3941,7 +4060,7 @@ export async function setupAgentDispatcher(
 
           // Resolve person ID for route matching. metadata.personId may not be set yet
           // (message-persistence runs in parallel), so fall back to identity lookup.
-          const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+          const channel = (metadata.channelType ?? instance.channel) as ChannelType;
           const earlyPersonId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
 
           const { instance: resolved, routeId } = await resolveEffectiveInstance(

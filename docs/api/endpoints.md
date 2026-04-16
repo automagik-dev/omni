@@ -72,6 +72,10 @@ POST   /api/v2/instances                      # Create instance
         agentSessionStrategy?, agentPrefixSenderName?,
         enableAutoSplit?, isDefault?, token?, ttsVoiceId?, ttsModelId?
 
+  Note: `agentReplyFilter` defaults to `null`, which means **reply to all**
+  inbound messages (see #371). Set `{ mode: 'filtered', conditions: {...} }`
+  to restrict agent responses to DMs / mentions / replies / name matches.
+
 PATCH  /api/v2/instances/:id                  # Update instance
   Body: (same as create, all optional)
 
