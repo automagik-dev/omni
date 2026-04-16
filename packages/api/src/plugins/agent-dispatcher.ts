@@ -3075,6 +3075,7 @@ async function applyAgentFkOverrides(
   const [agentRow] = await db
     .select({
       id: agents.id,
+      name: agents.name,
       agentProviderId: agents.agentProviderId,
       agentType: agents.agentType,
       metadata: agents.metadata,
@@ -3093,8 +3094,11 @@ async function applyAgentFkOverrides(
   const typeMap: Record<string, string> = { assistant: 'agent', tool: 'agent', workflow: 'workflow', team: 'team' };
   effectiveInstance.agentType = (typeMap[agentRow.agentType] ??
     effectiveInstance.agentType) as DispatchFields['agentType'];
-  // Provider-internal agent name from metadata or configPath
-  const providerAgentId = (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath;
+  // Provider-internal agent name from metadata, configPath, or agent name as last resort.
+  // agent.name is used as fallback because for agno providers it typically matches
+  // the agentId registered in the provider (e.g. "eugenia-seller").
+  const providerAgentId =
+    (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath ?? agentRow.name;
   if (providerAgentId) effectiveInstance.agentInternalId = providerAgentId as string;
 }
 
