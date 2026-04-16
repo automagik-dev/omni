@@ -67,11 +67,9 @@ export function success(message: string, data?: unknown): void {
   if (format === 'json') {
     writeStdoutLine(JSON.stringify({ success: true, message, data }, null, 2));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().green('✓'), message);
+    writeStdoutLine(`${c().green('✓')} ${message}`);
     if (data !== undefined) {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(c().dim(JSON.stringify(data, null, 2)));
+      writeStdoutLine(c().dim(JSON.stringify(data, null, 2)));
     }
   }
 }
@@ -104,8 +102,7 @@ export function warn(message: string): void {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(JSON.stringify({ warning: message }));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().yellow('⚠'), message);
+    writeStdoutLine(`${c().yellow('⚠')} ${message}`);
   }
 }
 
@@ -118,8 +115,7 @@ export function info(message: string): void {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(JSON.stringify({ info: message }));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().blue('ℹ'), message);
+    writeStdoutLine(`${c().blue('ℹ')} ${message}`);
   }
 }
 
@@ -135,8 +131,7 @@ export function data(value: unknown): void {
     } else if (typeof value === 'object' && value !== null) {
       printObject(value as Record<string, unknown>);
     } else {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(value);
+      writeStdoutLine(String(value));
     }
   }
 }
@@ -159,8 +154,7 @@ export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?:
   }
 
   if (items.length === 0) {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().dim(options?.emptyMessage ?? 'No items found.'));
+    writeStdoutLine(c().dim(options?.emptyMessage ?? 'No items found.'));
     return;
   }
 
@@ -174,8 +168,7 @@ function printTable<T>(items: T[]): void {
   const first = items[0];
   if (typeof first !== 'object' || first === null) {
     for (const item of items) {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(item);
+      writeStdoutLine(String(item));
     }
     return;
   }
@@ -197,18 +190,15 @@ function printTable<T>(items: T[]): void {
   }
 
   const header = keys.map((k) => k.toUpperCase().padEnd(widths[k])).join('  ');
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(c().bold(header));
+  writeStdoutLine(c().bold(header));
 
   const separator = keys.map((k) => '-'.repeat(widths[k])).join('  ');
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(c().dim(separator));
+  writeStdoutLine(c().dim(separator));
 
   for (const item of items) {
     const obj = item as Record<string, unknown>;
     const row = keys.map((k) => formatCellValue(obj[k]).padEnd(widths[k])).join('  ');
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(row);
+    writeStdoutLine(row);
   }
 }
 
@@ -237,8 +227,7 @@ function printObject(obj: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(obj)) {
     const label = key.padEnd(maxKeyLen);
     const formattedValue = formatValue(value);
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`${c().cyan(label)}  ${formattedValue}`);
+    writeStdoutLine(`${c().cyan(label)}  ${formattedValue}`);
   }
 }
 
@@ -263,24 +252,21 @@ export function keyValue(key: string, value: unknown): void {
   if (format === 'json') {
     writeStdoutLine(JSON.stringify({ [key]: value }, null, 2));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`${c().cyan(key)}: ${formatValue(value)}`);
+    writeStdoutLine(`${c().cyan(key)}: ${formatValue(value)}`);
   }
 }
 
 /** Print a section header */
 export function header(title: string): void {
   if (getCurrentFormat() === 'human') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`\n${c().bold.underline(title)}`);
+    writeStdoutLine(`\n${c().bold.underline(title)}`);
   }
 }
 
 /** Print dimmed/secondary text */
 export function dim(text: string): void {
   if (getCurrentFormat() === 'human') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().dim(text));
+    writeStdoutLine(c().dim(text));
   }
 }
 
@@ -296,12 +282,19 @@ export function raw(text: string): void {
  * internal stream buffer. If the process exits before those bytes drain,
  * output is truncated at exactly 64KB boundaries.
  *
- * JSON/raw output paths use `process.stdout.write(chunk, cb)` which fires its
- * callback only after the chunk is actually drained. We track those promises
- * in `pendingStdoutWrites` and await them here.
+ * All output paths in this module route through `writeStdoutLine`, which uses
+ * `process.stdout.write(chunk, cb)`. The callback fires only after the chunk
+ * is actually drained; we track those promises in `pendingStdoutWrites` and
+ * await them here.
+ *
+ * A trailing empty-write drain gives any stdout bytes written outside this
+ * module (e.g., direct `process.stdout.write` calls) a final chance to drain.
  */
 export async function flushStdout(): Promise<void> {
   while (pendingStdoutWrites.size > 0) {
     await Promise.all([...pendingStdoutWrites]);
   }
+  await new Promise<void>((resolve) => {
+    process.stdout.write('', () => resolve());
+  });
 }
