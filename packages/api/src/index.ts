@@ -11,7 +11,7 @@ import './instrument';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { agents, applyMigrations, closeDb, createDb } from '@omni/db';
+import { agents, applyMigrations, closeDb, createDb, instances } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { eq, sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
@@ -503,6 +503,22 @@ async function main() {
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
+
+  // Content-aware boot banner — surfaces the #412 "fresh empty data dir" symptom
+  // immediately after migrations. A zero count on a deploy that used to have
+  // instances is a red flag: the API is talking to the wrong pgserve data dir.
+  try {
+    const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(instances);
+    const rowCount = countRow?.count ?? 0;
+    log.info('Post-migration content snapshot', { DB_ROW_COUNT_INSTANCES: rowCount });
+    if (rowCount === 0 && pgserveConfig.requireExisting) {
+      log.error(
+        'PGSERVE_REQUIRE_EXISTING=true but instances table is empty after boot — verify PGSERVE_DATA points at the correct cluster (see #412).',
+      );
+    }
+  } catch (error) {
+    log.warn('Failed to read instances row count (non-fatal)', { error: String(error) });
+  }
 
   // Connect to NATS
   const eventBus = await connectToNats(db);
