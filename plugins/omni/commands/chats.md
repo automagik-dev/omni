@@ -60,7 +60,7 @@ For noisy group chats, add `--search "<keyword>"` or `--audio-only` / `--images-
 Pass `$ARGUMENTS` through and pipe JSON when the subcommand returns structured data:
 
 ```bash
-omni chats participants <chat-id> --instance <inst> --json \
+omni chats participants <chat-id> --json \
   | jq -r '.[] | "\(.platformUserId) \(.displayName // "-") [\(.role // "member")]"'
 ```
 
