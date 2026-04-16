@@ -26,58 +26,60 @@ import type { GupshupNativeInboundWebhook, GupshupNativeMessageObj } from '../ty
 
 const GupshupNativeWebhookSchema = z
   .object({
-    sender: z.string(),
-    botname: z.string(),
-    channel: z.string(),
+    sender: z.string().max(32),
+    botname: z.string().max(128),
+    channel: z.string().max(32),
     isGroup: z.boolean().optional(),
-    destination: z.union([z.string(), z.number()]),
-    event_type: z.string(),
-    message: z.string().optional(),
-    postbackText: z.string().nullable().optional(),
+    destination: z.union([z.string().max(32), z.number()]),
+    event_type: z.string().max(64),
+    message: z.string().max(4096).optional(),
+    postbackText: z.string().max(4096).nullable().optional(),
     senderobj: z.object({
-      channelid: z.string(),
-      display: z.string().optional(),
-      channeltype: z.string().optional(),
+      channelid: z.string().max(32),
+      display: z.string().max(256).optional(),
+      channeltype: z.string().max(32).optional(),
     }),
     contextobj: z
       .object({
-        senderName: z.string().optional(),
-        botname: z.string().optional(),
-        channeltype: z.string().optional(),
-        contexttype: z.string().optional(),
-        contextid: z.string().optional(),
+        senderName: z.string().max(256).optional(),
+        botname: z.string().max(128).optional(),
+        channeltype: z.string().max(32).optional(),
+        contexttype: z.string().max(32).optional(),
+        contextid: z.string().max(32).optional(),
         preventReply: z.boolean().optional(),
-        cc: z.string().optional(),
-        dc: z.string().optional(),
+        cc: z.string().max(8).optional(),
+        dc: z.string().max(32).optional(),
       })
       .passthrough()
       .optional(),
     messageobj: z
       .object({
-        id: z.string(),
-        type: z.string(),
-        from: z.string(),
-        timestamp: z.number(),
-        text: z.string().optional(),
-        url: z.string().optional(),
-        contentType: z.string().optional(),
-        fileName: z.string().optional(),
-        mediaId: z.string().optional(),
-        // location fields arrive as strings
-        latitude: z.string().optional(),
-        longitude: z.string().optional(),
-        address: z.string().optional(),
-        name: z.string().optional(),
+        id: z.string().max(512), // wamids are base64, can be long
+        type: z.string().max(32),
+        from: z.string().max(32),
+        timestamp: z.number().int().positive(),
+        text: z.string().max(65536).optional(), // WhatsApp max message length
+        url: z.string().max(2048).optional(),
+        contentType: z.string().max(128).optional(),
+        fileName: z.string().max(256).optional(),
+        mediaId: z.string().max(128).optional(),
+        latitude: z.string().max(32).optional(),
+        longitude: z.string().max(32).optional(),
+        address: z.string().max(512).optional(),
+        name: z.string().max(256).optional(),
         replyContext: z
           .object({
-            id: z.string(),
-            internalId: z.string().optional(),
+            id: z.string().max(512),
+            internalId: z.string().max(128).optional(),
           })
           .optional(),
         raw: z
           .object({
             payload: z.record(z.unknown()).optional(),
-            sender: z.object({ name: z.string().optional() }).passthrough().optional(),
+            sender: z
+              .object({ name: z.string().max(256).optional() })
+              .passthrough()
+              .optional(),
           })
           .passthrough()
           .optional(),
@@ -85,18 +87,61 @@ const GupshupNativeWebhookSchema = z
       .passthrough(),
     messageHeader: z
       .object({
-        event_type: z.string().optional(),
-        nsTraceId: z.string().optional(),
-        project_id: z.string().optional(),
+        event_type: z.string().max(64).optional(),
+        nsTraceId: z.string().max(128).optional(),
+        project_id: z.string().max(64).optional(),
       })
       .passthrough()
       .optional(),
-    source: z.string().optional(),
+    source: z.string().max(64).optional(),
   })
   .passthrough();
 
 // Download guard for media (100MB limit)
 const _downloadGuard = createInboundDedupeCache;
+
+// ─────────────────────────────────────────────────────────────
+// Payload extraction — handles multiple Gupshup envelope formats
+// ─────────────────────────────────────────────────────────────
+
+function extractPayload(body: string, instanceId: string, logger: import('@omni/core').Logger): unknown {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    logger.warn('[gupshup] body is not valid JSON', { instanceId, bodyPreview: body.slice(0, 200) });
+    return null;
+  }
+
+  // Double-encoded: entire payload is a JSON string
+  if (typeof parsed === 'string') {
+    logger.debug('[gupshup] unwrapping double-encoded webhook body', { instanceId });
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      logger.warn('[gupshup] double-encoded body is not valid JSON', { instanceId });
+      return null;
+    }
+  }
+
+  // Request Builder wrapper: { gupshupPayload: "<json string>" }
+  if (parsed !== null && typeof parsed === 'object' && 'gupshupPayload' in (parsed as object)) {
+    const wrapper = parsed as Record<string, unknown>;
+    logger.debug('[gupshup] unwrapping gupshupPayload envelope', { instanceId });
+    const inner = wrapper.gupshupPayload;
+    if (typeof inner === 'string') {
+      try {
+        return JSON.parse(inner);
+      } catch {
+        logger.warn('[gupshup] gupshupPayload value is not valid JSON', { instanceId });
+        return null;
+      }
+    }
+    return inner;
+  }
+
+  return parsed;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Entry point
@@ -126,36 +171,49 @@ export async function handleGupshupWebhook(
   try {
     body = await request.text();
   } catch {
-    return new Response('Bad Request', { status: 400 });
+    // Always ack — even if we can't read the body
+    return new Response('OK', { status: 200 });
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-    // Gupshup sometimes double-encodes the payload: the body is a JSON-encoded string wrapping
-    // another JSON object. Unwrap up to one extra layer.
-    if (typeof parsed === 'string') {
-      logger.debug('[gupshup] unwrapping double-encoded webhook body', { instanceId });
-      parsed = JSON.parse(parsed);
-    }
-  } catch {
-    return new Response('Bad Request: invalid JSON', { status: 400 });
+  // Reject oversized payloads (>256KB) — protects against memory exhaustion
+  if (body.length > 256 * 1024) {
+    logger.warn('[gupshup] oversized webhook body rejected', { instanceId, size: body.length });
+    return new Response('OK', { status: 200 });
+  }
+
+  logger.info('[gupshup] raw webhook received', {
+    instanceId,
+    contentType: request.headers.get('content-type'),
+    bodyPreview: body.slice(0, 500),
+  });
+
+  // Extract the actual Gupshup payload — handles multiple envelope formats:
+  // 1. Raw JSON object (native webhook)
+  // 2. Double-encoded: JSON string wrapping a JSON object
+  // 3. Request Builder wrapper: { gupshupPayload: "<json string>" }
+  const parsed = extractPayload(body, instanceId, logger);
+
+  if (!parsed) {
+    // Can't parse at all — ack and move on, we already logged the raw body
+    return new Response('OK', { status: 200 });
   }
 
   const result = GupshupNativeWebhookSchema.safeParse(parsed);
   if (!result.success) {
-    logger.warn('[gupshup] webhook payload failed schema validation', {
+    logger.warn('[gupshup] webhook payload unrecognized shape (acking anyway)', {
       instanceId,
       errors: result.error.issues,
-      rawBody: body.slice(0, 2000), // truncate to avoid log flood
+      parsed,
     });
-    return new Response('Bad Request: invalid payload shape', { status: 400 });
+    // Fail-open: always ack so Gupshup doesn't retry
+    return new Response('OK', { status: 200 });
   }
 
   const webhook = result.data as unknown as GupshupNativeInboundWebhook;
 
   // Only process user input events — ignore status, billing, etc.
   if (webhook.event_type !== 'user_input') {
+    logger.debug('[gupshup] non-user_input event ignored', { instanceId, event_type: webhook.event_type });
     return new Response('OK', { status: 200 });
   }
 
