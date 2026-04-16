@@ -7,6 +7,29 @@
 import chalk from 'chalk';
 import { getOutputFormat } from './config.js';
 
+/**
+ * Pending write promises for end-of-process flush.
+ * When stdout is a pipe (e.g., `--json | cat > file`), writes above the kernel
+ * pipe buffer (64KB on Linux) trigger backpressure and get buffered in the
+ * stream's internal queue. `write(chunk, cb)` fires its callback only after
+ * the chunk is actually drained, so we retain those promises and await them
+ * before the process exits to prevent 64KB truncation.
+ */
+const pendingStdoutWrites = new Set<Promise<void>>();
+
+/**
+ * Write a line to stdout using the callback form so we can await drain.
+ * `console.log` doesn't expose a completion signal, so large JSON payloads
+ * can be lost when the process exits before the pipe drains.
+ */
+function writeStdoutLine(text: string): void {
+  const promise = new Promise<void>((resolve) => {
+    process.stdout.write(`${text}\n`, () => resolve());
+  });
+  pendingStdoutWrites.add(promise);
+  promise.finally(() => pendingStdoutWrites.delete(promise));
+}
+
 /** Global color control */
 let colorsEnabled = true;
 
@@ -42,8 +65,7 @@ export function success(message: string, data?: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ success: true, message, data }, null, 2));
+    writeStdoutLine(JSON.stringify({ success: true, message, data }, null, 2));
   } else {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(c().green('✓'), message);
@@ -106,8 +128,7 @@ export function data(value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(value, null, 2));
+    writeStdoutLine(JSON.stringify(value, null, 2));
   } else {
     if (Array.isArray(value)) {
       printTable(value);
@@ -133,8 +154,7 @@ export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?:
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(options?.rawData ?? items, null, 2));
+    writeStdoutLine(JSON.stringify(options?.rawData ?? items, null, 2));
     return;
   }
 
@@ -241,8 +261,7 @@ export function keyValue(key: string, value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ [key]: value }, null, 2));
+    writeStdoutLine(JSON.stringify({ [key]: value }, null, 2));
   } else {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.log(`${c().cyan(key)}: ${formatValue(value)}`);
@@ -265,22 +284,24 @@ export function dim(text: string): void {
   }
 }
 
-/** Raw console.log (for custom formatting) */
+/** Raw stdout line (for custom formatting) */
 export function raw(text: string): void {
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(text);
+  writeStdoutLine(text);
 }
 
 /**
- * Flush stdout to ensure all buffered data is written.
- * When stdout is a pipe (e.g., `--json | jq`), writes are buffered.
- * Without explicit flushing, the process can exit before all data is written,
- * causing truncated output.
+ * Flush stdout to ensure all buffered data is written before exit.
+ * When stdout is a pipe (e.g., `--json | cat > file`), writes above the kernel
+ * pipe buffer (64KB on Linux) trigger backpressure and get queued in Bun's
+ * internal stream buffer. If the process exits before those bytes drain,
+ * output is truncated at exactly 64KB boundaries.
+ *
+ * JSON/raw output paths use `process.stdout.write(chunk, cb)` which fires its
+ * callback only after the chunk is actually drained. We track those promises
+ * in `pendingStdoutWrites` and await them here.
  */
-export function flushStdout(): Promise<void> {
-  return new Promise((resolve) => {
-    // Writing an empty string queues behind all pending data.
-    // The callback fires once all prior writes have been flushed.
-    process.stdout.write('', () => resolve());
-  });
+export async function flushStdout(): Promise<void> {
+  while (pendingStdoutWrites.size > 0) {
+    await Promise.all([...pendingStdoutWrites]);
+  }
 }
