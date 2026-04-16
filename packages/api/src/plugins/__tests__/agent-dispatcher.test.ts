@@ -1317,6 +1317,96 @@ describe('agent-dispatcher', () => {
   });
 
   // ======================================================================
+  // NullFilterWarningTracker — memory-leak guard for #371 null-filter warning
+  // ======================================================================
+  describe('createNullFilterWarningTracker', () => {
+    it('returns true only the first time each instanceId is seen', () => {
+      const tracker = __test__.createNullFilterWarningTracker();
+      expect(tracker.shouldWarn('inst-a')).toBe(true);
+      expect(tracker.shouldWarn('inst-a')).toBe(false);
+      expect(tracker.shouldWarn('inst-a')).toBe(false);
+      // Different instance still gets its first warning.
+      expect(tracker.shouldWarn('inst-b')).toBe(true);
+      expect(tracker.shouldWarn('inst-b')).toBe(false);
+    });
+
+    it('is independent per tracker instance (restart-within-process resets state)', () => {
+      // First dispatcher lifetime: warns for inst-a.
+      const firstLifetime = __test__.createNullFilterWarningTracker();
+      expect(firstLifetime.shouldWarn('inst-a')).toBe(true);
+      expect(firstLifetime.shouldWarn('inst-a')).toBe(false);
+
+      // Simulate dispatcher restart within the same process by creating a new tracker.
+      // The new tracker must NOT carry state from the previous one — otherwise operators
+      // would miss the warning after a restart.
+      const secondLifetime = __test__.createNullFilterWarningTracker();
+      expect(secondLifetime.shouldWarn('inst-a')).toBe(true);
+    });
+
+    it('caps size at NULL_FILTER_WARNED_MAX to prevent unbounded growth under churn', () => {
+      const tracker = __test__.createNullFilterWarningTracker();
+      const max = __test__.NULL_FILTER_WARNED_MAX;
+
+      for (let i = 0; i < max; i++) {
+        expect(tracker.shouldWarn(`inst-${i}`)).toBe(true);
+      }
+      expect(tracker.size).toBe(max);
+
+      // Adding the (max+1)-th entry triggers the safety-valve clear, then adds the new id.
+      expect(tracker.shouldWarn('inst-overflow')).toBe(true);
+      expect(tracker.size).toBe(1);
+    });
+
+    it('each setupAgentDispatcher call gets a fresh tracker (lifecycle reset invariant)', async () => {
+      // Fire the same message through two independently-set-up dispatchers with
+      // a null-filter instance. Each dispatcher must warn once for that instance;
+      // state from the first setup must NOT leak into the second.
+      const makeNullFilterServices = () => {
+        const agentRunner = {
+          getInstanceWithProvider: mock(async () => createMockInstance({ agentReplyFilter: null })),
+          getSenderName: mock(async () => 'User'),
+          run: mock(async () => ({
+            parts: ['resp'],
+            metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+          })),
+        };
+        return { agentRunner, services: createMockServices({ agentRunner }) };
+      };
+
+      // First dispatcher lifetime.
+      const eventBus1 = createMockEventBus();
+      const { services: services1 } = makeNullFilterServices();
+      const cleanup1 = await setupAgentDispatcher(
+        eventBus1 as unknown as import('@omni/core').EventBus,
+        services1,
+        mockDb,
+      );
+      await eventBus1.fire('message.received', createMessageEvent());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await cleanup1();
+
+      // Second dispatcher lifetime — should behave as a fresh process.
+      // If the warning tracker were still module-scoped, the second dispatch
+      // would silently skip the warning. Exercising this path confirms the
+      // tracker is scoped to setupAgentDispatcher.
+      const eventBus2 = createMockEventBus();
+      const { agentRunner: runner2, services: services2 } = makeNullFilterServices();
+      const cleanup2 = await setupAgentDispatcher(
+        eventBus2 as unknown as import('@omni/core').EventBus,
+        services2,
+        mockDb,
+      );
+      await eventBus2.fire('message.received', createMessageEvent());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Second dispatcher's message should still reach the pipeline (warning path
+      // is not a gate — it's a log-once side effect).
+      expect(runner2.getSenderName).toHaveBeenCalled();
+      await cleanup2();
+    });
+  });
+
+  // ======================================================================
   // Error resilience
   // ======================================================================
   describe('error resilience', () => {

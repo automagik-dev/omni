@@ -3467,8 +3467,37 @@ async function resolveEffectiveReplyFilter(
 }
 
 // Tracks instances we've already logged a "no reply filter configured" warning for,
-// so operators see the notice once per process lifetime instead of per message.
-const nullFilterWarnedInstances = new Set<string>();
+// so operators see the notice once per dispatcher lifetime instead of per message.
+// Scoped per dispatcher (created in setupAgentDispatcher) so state resets on restart
+// and a growth cap prevents unbounded accumulation under high instance churn.
+const NULL_FILTER_WARNED_MAX = 1000;
+
+type NullFilterWarningTracker = {
+  /** Returns true iff this is the first time we've seen this instanceId since reset. */
+  shouldWarn(instanceId: string): boolean;
+  /** Current number of tracked instance IDs (for observability/testing). */
+  readonly size: number;
+};
+
+function createNullFilterWarningTracker(): NullFilterWarningTracker {
+  const warned = new Set<string>();
+  return {
+    shouldWarn(instanceId: string): boolean {
+      if (warned.has(instanceId)) return false;
+      if (warned.size >= NULL_FILTER_WARNED_MAX) {
+        // Safety valve: in pathological high-churn environments (many transient
+        // instances), clear the set to cap memory. Worst case: the warning fires
+        // again for an instance we previously warned about — acceptable trade-off.
+        warned.clear();
+      }
+      warned.add(instanceId);
+      return true;
+    },
+    get size() {
+      return warned.size;
+    },
+  };
+}
 
 /** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
 async function resolveSlackThreadReply(
@@ -3526,6 +3555,7 @@ async function shouldProcessMessage(
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
   rateLimiter: RateLimiter,
+  nullFilterWarnings: NullFilterWarningTracker,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3627,8 +3657,7 @@ async function shouldProcessMessage(
   // #371: null filter now means "allow all" instead of silently dropping every
   // message. Surface a one-time warning so operators know they're running without
   // explicit gating and can configure a filter if that's not what they want.
-  if (!effectiveReplyFilter && !nullFilterWarnedInstances.has(instance.id)) {
-    nullFilterWarnedInstances.add(instance.id);
+  if (!effectiveReplyFilter && nullFilterWarnings.shouldWarn(instance.id)) {
     log.warn('instance has no agent_reply_filter configured — allowing all inbound messages', {
       instanceId: instance.id,
     });
@@ -3940,6 +3969,9 @@ export async function setupAgentDispatcher(
   const accessService = services.access;
   const rateLimiter = new RateLimiter();
   const reactionDedup = new ReactionDedup();
+  // Scoped per dispatcher lifetime: resets when setupAgentDispatcher is called
+  // again (restart within process) and caps growth to prevent leaks under churn.
+  const nullFilterWarnings = createNullFilterWarningTracker();
 
   // Periodic cleanup of rate limiter counters
   const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
@@ -4015,6 +4047,7 @@ export async function setupAgentDispatcher(
             services.messages,
             services.routeResolver,
             rateLimiter,
+            nullFilterWarnings,
             payload,
             metadata,
           );
@@ -4363,6 +4396,8 @@ export const __test__ = {
   mergeRouteOverrides,
   getDebounceConfig,
   createNatsGenieProviderInstance,
+  createNullFilterWarningTracker,
+  NULL_FILTER_WARNED_MAX,
   /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */
   set NatsGenieProviderClass(cls: typeof NatsGenieProvider) {
     _natsGenieProviderCtor = cls;
