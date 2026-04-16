@@ -3466,6 +3466,10 @@ async function resolveEffectiveReplyFilter(
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
+// Tracks instances we've already logged a "no reply filter configured" warning for,
+// so operators see the notice once per process lifetime instead of per message.
+const nullFilterWarnedInstances = new Set<string>();
+
 /** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
 async function resolveSlackThreadReply(
   chatsService: Services['chats'],
@@ -3620,8 +3624,18 @@ async function shouldProcessMessage(
     instance.agentReplyFilter,
   );
 
+  // #371: null filter now means "allow all" instead of silently dropping every
+  // message. Surface a one-time warning so operators know they're running without
+  // explicit gating and can configure a filter if that's not what they want.
+  if (!effectiveReplyFilter && !nullFilterWarnedInstances.has(instance.id)) {
+    nullFilterWarnedInstances.add(instance.id);
+    log.warn('instance has no agent_reply_filter configured — allowing all inbound messages', {
+      instanceId: instance.id,
+    });
+  }
+
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', {
+    log.info('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,

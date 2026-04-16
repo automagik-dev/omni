@@ -126,8 +126,9 @@ function matchesNamePattern(text: string, patterns?: string[]): boolean {
  * Determine if the agent should reply based on filter configuration
  */
 export function shouldAgentReply(filter: AgentReplyFilter | null | undefined, context: MessageContext): boolean {
-  // No filter configured = no agent response
-  if (!filter) return false;
+  // No filter configured = reply to all (safe default for new instances).
+  // Callers are expected to log/notify when operating without an explicit filter.
+  if (!filter) return true;
 
   // 'all' mode = always reply
   if (filter.mode === 'all') return true;
