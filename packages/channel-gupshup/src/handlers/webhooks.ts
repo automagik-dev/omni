@@ -104,7 +104,39 @@ const _downloadGuard = createInboundDedupeCache;
 // Payload extraction — handles multiple Gupshup envelope formats
 // ─────────────────────────────────────────────────────────────
 
+const GUPSHUP_PAYLOAD_PREFIX = '{"gupshupPayload":"';
+const GUPSHUP_PAYLOAD_SUFFIX = '"}';
+
+/**
+ * Gupshup Request Builder sends the payload as an unescaped JSON string inside
+ * a wrapper object: {"gupshupPayload":"{...unescaped json...}"}
+ * This makes the outer body invalid JSON. Detect and strip the wrapper by
+ * string matching instead of JSON.parse.
+ */
+function extractGupshupPayloadWrapper(body: string): string | null {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith(GUPSHUP_PAYLOAD_PREFIX)) return null;
+  if (!trimmed.endsWith(GUPSHUP_PAYLOAD_SUFFIX)) return null;
+  return trimmed.slice(GUPSHUP_PAYLOAD_PREFIX.length, -GUPSHUP_PAYLOAD_SUFFIX.length);
+}
+
 function extractPayload(body: string, instanceId: string, logger: import('@omni/core').Logger): unknown {
+  // Handle Gupshup Request Builder wrapper BEFORE JSON.parse — the body is invalid JSON
+  // because the gupshupPayload value contains unescaped quotes.
+  const unwrapped = extractGupshupPayloadWrapper(body);
+  if (unwrapped !== null) {
+    logger.debug('[gupshup] unwrapping gupshupPayload envelope (unescaped)', { instanceId });
+    try {
+      return JSON.parse(unwrapped);
+    } catch {
+      logger.warn('[gupshup] gupshupPayload inner value is not valid JSON', {
+        instanceId,
+        bodyPreview: unwrapped.slice(0, 200),
+      });
+      return null;
+    }
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -124,10 +156,10 @@ function extractPayload(body: string, instanceId: string, logger: import('@omni/
     }
   }
 
-  // Request Builder wrapper: { gupshupPayload: "<json string>" }
+  // Request Builder wrapper with properly escaped value: { gupshupPayload: "<json string>" }
   if (parsed !== null && typeof parsed === 'object' && 'gupshupPayload' in (parsed as object)) {
     const wrapper = parsed as Record<string, unknown>;
-    logger.debug('[gupshup] unwrapping gupshupPayload envelope', { instanceId });
+    logger.debug('[gupshup] unwrapping gupshupPayload envelope (escaped)', { instanceId });
     const inner = wrapper.gupshupPayload;
     if (typeof inner === 'string') {
       try {
