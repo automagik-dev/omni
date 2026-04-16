@@ -196,7 +196,7 @@ export function calculateCost(
     }
   }
 
-  // Return cost in fractional cents (NOT rounded) for sub-cent precision.
-  // Callers accumulate float values; only round at final persistence/display.
-  return costUsd * 100;
+  // Return cost rounded to nearest cent (integer).
+  // costCents is typed as integer — fractional values cause DB insert failures.
+  return Math.round(costUsd * 100);
 }

@@ -2599,12 +2599,33 @@ async function processAgentResponse(
   }
 
   // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
+  // Also drop messages received before the agent was last resumed (NATS redelivery
+  // of pre-handoff messages that queue up while agentPaused=true).
   const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const isAgentPaused = (chatRecord?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
+  const isAgentPaused = chatSettings?.agentPaused === true;
   if (isAgentPaused) {
     log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
     ackHandle.remove();
     return;
+  }
+  // Drop messages older than agentResumedAt — these are NATS redeliveries of
+  // messages that arrived during the handoff window and should not be processed.
+  if (chatSettings?.agentResumedAt) {
+    const resumedAt = new Date(chatSettings.agentResumedAt).getTime();
+    const msgTimestamp = firstMessage.payload.platformTimestamp
+      ? new Date(firstMessage.payload.platformTimestamp).getTime()
+      : null;
+    if (msgTimestamp && msgTimestamp < resumedAt) {
+      log.debug('Dropping pre-resume message (arrived during handoff window)', {
+        instanceId: instance.id,
+        chatId,
+        msgTimestamp: new Date(msgTimestamp).toISOString(),
+        resumedAt: chatSettings.agentResumedAt,
+      });
+      ackHandle.remove();
+      return;
+    }
   }
 
   // ── Session Reset Check + Activity Recording (post-personId guard) ──

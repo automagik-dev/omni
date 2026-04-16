@@ -120,16 +120,27 @@ async function clearAgentSession(
 /**
  * Handle trash emoji message event
  */
+// In-process dedupe set to prevent double-processing from NATS redelivery.
+// Key: externalId. TTL not needed — cleared messages are short-lived events.
+const processedTrashIds = new Set<string>();
+
 async function handleTrashEmojiMessage(
   services: Services,
   db: Database,
   event: TypedOmniEvent<'message.received'>,
 ): Promise<void> {
-  const { content, chatId, from } = event.payload;
+  const { content, chatId, from, externalId } = event.payload;
   const { instanceId } = event.metadata;
 
   if (!instanceId || !content?.text) return;
   if (!isTrashEmojiOnly(content.text)) return;
+
+  // Dedupe — NATS can redeliver before ack, causing double session clears
+  if (externalId && processedTrashIds.has(externalId)) {
+    log.debug('Trash emoji already processed, skipping duplicate', { instanceId, chatId, externalId });
+    return;
+  }
+  if (externalId) processedTrashIds.add(externalId);
 
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
 
@@ -152,10 +163,14 @@ async function handleTrashEmojiMessage(
           reason: 'session_cleared',
         });
 
-        // Resume agent if handoff had paused it
+        // Resume agent if handoff had paused it.
+        // Also record agentResumedAt so the dispatcher can drop messages that
+        // arrived before the resume (NATS redelivery of pre-handoff messages).
         const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
         if (isAgentPaused) {
-          await services.chats.update(dbChat.id, { settings: { agentPaused: false } });
+          await services.chats.update(dbChat.id, {
+            settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+          });
           log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
         }
       }
