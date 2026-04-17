@@ -864,8 +864,25 @@ const clearSessionSchema = z.object({
   chatId: z.string().min(1),
 });
 
-chatsRoutes.post('/clear-session', zValidator('json', clearSessionSchema), async (c) => {
-  const { instanceId, chatId } = c.req.valid('json');
+chatsRoutes.post('/clear-session', async (c) => {
+  const ct = c.req.header('content-type') ?? '';
+  let raw: Record<string, unknown>;
+  if (ct.includes('application/json')) {
+    raw = await c.req.json();
+  } else if (ct.includes('x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
+    const form = await c.req.parseBody();
+    raw = Object.fromEntries(Object.entries(form));
+  } else {
+    // try JSON fallback
+    try {
+      raw = await c.req.json();
+    } catch {
+      raw = {};
+    }
+  }
+  const parsed = clearSessionSchema.safeParse(raw);
+  if (!parsed.success) return c.json({ success: false, error: parsed.error.flatten() }, 400);
+  const { instanceId, chatId } = parsed.data;
   const services = c.get('services');
   const db = c.get('db');
 
