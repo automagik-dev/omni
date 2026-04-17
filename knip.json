@@ -43,6 +43,10 @@
     "packages/channel-gupshup": {
       "project": ["src/**/*.ts"]
     },
+    "packages/voice-client": {
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@types/libsodium-wrappers"]
+    },
     "packages/cli": {
       "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
       "project": ["src/**/*.ts"],

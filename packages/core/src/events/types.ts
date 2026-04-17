@@ -91,6 +91,13 @@ export const CORE_EVENT_TYPES = [
   'follow_up.fired',
   'follow_up.skipped',
   'follow_up.disarmed',
+  // Voice lifecycle
+  'voice.session_started',
+  'voice.stream_ready',
+  'voice.stream_ended',
+  'voice.session_ended',
+  'voice.user_joined_channel',
+  'voice.user_left_channel',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -751,6 +758,40 @@ export interface FollowUpDisarmedPayload {
   reason: FollowUpDisarmReason;
 }
 
+// ─── Voice Events ─────────────────────────────────────────
+export interface VoiceSessionStartedPayload {
+  sessionId: string;
+  channelId: string;
+  instanceId: string;
+  guildId?: string;
+}
+
+export interface VoiceStreamReadyPayload {
+  sessionId: string;
+  userId: string;
+  platformUserId: string;
+  ssrc: number;
+}
+
+export interface VoiceStreamEndedPayload {
+  sessionId: string;
+  userId: string;
+  reason: 'left' | 'disconnected' | 'session_ended';
+}
+
+export interface VoiceSessionEndedPayload {
+  sessionId: string;
+  reason: 'disconnected' | 'kicked' | 'channel_deleted' | 'manual';
+}
+
+export interface VoiceUserChannelPayload {
+  userId: string;
+  channelId: string;
+  guildId: string;
+  instanceId: string;
+  displayName?: string;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -815,6 +856,12 @@ export interface EventPayloadMap {
   'follow_up.fired': FollowUpFiredPayload;
   'follow_up.skipped': FollowUpSkippedPayload;
   'follow_up.disarmed': FollowUpDisarmedPayload;
+  'voice.session_started': VoiceSessionStartedPayload;
+  'voice.stream_ready': VoiceStreamReadyPayload;
+  'voice.stream_ended': VoiceStreamEndedPayload;
+  'voice.session_ended': VoiceSessionEndedPayload;
+  'voice.user_joined_channel': VoiceUserChannelPayload;
+  'voice.user_left_channel': VoiceUserChannelPayload;
 }
 
 /**

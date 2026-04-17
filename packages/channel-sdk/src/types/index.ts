@@ -19,3 +19,6 @@ export * from './messaging';
 
 // Streaming
 export * from './streaming';
+
+// Voice
+export * from './voice';
