@@ -444,6 +444,7 @@ async function setupEventBusServices(
 
         const [agentRow] = await db
           .select({
+            name: agents.name,
             agentProviderId: agents.agentProviderId,
             agentType: agents.agentType,
             metadata: agents.metadata,
@@ -463,7 +464,7 @@ async function setupEventBusServices(
         const providerAgentId =
           ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
           agentRow.configPath ??
-          undefined;
+          agentRow.name;
 
         const runInstance = {
           ...instance,

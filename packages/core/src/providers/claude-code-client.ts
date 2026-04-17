@@ -614,7 +614,8 @@ function buildQueryOptions(
   // it's already inside a Claude Code session (happens when Omni is spawned
   // from within Claude Code, which sets CLAUDECODE=1 in its environment)
   const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
-  const env: Record<string, string> = { ...baseEnv, CLAUDECODE: '0' };
+  const requestEnv = Object.fromEntries(Object.entries(request.env ?? {}).filter(([, value]) => value !== undefined));
+  const env: Record<string, string> = { ...baseEnv, ...requestEnv, CLAUDECODE: '0' };
   if (config.apiKey) {
     env.ANTHROPIC_API_KEY = config.apiKey;
   }

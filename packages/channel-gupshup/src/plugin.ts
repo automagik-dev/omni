@@ -42,7 +42,8 @@ async function dispatchContent(
 
   if (meta?.isHandoff === true) {
     const extraInfo = meta.extraInfo as string | undefined;
-    return sendHandoff(client, dest, content.text ?? '', extraInfo);
+    const handoffFields = meta.handoffFields as Record<string, unknown> | undefined;
+    return sendHandoff(client, dest, content.text ?? '', extraInfo, handoffFields);
   }
 
   if (content.type === 'text') {

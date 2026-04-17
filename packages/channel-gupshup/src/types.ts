@@ -25,6 +25,7 @@ export interface GupshupOutboundMessage {
   name?: string;
   address?: string;
   extra_info?: string;
+  handoff_fields?: Record<string, unknown>;
 }
 
 // ─────────────────────────────────────────────────────────────

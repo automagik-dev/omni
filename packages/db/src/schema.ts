@@ -1330,6 +1330,39 @@ export const omniEvents = pgTable(
 );
 
 // ============================================================================
+// HANDOFF LOGS
+// ============================================================================
+
+/**
+ * Records every agent→human handoff with full payload.
+ * Written synchronously in the /send/handoff route so no data is lost.
+ */
+export const handoffLogs = pgTable(
+  'handoff_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'set null' }),
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    chatId: varchar('chat_id', { length: 255 }).notNull(), // raw JID / phone used as chatId
+    toPhone: varchar('to_phone', { length: 100 }).notNull(), // recipient phone
+    text: text('text').notNull(), // handoff message shown to user
+    extraInfo: text('extra_info'), // optional metadata string from agent (e.g. summary)
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
+    sentAt: timestamp('sent_at').notNull().defaultNow(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+  },
+  (table) => ({
+    instanceIdx: index('handoff_logs_instance_idx').on(table.instanceId),
+    chatUuidIdx: index('handoff_logs_chat_uuid_idx').on(table.chatUuid),
+    chatIdIdx: index('handoff_logs_chat_id_idx').on(table.chatId),
+    sentAtIdx: index('handoff_logs_sent_at_idx').on(table.sentAt),
+    agentIdx: index('handoff_logs_agent_idx').on(table.agentId),
+  }),
+);
+
+// ============================================================================
 // ACCESS RULES
 // ============================================================================
 

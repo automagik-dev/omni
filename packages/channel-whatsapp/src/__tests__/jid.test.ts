@@ -221,16 +221,33 @@ describe('JID Utilities', () => {
   });
 
   describe('resolveCanonicalJid', () => {
-    it('returns LID JID unchanged (no phone downconversion)', () => {
+    it('returns LID JID unchanged (already canonical)', () => {
       expect(resolveCanonicalJid('100000001@lid', null, undefined)).toBe('100000001@lid');
     });
 
-    it('returns phone JID unchanged', () => {
+    it('returns phone JID unchanged when no mapping is available', () => {
       expect(resolveCanonicalJid('5511999@s.whatsapp.net', null, undefined)).toBe('5511999@s.whatsapp.net');
     });
 
-    it('returns LID JID unchanged even with remoteJidAlt', () => {
+    it('returns LID JID unchanged even when remoteJidAlt is a phone JID', () => {
       expect(resolveCanonicalJid('100000001@lid', '5511999@s.whatsapp.net', undefined)).toBe('100000001@lid');
+    });
+
+    it('upgrades phone JID to LID via remoteJidAlt when alt is a LID', () => {
+      expect(resolveCanonicalJid('5511999@s.whatsapp.net', '100000001@lid', undefined)).toBe('100000001@lid');
+    });
+
+    it('upgrades phone JID to LID via the bidirectional cache', () => {
+      const cache = new Map([
+        ['100000001@lid', '5511999@s.whatsapp.net'],
+        ['5511999@s.whatsapp.net', '100000001@lid'],
+      ]);
+      expect(resolveCanonicalJid('5511999@s.whatsapp.net', null, cache)).toBe('100000001@lid');
+    });
+
+    it('prefers remoteJidAlt over the cache when both are present', () => {
+      const cache = new Map([['5511999@s.whatsapp.net', '999999999@lid']]);
+      expect(resolveCanonicalJid('5511999@s.whatsapp.net', '100000001@lid', cache)).toBe('100000001@lid');
     });
 
     it('returns empty string for null/undefined jid', () => {
@@ -239,7 +256,22 @@ describe('JID Utilities', () => {
     });
 
     it('returns group JID unchanged', () => {
-      expect(resolveCanonicalJid('123-456@g.us', null, undefined)).toBe('123-456@g.us');
+      const cache = new Map([['100000001@lid', '5511999@s.whatsapp.net']]);
+      expect(resolveCanonicalJid('123-456@g.us', '100000001@lid', cache)).toBe('123-456@g.us');
+    });
+
+    it('returns broadcast JID unchanged', () => {
+      expect(resolveCanonicalJid('status@broadcast', null, undefined)).toBe('status@broadcast');
+    });
+
+    it('returns newsletter JID unchanged', () => {
+      expect(resolveCanonicalJid('abc123@newsletter', null, undefined)).toBe('abc123@newsletter');
+    });
+
+    it('ignores cache entries that point to non-LID JIDs', () => {
+      // Defensive: if the cache lookup yields something that isn't a LID, fall back to phone JID
+      const cache = new Map([['5511999@s.whatsapp.net', '5599888@s.whatsapp.net']]);
+      expect(resolveCanonicalJid('5511999@s.whatsapp.net', null, cache)).toBe('5511999@s.whatsapp.net');
     });
   });
 

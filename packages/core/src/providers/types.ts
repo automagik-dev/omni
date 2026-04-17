@@ -80,6 +80,9 @@ export interface ProviderRequest {
   timeoutMs?: number;
   /** Dynamic URL params to append to HTTP MCP server URLs (e.g. { chat_id: "123" }) */
   mcpUrlParams?: Record<string, string>;
+
+  /** Environment variables to expose to provider subprocesses/SDK runtimes. */
+  env?: Record<string, string>;
 }
 
 export interface ProviderFile {
