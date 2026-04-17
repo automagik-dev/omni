@@ -470,6 +470,52 @@ describe('CLI Integration Tests', () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(output.toLowerCase()).toContain('not found');
     });
+
+    test('events stream emits NDJSON for seeded events then shuts down on SIGTERM', async () => {
+      const { seedStreamEvent, clearStreamedEvents } = await import('./mock-api');
+      clearStreamedEvents();
+
+      const ev1 = seedStreamEvent({ eventType: 'message.received', textContent: 'stream one' });
+      const ev2 = seedStreamEvent({
+        eventType: 'message.sent',
+        direction: 'outbound',
+        textContent: 'stream two',
+      });
+
+      // --since 1h ensures the cursor starts before the seed rows; --poll-ms 200
+      // keeps the loop tight so the test completes quickly.
+      const proc = spawn({
+        cmd: ['bun', CLI_PATH, 'events', 'stream', '--since', '1h', '--poll-ms', '200', '--ndjson'],
+        env: { ...process.env, HOME: TEST_CONFIG_DIR },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+      // Collect up to two NDJSON lines, then terminate.
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const lines: string[] = [];
+      const start = Date.now();
+      while (lines.length < 2 && Date.now() - start < 5000) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          if (part.trim()) lines.push(part.trim());
+        }
+      }
+      proc.kill('SIGTERM');
+      await proc.exited;
+
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      const parsed = lines.slice(0, 2).map((l) => JSON.parse(l) as { id: string; eventType: string });
+      const ids = parsed.map((p) => p.id);
+      expect(ids).toContain(ev1.id);
+      expect(ids).toContain(ev2.id);
+    });
   });
 
   describe('chats', () => {
