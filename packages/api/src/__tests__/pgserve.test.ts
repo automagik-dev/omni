@@ -17,12 +17,17 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  PgserveDataDirMissingError,
   PgserveInternalPortConflict,
+  PgserveRelativeDataPathError,
   type SystemCalls,
   ensureInternalPortFree,
   findProcessOnPort,
+  isPopulatedPgserveDir,
   killOrphanedPostgres,
   killPostgresByPid,
+  resolvePgserveConfig,
+  validatePgserveDataDir,
 } from '../pgserve';
 
 /**
@@ -406,5 +411,203 @@ describe('killOrphanedPostgres — postmaster.pid path (preserved legacy behavio
     // Only the liveness probe (signal 0) should have fired — never SIGTERM
     const termSent = sentSignals.some((s) => s.signal === 'SIGTERM' || s.signal === 'SIGKILL');
     expect(termSent).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #412 — PGSERVE_DATA path + require-existing guards
+// ---------------------------------------------------------------------------
+
+describe('resolvePgserveConfig — #412 env surface', () => {
+  const saved: Record<string, string | undefined> = {};
+  const keys = ['PGSERVE_DATA', 'PGSERVE_REQUIRE_EXISTING', 'PGSERVE_ALLOW_RELATIVE_DATA'];
+
+  beforeEach(() => {
+    for (const k of keys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  test('defaults requireExisting and allowRelativeData to false', () => {
+    const cfg = resolvePgserveConfig();
+    expect(cfg.requireExisting).toBe(false);
+    expect(cfg.allowRelativeData).toBe(false);
+  });
+
+  test('reads PGSERVE_REQUIRE_EXISTING=true', () => {
+    process.env.PGSERVE_REQUIRE_EXISTING = 'true';
+    expect(resolvePgserveConfig().requireExisting).toBe(true);
+  });
+
+  test('reads PGSERVE_ALLOW_RELATIVE_DATA=true', () => {
+    process.env.PGSERVE_ALLOW_RELATIVE_DATA = 'true';
+    expect(resolvePgserveConfig().allowRelativeData).toBe(true);
+  });
+});
+
+describe('validatePgserveDataDir — relative path rejection (#412)', () => {
+  test('accepts absolute path and returns resolved value', () => {
+    const result = validatePgserveDataDir({
+      enabled: true,
+      port: 8432,
+      dataDir: '/tmp/pg-abs',
+      requireExisting: false,
+      allowRelativeData: false,
+    });
+    expect(result).toBe('/tmp/pg-abs');
+  });
+
+  test('throws PgserveRelativeDataPathError when path is relative and opt-in is off', () => {
+    let caught: PgserveRelativeDataPathError | undefined;
+    try {
+      validatePgserveDataDir({
+        enabled: true,
+        port: 8432,
+        dataDir: './.pgserve-data',
+        requireExisting: false,
+        allowRelativeData: false,
+      });
+    } catch (err) {
+      caught = err as PgserveRelativeDataPathError;
+    }
+
+    expect(caught).toBeInstanceOf(PgserveRelativeDataPathError);
+    expect(caught?.rawPath).toBe('./.pgserve-data');
+    expect(caught?.message).toContain('PGSERVE_ALLOW_RELATIVE_DATA=true');
+    expect(caught?.message).toContain('#412');
+  });
+
+  test('allows relative path when PGSERVE_ALLOW_RELATIVE_DATA escape hatch is set', () => {
+    const result = validatePgserveDataDir({
+      enabled: true,
+      port: 8432,
+      dataDir: './.pgserve-data',
+      requireExisting: false,
+      allowRelativeData: true,
+    });
+    // Relative path is resolved against cwd for logging purposes
+    expect(result).toContain('.pgserve-data');
+  });
+
+  test('memory mode (dataDir=null) passes through without validation', () => {
+    const result = validatePgserveDataDir({
+      enabled: true,
+      port: 8432,
+      dataDir: null,
+      requireExisting: true, // even with this set, memory mode short-circuits
+      allowRelativeData: false,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+describe('validatePgserveDataDir — require-existing guard (#412)', () => {
+  let tmpDataDir: string;
+
+  beforeEach(() => {
+    tmpDataDir = mkdtempSync(join(tmpdir(), 'pgserve-412-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDataDir, { recursive: true, force: true });
+  });
+
+  test('throws PgserveDataDirMissingError (missing) when dir does not exist', () => {
+    const missingDir = join(tmpdir(), `pgserve-does-not-exist-${Date.now()}`);
+
+    let caught: PgserveDataDirMissingError | undefined;
+    try {
+      validatePgserveDataDir({
+        enabled: true,
+        port: 8432,
+        dataDir: missingDir,
+        requireExisting: true,
+        allowRelativeData: false,
+      });
+    } catch (err) {
+      caught = err as PgserveDataDirMissingError;
+    }
+
+    expect(caught).toBeInstanceOf(PgserveDataDirMissingError);
+    expect(caught?.reason).toBe('missing');
+    expect(caught?.message).toContain('does not exist');
+  });
+
+  test('throws PgserveDataDirMissingError (not-initialized) when dir exists but has no PG_VERSION', () => {
+    // tmpDataDir exists but is empty — mirrors the #412 scenario where a
+    // fresh cwd-relative dir was created before pgserve initdb'd it.
+    let caught: PgserveDataDirMissingError | undefined;
+    try {
+      validatePgserveDataDir({
+        enabled: true,
+        port: 8432,
+        dataDir: tmpDataDir,
+        requireExisting: true,
+        allowRelativeData: false,
+      });
+    } catch (err) {
+      caught = err as PgserveDataDirMissingError;
+    }
+
+    expect(caught).toBeInstanceOf(PgserveDataDirMissingError);
+    expect(caught?.reason).toBe('not-initialized');
+    expect(caught?.message).toContain('PG_VERSION');
+  });
+
+  test('accepts populated data dir (with PG_VERSION marker)', () => {
+    writeFileSync(join(tmpDataDir, 'PG_VERSION'), '17\n');
+
+    const result = validatePgserveDataDir({
+      enabled: true,
+      port: 8432,
+      dataDir: tmpDataDir,
+      requireExisting: true,
+      allowRelativeData: false,
+    });
+    expect(result).toBe(tmpDataDir);
+  });
+
+  test('no-op when requireExisting=false even if dir is empty', () => {
+    const result = validatePgserveDataDir({
+      enabled: true,
+      port: 8432,
+      dataDir: tmpDataDir,
+      requireExisting: false,
+      allowRelativeData: false,
+    });
+    expect(result).toBe(tmpDataDir);
+  });
+});
+
+describe('isPopulatedPgserveDir', () => {
+  test('returns false for empty dir', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pgserve-empty-'));
+    try {
+      expect(isPopulatedPgserveDir(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns true when PG_VERSION marker file exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pgserve-populated-'));
+    try {
+      writeFileSync(join(dir, 'PG_VERSION'), '17\n');
+      expect(isPopulatedPgserveDir(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when dir does not exist at all', () => {
+    expect(isPopulatedPgserveDir(join(tmpdir(), `pgserve-missing-${Date.now()}`))).toBe(false);
   });
 });

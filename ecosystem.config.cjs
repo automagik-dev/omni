@@ -22,9 +22,22 @@
  */
 
 const path = require('node:path');
+const os = require('node:os');
 
 const natsManaged = process.env.NATS_MANAGED === 'true';
 const apiManaged = process.env.API_MANAGED === 'true';
+
+// ---------------------------------------------------------------------------
+// Canonical absolute PGSERVE_DATA.
+//
+// #412 incident: PM2's persisted cwd drifted to an unrelated workspace on
+// restart; the relative `./.pgserve-data` convention then resolved to a
+// different filesystem location and the embedded PostgreSQL silently
+// initdb'd a fresh, empty cluster. Force an absolute default so the data
+// dir is cwd-independent. An operator-set PGSERVE_DATA still wins.
+// ---------------------------------------------------------------------------
+const PGSERVE_DATA_DEFAULT = path.join(os.homedir(), '.omni', 'data', 'pgserve');
+const pgserveData = process.env.PGSERVE_DATA || PGSERVE_DATA_DEFAULT;
 
 // ---------------------------------------------------------------------------
 // Shared defaults — production-grade self-healing
@@ -86,6 +99,8 @@ if (apiManaged) {
     env: {
       NODE_ENV: process.env.NODE_ENV || 'development',
       OMNI_PACKAGES_DIR: path.join(__dirname, 'packages'),
+      // Absolute path — see PGSERVE_DATA_DEFAULT block above for rationale.
+      PGSERVE_DATA: pgserveData,
     },
     max_memory_restart: '2G',
     // Dependency: wait 1s to let nats bind its port first
