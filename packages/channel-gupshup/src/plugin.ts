@@ -181,14 +181,16 @@ export class GupshupPlugin extends BaseChannelPlugin {
 
     try {
       const response = await dispatchContent(client, dest, message);
-      const messageId = typeof response.messageId === 'string' ? response.messageId : undefined;
+      // Gupshup doesn't reliably return a messageId — fall back to a UUID so each
+      // sent message gets a unique externalId and is stored as its own DB row.
+      const messageId = typeof response.messageId === 'string' ? response.messageId : crypto.randomUUID();
 
       // Journey timing: T11 (platformDeliveredAt) after API responds
       if (correlationId) this.captureT11(correlationId);
 
       await this.emitMessageSent({
         instanceId,
-        externalId: messageId ?? '',
+        externalId: messageId,
         chatId: to,
         to,
         content: {
