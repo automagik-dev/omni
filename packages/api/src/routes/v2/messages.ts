@@ -1485,15 +1485,13 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  // dadosLead takes precedence over legacy extraInfo
-  const resolvedExtraInfo = data.dadosLead ?? data.extraInfo;
-
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: { type: 'text', text: data.text } as OutgoingContent,
     metadata: {
       isHandoff: true,
-      extraInfo: resolvedExtraInfo,
+      dadosLead: data.dadosLead ?? data.extraInfo,
+      motivoHandoff: data.motivoHandoff,
       handoffFields: data.handoffFields,
     },
   };
@@ -1514,7 +1512,7 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
       chatId: data.to, // raw phone/JID used as chat identifier on the channel
       toPhone: data.to,
       text: data.text,
-      extraInfo: resolvedExtraInfo ?? null,
+      extraInfo: data.dadosLead ?? data.extraInfo ?? null,
       agentId: instance.agentId ?? null,
       externalMessageId: result.messageId ?? null,
       handoffFields: data.handoffFields ?? null,

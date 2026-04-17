@@ -24,7 +24,8 @@ export interface GupshupOutboundMessage {
   longitude?: number;
   name?: string;
   address?: string;
-  extra_info?: string;
+  dados_lead?: string;
+  motivo_handoff?: string;
   handoff_fields?: Record<string, unknown>;
 }
 

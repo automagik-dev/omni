@@ -41,9 +41,10 @@ async function dispatchContent(
   const mediaTypes = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
   if (meta?.isHandoff === true) {
-    const extraInfo = meta.extraInfo as string | undefined;
+    const dadosLead = meta.dadosLead as string | undefined;
+    const motivoHandoff = meta.motivoHandoff as string | undefined;
     const handoffFields = meta.handoffFields as Record<string, unknown> | undefined;
-    return sendHandoff(client, dest, content.text ?? '', extraInfo, handoffFields);
+    return sendHandoff(client, dest, content.text ?? '', dadosLead, motivoHandoff, handoffFields);
   }
 
   if (content.type === 'text') {
