@@ -21,6 +21,7 @@ import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
 import { followUpRoutes } from './follow-up';
+import { handoffsRoutes } from './handoffs';
 import { instancesRoutes } from './instances';
 import { journeysRoutes } from './journeys';
 import { keysRoutes } from './keys';
@@ -69,3 +70,4 @@ v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automa
 v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
 v2Routes.route('/voice', voiceRoutes); // Voice session management
 v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404)
+v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs
