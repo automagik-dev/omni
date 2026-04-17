@@ -112,20 +112,22 @@ describe('sendHandoff', () => {
     expect(spy).toHaveBeenCalledWith('5511111111111', {
       type: 'HANDOFF',
       text: 'Transferring to agent',
-      extra_info: undefined,
+      dados_lead: undefined,
+      motivo_handoff: undefined,
     });
   });
 
-  it('includes extra_info when provided', async () => {
+  it('includes dados_lead and motivo_handoff when provided', async () => {
     const client = makeClient();
     const spy = spyOn(client, 'send').mockResolvedValueOnce({ status: 'ok' });
 
-    await sendHandoff(client, '5511111111111', 'Transferring to agent', 'queue=sales');
+    await sendHandoff(client, '5511111111111', 'Transferring to agent', 'queue=sales', 'Pediu humano');
 
     expect(spy).toHaveBeenCalledWith('5511111111111', {
       type: 'HANDOFF',
       text: 'Transferring to agent',
-      extra_info: 'queue=sales',
+      dados_lead: 'queue=sales',
+      motivo_handoff: 'Pediu humano',
     });
   });
 });
