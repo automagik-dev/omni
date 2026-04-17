@@ -54,7 +54,7 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
  * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
  * falls back to direct AgnoOS client for legacy.
  */
-async function clearAgentSession(
+export async function clearAgentSession(
   services: Services,
   db: Database,
   instanceId: string,

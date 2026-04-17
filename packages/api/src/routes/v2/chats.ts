@@ -10,6 +10,7 @@ import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { clearAgentSession } from '../../plugins/session-cleaner';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
@@ -856,6 +857,40 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
       chatsUpdated: updated,
     },
   });
+});
+
+const clearSessionSchema = z.object({
+  instanceId: z.string().uuid(),
+  chatId: z.string().min(1),
+});
+
+chatsRoutes.post('/clear-session', zValidator('json', clearSessionSchema), async (c) => {
+  const { instanceId, chatId } = c.req.valid('json');
+  const services = c.get('services');
+  const db = c.get('db');
+
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, chatId, chatId);
+
+  // Disarm follow-ups + resume agent if paused (same as trash emoji)
+  try {
+    const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    if (dbChat?.id) {
+      await services.followUpLifecycle.disarm({ chatId: dbChat.id, instanceId, reason: 'session_cleared' });
+
+      const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+      if (isAgentPaused) {
+        await services.chats.update(dbChat.id, {
+          settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+        });
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
+  return c.json({ success: true, sessionId, sessionStrategy });
 });
 
 export { chatsRoutes };
