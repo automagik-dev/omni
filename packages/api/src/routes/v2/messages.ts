@@ -454,7 +454,12 @@ const sendHandoffSchema = z.object({
   chatId: z.string().min(1).describe('Chat ID to pause agent on'),
   to: z.string().min(1).describe('Recipient phone number'),
   text: z.string().min(1).describe('Message text shown to end user'),
-  extraInfo: z.string().optional().describe('Free-text briefing for the human attendant'),
+  dadosLead: z.string().optional().describe('Free-text lead data summary for the human attendant'),
+  motivoHandoff: z
+    .string()
+    .optional()
+    .describe('Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...")'),
+  extraInfo: z.string().optional().describe('Free-text briefing (legacy — prefer dadosLead)'),
   handoffFields: z
     .record(z.unknown())
     .optional()
@@ -1480,12 +1485,15 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  // dadosLead takes precedence over legacy extraInfo
+  const resolvedExtraInfo = data.dadosLead ?? data.extraInfo;
+
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: { type: 'text', text: data.text } as OutgoingContent,
     metadata: {
       isHandoff: true,
-      extraInfo: data.extraInfo,
+      extraInfo: resolvedExtraInfo,
       handoffFields: data.handoffFields,
     },
   };
@@ -1506,12 +1514,15 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
       chatId: data.to, // raw phone/JID used as chat identifier on the channel
       toPhone: data.to,
       text: data.text,
-      extraInfo: data.extraInfo ?? null,
+      extraInfo: resolvedExtraInfo ?? null,
       agentId: instance.agentId ?? null,
       externalMessageId: result.messageId ?? null,
       handoffFields: data.handoffFields ?? null,
       sentAt: new Date(),
-      metadata: { instanceChannel: instance.channel },
+      metadata: {
+        instanceChannel: instance.channel,
+        ...(data.motivoHandoff ? { motivoHandoff: data.motivoHandoff } : {}),
+      },
     })
     .catch((err: unknown) => log.warn('Failed to persist handoff log', { error: String(err) }));
 
