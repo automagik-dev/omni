@@ -493,6 +493,39 @@ export class AgentRunnerService {
   }
 
   /**
+   * Run or stream an agent call based on `instance.agentStreamMode`.
+   *
+   * When `agentStreamMode` is true, consumes `stream()` and collects parts
+   * into an AgentRunResult. Otherwise, delegates to `run()` (sync mode).
+   *
+   * Used by callers that must honor the per-instance stream flag without
+   * owning the branching logic themselves (e.g. the automation `call_agent`
+   * adapter — see issue #410).
+   */
+  async runOrStream(context: AgentRunContext): Promise<AgentRunResult> {
+    if (!context.instance.agentStreamMode) {
+      return this.run(context);
+    }
+
+    const parts: string[] = [];
+    for await (const part of this.stream(context)) {
+      parts.push(part);
+    }
+
+    const sessionStrategy = context.instance.agentSessionStrategy ?? 'per_chat';
+    const sessionId = computeSessionId(sessionStrategy, context.senderId, context.chatId);
+
+    return {
+      parts,
+      metadata: {
+        runId: crypto.randomUUID(),
+        sessionId,
+        status: 'completed',
+      },
+    };
+  }
+
+  /**
    * Stream an agent call
    * Yields split parts as they become available
    */

@@ -476,7 +476,10 @@ async function setupEventBusServices(
           agentTimeout: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : instance.agentTimeout,
         };
 
-        const result = await services.agentRunner.run({
+        // Honor instance.agentStreamMode — sync mode waits for the full agent run
+        // before sending anything (11-14s on some providers); stream mode returns
+        // progressively. See issue #410.
+        const result = await services.agentRunner.runOrStream({
           instance: runInstance,
           chatId: ctx.chatId,
           senderId: ctx.senderId,
