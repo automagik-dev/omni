@@ -337,7 +337,11 @@ function processStreamBatch(items: Event[], filters: StreamFilterOptions, state:
   }
   // Bound the dedupe set — once the cursor moves past events we cannot
   // re-observe them, so a periodic flush keeps memory O(poll window).
-  if (state.seen.size > 5000) state.seen.clear();
+  // Keep the most recent batch's IDs to avoid re-emitting events returned
+  // again by an inclusive `since: state.sinceIso` query on the next poll.
+  if (state.seen.size > 5000 && items.length > 0) {
+    state.seen = new Set(items.map((ev) => ev.id));
+  }
 }
 
 async function streamEvents(client: OmniClient, options: StreamOptions): Promise<void> {

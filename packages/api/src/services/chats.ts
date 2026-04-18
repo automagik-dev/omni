@@ -49,7 +49,7 @@ export function withIsGroup<T extends Pick<Chat, 'chatType' | 'externalId'>>(cha
   return { ...chat, isGroup: isChatGroup(chat) };
 }
 
-export interface ChatWithParticipants extends Chat {
+export interface ChatWithParticipants extends ChatWithIsGroup<Chat> {
   participants: ChatParticipant[];
 }
 
