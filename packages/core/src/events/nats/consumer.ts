@@ -21,8 +21,8 @@ export const DEFAULT_CONSUMER_CONFIG = {
   maxAckPending: 1000,
   // Safety net for ephemeral consumers — NATS server's default is 5s, which
   // silently GCs consumers with low-frequency message patterns (see #445).
-  // 24h gives any reasonable idle window time to survive before GC kicks in.
-  ephemeralInactiveThresholdMs: 24 * 60 * 60 * 1000,
+  // 1h gives any reasonable idle window time to survive before GC kicks in.
+  ephemeralInactiveThresholdMs: 1 * 60 * 60 * 1000,
 } as const;
 
 /**

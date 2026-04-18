@@ -145,7 +145,7 @@ describe('consumer', () => {
       expect(DEFAULT_CONSUMER_CONFIG.ackWaitMs).toBe(30_000);
       expect(DEFAULT_CONSUMER_CONFIG.maxAckPending).toBe(1000);
       // Ephemeral consumers get a long idle threshold by default — see #445.
-      expect(DEFAULT_CONSUMER_CONFIG.ephemeralInactiveThresholdMs).toBe(24 * 60 * 60 * 1000);
+      expect(DEFAULT_CONSUMER_CONFIG.ephemeralInactiveThresholdMs).toBe(1 * 60 * 60 * 1000);
     });
   });
 });

@@ -117,7 +117,7 @@ export class AutomationEngine {
       // Durable consumer name — ephemeral consumers are GC'd by NATS after 5s
       // idle, which silently stops automations with low-frequency triggers
       // (chat.idle_timeout, chat.archived, handoff, etc.). See #445.
-      const durable = `automation-engine-${eventType.replace(/\./g, '-')}`;
+      const durable = `automation-engine-${eventType.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
       const subscription = await eventBus.subscribePattern(
         `${eventType}.>`,
         async (event) => {
