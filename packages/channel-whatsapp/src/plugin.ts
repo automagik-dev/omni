@@ -388,7 +388,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private static readonly MESSAGE_KEY_CACHE_TTL_MS = 60_000; // 1 minute
 
   /**
-   * Store a LID → phone JID mapping for an instance
+   * Store a bidirectional LID ↔ phone JID mapping for an instance.
+   *
+   * Both directions are stored in the same Map (key namespaces don't collide:
+   * `@lid` vs `@s.whatsapp.net`). The forward direction (lid→phone) is what
+   * `publishLidMappings` persists to the DB. The reverse (phone→lid) is what
+   * `resolveCanonicalJid` uses to upgrade a phone-addressed message to its
+   * LID canonical form so debounce/session keying stays stable per human.
    */
   storeLidMapping(instanceId: string, lidJid: string, phoneJid: string): void {
     let cache = this.lidMappingCache.get(instanceId);
@@ -397,7 +403,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       this.lidMappingCache.set(instanceId, cache);
     }
     cache.set(lidJid, phoneJid);
-    this.logger.debug('Stored LID mapping', { instanceId, lidJid, phoneJid });
+    cache.set(phoneJid, lidJid);
+    this.logger.debug('Stored LID↔phone mapping', { instanceId, lidJid, phoneJid });
   }
 
   /**
@@ -1275,6 +1282,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
           text: message.content.text,
         },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       // Reset rate limit state on successful send
@@ -2356,7 +2364,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const config = this.instances.get(instanceId)?.config;
     if (config) {
       await this.updateInstanceStatus(instanceId, config, {
-        state: 'connecting',
+        state: 'qr',
         since: new Date(),
         qrCode: { code: qrCode, expiresAt },
       });
@@ -3201,7 +3209,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const lidCache = this.lidMappingCache.get(instanceId);
     if (!lidCache || lidCache.size === 0) return;
 
-    const mappings = Array.from(lidCache.entries()).map(([lidJid, phoneJid]) => ({ lidJid, phoneJid }));
+    // Cache stores both directions (lid→phone and phone→lid). Only the
+    // lid-keyed direction belongs in DB persistence as the canonical mapping.
+    const mappings = Array.from(lidCache.entries())
+      .filter(([key]) => isLidJid(key))
+      .map(([lidJid, phoneJid]) => ({ lidJid, phoneJid }));
     this.eventBus
       .publishGeneric(
         'custom.lid-mapping.batch',

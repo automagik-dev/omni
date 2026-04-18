@@ -10,6 +10,7 @@ import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { clearAgentSession } from '../../plugins/session-cleaner';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
@@ -856,6 +857,57 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
       chatsUpdated: updated,
     },
   });
+});
+
+const clearSessionSchema = z.object({
+  instanceId: z.string().uuid(),
+  chatId: z.string().min(1),
+});
+
+chatsRoutes.post('/clear-session', async (c) => {
+  const ct = c.req.header('content-type') ?? '';
+  let raw: Record<string, unknown>;
+  if (ct.includes('application/json')) {
+    raw = await c.req.json();
+  } else if (ct.includes('x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
+    const form = await c.req.parseBody();
+    raw = Object.fromEntries(Object.entries(form));
+  } else {
+    // try JSON fallback
+    try {
+      raw = await c.req.json();
+    } catch {
+      raw = {};
+    }
+  }
+  const parsed = clearSessionSchema.safeParse(raw);
+  if (!parsed.success) return c.json({ success: false, error: parsed.error.flatten() }, 400);
+  const { instanceId, chatId } = parsed.data;
+  const services = c.get('services');
+  const db = c.get('db');
+
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, chatId, chatId);
+
+  // Disarm follow-ups + resume agent if paused (same as trash emoji)
+  try {
+    const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    if (dbChat?.id) {
+      await services.followUpLifecycle.disarm({ chatId: dbChat.id, instanceId, reason: 'session_cleared' });
+
+      const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+      if (isAgentPaused) {
+        await services.chats.update(dbChat.id, {
+          settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+        });
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
+  return c.json({ success: true, sessionId, sessionStrategy });
 });
 
 export { chatsRoutes };

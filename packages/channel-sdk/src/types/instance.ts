@@ -22,7 +22,7 @@ export interface InstanceConfig {
 /**
  * Connection status for a channel instance
  */
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+export type ConnectionState = 'disconnected' | 'connecting' | 'qr' | 'connected' | 'reconnecting' | 'error';
 
 /**
  * Connection status response

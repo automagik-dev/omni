@@ -83,6 +83,21 @@ export const CORE_EVENT_TYPES = [
   'conversation.created',
   'conversation.updated',
   'conversation.deleted',
+  // Idle-chat follow-up sequences
+  'chat.idle_timeout',
+  'chat.handoff_activated',
+  'chat.archived',
+  'follow_up.armed',
+  'follow_up.fired',
+  'follow_up.skipped',
+  'follow_up.disarmed',
+  // Voice lifecycle
+  'voice.session_started',
+  'voice.stream_ready',
+  'voice.stream_ended',
+  'voice.session_ended',
+  'voice.user_joined_channel',
+  'voice.user_left_channel',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -646,6 +661,138 @@ export interface AgentTaskCancelledPayload {
 }
 
 /**
+ * Idle-chat follow-up event payloads
+ *
+ * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
+ */
+
+/** Reasons a follow-up sequence was disarmed. Kept in sync with DisarmReasonSchema in schemas/follow-up.ts. */
+export type FollowUpDisarmReason =
+  | 'customer_replied'
+  | 'handoff'
+  | 'archived'
+  | 'window_expired'
+  | 'sequence_complete'
+  | 'agent_error'
+  | 'send_failed'
+  | 'session_cleared';
+
+/**
+ * Fired when a chat is flagged for human takeover. Any armed follow-up
+ * sequence on the chat disarms with reason `handoff`.
+ *
+ * Activation points:
+ *   - `chats.settings.agentPaused` flips from false → true
+ *   - (future) Dedicated handoff routes may emit directly.
+ */
+export interface ChatHandoffActivatedPayload {
+  chatId: string;
+  instanceId: string;
+  /** Agent that was routing the chat at the moment of handoff, if known. */
+  agentId?: string | null;
+  /** Free-form reason string for observability. */
+  reason?: string;
+}
+
+/**
+ * Fired when a chat is archived (or equivalently muted long-term). Any armed
+ * follow-up sequence on the chat disarms with reason `archived`.
+ */
+export interface ChatArchivedPayload {
+  chatId: string;
+  instanceId: string;
+  /** Discriminates archive vs. mute at the source — consumers can treat both the same. */
+  source: 'archive' | 'mute';
+}
+
+/** Fired by the sweeper when a due follow-up row is ready for the user-space automation. */
+export interface ChatIdleTimeoutPayload {
+  chatId: string;
+  instanceId: string;
+  agentId: string | null;
+  /** Zero-based index of the follow-up about to be acted on. */
+  sequenceIndex: number;
+  /** One-based attempt number — `sequenceIndex + 1`. Prefer this in LLM-facing prompts. */
+  attemptNumber: number;
+  /** Total attempts configured (`maxFollowUps`). Prefer this in LLM-facing prompts. */
+  totalAttempts: number;
+  /** Minutes elapsed since `lastAgentMessageAt`. */
+  minutesSinceLastAgentReply: number;
+  /** Rendered synthetic prompt passed to the agent. */
+  syntheticPrompt: string;
+  /** Chat display name if known — surfaced for template rendering. */
+  chatName?: string;
+}
+
+export interface FollowUpArmedPayload {
+  chatId: string;
+  instanceId: string;
+  agentId: string | null;
+  sequenceIndex: number;
+  nextFireAt: number;
+}
+
+export interface FollowUpFiredPayload {
+  chatId: string;
+  instanceId: string;
+  agentId: string | null;
+  sequenceIndex: number;
+  firedAt: number;
+  syntheticPrompt: string;
+}
+
+export interface FollowUpSkippedPayload {
+  chatId: string;
+  instanceId: string;
+  agentId: string | null;
+  sequenceIndex: number;
+  /** Transient reason — typed separately from disarm reasons because skipped does not end the sequence. */
+  reason: string;
+}
+
+export interface FollowUpDisarmedPayload {
+  chatId: string;
+  instanceId: string;
+  agentId: string | null;
+  sequenceIndex: number;
+  reason: FollowUpDisarmReason;
+}
+
+// ─── Voice Events ─────────────────────────────────────────
+export interface VoiceSessionStartedPayload {
+  sessionId: string;
+  channelId: string;
+  instanceId: string;
+  guildId?: string;
+}
+
+export interface VoiceStreamReadyPayload {
+  sessionId: string;
+  userId: string;
+  platformUserId: string;
+  ssrc: number;
+}
+
+export interface VoiceStreamEndedPayload {
+  sessionId: string;
+  userId: string;
+  reason: 'left' | 'disconnected' | 'session_ended';
+}
+
+export interface VoiceSessionEndedPayload {
+  sessionId: string;
+  reason: 'disconnected' | 'kicked' | 'channel_deleted' | 'manual';
+}
+
+export interface VoiceUserChannelPayload {
+  userId: string;
+  channelId: string;
+  guildId: string;
+  instanceId: string;
+  displayName?: string;
+}
+
+/**
  * Event type map for type-safe event handling (core events only)
  */
 export interface EventPayloadMap {
@@ -702,6 +849,19 @@ export interface EventPayloadMap {
   'conversation.created': { conversationId: string; title: string | null };
   'conversation.updated': { conversationId: string; title: string | null };
   'conversation.deleted': { conversationId: string };
+  'chat.idle_timeout': ChatIdleTimeoutPayload;
+  'chat.handoff_activated': ChatHandoffActivatedPayload;
+  'chat.archived': ChatArchivedPayload;
+  'follow_up.armed': FollowUpArmedPayload;
+  'follow_up.fired': FollowUpFiredPayload;
+  'follow_up.skipped': FollowUpSkippedPayload;
+  'follow_up.disarmed': FollowUpDisarmedPayload;
+  'voice.session_started': VoiceSessionStartedPayload;
+  'voice.stream_ready': VoiceStreamReadyPayload;
+  'voice.stream_ended': VoiceStreamEndedPayload;
+  'voice.session_ended': VoiceSessionEndedPayload;
+  'voice.user_joined_channel': VoiceUserChannelPayload;
+  'voice.user_left_channel': VoiceUserChannelPayload;
 }
 
 /**

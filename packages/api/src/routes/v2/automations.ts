@@ -75,6 +75,12 @@ const callAgentActionSchema = z.object({
     prefixSenderName: z.boolean().optional().describe('Prefix messages with sender name'),
     timeoutMs: z.number().int().optional().describe('Timeout in milliseconds'),
     responseAs: z.string().optional().describe('Store agent response as variable for chaining'),
+    promptOverride: z
+      .string()
+      .optional()
+      .describe(
+        'Synthetic prompt template that replaces the default user-input prompt for this invocation only (not persisted to chat history).',
+      ),
   }),
 });
 

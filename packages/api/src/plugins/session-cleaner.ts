@@ -54,7 +54,7 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
  * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
  * falls back to direct AgnoOS client for legacy.
  */
-async function clearAgentSession(
+export async function clearAgentSession(
   services: Services,
   db: Database,
   instanceId: string,
@@ -120,16 +120,27 @@ async function clearAgentSession(
 /**
  * Handle trash emoji message event
  */
+// In-process dedupe set to prevent double-processing from NATS redelivery.
+// Key: externalId. TTL not needed — cleared messages are short-lived events.
+const processedTrashIds = new Set<string>();
+
 async function handleTrashEmojiMessage(
   services: Services,
   db: Database,
   event: TypedOmniEvent<'message.received'>,
 ): Promise<void> {
-  const { content, chatId, from } = event.payload;
+  const { content, chatId, from, externalId } = event.payload;
   const { instanceId } = event.metadata;
 
   if (!instanceId || !content?.text) return;
   if (!isTrashEmojiOnly(content.text)) return;
+
+  // Dedupe — NATS can redeliver before ack, causing double session clears
+  if (externalId && processedTrashIds.has(externalId)) {
+    log.debug('Trash emoji already processed, skipping duplicate', { instanceId, chatId, externalId });
+    return;
+  }
+  if (externalId) processedTrashIds.add(externalId);
 
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
 
@@ -137,6 +148,39 @@ async function handleTrashEmojiMessage(
     const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, from, chatId);
 
     log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
+
+    // Disarm any active follow-up sequence — clearing the session means the
+    // user has explicitly reset the conversation; queued follow-ups referencing
+    // the cleared context should not fire.
+    // Also resume agent if paused (handoff active) — trash emoji from dev/QA
+    // is the explicit signal to re-enable the agent and start fresh.
+    try {
+      const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      if (dbChat?.id) {
+        await services.followUpLifecycle.disarm({
+          chatId: dbChat.id,
+          instanceId,
+          reason: 'session_cleared',
+        });
+
+        // Resume agent if handoff had paused it.
+        // Also record agentResumedAt so the dispatcher can drop messages that
+        // arrived before the resume (NATS redelivery of pre-handoff messages).
+        const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+        if (isAgentPaused) {
+          await services.chats.update(dbChat.id, {
+            settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+          });
+          log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
+        }
+      }
+    } catch (disarmError) {
+      log.warn('Failed to disarm follow-up after session clear', {
+        instanceId,
+        chatId,
+        error: String(disarmError),
+      });
+    }
 
     // Send confirmation message
     try {

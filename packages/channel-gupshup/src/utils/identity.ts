@@ -1,55 +1,33 @@
 /**
  * Gupshup identity utilities
  *
- * Phone normalization and user ID extraction for Gupshup BSP.
- * Gupshup uses E.164 phone numbers without the leading + as user identifiers.
+ * Phone normalization and user ID extraction for Gupshup Custom Integration.
+ * Strips BR extra-9 for outbound to match what Gupshup expects.
  */
 
 /**
- * Normalize a phone number to E.164 format (with leading +).
- *
- * Strips spaces, dashes, parentheses, and dots.
- * If the number has no leading +, it is returned as-is (already expected
- * to include the country code). Numbers starting with 00 are converted
- * to + prefix.
- *
- * @example
- * normalizePhone('55 11 9 9999-9999') // '+5511999999999'
- * normalizePhone('+5511999999999')     // '+5511999999999'
- * normalizePhone('005511999999999')    // '+5511999999999'
+ * Normalize a phone number for use in Gupshup API requests.
+ * - Remove leading + if present
+ * - Strip extra 9 from Brazilian mobile: 5551997285829 → 555197285829
  */
-export function normalizePhone(raw: string): string {
-  // Strip formatting characters
-  let cleaned = raw.replace(/[\s\-().]/g, '');
-
-  // Convert 00-prefixed international format to +
-  if (cleaned.startsWith('00')) {
-    cleaned = `+${cleaned.slice(2)}`;
-  }
-
-  // Ensure leading +
-  if (!cleaned.startsWith('+')) {
-    cleaned = `+${cleaned}`;
-  }
-
-  return cleaned;
+export function normalizePhone(phone: string): string {
+  // Remove leading + if present
+  const clean = phone.startsWith('+') ? phone.slice(1) : phone;
+  // Strip extra 9 from Brazilian mobile: 5551997285829 → 555197285829
+  return clean.replace(/^(55\d{2})9(\d{8})$/, '$1$2');
 }
 
 /**
- * Extract the Gupshup user ID from a webhook payload source field.
- *
- * Gupshup sends `source` as the phone number without the leading +
- * (e.g. "5511999999999"). This returns the E.164 version with +.
+ * Convert a phone number to Gupshup format (no leading +, BR extra-9 stripped).
  */
-export function extractUserId(source: string): string {
-  const stripped = source.trim();
-  return stripped.startsWith('+') ? stripped : `+${stripped}`;
+export function toGupshupPhone(phone: string): string {
+  return normalizePhone(phone);
 }
 
 /**
- * Strip the leading + from a phone number for use in Gupshup API requests.
- * Gupshup's destination field expects the number without +.
+ * Extract the user ID from a webhook source field.
+ * Returns normalized phone (no leading +, BR extra-9 stripped).
  */
-export function toGupshupPhone(e164: string): string {
-  return e164.startsWith('+') ? e164.slice(1) : e164;
+export function extractUserId(phone: string): string {
+  return normalizePhone(phone);
 }

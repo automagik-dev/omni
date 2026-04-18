@@ -470,6 +470,52 @@ describe('CLI Integration Tests', () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(output.toLowerCase()).toContain('not found');
     });
+
+    test('events stream emits NDJSON for seeded events then shuts down on SIGTERM', async () => {
+      const { seedStreamEvent, clearStreamedEvents } = await import('./mock-api');
+      clearStreamedEvents();
+
+      const ev1 = seedStreamEvent({ eventType: 'message.received', textContent: 'stream one' });
+      const ev2 = seedStreamEvent({
+        eventType: 'message.sent',
+        direction: 'outbound',
+        textContent: 'stream two',
+      });
+
+      // --since 1h ensures the cursor starts before the seed rows; --poll-ms 200
+      // keeps the loop tight so the test completes quickly.
+      const proc = spawn({
+        cmd: ['bun', CLI_PATH, 'events', 'stream', '--since', '1h', '--poll-ms', '200', '--ndjson'],
+        env: { ...process.env, HOME: TEST_CONFIG_DIR },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+      // Collect up to two NDJSON lines, then terminate.
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const lines: string[] = [];
+      const start = Date.now();
+      while (lines.length < 2 && Date.now() - start < 5000) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          if (part.trim()) lines.push(part.trim());
+        }
+      }
+      proc.kill('SIGTERM');
+      await proc.exited;
+
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      const parsed = lines.slice(0, 2).map((l) => JSON.parse(l) as { id: string; eventType: string });
+      const ids = parsed.map((p) => p.id);
+      expect(ids).toContain(ev1.id);
+      expect(ids).toContain(ev2.id);
+    });
   });
 
   describe('chats', () => {
@@ -506,6 +552,119 @@ describe('CLI Integration Tests', () => {
       expect(body.data.id).toBeDefined();
       expect(body.data.model).toBe('claude-sonnet-4-6');
       testAgentId = body.data.id;
+    });
+
+    test('agents create exposes --provider-agent-id, --config-path, --metadata (#372)', async () => {
+      // Locate the JSON data block from the two-block output (success + data).
+      // We parse the tail JSON object, which is the agent payload.
+      const result = await runCli(
+        [
+          'agents',
+          'create',
+          '--name',
+          `agno-seller-${Date.now()}`,
+          '--provider',
+          'agno',
+          '--provider-agent-id',
+          'eugenia-seller',
+          '--config-path',
+          '/tmp/eugenia.yaml',
+          '--metadata',
+          JSON.stringify({ team: 'sales', tier: 'premium' }),
+        ],
+        { OMNI_FORMAT: 'json' },
+      );
+      assertSuccess(result, 'agents create with new flags');
+
+      const blocks = result.stdout
+        .split(/\n(?=\{)/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const last = blocks[blocks.length - 1] ?? '';
+      const parsed = JSON.parse(last);
+      const agent = parsed.data ?? parsed;
+
+      expect(agent.configPath).toBe('/tmp/eugenia.yaml');
+      expect(agent.metadata).toEqual({
+        team: 'sales',
+        tier: 'premium',
+        providerAgentId: 'eugenia-seller',
+      });
+
+      // Cleanup
+      if (agent.id) {
+        await fetch(`${MOCK_URL}/api/v2/agents/${agent.id}`, {
+          method: 'DELETE',
+          headers: { 'x-api-key': MOCK_API_KEY },
+        });
+      }
+    });
+
+    test('agents create rejects invalid JSON in --metadata', async () => {
+      const result = await runCli([
+        'agents',
+        'create',
+        '--name',
+        'bad-meta',
+        '--provider',
+        'agno',
+        '--metadata',
+        'not-json',
+      ]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata is not valid JSON');
+    });
+
+    test('agents create rejects non-object JSON in --metadata', async () => {
+      const result = await runCli([
+        'agents',
+        'create',
+        '--name',
+        'bad-meta-array',
+        '--provider',
+        'agno',
+        '--metadata',
+        '[1,2,3]',
+      ]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata must be a JSON object');
+    });
+
+    test('agents create --provider-agent-id overrides providerAgentId in --metadata', async () => {
+      const result = await runCli(
+        [
+          'agents',
+          'create',
+          '--name',
+          `override-${Date.now()}`,
+          '--provider',
+          'agno',
+          '--metadata',
+          JSON.stringify({ providerAgentId: 'from-metadata', keep: true }),
+          '--provider-agent-id',
+          'from-flag',
+        ],
+        { OMNI_FORMAT: 'json' },
+      );
+      assertSuccess(result, 'agents create flag overrides metadata');
+
+      const blocks = result.stdout
+        .split(/\n(?=\{)/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const parsed = JSON.parse(blocks[blocks.length - 1] ?? '{}');
+      const agent = parsed.data ?? parsed;
+
+      expect(agent.metadata).toEqual({ providerAgentId: 'from-flag', keep: true });
+
+      if (agent.id) {
+        await fetch(`${MOCK_URL}/api/v2/agents/${agent.id}`, {
+          method: 'DELETE',
+          headers: { 'x-api-key': MOCK_API_KEY },
+        });
+      }
     });
 
     test('agents update patches model and preserves UUID', async () => {
@@ -586,6 +745,122 @@ describe('CLI Integration Tests', () => {
       expect(result.stdout).toContain('--provider');
       expect(result.stdout).toContain('--active');
       expect(result.stdout).toContain('--inactive');
+      expect(result.stdout).toContain('--provider-agent-id');
+      expect(result.stdout).toContain('--config-path');
+      expect(result.stdout).toContain('--metadata');
+    });
+
+    test('agents update rejects invalid JSON in --metadata (#372)', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--metadata', 'not-json']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata is not valid JSON');
+    });
+
+    test('agents update rejects non-object JSON in --metadata (#372)', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--metadata', '[1,2,3]']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--metadata must be a JSON object');
+    });
+
+    test('agents update --config-path sets configPath (#372)', async () => {
+      if (!testAgentId) return;
+
+      const result = await runCli(['agents', 'update', testAgentId, '--config-path', '/tmp/agent-config.yaml'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'agents update --config-path');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.configPath).toBe('/tmp/agent-config.yaml');
+    });
+
+    test('agents update --metadata merges into existing metadata (#372)', async () => {
+      if (!testAgentId) return;
+
+      // Seed existing metadata via raw PATCH so we can verify the merge behavior
+      const seed = await fetch(`${MOCK_URL}/api/v2/agents/${testAgentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': MOCK_API_KEY },
+        body: JSON.stringify({ metadata: { keepMe: 'original', tier: 'standard' } }),
+      });
+      expect(seed.ok).toBe(true);
+
+      const result = await runCli(
+        ['agents', 'update', testAgentId, '--metadata', JSON.stringify({ tier: 'premium', added: true })],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'agents update --metadata merge');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.metadata).toEqual({
+        keepMe: 'original', // preserved
+        tier: 'premium', // overwritten
+        added: true, // added
+      });
+    });
+
+    test('agents update --provider-agent-id wins over --metadata providerAgentId (#372)', async () => {
+      if (!testAgentId) return;
+
+      // Reset metadata to a known state
+      await fetch(`${MOCK_URL}/api/v2/agents/${testAgentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': MOCK_API_KEY },
+        body: JSON.stringify({ metadata: { keep: 'yes' } }),
+      });
+
+      const result = await runCli(
+        [
+          'agents',
+          'update',
+          testAgentId,
+          '--metadata',
+          JSON.stringify({ providerAgentId: 'from-metadata' }),
+          '--provider-agent-id',
+          'from-flag',
+        ],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'agents update provider-agent-id precedence');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.metadata).toEqual({
+        keep: 'yes', // preserved from existing
+        providerAgentId: 'from-flag', // flag wins
+      });
+    });
+
+    test('agents update --provider-agent-id only preserves existing metadata (#372)', async () => {
+      if (!testAgentId) return;
+
+      // Seed with keys we must not clobber
+      await fetch(`${MOCK_URL}/api/v2/agents/${testAgentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': MOCK_API_KEY },
+        body: JSON.stringify({ metadata: { team: 'sales', region: 'BR' } }),
+      });
+
+      const result = await runCli(['agents', 'update', testAgentId, '--provider-agent-id', 'eugenia-seller'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'agents update --provider-agent-id only');
+      const parsed = JSON.parse(result.stdout);
+      const agent = parsed.data ?? parsed;
+      expect(agent.metadata).toEqual({
+        team: 'sales',
+        region: 'BR',
+        providerAgentId: 'eugenia-seller',
+      });
     });
 
     test('agents delete removes agent', async () => {

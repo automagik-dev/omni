@@ -1,146 +1,123 @@
 /**
  * Gupshup-specific types for the channel plugin
+ *
+ * Inbound: Gupshup native format (messageobj/senderobj/contextobj)
+ * Outbound: Custom Integration callback URL
  */
 
-/**
- * Gupshup instance configuration
- */
+// Instance config
 export interface GupshupConfig {
-  /** API key from Gupshup dashboard */
-  gupshupApiKey: string;
+  gupshupCallbackUrl: string; // required — Custom Integration callback URL
+  gupshupAuthToken: string; // required — Custom Integration auth token
+  gupshupEventId?: string; // optional, default: "nx_omni_agent_reply"
+  webhookVerifyToken?: string; // optional — skip token check if not set
+}
 
-  /** App name tied to the WhatsApp number in Gupshup */
-  gupshupAppName: string;
-
-  /** E.164 phone number managed by Gupshup (e.g. +5511999999999) */
-  gupshupSourcePhone: string;
-
-  /** Token for webhook validation (compared against query param on inbound POST) */
-  webhookVerifyToken: string;
+// Outbound message shape (internal)
+export interface GupshupOutboundMessage {
+  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF';
+  text?: string;
+  url?: string;
+  caption?: string;
+  filename?: string;
+  latitude?: number;
+  longitude?: number;
+  name?: string;
+  address?: string;
+  dados_lead?: string;
+  motivo_handoff?: string;
+  handoff_fields?: Record<string, unknown>;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Inbound webhook payload types
+// Inbound — Gupshup native format
+// Content-Type arrives as application/x-www-form-urlencoded but body is raw JSON.
+// Parse with JSON.parse(await request.text()).
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Top-level Gupshup inbound webhook payload
- * Covers message events, delivery receipts, and read receipts
- */
-export interface GupshupInboundPayload {
-  app: string;
-  timestamp: number;
-  version: number;
-  type: 'message' | 'message-event';
-  payload: GupshupMessagePayload | GupshupMessageEventPayload;
-}
+export interface GupshupNativeMessageObj {
+  id: string; // wamid — use as message ID
+  type: 'text' | 'audio' | 'image' | 'video' | 'sticker' | 'file' | 'contacts' | 'location' | string;
+  from: string; // sender phone
+  timestamp: number; // unix seconds
 
-/**
- * Message event payload (delivery/read receipts)
- */
-export interface GupshupMessageEventPayload {
-  id: string;
-  gsId?: string;
-  type: 'delivered' | 'read' | 'failed';
-  timestamp: number;
-  destination: string;
-}
+  // text
+  text?: string;
 
-/**
- * Inbound message payload from Gupshup
- */
-export interface GupshupMessagePayload {
-  /** Unique message ID assigned by Gupshup */
-  id: string;
+  // media (audio, image, video, sticker, file)
+  url?: string;
+  contentType?: string; // MIME type
+  mediaId?: string;
+  fileName?: string; // file/document only
 
-  /** Source phone number (sender, E.164 without +) */
-  source: string;
+  // location — lat/lng arrive as strings, not numbers
+  latitude?: string;
+  longitude?: string;
+  address?: string;
+  name?: string; // place name (location) or contact-related
 
-  /** Message type */
-  type: GupshupMessageType;
+  // reply context — present when user replies to a prior message
+  replyContext?: {
+    id: string;
+    internalId?: string;
+  };
 
-  /** Payload content — varies by type */
-  payload:
-    | GupshupTextContent
-    | GupshupMediaContent
-    | GupshupLocationContent
-    | GupshupContactContent
-    | GupshupInteractiveContent;
-
-  /** Sender info */
-  sender: {
-    phone: string;
-    name?: string;
-    country_code?: string;
-    dial_code?: string;
+  raw?: {
+    payload?: Record<string, unknown>;
+    sender?: { name?: string; phone?: string; country_code?: string; dial_code?: string };
+    type?: string;
+    id?: string;
+    source?: string;
+    context?: Record<string, unknown>;
   };
 }
 
-export type GupshupMessageType =
-  | 'text'
-  | 'image'
-  | 'audio'
-  | 'video'
-  | 'document'
-  | 'location'
-  | 'contact'
-  | 'interactive'
-  | 'sticker';
-
-export interface GupshupTextContent {
-  text: string;
+export interface GupshupNativeSenderObj {
+  channelid: string; // sender phone
+  display?: string; // display name
+  channeltype?: string;
 }
 
-export interface GupshupMediaContent {
-  /** Public CDN URL (filemanager.gupshup.io) */
-  url: string;
-  caption?: string;
-  filename?: string;
-  /** MIME type if provided */
-  contentType?: string;
+export interface GupshupNativeContextObj {
+  senderName?: string;
+  botname?: string;
+  channeltype?: string;
+  contexttype?: string;
+  contextid?: string;
+  preventReply?: boolean;
+  cc?: string;
+  dc?: string;
 }
 
-export interface GupshupLocationContent {
-  longitude: number;
-  latitude: number;
-  name?: string;
-  address?: string;
+export interface GupshupNativeInboundWebhook {
+  source?: string;
+  sender: string; // remetente phone
+  channel: string; // "whatsapp"
+  isGroup?: boolean;
+  destination: string | number;
+  botname: string; // instance identifier
+  event_type: string; // "user_input" for inbound messages
+  message?: string; // redundant — prefer messageobj
+  postbackText?: string | null;
+  senderobj: GupshupNativeSenderObj;
+  contextobj?: GupshupNativeContextObj;
+  messageobj: GupshupNativeMessageObj;
+  messageHeader?: {
+    event_type?: string;
+    nsTraceId?: string;
+    project_id?: string;
+    'x-gs-priority'?: number;
+  };
 }
 
-export interface GupshupContactContent {
-  contacts: GupshupContact[];
-}
-
-export interface GupshupContact {
-  name?: { formatted_name?: string };
-  phones?: Array<{ phone: string; type?: string }>;
-}
-
-export interface GupshupInteractiveContent {
-  type: 'button_reply' | 'list_reply';
-  button_reply?: { id: string; title: string };
-  list_reply?: { id: string; title: string; description?: string };
-}
-
-// ─────────────────────────────────────────────────────────────
-// API response types
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Successful response from Gupshup send API
- * POST https://api.gupshup.io/wa/api/v1/msg
- */
+// API response
 export interface GupshupSendResponse {
-  status: 'submitted' | 'success';
-  messageId: string;
+  status?: string;
+  [key: string]: unknown;
 }
 
-/**
- * Error response from Gupshup API
- */
 export interface GupshupErrorResponse {
   status: 'error';
   message: string;
-  /** Gupshup error code (numeric string) */
   errorCode?: string;
 }

@@ -173,9 +173,16 @@ export interface ChannelPlugin {
   ): StreamSender;
 
   /**
-   * Send typing indicator
+   * Send typing indicator.
    *
    * Optional - only implement if canSendTyping capability is true.
+   *
+   * **Follow-up system (issue #404):** when an idle-chat follow-up is about
+   * to fire with `showTypingIndicator: true`, the runtime looks up the
+   * plugin by `channelType` and invokes `sendTyping(instanceId, chatId,
+   * ~2500)` ~2.5s before the outbound send. Plugins that cannot start the
+   * indicator (or choose not to implement this method) are silently skipped
+   * — the follow-up still sends, without the indicator.
    *
    * @param instanceId - Instance to send from
    * @param chatId - Chat to show typing in

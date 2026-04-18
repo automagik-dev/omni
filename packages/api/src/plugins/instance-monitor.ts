@@ -119,6 +119,9 @@ function buildInstanceConnectOptions(instance: {
   gupshupApiKey?: string | null;
   gupshupAppName?: string | null;
   gupshupSourcePhone?: string | null;
+  gupshupCallbackUrl?: string | null;
+  gupshupAuthToken?: string | null;
+  gupshupEventId?: string | null;
   webhookVerifyToken?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
@@ -132,12 +135,30 @@ function buildInstanceConnectOptions(instance: {
     applySlackMetadata(options, instance.profileMetadata);
   }
   if (instance.channel === 'gupshup') {
-    if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
-    if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
-    if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
-    if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
+    applyGupshupOptions(options, instance);
   }
   return options;
+}
+
+function applyGupshupOptions(
+  options: Record<string, unknown>,
+  instance: {
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.gupshupCallbackUrl) options.gupshupCallbackUrl = instance.gupshupCallbackUrl;
+  if (instance.gupshupAuthToken) options.gupshupAuthToken = instance.gupshupAuthToken;
+  if (instance.gupshupEventId) options.gupshupEventId = instance.gupshupEventId;
+  if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
+  if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
+  if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 /**
@@ -159,6 +180,9 @@ async function connectInstance(
     gupshupApiKey?: string | null;
     gupshupAppName?: string | null;
     gupshupSourcePhone?: string | null;
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
     webhookVerifyToken?: string | null;
   },
   registry: ChannelRegistry,
@@ -511,6 +535,9 @@ export class InstanceMonitor {
     gupshupApiKey?: string | null;
     gupshupAppName?: string | null;
     gupshupSourcePhone?: string | null;
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
     webhookVerifyToken?: string | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);

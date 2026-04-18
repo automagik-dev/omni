@@ -7,6 +7,29 @@
 import chalk from 'chalk';
 import { getOutputFormat } from './config.js';
 
+/**
+ * Pending write promises for end-of-process flush.
+ * When stdout is a pipe (e.g., `--json | cat > file`), writes above the kernel
+ * pipe buffer (64KB on Linux) trigger backpressure and get buffered in the
+ * stream's internal queue. `write(chunk, cb)` fires its callback only after
+ * the chunk is actually drained, so we retain those promises and await them
+ * before the process exits to prevent 64KB truncation.
+ */
+const pendingStdoutWrites = new Set<Promise<void>>();
+
+/**
+ * Write a line to stdout using the callback form so we can await drain.
+ * `console.log` doesn't expose a completion signal, so large JSON payloads
+ * can be lost when the process exits before the pipe drains.
+ */
+function writeStdoutLine(text: string): void {
+  const promise = new Promise<void>((resolve) => {
+    process.stdout.write(`${text}\n`, () => resolve());
+  });
+  pendingStdoutWrites.add(promise);
+  promise.finally(() => pendingStdoutWrites.delete(promise));
+}
+
 /** Global color control */
 let colorsEnabled = true;
 
@@ -42,14 +65,11 @@ export function success(message: string, data?: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ success: true, message, data }, null, 2));
+    writeStdoutLine(JSON.stringify({ success: true, message, data }, null, 2));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().green('✓'), message);
+    writeStdoutLine(`${c().green('✓')} ${message}`);
     if (data !== undefined) {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(c().dim(JSON.stringify(data, null, 2)));
+      writeStdoutLine(c().dim(JSON.stringify(data, null, 2)));
     }
   }
 }
@@ -82,8 +102,7 @@ export function warn(message: string): void {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(JSON.stringify({ warning: message }));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().yellow('⚠'), message);
+    writeStdoutLine(`${c().yellow('⚠')} ${message}`);
   }
 }
 
@@ -96,8 +115,7 @@ export function info(message: string): void {
     // biome-ignore lint/suspicious/noConsole: CLI output
     console.error(JSON.stringify({ info: message }));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().blue('ℹ'), message);
+    writeStdoutLine(`${c().blue('ℹ')} ${message}`);
   }
 }
 
@@ -106,16 +124,14 @@ export function data(value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(value, null, 2));
+    writeStdoutLine(JSON.stringify(value, null, 2));
   } else {
     if (Array.isArray(value)) {
       printTable(value);
     } else if (typeof value === 'object' && value !== null) {
       printObject(value as Record<string, unknown>);
     } else {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(value);
+      writeStdoutLine(String(value));
     }
   }
 }
@@ -133,14 +149,12 @@ export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?:
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify(options?.rawData ?? items, null, 2));
+    writeStdoutLine(JSON.stringify(options?.rawData ?? items, null, 2));
     return;
   }
 
   if (items.length === 0) {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().dim(options?.emptyMessage ?? 'No items found.'));
+    writeStdoutLine(c().dim(options?.emptyMessage ?? 'No items found.'));
     return;
   }
 
@@ -154,8 +168,7 @@ function printTable<T>(items: T[]): void {
   const first = items[0];
   if (typeof first !== 'object' || first === null) {
     for (const item of items) {
-      // biome-ignore lint/suspicious/noConsole: CLI output
-      console.log(item);
+      writeStdoutLine(String(item));
     }
     return;
   }
@@ -177,18 +190,15 @@ function printTable<T>(items: T[]): void {
   }
 
   const header = keys.map((k) => k.toUpperCase().padEnd(widths[k])).join('  ');
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(c().bold(header));
+  writeStdoutLine(c().bold(header));
 
   const separator = keys.map((k) => '-'.repeat(widths[k])).join('  ');
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(c().dim(separator));
+  writeStdoutLine(c().dim(separator));
 
   for (const item of items) {
     const obj = item as Record<string, unknown>;
     const row = keys.map((k) => formatCellValue(obj[k]).padEnd(widths[k])).join('  ');
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(row);
+    writeStdoutLine(row);
   }
 }
 
@@ -217,8 +227,7 @@ function printObject(obj: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(obj)) {
     const label = key.padEnd(maxKeyLen);
     const formattedValue = formatValue(value);
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`${c().cyan(label)}  ${formattedValue}`);
+    writeStdoutLine(`${c().cyan(label)}  ${formattedValue}`);
   }
 }
 
@@ -241,46 +250,51 @@ export function keyValue(key: string, value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(JSON.stringify({ [key]: value }, null, 2));
+    writeStdoutLine(JSON.stringify({ [key]: value }, null, 2));
   } else {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`${c().cyan(key)}: ${formatValue(value)}`);
+    writeStdoutLine(`${c().cyan(key)}: ${formatValue(value)}`);
   }
 }
 
 /** Print a section header */
 export function header(title: string): void {
   if (getCurrentFormat() === 'human') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(`\n${c().bold.underline(title)}`);
+    writeStdoutLine(`\n${c().bold.underline(title)}`);
   }
 }
 
 /** Print dimmed/secondary text */
 export function dim(text: string): void {
   if (getCurrentFormat() === 'human') {
-    // biome-ignore lint/suspicious/noConsole: CLI output
-    console.log(c().dim(text));
+    writeStdoutLine(c().dim(text));
   }
 }
 
-/** Raw console.log (for custom formatting) */
+/** Raw stdout line (for custom formatting) */
 export function raw(text: string): void {
-  // biome-ignore lint/suspicious/noConsole: CLI output
-  console.log(text);
+  writeStdoutLine(text);
 }
 
 /**
- * Flush stdout to ensure all buffered data is written.
- * When stdout is a pipe (e.g., `--json | jq`), writes are buffered.
- * Without explicit flushing, the process can exit before all data is written,
- * causing truncated output.
+ * Flush stdout to ensure all buffered data is written before exit.
+ * When stdout is a pipe (e.g., `--json | cat > file`), writes above the kernel
+ * pipe buffer (64KB on Linux) trigger backpressure and get queued in Bun's
+ * internal stream buffer. If the process exits before those bytes drain,
+ * output is truncated at exactly 64KB boundaries.
+ *
+ * All output paths in this module route through `writeStdoutLine`, which uses
+ * `process.stdout.write(chunk, cb)`. The callback fires only after the chunk
+ * is actually drained; we track those promises in `pendingStdoutWrites` and
+ * await them here.
+ *
+ * A trailing empty-write drain gives any stdout bytes written outside this
+ * module (e.g., direct `process.stdout.write` calls) a final chance to drain.
  */
-export function flushStdout(): Promise<void> {
-  return new Promise((resolve) => {
-    // Writing an empty string queues behind all pending data.
-    // The callback fires once all prior writes have been flushed.
+export async function flushStdout(): Promise<void> {
+  while (pendingStdoutWrites.size > 0) {
+    await Promise.all([...pendingStdoutWrites]);
+  }
+  await new Promise<void>((resolve) => {
     process.stdout.write('', () => resolve());
   });
 }

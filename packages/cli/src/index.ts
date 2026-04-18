@@ -27,6 +27,7 @@ import { createDoctorCommand } from './commands/doctor.js';
 import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
 import { createFilmCommand } from './commands/film.js';
+import { createFollowUpCommand } from './commands/follow-up.js';
 import { createHistoryCommand } from './commands/history.js';
 import { createImagineCommand } from './commands/imagine.js';
 import { createInstallCommand } from './commands/install.js';
@@ -58,6 +59,7 @@ import { createTtsCommand } from './commands/tts.js';
 import { createTurnsCommand } from './commands/turns.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createUseCommand } from './commands/use.js';
+import { createVoiceCommand } from './commands/voice.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
 import { createWhereCommand } from './commands/where.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
@@ -200,6 +202,12 @@ const COMMANDS: CommandDef[] = [
     helpGroup: 'Core',
     helpDescription: 'Close turn (send final message + emit turn.done)',
   },
+  {
+    create: createVoiceCommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'Voice channel operations (join, stream, sessions)',
+  },
 
   // Management group - Configuration and setup
   {
@@ -220,6 +228,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Event-driven workflows',
+  },
+  {
+    create: createFollowUpCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Idle-chat follow-up config (agents/instances/chats)',
   },
   {
     create: createAgentsCommand,

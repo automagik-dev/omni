@@ -8,12 +8,12 @@ import './instrument';
  * Uses Bun.serve with embedded pgserve (PostgreSQL 17) for zero-dependency PostgreSQL.
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { applyMigrations, closeDb, createDb } from '@omni/db';
+import { agents, applyMigrations, closeDb, createDb, instances } from '@omni/db';
 import * as Sentry from '@sentry/bun';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
@@ -38,6 +38,7 @@ import {
   setupConnectionListener,
   setupContactNamesListener,
   setupEventPersistence,
+  setupFollowUpHooks,
   setupHistoryPushTracker,
   setupLidMappingListener,
   setupMediaProcessor,
@@ -49,6 +50,7 @@ import {
 } from './plugins';
 import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
+import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { printStartupBanner } from './utils/startup-banner';
@@ -57,6 +59,15 @@ import { printStartupBanner } from './utils/startup-banner';
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
+
+import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
+import type { VoiceStreamClient } from './ws/voice';
+
+// Voice stream WebSocket registry (global singleton)
+const voiceStreamRegistry = new VoiceStreamRegistry();
+
+// Exported for voice session integration
+export { voiceStreamRegistry };
 
 // Global references for plugin system
 let globalEventBus: EventBus | null = null;
@@ -124,6 +135,14 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   const result = await loadChannelPlugins({ eventBus, db });
   globalChannelRegistry = result.registry;
 
+  // Wire voice stream registry to voice-capable plugins for WS audio forwarding
+  for (const plugin of result.registry.getAll()) {
+    if (isVoiceCapable(plugin) && 'voiceStreamSink' in plugin) {
+      Object.assign(plugin, { voiceStreamSink: voiceStreamRegistry });
+      pluginLog.info('Voice stream registry wired to plugin', { pluginId: plugin.id });
+    }
+  }
+
   if (result.loaded > 0) {
     pluginLog.info('Channel plugins loaded', { count: result.loaded, plugins: result.pluginIds });
   } else {
@@ -161,15 +180,122 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
- * Start the HTTP server using Bun.serve
+ * Start the HTTP server using Bun.serve with WebSocket support.
+ *
+ * Voice stream WebSocket: ws://host/api/v2/voice/stream/{sessionId}?api_key=<key>&format=opus|pcm
+ * Auth is validated on upgrade. Binary frames carry tagged audio per user.
  */
 function startBunServer(app: App) {
-  return Bun.serve({
+  return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
     port: PORT,
     hostname: HOST,
-    fetch: app.fetch,
+    fetch(req, server) {
+      const url = new URL(req.url);
+
+      // Voice stream WebSocket upgrade
+      if (url.pathname.startsWith('/api/v2/voice/stream/')) {
+        const params = parseVoiceStreamParams(url);
+        if (!params?.apiKey) {
+          return new Response('API key required (api_key query parameter)', { status: 401 });
+        }
+
+        // Validate API key synchronously by attempting upgrade — auth check happens in open()
+        // Bun.serve.upgrade() must be called in fetch; async auth validated in open handler
+        const upgraded = server.upgrade(req, { data: { params } });
+        if (!upgraded) {
+          return new Response('WebSocket upgrade failed', { status: 500 });
+        }
+        return undefined as unknown as Response;
+      }
+
+      // All other requests handled by Hono
+      return app.fetch(req, server);
+    },
+    websocket: {
+      async open(ws) {
+        const params = ws.data.params;
+        if (!params) {
+          ws.close(4001, 'Invalid parameters');
+          return;
+        }
+
+        // Validate API key against the database
+        if (globalDbRef) {
+          try {
+            const apiKeyService = new ApiKeyService(globalDbRef);
+            await apiKeyService.validate(params.apiKey);
+          } catch {
+            ws.close(4004, 'Invalid API key');
+            return;
+          }
+        }
+
+        // Validate session exists via VoiceCapable interface
+        const voicePlugin = globalChannelRegistry
+          ?.getAll()
+          .find((p) => isVoiceCapable(p) && p.voiceSession(params.sessionId));
+        if (!voicePlugin) {
+          ws.close(4004, `Voice session ${params.sessionId} not found`);
+          return;
+        }
+
+        const client: VoiceStreamClient = {
+          params,
+          send: (data) => {
+            try {
+              ws.send(data as string | ArrayBuffer | Uint8Array);
+            } catch {
+              // Client slow or disconnected
+            }
+          },
+        };
+        voiceStreamRegistry.add(ws, client);
+        ws.send(JSON.stringify({ type: 'session_ready', sessionId: params.sessionId }));
+      },
+      message(ws, message) {
+        const client = voiceStreamRegistry.get(ws);
+        if (!client) return;
+
+        // Text = JSON control message
+        if (typeof message === 'string') {
+          try {
+            const msg = JSON.parse(message) as { type: string };
+            if (msg.type === 'speaking') {
+              // Toggle bot speaking — handled at session level
+            }
+          } catch {
+            // Invalid JSON — ignore
+          }
+          return;
+        }
+
+        // Binary = audio for bot to speak — find session via VoiceCapable
+        const vPlugin = globalChannelRegistry
+          ?.getAll()
+          .find((p) => isVoiceCapable(p) && p.voiceSession(client.params.sessionId));
+        if (vPlugin && isVoiceCapable(vPlugin)) {
+          const session = vPlugin.voiceSession(client.params.sessionId);
+          try {
+            const opusFrame = transcodeAudioFrame(message as ArrayBuffer | Uint8Array, client.params.format, 'opus');
+            session?.sendAudio(Buffer.from(opusFrame));
+          } catch (error) {
+            try {
+              ws.send(JSON.stringify({ type: 'error', message: String(error) }));
+            } catch {
+              // Client disconnected while receiving the error
+            }
+          }
+        }
+      },
+      close(ws) {
+        voiceStreamRegistry.remove(ws);
+      },
+    },
   });
 }
+
+// Database reference for WS auth (set during startup)
+let globalDbRef: Database | null = null;
 
 /**
  * Set up graceful shutdown handlers
@@ -296,7 +422,80 @@ async function setupEventBusServices(
         if (!instance) throw new Error(`Instance not found: ${instanceId}`);
         const plugin = await getPlugin(instance.channel);
         if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
-        await plugin.sendMessage(instanceId, { to, content: { type: 'text', text: content } });
+        // Resolve internal chat UUID → channel-native external_id (e.g. WA JID).
+        // Automation payloads carry chat UUIDs; plugins expect channel JIDs.
+        let recipient = to;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(to)) {
+          try {
+            const chat = await services.chats.getById(to, { includeHidden: true });
+            recipient = chat.externalId;
+          } catch {
+            throw new Error(`Chat not found for UUID: ${to}`);
+          }
+        }
+        await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
+      },
+      callAgent: async (ctx, cfg) => {
+        const instance = await services.instances.getById(ctx.instanceId);
+        if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
+
+        const agentFkId = ctx.agentId ?? instance.agentId;
+        if (!agentFkId) throw new Error(`No agent configured for instance ${instance.id}`);
+
+        const [agentRow] = await db
+          .select({
+            name: agents.name,
+            agentProviderId: agents.agentProviderId,
+            agentType: agents.agentType,
+            metadata: agents.metadata,
+            configPath: agents.configPath,
+          })
+          .from(agents)
+          .where(eq(agents.id, agentFkId))
+          .limit(1);
+        if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+
+        const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
+          assistant: 'agent',
+          tool: 'agent',
+          workflow: 'workflow',
+          team: 'team',
+        };
+        const providerAgentId =
+          ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
+          agentRow.configPath ??
+          agentRow.name;
+
+        const runInstance = {
+          ...instance,
+          agentProviderId: agentRow.agentProviderId ?? null,
+          agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
+          agentInternalId: providerAgentId,
+          agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
+          agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,
+          agentTimeout: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : instance.agentTimeout,
+        };
+
+        // Honor instance.agentStreamMode — sync mode waits for the full agent run
+        // before sending anything (11-14s on some providers); stream mode returns
+        // progressively. See issue #410.
+        const result = await services.agentRunner.runOrStream({
+          instance: runInstance,
+          chatId: ctx.chatId,
+          senderId: ctx.senderId,
+          senderName: ctx.senderName,
+          chatType: 'dm',
+          messages: ctx.messages,
+        });
+        return {
+          parts: result.parts,
+          fullResponse: result.parts.join('\n'),
+          metadata: {
+            runId: result.metadata.runId,
+            sessionId: result.metadata.sessionId,
+            status: result.metadata.status,
+          },
+        };
       },
     });
   } catch (error) {
@@ -308,6 +507,13 @@ async function setupEventBusServices(
     await setupSessionCleaner(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up session cleaner', { error: String(error) });
+  }
+
+  // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
+  try {
+    await setupFollowUpHooks(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up follow-up hooks', { error: String(error) });
   }
 
   // Sync worker
@@ -383,6 +589,7 @@ async function main() {
   // Create database connection
   log.info('Connecting to database');
   const db = createDb({ url: databaseUrl });
+  globalDbRef = db;
 
   // Register early shutdown handler so SIGINT/SIGTERM during startup still cleans up
   const earlyShutdown = async () => {
@@ -426,6 +633,22 @@ async function main() {
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
+
+  // Content-aware boot banner — surfaces the #412 "fresh empty data dir" symptom
+  // immediately after migrations. A zero count on a deploy that used to have
+  // instances is a red flag: the API is talking to the wrong pgserve data dir.
+  try {
+    const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(instances);
+    const rowCount = countRow?.count ?? 0;
+    log.info('Post-migration content snapshot', { DB_ROW_COUNT_INSTANCES: rowCount });
+    if (rowCount === 0 && pgserveConfig.requireExisting) {
+      log.error(
+        'PGSERVE_REQUIRE_EXISTING=true but instances table is empty after boot — verify PGSERVE_DATA points at the correct cluster (see #412).',
+      );
+    }
+  } catch (error) {
+    log.warn('Failed to read instances row count (non-fatal)', { error: String(error) });
+  }
 
   // Connect to NATS
   const eventBus = await connectToNats(db);

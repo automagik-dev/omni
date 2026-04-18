@@ -9,6 +9,8 @@
  *   PGSERVE_EMBEDDED            — 'true' (default) to start in-process, 'false' to skip
  *   PGSERVE_PORT                — port for the embedded PostgreSQL proxy (default 8432)
  *   PGSERVE_DATA                — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
+ *   PGSERVE_ALLOW_RELATIVE_DATA — when 'true', allows PGSERVE_DATA to be a relative path (DANGEROUS — PM2 cwd drift can swap data dirs). Default: reject.
+ *   PGSERVE_REQUIRE_EXISTING    — when 'true', refuse to start if the data dir is missing or not an initialized PostgreSQL cluster (no PG_VERSION file). Prevents silent initdb after PM2 cwd drift.
  *   OMNI_PGSERVE_FORCE_CLEANUP  — when 'true', aggressively kills any postgres holding the internal port (PGSERVE_PORT + 1000) at startup
  */
 
@@ -16,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createLogger } from '@omni/core';
 import { getDefaultDatabaseUrl } from '@omni/db';
 
@@ -36,6 +38,60 @@ export interface PgserveConfig {
   enabled: boolean;
   port: number;
   dataDir: string | null;
+  /**
+   * When true, abort startup if the data dir does not exist or is not a
+   * populated PostgreSQL cluster. Set via PGSERVE_REQUIRE_EXISTING=true.
+   */
+  requireExisting: boolean;
+  /**
+   * When true, allow a relative PGSERVE_DATA path. By default relative paths
+   * are rejected because PM2's persisted cwd can drift (see #412), causing
+   * pgserve to silently initdb a fresh data dir under the new cwd.
+   */
+  allowRelativeData: boolean;
+}
+
+/**
+ * Thrown when PGSERVE_DATA is a relative path and the explicit opt-in flag
+ * PGSERVE_ALLOW_RELATIVE_DATA=true is not set. Prevents the PM2 cwd-drift
+ * failure mode from #412 (silent switch to a fresh, empty data dir).
+ */
+export class PgserveRelativeDataPathError extends Error {
+  public readonly rawPath: string;
+  public readonly resolvedPath: string;
+
+  constructor(rawPath: string, resolvedPath: string) {
+    super(
+      `PGSERVE_DATA is a relative path ("${rawPath}" → resolved to "${resolvedPath}" against cwd "${process.cwd()}"). Relative data paths are rejected because PM2's persisted cwd can drift across restarts, causing the embedded PostgreSQL to silently initdb a fresh, empty data dir in the wrong location (see #412). To remediate:\n  1. Set PGSERVE_DATA to an absolute path (e.g. /home/<user>/.omni/data/pgserve).\n  2. Or, if you truly want a cwd-relative dev path, set PGSERVE_ALLOW_RELATIVE_DATA=true.`,
+    );
+    this.name = 'PgserveRelativeDataPathError';
+    this.rawPath = rawPath;
+    this.resolvedPath = resolvedPath;
+  }
+}
+
+/**
+ * Thrown when PGSERVE_REQUIRE_EXISTING=true is set and the configured data
+ * dir is missing or has no `PG_VERSION` marker (i.e. pgserve would initdb).
+ * Fails closed so an accidental cwd/path swap does not bring the API up on
+ * an empty database.
+ */
+export class PgserveDataDirMissingError extends Error {
+  public readonly dataDir: string;
+  public readonly reason: 'missing' | 'not-initialized';
+
+  constructor(dataDir: string, reason: 'missing' | 'not-initialized') {
+    const detail =
+      reason === 'missing'
+        ? 'directory does not exist'
+        : 'directory exists but has no PG_VERSION file — this is NOT an initialized PostgreSQL cluster';
+    super(
+      `PGSERVE_REQUIRE_EXISTING=true is set but PGSERVE_DATA="${dataDir}" ${detail}. Refusing to initdb a fresh data dir (see #412). To remediate:\n  1. Verify PGSERVE_DATA points to the canonical data dir (absolute path).\n  2. Check PM2's persisted cwd — \`pm2 describe omni-v2-api\` → \`exec cwd\`.\n  3. If this IS a first-run install, unset PGSERVE_REQUIRE_EXISTING.`,
+    );
+    this.name = 'PgserveDataDirMissingError';
+    this.dataDir = dataDir;
+    this.reason = reason;
+  }
 }
 
 /** Minimal shape of the pgserve server instance (pgserve ships no type declarations). */
@@ -68,6 +124,11 @@ let serverInstance: PgserveInstance | null = null;
 
 /**
  * Read pgserve-related env vars and return a typed config object.
+ *
+ * Does NOT validate the path here — call `validatePgserveDataDir` after
+ * resolving so tests can exercise parsing independently from filesystem
+ * checks. Falls back to the canonical `~/.omni/data/pgserve` when
+ * `PGSERVE_DATA` is unset (the default is always absolute).
  */
 export function resolvePgserveConfig(): PgserveConfig {
   const enabled = (process.env.PGSERVE_EMBEDDED ?? 'true') === 'true';
@@ -75,9 +136,79 @@ export function resolvePgserveConfig(): PgserveConfig {
   const raw = process.env.PGSERVE_DATA;
   // Default to persistent storage inside ~/.omni/data/pgserve — never memory mode unless explicitly empty
   const defaultDataDir = join(homedir(), '.omni', 'data', 'pgserve');
-  const dataDir = raw !== undefined && raw.trim().length === 0 ? null : raw?.trim() || defaultDataDir;
+  const dataDir = raw?.trim() === '' ? null : raw?.trim() || defaultDataDir;
+  const requireExisting = process.env.PGSERVE_REQUIRE_EXISTING === 'true';
+  const allowRelativeData = process.env.PGSERVE_ALLOW_RELATIVE_DATA === 'true';
 
-  return { enabled, port, dataDir };
+  return { enabled, port, dataDir, requireExisting, allowRelativeData };
+}
+
+/**
+ * Return true when `dataDir` contains a PostgreSQL `PG_VERSION` marker.
+ * That file is written by `initdb` and is the canonical signal that a
+ * directory is a populated cluster (not just an empty dir a fresh initdb
+ * is about to fill).
+ *
+ * Exported so tests can exercise the guard without touching real directories.
+ */
+export function isPopulatedPgserveDir(dataDir: string): boolean {
+  return existsSync(join(dataDir, 'PG_VERSION'));
+}
+
+/**
+ * Validate the resolved PGSERVE_DATA path against operator intent:
+ *
+ *   1. Relative paths are rejected unless PGSERVE_ALLOW_RELATIVE_DATA=true.
+ *      Rationale: PM2 persists its cwd across restarts; if the operator ran
+ *      `pm2 save` from a different directory, a relative path resolves to a
+ *      different filesystem location and pgserve silently initdb's a fresh
+ *      cluster there — the 2026-04-14 incident (#412).
+ *
+ *   2. If PGSERVE_REQUIRE_EXISTING=true, the dir must exist AND contain a
+ *      `PG_VERSION` file (i.e. it is an initialized cluster, not an empty
+ *      placeholder). Fails closed so a wrong-cwd restart never brings the
+ *      API up against an empty migrations-applied database.
+ *
+ * Both checks write a structured fatal log before throwing so the condition
+ * is obvious in PM2's log feed.
+ */
+export function validatePgserveDataDir(config: PgserveConfig): string | null {
+  if (config.dataDir === null) return null; // memory mode — nothing to validate
+
+  const raw = config.dataDir;
+  const resolved = resolve(raw);
+
+  if (!isAbsolute(raw) && !config.allowRelativeData) {
+    log.error('Refusing to start: PGSERVE_DATA is a relative path', {
+      rawPath: raw,
+      resolvedPath: resolved,
+      cwd: process.cwd(),
+      hint: 'Set PGSERVE_DATA to an absolute path, or set PGSERVE_ALLOW_RELATIVE_DATA=true for dev.',
+    });
+    throw new PgserveRelativeDataPathError(raw, resolved);
+  }
+
+  if (config.requireExisting) {
+    if (!existsSync(resolved)) {
+      log.error('Refusing to start: PGSERVE_REQUIRE_EXISTING=true but data dir is missing', {
+        dataDir: resolved,
+        cwd: process.cwd(),
+      });
+      throw new PgserveDataDirMissingError(resolved, 'missing');
+    }
+    if (!isPopulatedPgserveDir(resolved)) {
+      log.error(
+        'Refusing to start: PGSERVE_REQUIRE_EXISTING=true but data dir is not an initialized PostgreSQL cluster (no PG_VERSION)',
+        {
+          dataDir: resolved,
+          cwd: process.cwd(),
+        },
+      );
+      throw new PgserveDataDirMissingError(resolved, 'not-initialized');
+    }
+  }
+
+  return resolved;
 }
 
 function isAddressInUse(error: unknown): boolean {
@@ -564,11 +695,32 @@ export async function startEmbeddedPgserve(config: PgserveConfig): Promise<strin
     return url;
   }
 
+  // Validate PGSERVE_DATA before doing anything else. Throws PgserveRelativeDataPathError
+  // or PgserveDataDirMissingError when invariants are violated (#412).
+  const resolvedDataDir = validatePgserveDataDir(config);
+
   log.info('Starting embedded pgserve', {
     port: config.port,
     mode: config.dataDir ? 'persistent' : 'memory',
     dataDir: config.dataDir ?? '(in-memory)',
+    // Always log the fully resolved absolute path so operators can spot cwd drift in logs.
+    PGSERVE_DATA_RESOLVED: resolvedDataDir ?? '(in-memory)',
+    cwd: process.cwd(),
+    requireExisting: config.requireExisting,
   });
+
+  // Loud fresh-initdb warning — catches the cwd-drift scenario even when
+  // PGSERVE_REQUIRE_EXISTING is not set. Normal first install will still see
+  // this warning once, which is acceptable.
+  if (resolvedDataDir && !isPopulatedPgserveDir(resolvedDataDir)) {
+    log.warn(
+      'Creating new pgserve data dir — previous data will NOT be present. If this is not a first install, STOP and verify PGSERVE_DATA + PM2 cwd (see #412).',
+      {
+        dataDir: resolvedDataDir,
+        cwd: process.cwd(),
+      },
+    );
+  }
 
   // Terminate any orphaned postgres left by a previous unclean shutdown before
   // pgserve tries to start (avoids the socket-dir mismatch crash loop).

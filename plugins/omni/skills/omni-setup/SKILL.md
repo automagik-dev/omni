@@ -78,22 +78,23 @@ omni connect <instance-id> <agent-name>
 
 This command does four things automatically:
 1. Discovers the agent from the Genie directory (`genie dir ls <agent-name>`)
-2. Creates a NATS-Genie provider for the agent
+2. Creates a NATS-Genie provider for the agent (schema `nats-genie`)
 3. Creates an Omni agent record linked to the provider
-4. Updates the instance with the agentId (FK), agentProviderId, replyFilter, and triggerMode
+4. Updates the instance with the agentId (FK), agentProviderId, agentReplyFilter, and triggerMode
 
-The default trigger mode is `turn-based` (round-trip), meaning the agent processes one message at a time and signals completion with `omni done`. For fire-and-forget mode (agent receives messages but Omni does not wait for a reply signal):
+**Flags:**
 
-```bash
-omni connect <instance-id> <agent-name> --mode fire-and-forget
-```
+| Flag | Default | Behavior |
+|------|---------|----------|
+| `--mode <mode>` | `turn-based` | `turn-based` (round-trip; agent ends each turn with `omni done`) or `fire-and-forget` (Omni publishes and does not wait) |
+| `--reply-filter <filter>` | `all` | `all` reply to every inbound message; `filtered` apply `agentReplyFilter.conditions` (DM, mention, reply enabled by default; name-match disabled) |
+| `--nats-url <url>` | `localhost:4222` | NATS server URL used by the provider for publish/subscribe |
 
-Other options:
-
-```bash
-omni connect <instance-id> <agent-name> --reply-filter filtered   # Only reply to messages matching filter conditions
-omni connect <instance-id> <agent-name> --nats-url custom:4222    # Custom NATS server URL (default: localhost:4222)
-```
+> **⚠️ Reply filter default — `all` means "reply to everything."** On WhatsApp this includes every group and broadcast the account is in. If the instance will join groups, pass `--reply-filter filtered` at connect time, or tighten later with:
+> ```bash
+> omni instances update <id> --reply-filter-mode filtered --reply-on-dm
+> ```
+> A **null/missing** `agentReplyFilter` also allows every message through (behavior change introduced in automagik-dev/omni#371 — previously null silently dropped every message). The API logs a one-time warning per instance when a null filter is detected.
 
 The agent must be registered in the Genie directory first. If it is not, register it:
 
@@ -103,25 +104,44 @@ genie dir add <agent-name> --dir /path/to/agent
 
 ### Step 4: Start Bridge
 
-Start the NATS-to-Genie bridge that delivers messages from Omni to your agent:
+Start the Genie server. The NATS ↔ agent bridge (`OmniBridge`) is instantiated inside `genie serve start` automatically — there is **no** `genie omni start` command.
 
 ```bash
-genie omni start --executor sdk
+genie serve start
 ```
 
-This bridges NATS message events to the Genie agent. When a message arrives on the connected WhatsApp instance, the bridge:
-1. Receives the message event from NATS (`omni.message.<instance-id>.*`)
-2. Spawns or routes to the configured Genie agent
+When a message arrives on the connected instance, the bridge:
+1. Receives the message event from NATS (`omni.message.<instance-id>.<chat-id>`)
+2. Routes to the configured Genie agent (spawning a session if needed)
 3. Sets environment variables (`OMNI_INSTANCE`, `OMNI_CHAT`, `OMNI_MESSAGE`, `OMNI_AGENT`)
-4. The agent processes the message and replies using verb commands (`omni say`, `omni speak`, etc.)
-5. The agent signals completion with `omni done`
+4. The agent processes the message and replies using verb commands (`omni say`, `omni speak`, etc.), publishing on `omni.reply.<instance-id>.<chat-id>`
+5. In `turn-based` mode the agent signals completion with `omni done`
 
-The bridge runs as a long-lived process. Use PM2 to keep it running in the background:
+Verify the bridge is live:
 
 ```bash
-pm2 start "genie omni start --executor sdk" --name omni-bridge
+genie serve status
+```
+
+For long-running deployments, keep `genie serve` under a process manager:
+
+```bash
+pm2 start "genie serve start" --name genie-serve
 pm2 save
 ```
+
+### NATS topic contract
+
+The `nats-genie` provider and the genie `OmniBridge` communicate over plain NATS subjects. Understanding the contract makes debugging straightforward — you can subscribe to any subject with `nats sub '<pattern>'`.
+
+| Direction | Subject | Purpose |
+|-----------|---------|---------|
+| Omni → Genie | `omni.message.<instance-id>.<chat-id>` | Inbound user message payload (content, sender, files, env) |
+| Genie → Omni | `omni.reply.<instance-id>.<chat-id>` | Agent-generated reply delivered back to the channel |
+| Omni → Genie | `omni.session.reset.<instance-id>.<chat-id>` | `{ action: 'kill' }` — drop the agent's in-memory session for this chat |
+| Omni → Genie (turn lifecycle) | `omni.turn.{open,done,nudge,stalled,timeout}.<instance-id>.<chat-id>` | Real-time turn signals for `turn-based` mode |
+
+**Important:** Omni subscribes to `omni.reply.<instance-id>.>` (recursive wildcard). WhatsApp chat IDs contain dots (e.g. `5511999999999@s.whatsapp.net`), which the single-token wildcard `*` does not match. See `docs/migration/nats-genie-sidecar-decommission.md`.
 
 ## Verify
 
@@ -207,10 +227,10 @@ pm2 logs omni-bridge           # Check bridge logs for delivery errors
 ```
 
 Common causes:
-- The bridge is not running — start it with `genie omni start --executor sdk`
+- The bridge is not running — start it with `genie serve start` (verify with `genie serve status`)
 - The agent crashed during processing — check `genie events errors`
 - The agent does not have a turn-based prompt — ensure the agent calls `omni done` at the end of each turn
-- The reply filter is set to `filtered` but no filter conditions are configured — use `--reply-filter all`
+- The reply filter is set to `filtered` but no filter conditions match (e.g. `onDm: true` in a group chat) — inspect with `omni instances get <id> --json | jq .agentReplyFilter`
 
 ### agentId still null after connect
 

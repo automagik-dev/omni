@@ -117,6 +117,7 @@ let dynamicAgents: Array<{
   agentType: string;
   capabilities: string[];
   agentProviderId: string | null;
+  configPath: string | null;
   isInternal: boolean;
   isActive: boolean;
   metadata: Record<string, unknown> | null;
@@ -128,7 +129,14 @@ function makeAgent(
   id: string,
   name: string,
   provider: string,
-  opts?: { model?: string; agentType?: string; agentProviderId?: string | null; isActive?: boolean },
+  opts?: {
+    model?: string;
+    agentType?: string;
+    agentProviderId?: string | null;
+    configPath?: string | null;
+    isActive?: boolean;
+    metadata?: Record<string, unknown> | null;
+  },
 ) {
   return {
     id,
@@ -138,9 +146,10 @@ function makeAgent(
     agentType: opts?.agentType ?? 'assistant',
     capabilities: [],
     agentProviderId: opts?.agentProviderId ?? null,
+    configPath: opts?.configPath ?? null,
     isInternal: false,
     isActive: opts?.isActive ?? true,
-    metadata: null,
+    metadata: opts?.metadata ?? null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -153,14 +162,18 @@ async function handleCreateAgent(req: Request): Promise<Response> {
     model?: string;
     agentType?: string;
     agentProviderId?: string;
+    configPath?: string;
     isActive?: boolean;
+    metadata?: Record<string, unknown>;
   };
   const id = crypto.randomUUID();
   const agent = makeAgent(id, body.name ?? 'unnamed', body.provider ?? 'claude', {
     model: body.model,
     agentType: body.agentType,
     agentProviderId: body.agentProviderId,
+    configPath: body.configPath ?? null,
     isActive: body.isActive,
+    metadata: body.metadata ?? null,
   });
   dynamicAgents.push(agent);
   return json({ data: agent }, 201);
@@ -186,6 +199,8 @@ async function handleUpdateAgent(req: Request, path: string): Promise<Response> 
   if (body.agentType !== undefined) found.agentType = body.agentType as string;
   if (body.agentProviderId !== undefined) found.agentProviderId = body.agentProviderId as string | null;
   if (body.isActive !== undefined) found.isActive = body.isActive as boolean;
+  if (body.configPath !== undefined) found.configPath = body.configPath as string | null;
+  if (body.metadata !== undefined) found.metadata = body.metadata as Record<string, unknown> | null;
   found.updatedAt = new Date().toISOString();
   return json({ data: found });
 }
@@ -326,6 +341,72 @@ function handleGetEvent(path: string): Response {
   return json({ data: makeSeedEvent() });
 }
 
+/**
+ * In-memory event queue used by `omni events stream` integration tests.
+ * Pushed via {@link seedStreamEvent} and drained by `GET /api/v2/events`
+ * filtered by `since`. Kept separate from {@link makeSeedEvent} so the
+ * `events get` happy path stays deterministic.
+ */
+interface StreamEventRow {
+  id: string;
+  eventType: string;
+  contentType: string | null;
+  instanceId: string;
+  personId: string | null;
+  direction: 'inbound' | 'outbound';
+  textContent: string | null;
+  transcription: string | null;
+  imageDescription: string | null;
+  chatUuid: string | null;
+  agentId: string | null;
+  conversationId: string | null;
+  receivedAt: string;
+  processedAt: string | null;
+}
+
+let streamedEvents: StreamEventRow[] = [];
+
+export function seedStreamEvent(overrides: Partial<StreamEventRow> = {}): StreamEventRow {
+  const now = new Date().toISOString();
+  const ev: StreamEventRow = {
+    id: crypto.randomUUID(),
+    eventType: 'message.received',
+    contentType: 'text',
+    instanceId: SEED_INSTANCE_ID,
+    personId: null,
+    direction: 'inbound',
+    textContent: 'streamed hello',
+    transcription: null,
+    imageDescription: null,
+    chatUuid: null,
+    agentId: null,
+    conversationId: null,
+    receivedAt: now,
+    processedAt: null,
+    ...overrides,
+  };
+  streamedEvents.push(ev);
+  return ev;
+}
+
+export function clearStreamedEvents(): void {
+  streamedEvents = [];
+}
+
+function handleListEvents(req: Request): Response {
+  const url = new URL(req.url);
+  const sinceRaw = url.searchParams.get('since');
+  const since = sinceRaw ? new Date(sinceRaw).getTime() : 0;
+  const instanceId = url.searchParams.get('instanceId');
+  const eventType = url.searchParams.get('eventType');
+  const matches = streamedEvents
+    .filter((e) => new Date(e.receivedAt).getTime() >= since)
+    .filter((e) => !instanceId || e.instanceId === instanceId)
+    .filter((e) => !eventType || e.eventType === eventType)
+    .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+  return json({ items: matches, meta: { hasMore: false } });
+}
+
 // ── Log fixtures ──
 
 /**
@@ -395,7 +476,7 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'POST /api/v2/auth/validate': handleAuthValidate,
   'GET /api/v2/instances': handleListInstances,
   'POST /api/v2/instances': handleCreateInstance,
-  'GET /api/v2/events': () => json(EMPTY_LIST),
+  'GET /api/v2/events': handleListEvents,
   'POST /api/v2/events/search': () => json(EMPTY_LIST),
   'GET /api/v2/chats': () => json({ items: [], meta: { hasMore: false, cursor: null } }),
   'GET /api/v2/persons': () => json(EMPTY_ITEMS),
@@ -500,6 +581,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
   dynamicInstances = [];
   dynamicProviders = [];
   dynamicAgents = [];
+  streamedEvents = [];
 
   const server = Bun.serve({
     port: 0, // OS-assigned random port
@@ -517,6 +599,7 @@ export async function startMockApi(): Promise<MockApiHandle> {
       dynamicInstances = [];
       dynamicProviders = [];
       dynamicAgents = [];
+      streamedEvents = [];
     },
   };
 

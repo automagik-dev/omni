@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260409.6",
+  "version": "2.260410.1",
   "type": "module",
   "exports": {
     ".": {
@@ -32,6 +32,7 @@
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
+    "@omni/voice-client": "workspace:*",
     "@sentry/bun": "^10.43.0",
     "@trpc/server": "^11.0.0-rc.608",
     "drizzle-orm": "^0.38.4",

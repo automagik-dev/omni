@@ -9,7 +9,7 @@
  * @see /home/cezar/dev/omni/src/db/models.py (v1 reference)
  */
 
-import type { ProviderSchema as CoreProviderSchema } from '@omni/core';
+import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -220,6 +220,8 @@ export interface ChatSettings {
   readOnly?: boolean;
   slowMode?: number; // seconds
   agentPaused?: boolean; // Pause AI agent responses for this chat
+  /** Idle-chat follow-up config at the chat scope (closest). @see issue #404 */
+  followUpConfig?: FollowUpSequenceConfig | null;
   [key: string]: unknown;
 }
 
@@ -322,6 +324,8 @@ export const agents = pgTable(
     isActive: boolean('is_active').notNull().default(true),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
+    /** Idle-chat follow-up config at the agent scope (broadest). @see issue #404 */
+    followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -633,9 +637,9 @@ export const instances = pgTable(
     telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
     // ---- Gupshup Configuration ----
-    gupshupApiKey: text('gupshup_api_key'),
-    gupshupAppName: varchar('gupshup_app_name', { length: 255 }),
-    gupshupSourcePhone: varchar('gupshup_source_phone', { length: 20 }),
+    gupshupCallbackUrl: text('gupshup_callback_url'),
+    gupshupAuthToken: text('gupshup_auth_token'),
+    gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
     webhookVerifyToken: text('webhook_verify_token'),
 
     // ---- Agent Reference ----
@@ -666,6 +670,13 @@ export const instances = pgTable(
     triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
     /** Max triggers per user per channel per minute (rate limiting) */
     triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
+    /**
+     * Drop inbound `message.received` events when the platform-native timestamp
+     * (e.g. WhatsApp `messageTimestamp`) is older than this many minutes.
+     * Guards the agent dispatcher against history-sync replays and NATS
+     * redelivery of stale messages after reconnect/restart. Default: 10.
+     */
+    inboundMaxAgeMinutes: integer('inbound_max_age_minutes').notNull().default(10),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
@@ -792,6 +803,10 @@ export const instances = pgTable(
     }),
     /** Chain mode: 'off' | 'forward' | 'bidirectional' */
     chainMode: varchar('chain_mode', { length: 20 }).notNull().default('off'),
+
+    // ---- Idle-chat follow-up config (instance scope, beats agent scope) ----
+    /** @see issue #404 */
+    followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
 
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -1311,6 +1326,39 @@ export const omniEvents = pgTable(
     agentIdIdx: index('omni_events_agent_id_idx').on(table.agentId),
     chatUuidIdx: index('omni_events_chat_uuid_idx').on(table.chatUuid),
     conversationIdIdx: index('omni_events_conversation_id_idx').on(table.conversationId),
+  }),
+);
+
+// ============================================================================
+// HANDOFF LOGS
+// ============================================================================
+
+/**
+ * Records every agent→human handoff with full payload.
+ * Written synchronously in the /send/handoff route so no data is lost.
+ */
+export const handoffLogs = pgTable(
+  'handoff_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'set null' }),
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    chatId: varchar('chat_id', { length: 255 }).notNull(), // raw JID / phone used as chatId
+    toPhone: varchar('to_phone', { length: 100 }).notNull(), // recipient phone
+    text: text('text').notNull(), // handoff message shown to user
+    extraInfo: text('extra_info'), // optional metadata string from agent (e.g. summary)
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
+    sentAt: timestamp('sent_at').notNull().defaultNow(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+  },
+  (table) => ({
+    instanceIdx: index('handoff_logs_instance_idx').on(table.instanceId),
+    chatUuidIdx: index('handoff_logs_chat_uuid_idx').on(table.chatUuid),
+    chatIdIdx: index('handoff_logs_chat_id_idx').on(table.chatId),
+    sentAtIdx: index('handoff_logs_sent_at_idx').on(table.sentAt),
+    agentIdx: index('handoff_logs_agent_idx').on(table.agentId),
   }),
 );
 
@@ -2594,5 +2642,96 @@ export const turnsRelations = relations(turns, ({ one }) => ({
   apiKey: one(apiKeys, {
     fields: [turns.apiKeyId],
     references: [apiKeys.id],
+  }),
+}));
+
+// ============================================================================
+// CHAT FOLLOW-UP STATE (Idle-chat follow-up sequences)
+// ============================================================================
+
+export const followUpDisarmReasons = [
+  'customer_replied',
+  'handoff',
+  'archived',
+  'window_expired',
+  'sequence_complete',
+  'agent_error',
+  'send_failed',
+  'session_cleared',
+] as const;
+export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
+
+/**
+ * Durable runtime state for a single follow-up sequence on a chat.
+ *
+ * One row per (chatId, instanceId). The sweeper scans this table every 15s
+ * (cron `*\/15 * * * * *`) for rows where `nextFireAt <= NOW()` and
+ * `disarmReason IS NULL`, emits `chat.idle_timeout`, advances the sequence,
+ * and updates `nextFireAt`.
+ *
+ * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
+ */
+export const chatFollowUpState = pgTable(
+  'chat_follow_up_state',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    // ---- Subject ----
+    chatId: uuid('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    /** Agent that produced the outbound message which armed this sequence (nullable — agent may have been deleted). */
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+
+    // ---- Config snapshot ----
+    /** Snapshot of the resolved FollowUpSequenceConfig at arm time — decouples runtime from live config edits. */
+    sequenceConfig: jsonb('sequence_config').notNull().$type<FollowUpSequenceConfig>(),
+
+    // ---- Lifecycle ----
+    /** Zero-based count of follow-ups already fired. The next fire uses this index, then increments. */
+    sequenceIndex: integer('sequence_index').notNull().default(0),
+    /** Timestamp of the outbound agent message that armed (or last refreshed) this sequence. */
+    lastAgentMessageAt: timestamp('last_agent_message_at', { withTimezone: true }).notNull(),
+    /** Timestamp of the most recent inbound customer message — used by the 24h BSP window guard. */
+    lastInboundCustomerMessageAt: timestamp('last_inbound_customer_message_at', { withTimezone: true }),
+    /** When the sweeper should next fire. Null only when disarmed. */
+    nextFireAt: timestamp('next_fire_at', { withTimezone: true }),
+    /** Non-null terminates the sequence. */
+    disarmReason: varchar('disarm_reason', { length: 32 }).$type<FollowUpDisarmReasonDb>(),
+    /** Timestamp of disarm for observability. */
+    disarmedAt: timestamp('disarmed_at', { withTimezone: true }),
+
+    // ---- Timestamps ----
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    /** Sweeper scan: pick rows where nextFireAt is due and sequence is still armed. */
+    sweeperIdx: index('chat_follow_up_state_sweeper_idx').on(table.nextFireAt, table.disarmReason),
+    /** One active row per (chat, instance). */
+    chatInstanceUnique: uniqueIndex('chat_follow_up_state_chat_instance_unique').on(table.chatId, table.instanceId),
+    chatIdx: index('chat_follow_up_state_chat_idx').on(table.chatId),
+    instanceIdx: index('chat_follow_up_state_instance_idx').on(table.instanceId),
+  }),
+);
+
+export type ChatFollowUpState = typeof chatFollowUpState.$inferSelect;
+export type NewChatFollowUpState = typeof chatFollowUpState.$inferInsert;
+
+export const chatFollowUpStateRelations = relations(chatFollowUpState, ({ one }) => ({
+  chat: one(chats, {
+    fields: [chatFollowUpState.chatId],
+    references: [chats.id],
+  }),
+  instance: one(instances, {
+    fields: [chatFollowUpState.instanceId],
+    references: [instances.id],
+  }),
+  agent: one(agents, {
+    fields: [chatFollowUpState.agentId],
+    references: [agents.id],
   }),
 }));

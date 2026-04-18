@@ -32,8 +32,8 @@ describe('validateCacheKey', () => {
     expect(validateCacheKey('a'.repeat(65), 'msg')).toBeNull();
   });
 
-  test('returns null for externalId exceeding 256 chars', () => {
-    expect(validateCacheKey('inst', 'a'.repeat(257))).toBeNull();
+  test('returns null for externalId exceeding 512 chars', () => {
+    expect(validateCacheKey('inst', 'a'.repeat(513))).toBeNull();
   });
 
   test('accepts externalId with dots, @, colons, slashes', () => {

@@ -1,9 +1,11 @@
 /**
  * Tests for computeSessionId — per_thread strategy and backwards compatibility
+ * Tests for runOrStream — branches on instance.agentStreamMode (issue #410)
  */
 
-import { describe, expect, it } from 'bun:test';
-import { computeSessionId } from '../agent-runner';
+import { describe, expect, it, mock } from 'bun:test';
+import type { Database, Instance } from '@omni/db';
+import { type AgentRunContext, type AgentRunResult, AgentRunnerService, computeSessionId } from '../agent-runner';
 
 describe('computeSessionId', () => {
   describe('per_thread strategy', () => {
@@ -63,5 +65,66 @@ describe('computeSessionId', () => {
       expect(computeSessionId('per_user', 'user-1', 'chat-A')).toBe('user-1');
       expect(computeSessionId('per_chat', 'user-1', 'chat-A')).toBe('chat-A');
     });
+  });
+});
+
+describe('AgentRunnerService.runOrStream', () => {
+  const fakeDb = {} as Database;
+
+  function baseContext(agentStreamMode: boolean): AgentRunContext {
+    const instance = {
+      id: 'inst-1',
+      agentStreamMode,
+      agentSessionStrategy: 'per_chat' as const,
+    } as unknown as Instance;
+    return {
+      instance,
+      chatId: 'chat-1',
+      senderId: 'sender-1',
+      chatType: 'dm',
+      messages: ['hi'],
+    };
+  }
+
+  it('calls run() (sync) when agentStreamMode is false', async () => {
+    const runner = new AgentRunnerService(fakeDb);
+    const runResult: AgentRunResult = {
+      parts: ['sync-response'],
+      metadata: { runId: 'run-sync', sessionId: 'chat-1', status: 'completed' },
+    };
+    const runMock = mock(async () => runResult);
+    const streamMock = mock(async function* () {
+      yield 'should-not-run';
+    });
+    runner.run = runMock as unknown as typeof runner.run;
+    runner.stream = streamMock as unknown as typeof runner.stream;
+
+    const result = await runner.runOrStream(baseContext(false));
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    expect(streamMock).not.toHaveBeenCalled();
+    expect(result).toBe(runResult);
+  });
+
+  it('consumes stream() and collects parts when agentStreamMode is true', async () => {
+    const runner = new AgentRunnerService(fakeDb);
+    const runMock = mock(async () => {
+      throw new Error('run() must not be invoked in stream mode');
+    });
+    const streamMock = mock(async function* () {
+      yield 'part-1';
+      yield 'part-2';
+    });
+    runner.run = runMock as unknown as typeof runner.run;
+    runner.stream = streamMock as unknown as typeof runner.stream;
+
+    const result = await runner.runOrStream(baseContext(true));
+
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    expect(runMock).not.toHaveBeenCalled();
+    expect(result.parts).toEqual(['part-1', 'part-2']);
+    expect(result.metadata.status).toBe('completed');
+    expect(result.metadata.sessionId).toBe('chat-1');
+    expect(result.metadata.runId).toBeString();
   });
 });

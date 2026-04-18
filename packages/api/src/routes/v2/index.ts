@@ -20,6 +20,8 @@ import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
+import { followUpRoutes } from './follow-up';
+import { handoffsRoutes } from './handoffs';
 import { instancesRoutes } from './instances';
 import { journeysRoutes } from './journeys';
 import { keysRoutes } from './keys';
@@ -32,6 +34,7 @@ import { personsRoutes } from './persons';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
 import { turnsRoutes } from './turns';
+import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -65,3 +68,6 @@ v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:sour
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
+v2Routes.route('/voice', voiceRoutes); // Voice session management
+v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404)
+v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs
