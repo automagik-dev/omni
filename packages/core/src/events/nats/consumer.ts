@@ -19,6 +19,10 @@ export const DEFAULT_CONSUMER_CONFIG = {
   retryDelayMs: 1000,
   ackWaitMs: 30_000,
   maxAckPending: 1000,
+  // Safety net for ephemeral consumers — NATS server's default is 5s, which
+  // silently GCs consumers with low-frequency message patterns (see #445).
+  // 1h gives any reasonable idle window time to survive before GC kicks in.
+  ephemeralInactiveThresholdMs: 1 * 60 * 60 * 1000,
 } as const;
 
 /**
@@ -56,6 +60,10 @@ export function buildConsumerConfig(pattern: string, options: SubscribeOptions =
   // Durable consumer name
   if (durable) {
     config.durable_name = durable;
+  } else {
+    // Ephemeral consumer — override NATS server's 5s default so long idle
+    // gaps don't silently kill the subscription (see #445).
+    config.inactive_threshold = DEFAULT_CONSUMER_CONFIG.ephemeralInactiveThresholdMs * 1_000_000;
   }
 
   // Queue group for load balancing

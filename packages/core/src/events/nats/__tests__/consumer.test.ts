@@ -27,6 +27,23 @@ describe('consumer', () => {
       expect(config.durable_name).toBe('my-consumer');
     });
 
+    test('does NOT set inactive_threshold when durable is provided', () => {
+      const config = buildConsumerConfig('message.received.>', {
+        durable: 'my-consumer',
+      });
+      expect(config.inactive_threshold).toBeUndefined();
+    });
+
+    test('sets long inactive_threshold for ephemeral consumers (#445)', () => {
+      const config = buildConsumerConfig('message.received.>');
+      // Ephemeral consumers must override the NATS 5s default to prevent
+      // silent GC of subscriptions with low-frequency traffic patterns.
+      expect(config.inactive_threshold).toBeDefined();
+      expect(config.inactive_threshold).toBe(DEFAULT_CONSUMER_CONFIG.ephemeralInactiveThresholdMs * 1_000_000);
+      // Must be significantly longer than server default (5s = 5e9 ns)
+      expect(config.inactive_threshold).toBeGreaterThan(5_000_000_000);
+    });
+
     test('includes queue group when provided', () => {
       const config = buildConsumerConfig('message.received.>', {
         queue: 'message-processors',
@@ -127,6 +144,8 @@ describe('consumer', () => {
       expect(DEFAULT_CONSUMER_CONFIG.retryDelayMs).toBe(1000);
       expect(DEFAULT_CONSUMER_CONFIG.ackWaitMs).toBe(30_000);
       expect(DEFAULT_CONSUMER_CONFIG.maxAckPending).toBe(1000);
+      // Ephemeral consumers get a long idle threshold by default — see #445.
+      expect(DEFAULT_CONSUMER_CONFIG.ephemeralInactiveThresholdMs).toBe(1 * 60 * 60 * 1000);
     });
   });
 });
