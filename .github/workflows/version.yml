@@ -26,7 +26,8 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
        startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
-       contains(github.event.workflow_run.head_commit.message, '/dev') &&
+       (contains(github.event.workflow_run.head_commit.message, '/dev') ||
+        contains(github.event.workflow_run.head_commit.message, '/homolog')) &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
 
     steps:
