@@ -87,7 +87,7 @@ This command does four things automatically:
 | Flag | Default | Behavior |
 |------|---------|----------|
 | `--mode <mode>` | `turn-based` | `turn-based` (round-trip; agent ends each turn with `omni done`) or `fire-and-forget` (Omni publishes and does not wait) |
-| `--reply-filter <filter>` | `all` | `all` reply to every inbound message; `filtered` apply `agentReplyFilter.conditions` (DM, mention, reply, name-match) |
+| `--reply-filter <filter>` | `all` | `all` reply to every inbound message; `filtered` apply `agentReplyFilter.conditions` (DM, mention, reply enabled by default; name-match disabled) |
 | `--nats-url <url>` | `localhost:4222` | NATS server URL used by the provider for publish/subscribe |
 
 > **⚠️ Reply filter default — `all` means "reply to everything."** On WhatsApp this includes every group and broadcast the account is in. If the instance will join groups, pass `--reply-filter filtered` at connect time, or tighten later with:
