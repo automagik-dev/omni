@@ -325,6 +325,135 @@ export async function resolveBatchJobId(input: string): Promise<string> {
 }
 
 /**
+ * Resolve a provider identifier to a UUID.
+ *
+ * Matches in order:
+ *   1. Exact UUID match (skip API call)
+ *   2. UUID prefix match (minimum 2 hex chars)
+ *   3. Exact name match (case-insensitive)
+ *   4. Name substring match (case-insensitive)
+ *
+ * Exits with error if no match or ambiguous.
+ */
+export async function resolveProviderId(input: string): Promise<string> {
+  if (UUID_RE.test(input)) return input;
+
+  const client = getClient();
+  const providers = await client.providers.list({});
+
+  // Partial UUID prefix (at least 2 chars, looks hex-ish)
+  if (/^[0-9a-f]{2,}$/i.test(input)) {
+    const matches = providers.filter((p) => p.id.toLowerCase().startsWith(input.toLowerCase()));
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length > 1) {
+      const names = matches.map((p) => `  ${p.id.slice(0, 8)}  ${p.name}`).join('\n');
+      output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} providers:\n${names}`);
+    }
+  }
+
+  // Exact name match (case-insensitive)
+  const lower = input.toLowerCase();
+  const exactName = providers.find((p) => p.name.toLowerCase() === lower);
+  if (exactName) return exactName.id;
+
+  // Name substring match
+  const nameMatches = providers.filter((p) => p.name.toLowerCase().includes(lower));
+  if (nameMatches.length === 1) return nameMatches[0].id;
+  if (nameMatches.length > 1) {
+    const names = nameMatches.map((p) => `  ${p.id.slice(0, 8)}  ${p.name}`).join('\n');
+    output.error(`Ambiguous name "${input}" matches ${nameMatches.length} providers:\n${names}`);
+  }
+
+  output.error(`No provider found matching "${input}"`);
+}
+
+/**
+ * Resolve an agent identifier to a UUID.
+ *
+ * Matches in order:
+ *   1. Exact UUID match (skip API call)
+ *   2. UUID prefix match (minimum 2 hex chars)
+ *   3. Exact name match (case-insensitive)
+ *   4. Name substring match (case-insensitive)
+ *
+ * Exits with error if no match or ambiguous.
+ */
+export async function resolveAgentId(input: string): Promise<string> {
+  if (UUID_RE.test(input)) return input;
+
+  const client = getClient();
+  const { items: agents } = await client.agents.list({ limit: 100 });
+
+  // Partial UUID prefix (at least 2 chars, looks hex-ish)
+  if (/^[0-9a-f]{2,}$/i.test(input)) {
+    const matches = agents.filter((a) => a.id.toLowerCase().startsWith(input.toLowerCase()));
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length > 1) {
+      const names = matches.map((a) => `  ${a.id.slice(0, 8)}  ${a.name}`).join('\n');
+      output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} agents:\n${names}`);
+    }
+  }
+
+  // Exact name match (case-insensitive)
+  const lower = input.toLowerCase();
+  const exactName = agents.find((a) => a.name.toLowerCase() === lower);
+  if (exactName) return exactName.id;
+
+  // Name substring match
+  const nameMatches = agents.filter((a) => a.name.toLowerCase().includes(lower));
+  if (nameMatches.length === 1) return nameMatches[0].id;
+  if (nameMatches.length > 1) {
+    const names = nameMatches.map((a) => `  ${a.id.slice(0, 8)}  ${a.name}`).join('\n');
+    output.error(`Ambiguous name "${input}" matches ${nameMatches.length} agents:\n${names}`);
+  }
+
+  output.error(`No agent found matching "${input}"`);
+}
+
+/**
+ * Resolve a webhook source identifier to a UUID.
+ *
+ * Matches in order:
+ *   1. Exact UUID match (skip API call)
+ *   2. UUID prefix match (minimum 2 hex chars)
+ *   3. Exact name match (case-insensitive)
+ *   4. Name substring match (case-insensitive)
+ *
+ * Exits with error if no match or ambiguous.
+ */
+export async function resolveWebhookId(input: string): Promise<string> {
+  if (UUID_RE.test(input)) return input;
+
+  const client = getClient();
+  const sources = await client.webhooks.listSources({});
+
+  // Partial UUID prefix (at least 2 chars, looks hex-ish)
+  if (/^[0-9a-f]{2,}$/i.test(input)) {
+    const matches = sources.filter((w) => w.id.toLowerCase().startsWith(input.toLowerCase()));
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length > 1) {
+      const names = matches.map((w) => `  ${w.id.slice(0, 8)}  ${w.name}`).join('\n');
+      output.error(`Ambiguous ID prefix "${input}" matches ${matches.length} webhook sources:\n${names}`);
+    }
+  }
+
+  // Exact name match (case-insensitive)
+  const lower = input.toLowerCase();
+  const exactName = sources.find((w) => w.name.toLowerCase() === lower);
+  if (exactName) return exactName.id;
+
+  // Name substring match
+  const nameMatches = sources.filter((w) => w.name.toLowerCase().includes(lower));
+  if (nameMatches.length === 1) return nameMatches[0].id;
+  if (nameMatches.length > 1) {
+    const names = nameMatches.map((w) => `  ${w.id.slice(0, 8)}  ${w.name}`).join('\n');
+    output.error(`Ambiguous name "${input}" matches ${nameMatches.length} webhook sources:\n${names}`);
+  }
+
+  output.error(`No webhook source found matching "${input}"`);
+}
+
+/**
  * Resolve an agent route identifier to a UUID.
  *
  * Routes are scoped to an instance, so instanceId must already be resolved.

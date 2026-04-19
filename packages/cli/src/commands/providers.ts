@@ -20,6 +20,7 @@ import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveProviderId } from '../resolve.js';
 import { createSetupCommand } from './providers-setup.js';
 
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
@@ -209,9 +210,10 @@ async function handleList(options: { active?: boolean }): Promise<void> {
 }
 
 async function handleGet(id: string): Promise<void> {
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    const provider = await client.providers.get(id);
+    const provider = await client.providers.get(resolvedId);
     output.data(provider);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -270,9 +272,10 @@ async function handleCreate(options: {
 }
 
 async function handleTest(id: string): Promise<void> {
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    const result = await client.providers.checkHealth(id);
+    const result = await client.providers.checkHealth(resolvedId);
     if (result.healthy) {
       output.success(`Provider is healthy (latency: ${result.latency}ms)`);
     } else {
@@ -297,17 +300,18 @@ async function handleUpdate(id: string, options: Record<string, unknown>): Promi
     return;
   }
 
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
     // If updating individual schemaConfig fields (not raw --schema-config JSON),
     // merge with the existing config to avoid dropping required fields.
     if (body.schemaConfig && !options.schemaConfig) {
-      const existing = await client.providers.get(id);
+      const existing = await client.providers.get(resolvedId);
       const existingConfig = (existing.schemaConfig as Record<string, unknown>) ?? {};
       body.schemaConfig = { ...existingConfig, ...(body.schemaConfig as Record<string, unknown>) };
     }
 
-    const provider = await client.providers.update(id, body);
+    const provider = await client.providers.update(resolvedId, body);
     output.success(`Updated provider: ${provider.id}`);
     output.data(provider);
   } catch (err) {
@@ -321,10 +325,11 @@ async function handleDelete(id: string, options: { force?: boolean }): Promise<v
     output.warn(`This will delete provider ${id}. Use --force to confirm.`);
     return;
   }
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    await client.providers.delete(id);
-    output.success(`Deleted provider: ${id}`);
+    await client.providers.delete(resolvedId);
+    output.success(`Deleted provider: ${resolvedId}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     output.error(`Failed to delete provider: ${message}`);
@@ -383,10 +388,11 @@ export function createProvidersCommand(): Command {
     .command('agents <id>')
     .description('List agents from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const agents = await client.providers.listAgents(id);
+        const agents = await client.providers.listAgents(resolvedId);
 
         const items = agents.map((a) => ({
           id: a.agent_id,
@@ -407,10 +413,11 @@ export function createProvidersCommand(): Command {
     .command('teams <id>')
     .description('List teams from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const teams = await client.providers.listTeams(id);
+        const teams = await client.providers.listTeams(resolvedId);
 
         const items = teams.map((t) => ({
           id: t.team_id,
@@ -432,10 +439,11 @@ export function createProvidersCommand(): Command {
     .command('workflows <id>')
     .description('List workflows from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const workflows = await client.providers.listWorkflows(id);
+        const workflows = await client.providers.listWorkflows(resolvedId);
 
         const items = workflows.map((w) => ({
           id: w.workflow_id,
