@@ -34,7 +34,7 @@ function killTestPm2Daemon(): void {
   if (!existsSync(TEST_PM2_HOME)) return;
   spawnSync({
     cmd: ['pm2', 'kill'],
-    env: { ...process.env, PM2_HOME: TEST_PM2_HOME },
+    env: { ...process.env, HOME: TEST_CONFIG_DIR, PM2_HOME: TEST_PM2_HOME },
     stdout: 'ignore',
     stderr: 'ignore',
   });
