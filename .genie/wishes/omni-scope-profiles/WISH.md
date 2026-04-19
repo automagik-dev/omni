@@ -45,6 +45,8 @@ Introduce **profiles** as the primary abstraction for issuing omni API keys. A p
 | Output redactor is middleware, not a scope | Scopes gate "can I make this API call" — redaction gates "what can the response contain." Different layer |
 | Admin key creation requires TTY + exact-match prompt | Prevents any non-interactive caller (AI agents, scripts, CI) from ever minting a god-key — even one that has `keys:write`. Human-gated by construction |
 | `chat_allowlist` / `instance_allowlist` / `outbound_recipient_allowlist` are `text[]` columns, not a separate join table | Small cardinality (tens, not thousands), read on every authed request, denormalized for latency |
+| Denylist presets (e.g. `khal-os-core`) are loaded from tenant config/env at key-creation time, **not bundled** in omni source | Keeps platform/consumer boundary clean. `profiles.ts` ships only a `coworker.defaultDenylistPresetKey: string` pointer; the actual pattern list is resolved from `OMNI_DENYLIST_PRESETS` env (or equivalent tenant config) at runtime. Consumer-specific secret-sauce taxonomy (khal-os core paths, specific token names) never enters the omni platform repo |
+| Empty allowlist is profile-aware: legacy NULL-profile keys treat `[]` as "no lock" (backward compat); profile keys where the template declares `requiresLocks` treat `[]` as "deny all" | Prevents a cleared allowlist (via direct DB edit, bug, or misuse) from silently granting unrestricted access on a profile that was explicitly designed to be scoped |
 
 ## Success Criteria
 
@@ -62,34 +64,44 @@ Introduce **profiles** as the primary abstraction for issuing omni API keys. A p
 
 ## Execution Strategy
 
-### Wave 1 (parallel — foundational, no dependencies)
+### Wave 1 (parallel — truly no dependencies)
 
 | Group | Agent | Description |
 |-------|-------|-------------|
 | 1 | engineer | Verbs enum + verb-bucket groupings (`constants/verbs.ts`) |
-| 2 | engineer | `verbsToScopes()` resolver (`lib/verbs-to-scopes.ts`) |
 | 3 | engineer | Drizzle migration for `agent_keys` columns |
 
-### Wave 2 (after Wave 1)
+### Wave 2 (parallel — after Wave 1)
 
 | Group | Agent | Description |
 |-------|-------|-------------|
-| 4 | engineer | 5 profile templates (`constants/profiles.ts`) — consumes Groups 1 + 2 |
+| 2 | engineer | `verbsToScopes()` resolver — consumes Group 1 |
 | 5 | engineer | Scope-enforcer extensions (chat/instance/outbound allowlists) — consumes Group 3 |
 
 ### Wave 3 (after Wave 2)
 
 | Group | Agent | Description |
 |-------|-------|-------------|
-| 6 | engineer | Output-redactor middleware + `secret.redacted` events |
-| 7 | engineer | CLI extensions (`omni keys create --profile …`) + admin TTY gate |
+| 4 | engineer | 5 profile templates (`constants/profiles.ts`) — consumes Groups 1 + 2 |
 
-### Wave 4 (after all above)
+### Wave 4 (after Wave 3)
+
+| Group | Agent | Description |
+|-------|-------|-------------|
+| 6 | engineer | Output-redactor middleware + `secret.redacted` events — consumes Group 4 |
+
+### Wave 5 (after Wave 4)
+
+| Group | Agent | Description |
+|-------|-------|-------------|
+| 7 | engineer | CLI extensions (`omni keys create --profile …`) + admin TTY gate + API-route guard — consumes Groups 4 + 5 + 6 |
+
+### Wave 6 (after Wave 5)
 
 | Group | Agent | Description |
 |-------|-------|-------------|
 | 8 | engineer | Docs (`docs/profiles.md`) + OpenAPI regen + CLI help polish |
-| review | reviewer | Full-wish review — security focus on admin gate + enforcer primitives |
+| review | reviewer | Full-wish review — security focus on admin gate + enforcer primitives + API-route guard |
 | qa | qa | Integration tests on dev — every profile + every lock primitive |
 
 ## Execution Groups
@@ -192,7 +204,10 @@ cd packages/api && bun test src/constants/__tests__/profiles.test.ts
 - [ ] Request to `POST /chats/:otherJid/messages` from a cs-locked key returns 403 with `lock: chatAllowlist`
 - [ ] `messages:send` to a non-allowlisted recipient from a scout key returns 403 with `lock: outboundRecipientAllowlist`
 - [ ] Request against an instance not in `instance_allowlist` returns 403 with `lock: instanceAllowlist`
-- [ ] Empty allowlist (`[]`) is treated as "no lock" (not "deny all") — backward compat for pre-profile keys
+- [ ] Empty allowlist semantics are **profile-aware**:
+  - For keys with `profile IS NULL` (pre-profile legacy keys), empty `[]` = "no lock" (backward compat)
+  - For keys with `profile != NULL` where the profile template declares the lock in `requiresLocks` (e.g. `cs` requires `chatAllowlist` + `instanceAllowlist`, `scout` requires `outboundRecipientAllowlist`), empty `[]` = **deny all** — never "no lock". This closes the hole where a cleared allowlist silently grants unrestricted access.
+  - Unit test covers both cases: legacy key with `[]` allowed; profile key with `requiresLocks` lock cleared to `[]` denied with `lock: <name> (deny-all: profile requires lock)`.
 - [ ] Unit tests cover allow + deny per primitive
 
 **Validation:**
@@ -242,10 +257,12 @@ bun run bench/output-redactor.bench.ts
 - [ ] `omni keys create --profile admin` on a TTY prompts exactly the DESIGN-documented text
 - [ ] Wrong confirmation text aborts with exit code 1 and no key created
 - [ ] `omni events --type key.admin_created` shows the event after success
+- [ ] API route `POST /keys` rejects `{ profile: 'admin' }` unconditionally with 403 — admin key minting is CLI-only and never reachable via HTTP. `operator_confirmed` is never a valid request body field; the API route does not read it. Enforced at the route layer (not just the CLI flag parser) so `keys:write` scope alone cannot mint a god-key. Integration test proves it: POST with `{profile:'admin',operator_confirmed:true}` returns 403.
 
 **Validation:**
 ```bash
 cd packages/cli && bun test src/commands/__tests__/keys.test.ts
+cd packages/api && bun test src/routes/v2/__tests__/keys-admin-route-guard.test.ts
 # manual TTY verification step (documented in QA criteria)
 ```
 
