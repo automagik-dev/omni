@@ -12,6 +12,7 @@
 import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  ConnectionStatus,
   DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -365,7 +366,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
     if (telegramConfig.mode === 'webhook') {
       await this.startWebhook(bot, instanceId, telegramConfig);
     } else {
-      await this.startPolling(bot, instanceId);
+      await this.startPolling(bot, instanceId, config);
     }
 
     // Update instance state
@@ -411,6 +412,28 @@ export class TelegramPlugin extends BaseChannelPlugin {
     });
 
     await this.emitInstanceDisconnected(instanceId, 'Manual disconnect');
+  }
+
+  /**
+   * Report 'error' when the tracked status says 'connected' but the underlying
+   * grammy bot is no longer polling (e.g. a 409 Conflict killed the poller
+   * without rejecting bot.start()'s promise in time for state to update).
+   * InstanceMonitor relies on this to schedule a reconnect.
+   */
+  override async getStatus(instanceId: string): Promise<ConnectionStatus> {
+    const status = await super.getStatus(instanceId);
+    if (status.state !== 'connected') return status;
+
+    const bot = getBot(instanceId);
+    const pollingAlive = bot?.isRunning ? bot.isRunning() : Boolean(bot);
+    if (!pollingAlive) {
+      return {
+        state: 'error',
+        since: new Date(),
+        message: 'Polling stopped',
+      };
+    }
+    return status;
   }
 
   // ────────────────────────────────────────────────────────────
@@ -876,32 +899,40 @@ export class TelegramPlugin extends BaseChannelPlugin {
   // Private helpers
   // ────────────────────────────────────────────────────────────
 
-  private async startPolling(bot: TelegramBotLike, instanceId: string): Promise<void> {
+  private async startPolling(bot: TelegramBotLike, instanceId: string, config: InstanceConfig): Promise<void> {
     this.logger.info('Starting polling mode', { instanceId });
 
-    // Start polling in background (non-blocking)
-    bot.start({
-      drop_pending_updates: true,
-      allowed_updates: [
-        'message',
-        'edited_message',
-        'channel_post',
-        'edited_channel_post',
-        'message_reaction',
-        'callback_query',
-        'poll',
-        'poll_answer',
-        'my_chat_member',
-      ],
-      onStart: () => {
-        this.logger.info('Polling started', { instanceId });
-      },
-    });
-
-    // grammy emits 'error' on polling failures — the bot.catch() handler will
-    // catch these, and grammy will automatically retry polling with backoff.
-    // If polling stops entirely (e.g. bot revoked), the health check will
-    // surface the failure via getHealthChecks().
+    // Start polling in background (non-blocking). Attach a .catch() so fatal
+    // errors (e.g. 409 Conflict when another poller is active) surface through
+    // getStatus() and let InstanceMonitor schedule a reconnect.
+    bot
+      .start({
+        drop_pending_updates: true,
+        allowed_updates: [
+          'message',
+          'edited_message',
+          'channel_post',
+          'edited_channel_post',
+          'message_reaction',
+          'callback_query',
+          'poll',
+          'poll_answer',
+          'my_chat_member',
+        ],
+        onStart: () => {
+          this.logger.info('Polling started', { instanceId });
+        },
+      })
+      .catch(async (err) => {
+        const message = `Polling stopped: ${err instanceof Error ? err.message : String(err)}`;
+        this.logger.error('Polling terminated', { instanceId, error: message });
+        await this.updateInstanceStatus(instanceId, config, {
+          state: 'error',
+          since: new Date(),
+          message,
+        });
+        await this.emitInstanceDisconnected(instanceId, message);
+      });
   }
 
   private async startWebhook(_bot: TelegramBotLike, instanceId: string, _config: TelegramConfig): Promise<void> {
