@@ -102,6 +102,19 @@ export type SettingValueType = (typeof settingValueTypes)[number];
 export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
 export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
 
+// Profile templates that compose verb buckets + enforcement locks for API keys.
+// `null` keeps pre-profile keys working with legacy empty-allowlist-as-no-lock semantics.
+export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] as const;
+export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
+
+// Tenant-editable overrides applied on top of a profile's bucket resolution.
+// `add` / `remove` take verb names; `denylistPresetKey` swaps the outbound redactor preset.
+export type ApiKeyProfileOverrides = {
+  add?: string[];
+  remove?: string[];
+  denylistPresetKey?: string;
+};
+
 export const eventTypes = CORE_EVENT_TYPES;
 export type EventType = CoreEventType;
 
@@ -503,6 +516,22 @@ export const apiKeys = pgTable(
     // Scopes define what the key can access
     // Examples: ['*'], ['messages:read', 'messages:write'], ['instances:read']
     scopes: text('scopes').array().notNull(),
+
+    // Profile template used at key-creation time to resolve `scopes` and enforcement
+    // locks. `null` for legacy / pre-profile keys — they keep their hand-authored scopes
+    // and treat the allowlist columns as "no lock" instead of "deny all".
+    profile: varchar('profile', { length: 32 }).$type<ApiKeyProfile>(),
+
+    // Tenant-level overrides that add/remove verbs or swap the denylist preset on top
+    // of the profile's bucket resolution. Empty `{}` means "profile defaults".
+    profileOverrides: jsonb('profile_overrides').$type<ApiKeyProfileOverrides>().notNull().default(sql`'{}'::jsonb`),
+
+    // Enforcement locks consumed by the scope-enforcer middleware.
+    // Empty `[]` semantics depend on `profile`: NULL profile = "no lock" (backward
+    // compat); profile that declares `requiresLocks` = "deny all".
+    chatAllowlist: text('chat_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
+    instanceAllowlist: uuid('instance_allowlist').array().notNull().default(sql`ARRAY[]::uuid[]`),
+    outboundRecipientAllowlist: text('outbound_recipient_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
 
     // Instance restrictions (null = all instances)
     instanceIds: uuid('instance_ids').array(),
