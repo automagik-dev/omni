@@ -62,7 +62,7 @@ each plugin's `capabilities.ts` and the real implementation status from the audi
 | Typing indicator (inbound) | ❌ library-blocked | 📥 handler exists, not emitted | **blocked** (TG) | TG Bot API does not expose typing events to bots. WA fires `presence.update` but handler is a TODO stub. |
 | Markdown → native format | ✅ `markdownToTelegramHtml()` (HTML) | ✅ `markdownToWhatsApp()` | **match** | Both respect `messageFormatMode: 'convert' | 'passthrough'`. |
 | Smart message splitting | ✅ `splitHtmlMessage()` | ✅ `splitWhatsAppMessage()` | **match** | Both split at `maxMessageLength`, respecting code blocks. |
-| Human delay / anti-bot | ❌ not needed | ✅ `humanDelay()` 1.5–3.5 s | **out-of-scope** | Telegram bots are expected to be bots; no delay needed. |
+| Human delay / anti-bot | ❌ not needed | ✅ `humanDelay()` default 1.5–3.5 s | **out-of-scope** | Telegram bots are expected to be bots; WA timing is configurable via `WHATSAPP_HUMAN_DELAY_*` env vars. |
 
 ---
 
@@ -196,7 +196,7 @@ These are **permanent platform constraints** — Telegram's Bot API does not exp
 | No slash commands | WhatsApp has no command registration mechanism |
 | Broadcast list support is partial | Baileys exposes broadcast JIDs but sending is unreliable; newsletters are a separate API |
 | Custom emoji reactions not supported | WhatsApp restricts reactions to standard Unicode emoji |
-| Rate limits ≈ human hand speed | Baileys mimics the WhatsApp Web client; sending too fast triggers rate limits and temporary bans. Use `humanDelay()` (1.5–3.5 s) and `simulateTyping()` (text-length-scaled) to stay safe. This is **not** API throughput — it's anti-automation detection. |
+| Rate limits ≈ human hand speed | Baileys mimics the WhatsApp Web client; sending too fast triggers rate limits and temporary bans. Use `humanDelay()` (default 1.5–3.5 s) and `simulateTyping()` (text-length-scaled) to stay safe. Both are configurable via `WHATSAPP_*` env vars. This is **not** API throughput — it's anti-automation detection. |
 | Session stability | Baileys uses a reverse-engineered protocol; connection can drop. Exponential backoff + `seedAuthenticated()` required. |
 
 ---
@@ -206,7 +206,7 @@ These are **permanent platform constraints** — Telegram's Bot API does not exp
 | Channel | Model | Details |
 |---------|-------|---------|
 | **Telegram** | API throughput | Bot API allows ~30 msg/s globally, ~1 msg/s per chat in groups. grammy handles 429 retries automatically. |
-| **WhatsApp** | Human hand speed | Baileys ≈ web client; rate is limited by anti-bot detection, not an API quota. `humanDelay()` randomizes 1.5–3.5 s between actions. `simulateTyping()` scales delay to message length. Sending too fast → temp ban (24 h in severe cases). |
+| **WhatsApp** | Human hand speed | Baileys ≈ web client; rate is limited by anti-bot detection, not an API quota. `humanDelay()` defaults to 1.5–3.5 s between actions. `simulateTyping()` scales delay to message length. Outbound timing and rate-limit backoff are configurable via `WHATSAPP_*` env vars. Sending too fast → temp ban (24 h in severe cases). |
 
 ---
 

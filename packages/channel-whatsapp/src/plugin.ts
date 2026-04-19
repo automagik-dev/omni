@@ -23,6 +23,7 @@ import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
+import { getWhatsAppOutboundTimingConfig, getWhatsAppRateLimitConfig } from './env';
 import { setupAllEventHandlers } from './handlers/all-events';
 import {
   cancelPendingReconnect,
@@ -269,7 +270,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private getRateLimitManager(instanceId: string): RateLimitManager {
     let manager = this.rateLimitManagers.get(instanceId);
     if (!manager) {
-      manager = createRateLimitManager(instanceId, this.logger);
+      manager = createRateLimitManager(instanceId, this.logger, getWhatsAppRateLimitConfig());
       this.rateLimitManagers.set(instanceId, manager);
     }
     return manager;
@@ -283,10 +284,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * enough time has passed since the previous action.
    */
   private async humanDelay(instanceId: string): Promise<void> {
+    const timing = getWhatsAppOutboundTimingConfig();
+    if (!timing.humanDelayEnabled) return;
+
     const now = Date.now();
     const last = this.lastActionTime.get(instanceId) || 0;
-    const minDelay = 1500;
-    const maxDelay = 3500;
+    const minDelay = timing.humanDelayMinMs;
+    const maxDelay = timing.humanDelayMaxMs;
     const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
     const elapsed = now - last;
 
@@ -302,9 +306,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Duration scales with text length to look natural.
    */
   private async simulateTyping(instanceId: string, jid: string, text: string): Promise<void> {
+    const timing = getWhatsAppOutboundTimingConfig();
+    if (!timing.typingSimulationEnabled) return;
+
     try {
       const sock = this.getSocket(instanceId);
-      const typingMs = Math.min(800 + text.length * 30, 4000);
+      const typingMs = Math.min(
+        timing.typingDelayBaseMs + text.length * timing.typingDelayPerCharMs,
+        timing.typingDelayMaxMs,
+      );
+      if (typingMs <= 0) return;
+
       await sock.sendPresenceUpdate('composing', jid);
       await new Promise<void>((r) => setTimeout(r, typingMs));
       await sock.sendPresenceUpdate('paused', jid);
@@ -1515,7 +1527,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Send typing indicator
    */
-  async sendTyping(instanceId: string, chatId: string, duration = 3000): Promise<void> {
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const resolvedDuration = duration ?? getWhatsAppOutboundTimingConfig().typingDefaultMs;
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
@@ -1529,7 +1542,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       } catch {
         // Ignore errors when pausing typing
       }
-    }, duration);
+    }, resolvedDuration);
   }
 
   /**
