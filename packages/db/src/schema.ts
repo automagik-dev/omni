@@ -1536,6 +1536,12 @@ export interface SyncJobProgress {
   duplicates: number;
   mediaDownloaded: number;
   totalEstimated?: number;
+  /**
+   * ISO-8601 timestamp of the last `updateProgress` call. Lets clients
+   * distinguish "running slowly" from "stuck" when `progressPercent` cannot
+   * be computed (e.g. Baileys never reports a denominator). See issue #398.
+   */
+  lastProgressAt?: string;
 }
 
 /**
