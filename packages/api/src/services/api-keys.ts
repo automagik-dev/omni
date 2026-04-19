@@ -39,6 +39,10 @@ export interface ValidatedApiKey {
   scopes: string[];
   instanceIds: string[] | null;
   rateLimit: number | null;
+  profile: string | null;
+  chatAllowlist: string[];
+  instanceAllowlist: string[];
+  outboundRecipientAllowlist: string[];
 }
 
 /**
@@ -153,6 +157,10 @@ export class ApiKeyService {
         scopes: cached.scopes,
         instanceIds: cached.instanceIds,
         rateLimit: null, // Rate limit checked separately
+        profile: cached.profile ?? null,
+        chatAllowlist: cached.chatAllowlist ?? [],
+        instanceAllowlist: cached.instanceAllowlist ?? [],
+        outboundRecipientAllowlist: cached.outboundRecipientAllowlist ?? [],
       };
     }
 
@@ -182,6 +190,10 @@ export class ApiKeyService {
       expiresAt: apiKey.expiresAt,
       scopes: apiKey.scopes,
       instanceIds: apiKey.instanceIds,
+      profile: apiKey.profile,
+      chatAllowlist: apiKey.chatAllowlist,
+      instanceAllowlist: apiKey.instanceAllowlist,
+      outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
     };
     await apiKeyCache.set(cacheKey, cachedData, CacheTTL.API_KEY);
 
@@ -194,6 +206,10 @@ export class ApiKeyService {
       scopes: apiKey.scopes,
       instanceIds: apiKey.instanceIds,
       rateLimit: apiKey.rateLimit,
+      profile: apiKey.profile,
+      chatAllowlist: apiKey.chatAllowlist ?? [],
+      instanceAllowlist: apiKey.instanceAllowlist ?? [],
+      outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist ?? [],
     };
   }
 

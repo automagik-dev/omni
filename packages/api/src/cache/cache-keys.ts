@@ -71,6 +71,10 @@ export interface CachedApiKey {
   expiresAt: Date | null;
   scopes: string[];
   instanceIds: string[] | null;
+  profile?: string | null;
+  chatAllowlist?: string[];
+  instanceAllowlist?: string[];
+  outboundRecipientAllowlist?: string[];
 }
 
 /**
