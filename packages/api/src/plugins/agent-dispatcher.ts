@@ -3561,7 +3561,6 @@ async function shouldProcessMessage(
   chatsService: Services['chats'],
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
-  rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3681,11 +3680,10 @@ async function shouldProcessMessage(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
-    return null;
-  }
+
+  // #384: Rate limiting is deferred to the debounced flush so fast-typed
+  // messages still reach the debounce buffer. Counting per-inbound-message
+  // silently dropped mid-thought messages and corrupted the agent context.
 
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
   if (accessDenied) return null;
@@ -4024,6 +4022,20 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
+    // #384: Apply rate limit per debounced trigger (not per inbound message) so
+    // fast-typed messages queue into the debounce buffer instead of being dropped.
+    const channel = (firstMsg.metadata.channelType ?? instance.channel) as ChannelType;
+    const rateLimit = (instance as unknown as Record<string, unknown>).triggerRateLimit as number | undefined;
+    if (!rateLimiter.isAllowed(firstMsg.payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
+      log.info('Rate limited (debounced trigger)', {
+        instanceId: instance.id,
+        from: firstMsg.payload.from,
+        channel,
+        bufferedCount: messages.length,
+      });
+      return;
+    }
+
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
       const tracker = getJourneyTracker();
@@ -4050,7 +4062,6 @@ export async function setupAgentDispatcher(
             services.chats,
             services.messages,
             services.routeResolver,
-            rateLimiter,
             payload,
             metadata,
           );

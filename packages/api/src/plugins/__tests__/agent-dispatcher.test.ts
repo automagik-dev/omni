@@ -597,9 +597,9 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
-    it('rate limits when too many messages from same user', async () => {
+    it('rate limits debounced triggers, not individual messages (#384)', async () => {
       const eventBus = createMockEventBus();
-      // Instance with rate limit of 2
+      // Instance with rate limit of 2 triggers per window
       const agentRunner = {
         getInstanceWithProvider: mock(async () => createMockInstance({ triggerRateLimit: 2 })),
         getSenderName: mock(async () => 'User'),
@@ -612,17 +612,57 @@ describe('agent-dispatcher', () => {
 
       cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
-      // Send 3 messages — the 3rd should be rate limited
+      // #384: Fast burst of 3 messages to the same chat must NOT be dropped.
+      // They all queue into the debounce buffer and flush as a single trigger.
       for (let i = 0; i < 3; i++) {
         await eventBus.fire('message.received', createMessageEvent());
       }
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // B-1: IAgentProvider handles dispatch; getSenderName proves message reached processAgentResponse.
-      // Rate limiter blocks the 3rd message. Debouncer merges same-chatKey, so 1 flush = 1 call.
+      // All 3 messages survive the rate limiter and reach the agent in one batch.
+      // Debouncer merges same-chatKey → 1 flush → 1 agent call.
       const senderNameCalls = agentRunner.getSenderName.mock.calls.length;
       expect(senderNameCalls).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not drop fast-typed messages between rate limiter and debounce buffer (#384)', async () => {
+      const eventBus = createMockEventBus();
+      // triggerRateLimit is intentionally smaller than the message burst
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () => createMockInstance({ triggerRateLimit: 1 })),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      // 5 fast-typed messages in the same chat. Pre-fix: only the first reached
+      // the debounce buffer and the other 4 were silently dropped, corrupting
+      // agent context. Post-fix: all 5 queue into the debouncer and the agent
+      // sees every message in a single batch.
+      const events = Array.from({ length: 5 }, (_, i) =>
+        createMessageEvent({
+          payload: {
+            externalId: `ext-${i}`,
+            chatId: '5511999000001@s.whatsapp.net',
+            from: '5511999000001',
+            content: { type: 'text', text: `part ${i}` },
+          },
+        }),
+      );
+      for (const event of events) {
+        await eventBus.fire('message.received', event);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Exactly one trigger (debounced batch), but carrying all 5 messages.
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
     });
   });
 
