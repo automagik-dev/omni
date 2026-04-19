@@ -531,6 +531,14 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  if (data.agentId && data.agentReplyFilter === undefined) {
+    data.agentReplyFilter = {
+      mode: 'all',
+      conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
+    };
+    log.info('Auto-set agentReplyFilter for new instance', { agentId: data.agentId });
+  }
+
   // Map generic `token` → channel-specific DB column + resolve connect token
   const connectToken = resolveChannelToken(data);
 
@@ -572,15 +580,26 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  // Detect agent assignment changes for auto-key provisioning
+  // Detect agent assignment changes for auto-key provisioning and auto-reply-filter
   let oldAgentId: string | null | undefined;
-  if (data.agentId !== undefined) {
+  let current: Awaited<ReturnType<typeof services.instances.getById>> | undefined;
+  if (data.agentId !== undefined || data.agentReplyFilter === undefined) {
     try {
-      const current = await services.instances.getById(id);
+      current = await services.instances.getById(id);
       oldAgentId = current.agentId;
     } catch {
       // Instance not found — update will throw
     }
+  }
+
+  // Auto-set agentReplyFilter when agent is assigned (new or existing) and no filter configured
+  const finalAgentId = data.agentId !== undefined ? data.agentId : (current?.agentId ?? null);
+  if (finalAgentId && data.agentReplyFilter === undefined && !current?.agentReplyFilter) {
+    data.agentReplyFilter = {
+      mode: 'all',
+      conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
+    };
+    log.info('Auto-set agentReplyFilter on agent assignment', { instanceId: id, agentId: finalAgentId });
   }
 
   const instance = await services.instances.update(id, data);
