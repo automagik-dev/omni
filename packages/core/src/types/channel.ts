@@ -13,6 +13,7 @@ export const CHANNEL_TYPES = [
   'hermes',
   'twilio-whatsapp',
   'internal',
+  'msteams',
 ] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 
