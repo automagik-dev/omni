@@ -5,7 +5,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import type { ApiKeyProfile } from '@omni/db';
+import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
 import type { Services } from './services';
 
 /**
@@ -30,6 +30,11 @@ export interface ApiKeyData {
   instanceAllowlist?: string[];
   /** Outbound recipients (platform ids / JIDs) this key may send to. */
   outboundRecipientAllowlist?: string[];
+  /**
+   * Tenant overrides persisted on the row. Consumed by the output-redactor to
+   * resolve the effective denylist preset key and per-key extra patterns.
+   */
+  profileOverrides?: ApiKeyProfileOverrides | null;
 }
 
 /**

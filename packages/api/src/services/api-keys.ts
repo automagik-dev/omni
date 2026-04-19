@@ -13,7 +13,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
+import type { ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache } from '../cache';
@@ -43,6 +43,7 @@ export interface ValidatedApiKey {
   chatAllowlist: string[];
   instanceAllowlist: string[];
   outboundRecipientAllowlist: string[];
+  profileOverrides: ApiKeyProfileOverrides | null;
 }
 
 /**
@@ -161,6 +162,7 @@ export class ApiKeyService {
         chatAllowlist: cached.chatAllowlist ?? [],
         instanceAllowlist: cached.instanceAllowlist ?? [],
         outboundRecipientAllowlist: cached.outboundRecipientAllowlist ?? [],
+        profileOverrides: (cached.profileOverrides as ApiKeyProfileOverrides | null | undefined) ?? null,
       };
     }
 
@@ -194,6 +196,7 @@ export class ApiKeyService {
       chatAllowlist: apiKey.chatAllowlist,
       instanceAllowlist: apiKey.instanceAllowlist,
       outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
+      profileOverrides: apiKey.profileOverrides ?? null,
     };
     await apiKeyCache.set(cacheKey, cachedData, CacheTTL.API_KEY);
 
@@ -210,6 +213,7 @@ export class ApiKeyService {
       chatAllowlist: apiKey.chatAllowlist ?? [],
       instanceAllowlist: apiKey.instanceAllowlist ?? [],
       outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist ?? [],
+      profileOverrides: apiKey.profileOverrides ?? null,
     };
   }
 

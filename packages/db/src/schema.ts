@@ -108,11 +108,14 @@ export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] a
 export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
 
 // Tenant-editable overrides applied on top of a profile's bucket resolution.
-// `add` / `remove` take verb names; `denylistPresetKey` swaps the outbound redactor preset.
+// `add` / `remove` take verb names; `denylistPresetKey` swaps the outbound redactor
+// preset; `denylistExtras` appends tenant-specific literal patterns on top of the
+// resolved preset (no preset change required — the extras merge with the preset list).
 export type ApiKeyProfileOverrides = {
   add?: string[];
   remove?: string[];
   denylistPresetKey?: string;
+  denylistExtras?: string[];
 };
 
 export const eventTypes = CORE_EVENT_TYPES;

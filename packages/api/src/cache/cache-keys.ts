@@ -75,6 +75,7 @@ export interface CachedApiKey {
   chatAllowlist?: string[];
   instanceAllowlist?: string[];
   outboundRecipientAllowlist?: string[];
+  profileOverrides?: Record<string, unknown> | null;
 }
 
 /**

@@ -75,6 +75,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     chatAllowlist: validatedKey.chatAllowlist ?? [],
     instanceAllowlist: validatedKey.instanceAllowlist ?? [],
     outboundRecipientAllowlist: validatedKey.outboundRecipientAllowlist ?? [],
+    profileOverrides: validatedKey.profileOverrides ?? null,
   };
 
   c.set('apiKey', keyData);

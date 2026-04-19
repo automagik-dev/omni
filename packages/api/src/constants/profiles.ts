@@ -33,6 +33,11 @@ export interface ProfileOverrides {
   extraBuckets: VerbBucket[];
   extraScopes: string[];
   denylistPresetKey: string | null;
+  /**
+   * Tenant-specific literal patterns appended to the resolved preset list.
+   * Each entry is treated as a case-insensitive literal (regex-escaped).
+   */
+  denylistExtras: string[];
 }
 
 export interface ProfileTemplate {

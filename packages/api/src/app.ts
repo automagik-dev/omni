@@ -43,6 +43,7 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { outputRedactorMiddleware } from './middleware/output-redactor';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 
 import { createContextMiddleware } from './middleware/context';
@@ -233,6 +234,7 @@ export function createApp(
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
   protectedApp.use('*', scopeEnforcerMiddleware);
+  protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
   // Mount v2 routes
