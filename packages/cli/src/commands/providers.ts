@@ -61,8 +61,8 @@ function validateCreateOptions(options: {
   if (options.schema === 'claude-code' && !options.projectPath) {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
   }
-  if (options.schema === 'genie' && (!options.agentName || !options.targetAgent)) {
-    return 'Genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Genie" --schema genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
+  if (options.schema === 'nats-genie' && (!options.agentName || !options.targetAgent)) {
+    return 'Genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Genie" --schema nats-genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
   }
   return null;
 }
@@ -98,6 +98,8 @@ function buildClaudeCodeConfig(options: SchemaConfigOptions): Record<string, unk
 function buildNatsGenieConfig(options: SchemaConfigOptions): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   if (options.agentName) config.agentName = options.agentName;
+  if (options.targetAgent) config.targetAgent = options.targetAgent;
+  if (options.teamName) config.teamName = options.teamName;
   return config;
 }
 
