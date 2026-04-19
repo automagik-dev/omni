@@ -204,6 +204,10 @@ export interface MessageReceivedPayload {
   /** Optional thread/topic identifier (e.g. Telegram forum topic) */
   threadId?: string;
   from: string;
+  /** Display name of the sender (normalized across channels) */
+  senderName?: string;
+  /** Group/chat display name (for group chats) */
+  chatName?: string;
   content: {
     type: ContentType;
     text?: string;

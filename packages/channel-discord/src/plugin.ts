@@ -1541,11 +1541,16 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Discord timestamps are already in milliseconds
     const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
 
+    const senderName = typeof rawPayload.displayName === 'string' ? rawPayload.displayName : undefined;
+    const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
       from,
+      senderName,
+      chatName,
       content,
       replyToId,
       rawPayload,

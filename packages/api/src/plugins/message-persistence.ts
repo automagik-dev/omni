@@ -188,7 +188,7 @@ function buildChatPreview(payload: MessageReceivedPayload, rawPayload: Record<st
 
   // Prefix with sender name for groups (not from self)
   if (isGroup && !isFromMe) {
-    const sender = (rawPayload?.pushName as string) || (rawPayload?.displayName as string) || '';
+    const sender = payload.senderName || (rawPayload?.pushName as string) || (rawPayload?.displayName as string) || '';
     if (sender) preview = `${sender}: ${preview}`;
   }
 
@@ -258,7 +258,7 @@ async function processSenderIdentity(
     return { personId: metadata.personId, platformIdentityId: undefined };
   }
 
-  const displayName = truncate(payload.rawPayload?.pushName as string | undefined, 255);
+  const displayName = truncate(payload.senderName ?? (payload.rawPayload?.pushName as string | undefined), 255);
   const platformUserId = truncate(payload.from, 255) ?? payload.from;
   // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
   // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
@@ -408,6 +408,7 @@ async function postProcessChat(
   instanceId: string,
   rawPayload: Record<string, unknown> | undefined,
   isFromMe: boolean,
+  chatName: string | undefined,
 ): Promise<void> {
   // Populate canonicalId ONLY if not already set
   // (Usually set during creation, but handle legacy chats or edge cases)
@@ -423,7 +424,7 @@ async function postProcessChat(
   // Note: we process both new and existing chats — new chats may have been created
   // without a name if effectiveName was not available at findOrCreate time.
   {
-    const chatNameLocal = rawPayload?.chatName as string | undefined;
+    const chatNameLocal = chatName ?? (rawPayload?.chatName as string | undefined);
     const effectiveNameLocal = resolveEffectiveChatName({
       chatType,
       isFromMe,
@@ -440,14 +441,17 @@ async function postProcessChat(
 
 /**
  * Resolve sender display name with fallback chain
- * Priority: pushName > participant displayName > undefined
+ * Priority: senderName > rawPayload.pushName > participant displayName > undefined
  */
 function resolveSenderDisplayName(
+  senderName: string | undefined,
   rawPayload: Record<string, unknown> | undefined,
   participantResult: { participant: { displayName: string | null } } | undefined,
 ): string | undefined {
   return (
-    truncate(rawPayload?.pushName as string | undefined, 255) || participantResult?.participant.displayName || undefined
+    truncate(senderName ?? (rawPayload?.pushName as string | undefined), 255) ||
+    participantResult?.participant.displayName ||
+    undefined
   );
 }
 
@@ -458,12 +462,13 @@ async function maybeFindOrCreateParticipant(
   rawPayload: Record<string, unknown> | undefined,
   personId: string | undefined,
   platformIdentityId: string | undefined,
+  senderName: string | undefined,
 ): Promise<Awaited<ReturnType<typeof services.chats.findOrCreateParticipant>> | undefined> {
   if (!from) return undefined;
 
   const participantUserId = truncate(from, 255) ?? from;
   return services.chats.findOrCreateParticipant(chatId, participantUserId, {
-    displayName: truncate(rawPayload?.pushName as string | undefined, 255),
+    displayName: truncate(senderName ?? (rawPayload?.pushName as string | undefined), 255),
     personId,
     platformIdentityId,
   });
@@ -588,8 +593,8 @@ async function handleMessageReceived(
   // Resolve the chat name based on direction and chat type.
   // For outbound DMs, we look at rawPayload fields (recipientName, verifiedBizName)
   // since pushName is our own name, not the contact's.
-  const pushName = truncate(rawPayload?.pushName as string | undefined, 255);
-  const chatName = truncate(rawPayload?.chatName as string | undefined, 255);
+  const pushName = truncate(payload.senderName ?? (rawPayload?.pushName as string | undefined), 255);
+  const chatName = truncate(payload.chatName ?? (rawPayload?.chatName as string | undefined), 255);
   const effectiveName = resolveEffectiveChatName({ chatType, isFromMe, chatName, pushName, rawPayload });
 
   // Determine canonicalId upfront for phone-based chats
@@ -617,6 +622,7 @@ async function handleMessageReceived(
     metadata.instanceId,
     rawPayload,
     isFromMe,
+    chatName,
   );
 
   // Step 2: Process sender identity (before participant, so we have IDs)
@@ -630,10 +636,11 @@ async function handleMessageReceived(
     rawPayload,
     personId,
     platformIdentityId,
+    payload.senderName,
   );
 
-  // Step 4: Resolve sender display name (fallback chain: pushName > participant > undefined)
-  const senderDisplayName = resolveSenderDisplayName(rawPayload, participantResult);
+  // Step 4: Resolve sender display name (fallback chain: senderName > pushName > participant > undefined)
+  const senderDisplayName = resolveSenderDisplayName(payload.senderName, rawPayload, participantResult);
 
   // Step 5: Build and create message
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
