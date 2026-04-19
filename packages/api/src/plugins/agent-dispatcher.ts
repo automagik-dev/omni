@@ -3036,6 +3036,45 @@ export function resolveProvider(
 }
 
 /**
+ * Invalidate cached IAgentProvider instances for a specific provider.
+ *
+ * Call after provider schemaConfig / baseUrl / apiKey updates so the next
+ * dispatch rebuilds from fresh DB state instead of returning the stale
+ * cached instance. Also stops and removes the shared OpenClaw WS client
+ * for this provider since connection-level config may have changed.
+ */
+export function invalidateProviderCache(providerId: string): void {
+  const prefix = `${providerId}:`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  const openclawClient = openclawClientPool.get(providerId);
+  if (openclawClient) {
+    try {
+      openclawClient.stop();
+    } catch (err) {
+      log.warn('Error stopping OpenClaw client on cache invalidation', {
+        providerId,
+        error: String(err),
+      });
+    }
+    openclawClientPool.delete(providerId);
+  }
+
+  log.debug('Provider cache invalidated', { providerId, removed });
+}
+
+/**
  * Look up provider from DB and resolve to IAgentProvider.
  * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */
