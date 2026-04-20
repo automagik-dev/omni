@@ -114,12 +114,10 @@ const auditQuerySchema = z.object({
 keysRoutes.post(
   '/',
   async (c, next) => {
-    // Intentionally peek the raw body before zod so `profile: "admin"` is
+    // Intentionally peek the parsed body before zod so `profile: "admin"` is
     // refused even if other fields would fail validation (e.g. missing name).
-    const raw = await c.req.raw
-      .clone()
-      .json()
-      .catch(() => null);
+    // Hono caches `c.req.json()`, so downstream handlers + zValidator reuse it.
+    const raw = await c.req.json().catch(() => null);
     if (raw && typeof raw === 'object' && (raw as { profile?: unknown }).profile === 'admin') {
       return c.json(
         {
