@@ -136,7 +136,7 @@ omni routes list --instance <id> --active --json | jq '.[] | {id, label, scope, 
 
 ## Providers
 
-Manage AI/agent providers that define how Omni connects to backend services. Supported schemas: `genie`, `claude-code`, `a2a`, `ag-ui`, `agno`, `openclaw`, `webhook`.
+Manage AI/agent providers that define how Omni connects to backend services. Supported schemas: `nats-genie`, `claude-code`, `a2a`, `ag-ui`, `agno`, `openclaw`, `webhook`.
 
 ### Key commands
 
@@ -147,7 +147,7 @@ omni providers list --active --json
 omni providers get <id> --json
 
 # Create by schema
-omni providers create --name "genie-prod" --schema genie --agent-name "omni-agent" --target-agent "team-lead" --team-name "omni-{chat_id}" --json
+omni providers create --name "genie-prod" --schema nats-genie --agent-name "omni-agent" --target-agent "team-lead" --team-name "omni-{chat_id}" --json
 omni providers create --name "claude-local" --schema claude-code --project-path /home/user/project --max-turns 10 --permission-mode bypassPermissions --json
 omni providers create --name "a2a-svc" --schema a2a --base-url https://a2a.example.com --api-key <key> --json
 omni providers create --name "agui-svc" --schema ag-ui --base-url https://agui.example.com --api-key <key> --stream --json

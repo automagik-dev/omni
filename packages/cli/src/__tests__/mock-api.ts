@@ -61,7 +61,7 @@ async function handleCreateProvider(req: Request): Promise<Response> {
   const provider = makeProvider(
     id,
     body.name ?? 'unnamed',
-    body.schema ?? 'genie',
+    body.schema ?? 'nats-genie',
     body.baseUrl ?? '',
     body.schemaConfig,
     body.apiKey,
