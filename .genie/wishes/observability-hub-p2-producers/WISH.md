@@ -28,7 +28,7 @@ Instrument Omni, Agno, and Genie with vanilla OpenTelemetry SDKs so one customer
 |-------|-------|:---:|--------|
 | **2.1** `IAgentProvider` observability contract | Producer code | ❌ | Upstream `automagik-dev/omni` (or fork-bridge) |
 | **2.2** Omni OTel SDK bootstrap + `JourneyTracker → spans` + dual-header NATS | Producer code | ❌ | Upstream Omni |
-| **2.3** Agno OTLP export + FastAPI `traceparent` middleware + dual-export | Producer code | ❌ | `~/prod/eugenia-seller/apps/agno-api` |
+| **2.3** Agno OTLP export + FastAPI `traceparent` middleware + dual-export | Producer code | ❌ | `namastexlabs/genie-hv-eugenia` (branch `dev`, path `apps/agno-api/`) — deployed via `~/prod/eugenia-seller/` |
 | ~~**2.4**~~ ~~Genie mailbox~~ | ~~deferred~~ | — | Moved to `observability-hub-p2-genie` |
 | **2.5** System exporters (`node_exporter`, `postgres_exporter ×3`, `nats-prometheus-exporter`, `pm2-prometheus-exporter`) scraped by Collector | Our infra | ❌ (Prom/OTLP std) | CT 173 |
 | **2.6** OTel Collector config: OTLP receivers, PII scrub processor, backend exporter(s), `otlphttp/khalos` stub | Our infra | ✅ | `infra-observability/` (new repo or subdir) |
@@ -128,7 +128,7 @@ P1 (backend live) ✅
 
 - Parent DESIGN: [`.genie/brainstorms/observability-hub/DESIGN.md`](../../brainstorms/observability-hub/DESIGN.md)
 - Omni source: `~/dev/omni` (remote `automagik-dev/omni`)
-- Agno source: `~/prod/eugenia-seller/apps/agno-api`
+- Agno repo: `github.com/namastexlabs/genie-hv-eugenia` (branch `dev`, path `apps/agno-api/`); deployed checkout at `~/prod/eugenia-seller/apps/agno-api/`
 - Omni upstream JourneyTracker: `packages/core/src/tracing/journey-tracker.ts`
 - Omni upstream EventMetadata (correlationId, traceId): `packages/core/src/events/types.ts:163,168`
 - Omni upstream NatsOutboundMessage (traceId): `packages/core/src/providers/nats-genie-provider.ts:49`
