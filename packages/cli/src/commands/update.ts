@@ -26,7 +26,7 @@ import { createOmniClient } from '@omni/sdk';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import ora from 'ora';
-import { loadConfig, loadServerConfig } from '../config.js';
+import { type Config, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
@@ -45,15 +45,54 @@ interface UpdateOptions {
   yes?: boolean;
   restart?: boolean;
   sidecarCleanup?: boolean;
+  next?: boolean;
+  stable?: boolean;
+}
+
+export type UpdateChannel = 'latest' | 'next';
+
+/**
+ * Resolve the npm dist-tag to install. Priority:
+ *   1. --next / --stable flag (explicit override)
+ *   2. Saved `updateChannel` in ~/.omni/config.json
+ *   3. Default to 'latest'
+ */
+export function resolveChannel(options: { next?: boolean; stable?: boolean }, config?: Config): UpdateChannel {
+  if (options.next) return 'next';
+  if (options.stable) return 'latest';
+
+  const saved = (config ?? loadConfig()).updateChannel;
+  if (saved === 'latest' || saved === 'next') return saved;
+
+  return 'latest';
+}
+
+/**
+ * Persist the chosen channel to ~/.omni/config.json. Only called when the user
+ * passed --next or --stable explicitly — so subsequent `omni update` calls stay
+ * on the chosen track until switched again.
+ */
+function persistChannel(channel: UpdateChannel): void {
+  try {
+    const config = loadConfig();
+    config.updateChannel = channel;
+    saveConfig(config);
+  } catch {
+    // Non-fatal — channel preference lost but update still works
+  }
 }
 
 type Pm2ProcessName = (typeof PM2_PROCESSES)[keyof typeof PM2_PROCESSES];
 
-/** Fetch the latest published version from the npm registry via bunx. */
-async function fetchLatestVersion(): Promise<string | null> {
+/**
+ * Fetch the latest published version for the given channel from the npm registry.
+ * `channel='latest'` returns the stable release; `channel='next'` returns the
+ * most recent dev build.
+ */
+async function fetchLatestVersion(channel: UpdateChannel): Promise<string | null> {
   try {
     const proc = Bun.spawn({
-      cmd: ['bunx', 'npm', 'view', PACKAGE_NAME, 'version'],
+      cmd: ['bunx', 'npm', 'view', `${PACKAGE_NAME}@${channel}`, 'version'],
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -103,10 +142,16 @@ function getRunningPm2Services(): Pm2ProcessName[] {
   }
 }
 
-/** Run `bun add -g @automagik/omni@latest`. Returns true on success. */
-async function installLatest(): Promise<boolean> {
+/**
+ * Install the given channel globally via bun. Returns true on success.
+ *
+ * Uses `--force --no-cache` to work around bun's global lockfile pinning —
+ * without these flags, switching channels (e.g. next → latest) may silently
+ * reuse a cached version. Mirrors the genie CLI update behavior.
+ */
+async function installLatest(channel: UpdateChannel): Promise<boolean> {
   const proc = Bun.spawn({
-    cmd: ['bun', 'add', '-g', `${PACKAGE_NAME}@latest`],
+    cmd: ['bun', 'add', '-g', '--force', '--no-cache', `${PACKAGE_NAME}@${channel}`],
     stdin: 'inherit',
     stdout: 'inherit',
     stderr: 'inherit',
@@ -380,9 +425,19 @@ async function promptConfirm(question: string): Promise<boolean> {
 }
 
 async function runUpdate(options: UpdateOptions): Promise<void> {
-  // Check latest version from npm
-  const versionSpinner = ora(`Checking latest version of ${PACKAGE_NAME}...`).start();
-  const latest = await fetchLatestVersion();
+  const channel = resolveChannel(options);
+
+  // Persist explicit channel switch so subsequent `omni update` stays on the
+  // chosen track until switched again.
+  if (options.next || options.stable) {
+    persistChannel(channel);
+  }
+
+  output.info(`Channel: ${channel}${channel === 'next' ? ' (dev builds)' : ' (stable)'}`);
+
+  // Check latest version on the resolved channel
+  const versionSpinner = ora(`Checking ${channel} version of ${PACKAGE_NAME}...`).start();
+  const latest = await fetchLatestVersion(channel);
   versionSpinner.stop();
 
   if (latest === null) {
@@ -394,11 +449,11 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
   const currentClean = VERSION.split('+')[0];
 
   if (currentClean === latest) {
-    output.success(`Already up to date (v${latest})`);
+    output.success(`Already up to date (v${latest}, channel: ${channel})`);
     process.exit(0);
   }
 
-  output.info(`Update available: v${currentClean} → v${latest}`);
+  output.info(`Update available: v${currentClean} → v${latest} (${channel})`);
 
   if (!options.yes) {
     const confirmed = await promptConfirm(`Update from v${currentClean} to v${latest}? [Y/n] `);
@@ -410,8 +465,8 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
 
   const servicesToRestart = options.restart !== false ? getRunningPm2Services() : [];
 
-  const installSpinner = ora(`Updating ${PACKAGE_NAME}...`).start();
-  const installed = await installLatest();
+  const installSpinner = ora(`Updating ${PACKAGE_NAME}@${channel}...`).start();
+  const installed = await installLatest(channel);
   installSpinner.stop();
 
   if (!installed) {
@@ -442,9 +497,22 @@ export function createUpdateCommand(): Command {
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
     .option('--no-restart', 'Update CLI only; skip service restarts and verification')
     .option('--no-sidecar-cleanup', 'Skip the legacy nats-reply-sidecar.mjs cleanup step')
+    .option('--next', 'Switch to dev builds (npm @next tag) and persist as default')
+    .option('--stable', 'Switch to stable releases (npm @latest tag) and persist as default')
     .addHelpText(
       'after',
       `
+Channels:
+  - stable (default) — tracks the npm @latest tag, bumped from main branch releases.
+  - next (dev builds) — tracks the npm @next tag, bumped on every CI-green dev merge.
+
+  Use --next to switch to dev builds; --stable to switch back. The choice is
+  persisted to ~/.omni/config.json under 'updateChannel' so subsequent
+  'omni update' calls stay on the selected track. Check or change manually:
+    omni config get updateChannel
+    omni config set updateChannel next
+    omni config set updateChannel latest
+
 Behavior:
   - Installs the latest CLI package first.
   - Restarts tracked Omni services only when they were online before the update.
