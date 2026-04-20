@@ -1,7 +1,7 @@
 ---
 title: "design-observability-hub"
 type: design
-tags: [design, observability, signoz, otel, khal-os, multi-provider, umbrella]
+tags: [design, observability, otel, khal-os, multi-provider, vendor-neutral, umbrella]
 status: READY
 slug: observability-hub
 date: 2026-04-20
@@ -28,18 +28,33 @@ A stack Omni + Agno + Genie + NATS + Gupshup tem instrumentação profunda mas s
 
 ## Scope
 
+### Architectural principle — vendor-neutral at the producer layer
+
+**Omni, Agno, and Genie code MUST NOT reference any specific OTel backend vendor** (SigNoz, Jaeger, Honeycomb, Datadog, Grafana Cloud, etc.). Every producer exports via vanilla OTLP using standard env vars: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, optional `OTEL_EXPORTER_OTLP_HEADERS` for auth. Anyone forking Omni plugs in their own collector/backend with zero source changes.
+
+**Vendor-specific configuration is confined to the infrastructure layer**:
+
+| Zone | Content | Vendor-aware? | Home |
+|------|---------|:---:|---|
+| **Producer code** | Omni, Agno, Genie OTel SDK bootstrap + spans + propagation | ❌ no | Upstream repos (`automagik-dev/omni`, `eugenia-seller`, Genie) |
+| **Infra/operator** | OTel Collector config, alert rules, dashboards, retention | ✅ yes | `infra-observability/` (our repo — evolves with the backend) |
+| **UI app** (`pack-observability`) | Reads observability data | Abstracted via data-source interface | `namastexlabs/pack-observability` (future khal-os home) |
+
+**Our current deployment target is SigNoz Community EE v0.119.0** on CT 173. This is an **operational choice**, not an architectural dependency. Swapping SigNoz for LGTM/Jaeger+ClickHouse/whatever-OTLP-compliant touches only the infra config layer.
+
 ### IN
 
-- **P1 — SigNoz Community Edition v0.119.0 EE** self-hosted em CT 173 (`10.114.1.173`) como backend unificado de traces+logs+metrics+exceptions
-- **P2 — Instrumentar produtores** com OTel SDK + dual-header trace context (W3C `traceparent` + khal-os `x-trace-id/x-span-id/x-parent-span-id`) para forward-compat khal-os:
-  - Omni: OTel SDK bootstrap, `JourneyTracker.recordCheckpoint` → spans, NATS publisher inject headers, HTTP a Agno inject `traceparent`
-  - Agno: `opentelemetry-exporter-otlp`, FastAPI middleware lê incoming `traceparent`, dual-export (mantém `agno_spans` PG + OTLP out)
-  - Genie: mailbox consumer stamps `trace_id`, PG events → OTLP tailer
-  - System: `node_exporter`, `postgres_exporter ×3`, `nats-prometheus-exporter`, `pm2-prometheus-exporter` → OTel Collector → SigNoz
-  - `IAgentProvider` ganha contrato `observability: { propagateTrace, exporter, heartbeat }`
-  - Silent-failure rules via `POST /api/v1/rules` (consumer-count, business-hours-zero, PM2 restart, NATS pending)
-- **P3 — `pack-observability`** — Next.js thin app seguindo padrão khal-os `pack-template`, data-source abstraction SigNoz-API-today / khal-os-NATS-later, **GitHub App** (auto-issue on new error fingerprint + CODEOWNERS assignee + release markers + trace deep-link), alert routing UI
-- **Forward-compat contract**: OTel Collector config com `otlphttp/khalos` exporter comentado; resource attributes `service.name`, `deployment.environment`, `user.id`, `org.id`, `project.id`, `service.version`; pack-observability data-source é abstract
+- **P1 — Deploy an OTLP-compliant backend** (our pick: SigNoz Community EE v0.119.0 self-hosted at `10.114.1.173`, OTLP `:4317`/`:4318`, already running)
+- **P2 — Instrument producers with vanilla OTel SDK** + dual-header trace context (W3C `traceparent` + khal-os `x-trace-id/x-span-id/x-parent-span-id`) for forward-compat. **All upstream changes are vendor-neutral.**
+  - **Omni** (upstream): OTel SDK bootstrap reading `OTEL_EXPORTER_OTLP_ENDPOINT`, `JourneyTracker.recordCheckpoint` emits standard OTel spans, NATS publisher injects both header sets, HTTP client to agent providers injects `traceparent`. Zero backend references.
+  - **Agno** (upstream): add `opentelemetry-exporter-otlp` to `pyproject.toml`, FastAPI middleware reads incoming `traceparent`, dual-export keeps `agno_spans` PG while shipping OTLP outward. Zero backend references.
+  - **Genie** (upstream): mailbox consumer stamps `genie_runtime_events.trace_id` from NATS header, PG events → OTLP tailer. Zero backend references.
+  - **`IAgentProvider`** (Omni upstream): optional `observability: { propagateTrace, exporter, heartbeat }` contract. Backend-agnostic.
+  - **System exporters** (our infra): `node_exporter`, `postgres_exporter ×3`, `nats-prometheus-exporter`, `pm2-prometheus-exporter` scraped by our OTel Collector.
+  - **OTel Collector config** (our infra): OTLP receivers, PII scrub processor, vendor exporter(s). Today: SigNoz exporter. Tomorrow: add `otlphttp/khalos` alongside — collector is the abstraction boundary, not the code.
+  - **Silent-failure rules** (our infra/operator): expressed in the chosen backend's native rule language — today SigNoz `POST /api/v1/rules`, tomorrow migrates with the backend.
+- **P3 — `pack-observability`** — Next.js thin app in `namastexlabs/pack-observability`, data-source abstraction (`signoz-api` impl today, `khalos-nats` stub), **GitHub App** (auto-issue on new error fingerprint + CODEOWNERS assignee + release markers + trace deep-link), alert routing UI. Lives OUTSIDE Omni/Agno/Genie, so backend-specific data-source impls are fine.
+- **Forward-compat contract**: producer code is OTLP vendor-neutral; Collector config has `otlphttp/khalos` exporter block staged (commented); resource attributes follow OTel semantic conventions (`service.name`, `deployment.environment`, `service.version`) plus our namespace (`user.id`, `org.id`, `project.id`); pack-observability data-source is abstract.
 
 ### OUT
 
@@ -47,15 +62,19 @@ A stack Omni + Agno + Genie + NATS + Gupshup tem instrumentação profunda mas s
 - Session replay (não precisa hoje)
 - PR preview tenants (depende de khal-os FGA)
 - Mobile paging (Discord/WhatsApp é suficiente)
-- Per-tenant SigNoz isolation (Enterprise ou FGA)
+- Per-tenant backend isolation (Enterprise ou FGA)
 - Long-term retention > 30 dias em P1
 - Migração do Sentry `@sentry/nextjs` que já roda em khal-os Next.js (fica como escopo separado — OTel bridge depois)
+- **Baking any backend choice into Omni/Agno/Genie source code** — producer code stays vendor-neutral
 
 ## Approach
 
-**Adotar SigNoz Community EE v0.119.0 já deployado como backend "ready-now"**, desenhando a integração para ser forward-compatible com o futuro `@khal-os/o11y-store` + `pack-observability` que virá quando o control plane da khal-os amadurecer.
+**Two-layer architecture with clean vendor boundaries:**
 
-A escolha foi feita sobre alternativas consideradas:
+1. **Producer layer (upstream code)** — Omni, Agno, Genie use vanilla OTel SDK with standard `OTEL_*` env vars. No backend vendor names in source. A fork can point at their own endpoint.
+2. **Infrastructure layer (our operational choice)** — deploy SigNoz Community EE v0.119.0 as today's OTLP target. The OTel Collector in between is the swappable boundary — change one config block, swap the backend, producer code never moves.
+
+**Why SigNoz as our current operational pick** (backend choice alternatives considered):
 
 - Grafana LGTM stack: 3 stores (Tempo+Loki+Mimir), 3 query languages, UX humano-first, thin MCP/API — rejeitada pela complexidade + desalinhamento com 2026 "AI-native" consumption
 - Apache SkyWalking: MAL baseline anomaly detection atraente, mas Elasticsearch backend + OTel secondary — rejeitada pelo peso operacional
@@ -63,66 +82,92 @@ A escolha foi feita sobre alternativas consideradas:
 - DIY ClickHouse + OTel Collector + Grafana: flexibilidade máxima, mas exige building UI/alertas do zero — rejeitada por tempo até first-value
 - Fork SigNoz: rejeitada por "upstream treadmill tax" (~100 commits/mês) — em vez disso, `pack-observability` wrapper faz o mesmo trabalho sem fork
 
-SigNoz vence porque: (a) ClickHouse-backed (matches likely khal-os future choice), (b) OTel-native end-to-end, (c) ship today com UI+alertas+exceptions, (d) Apache 2.0, (e) REST API completa + `clickhouse-client` para agents, (f) já deployado e ingestindo.
+SigNoz wins as our deployment choice because: (a) ClickHouse-backed (matches likely khal-os future choice), (b) OTel-native end-to-end, (c) ships today com UI+alertas+exceptions, (d) Apache 2.0, (e) REST API completa + `clickhouse-client` for agents, (f) já deployado e ingestindo. **Crucially, this choice is reversible without touching producer code** — anyone (us tomorrow, or an Omni fork operator) can swap SigNoz for anything OTLP-compliant by editing the Collector config.
 
-O esquema de consumption por agents é **CLI + HTTP API first** (não MCP): agents usam `curl` + `jq` contra SigNoz API, ou `clickhouse-client` direto em ClickHouse. Service Account Keys com header `SIGNOZ-API-KEY` (EE v0.119 aboliu PATs) dão role-scoped access (ADMIN/EDITOR/VIEWER).
+**Forward-compat to khal-os** works the same way: when `@khal-os/o11y-store` + `pack-observability` ship, the Collector gets a new exporter block (`otlphttp/khalos`) added alongside SigNoz's, producers keep running unchanged, the `pack-observability` UI data-source abstraction picks up a new backend impl.
 
-Erro tracking **não** usa Sentry como produto separado — OTel exception span events (attributes `exception.type`/`exception.message`/`exception.stacktrace`) vão para o mesmo ClickHouse, SigNoz agrupa nativamente. Um silo a menos. `@sentry/nextjs` que já roda em khal-os Next.js fica como-é (migração OTel depois, escopo separado).
+**Agent consumption is CLI + HTTP API first** (no MCP dependency): agents query via `curl`/`jq` against whichever backend API is configured, or `clickhouse-client` when ClickHouse is the store. The CLI/API abstraction lives in `pack-observability`'s data-source interface — agents call THAT, which routes to the configured backend.
 
-User granularity hoje usa perímetro de rede (LAN `10.114.1.0/24`) + SigNoz built-in roles + resource attributes como dimensões de filtro. Forward path: quando khal-os Phase 4 FGA ship, os mesmos atributos `user.id`/`org.id`/`project.id` viram claims FGA, auth UI migra para WorkOS via reverse-proxy, pack-observability herda tudo isso.
+**Error tracking is OTel exception span events** (`exception.type`/`exception.message`/`exception.stacktrace` attributes). No separate Sentry product on producer side. The existing `@sentry/nextjs` in khal-os Next.js stays (out of scope migration).
+
+**User granularity** uses network perimeter (LAN `10.114.1.0/24`) + backend's built-in roles + OTel resource attributes (`user.id`, `org.id`, `project.id`) as filter dimensions. Forward path: when khal-os Phase 4 FGA ships, the same attributes become FGA claims, auth UI migrates to WorkOS via reverse-proxy, `pack-observability` inherits — **no producer changes required**.
 
 ## Decisions
 
+### Architectural (vendor-neutral, ships upstream)
+
 | Decision | Rationale |
 |----------|-----------|
-| SigNoz Community EE v0.119.0 self-hosted | Ready today, ClickHouse matches khal-os future, OTel-native, Apache 2.0, já deployado |
-| Não forkar SigNoz — wrap com thin app P3 | Zero upstream treadmill; pack-observability é o wrapper e a futura home khal-os |
-| Sem Sentry como produto separado | SigNoz cobre errors via OTel exception events; um silo a menos |
-| Dual-emit trace headers (W3C `traceparent` + khal-os `x-trace-id`) | Forward-compat khal-os sem quebrar OpenInference/Agno |
-| Retention defaults SigNoz (7d traces / 15d logs / 30d metrics) | Suficiente pra volume atual (404 traces Agno/24h); evoluir só se necessário |
+| Producer code uses vanilla OTel SDK + `OTEL_*` env vars only — no backend vendor names in source | Zero lock-in; any operator (us, a fork, a future khal-os) plugs in their own endpoint |
+| Dual-emit trace headers (W3C `traceparent` + khal-os `x-trace-id`/`x-span-id`/`x-parent-span-id`) | Forward-compat khal-os sem quebrar OpenInference/Agno |
+| Error tracking via OTel exception span events (no dedicated Sentry SDK in producers) | Backend-agnostic; any OTel-compliant backend surfaces exceptions natively |
+| `IAgentProvider` gains optional `observability: { propagateTrace, exporter, heartbeat }` contract | Backend-agnostic; providers without impl fallback to noop |
+| `pack-observability` has abstract data-source interface (`signoz-api` impl today, `khalos-nats` stub) | Swappable backend access; natural move to khal-os later |
+| OTel Collector is THE vendor abstraction boundary — backend-specific exporter config lives there, not in producer code | Producers ship upstream clean; we evolve infra independently |
+| Umbrella DESIGN + 3 wishes-filhas | P1 operator work / P2 upstream producer code / P3 our UI app — distinct natures, distinct repos |
+| CLI/HTTP API consumption (no MCP dependency) | Simpler, more debuggable, `curl`+`jq` are agent-native without middleware |
+
+### Deployment choice (our current operational pick — reversible without code changes)
+
+| Decision | Rationale |
+|----------|-----------|
+| SigNoz Community EE v0.119.0 self-hosted as today's OTLP target | Ready today, ClickHouse-backed (matches likely khal-os future), OTel-native, Apache 2.0, já deployado |
+| Não forkar SigNoz — wrap com thin app (P3) | Zero upstream treadmill; pack-observability é o wrapper e a futura home khal-os |
+| Retention defaults (7d traces / 15d logs / 30d metrics) for MVP | Suficiente pra volume atual (404 traces Agno/24h); evoluir se necessário |
 | Same infra (CT 173) | 64/48/100 tem folga, zero nova infra |
 | Community = sem ingestion keys | Isolamento via perímetro LAN + OTel resource attrs |
-| Service Account Keys (não PATs) | EE v0.119 aboliu PATs; header `SIGNOZ-API-KEY` |
+| Service Account Keys (EE v0.119 aboliu PATs); header `SIGNOZ-API-KEY` para automação | Current SigNoz reality |
 | Auth UI LAN-only hoje | WorkOS reverse-proxy fica pra quando khal-os Platform estabilizar |
-| Umbrella DESIGN + 3 wishes-filhas | P1 ops / P2 upstream-heavy / P3 product — naturezas distintas |
-| GitHub integration dentro do pack-observability (P3) | Mantém SigNoz limpo; integração vive onde temos controle |
-| CLI/HTTP API consumption (sem MCP) | Simpler, mais debuggable, `curl`+`jq` são agent-native sem middleware |
+| GitHub integration dentro do pack-observability (P3), não fork SigNoz | Mantém producer + backend limpos; integração vive onde temos controle |
 
 ## Architecture
 
 ```
-┌── Producers ──────────────────────────────────────────────┐
-│  Omni (Bun)     ──OTLP──┐                                 │
-│  Agno (Python)  ──OTLP──┤  dual-header: W3C traceparent    │
-│  Genie (TS)     ──OTLP──┤  + khal-os x-trace-id            │
-│  System exp.    ──Prom──┤                                  │
-│  (node/pg×3/nats/pm2)   │                                  │
-└─────────────────────────┼──────────────────────────────────┘
+╔══ VENDOR-NEUTRAL (upstream code — producers) ═════════════════════╗
+║  Omni (Bun)     ──OTLP──┐                                         ║
+║  Agno (Python)  ──OTLP──┤  OTEL_EXPORTER_OTLP_ENDPOINT            ║
+║  Genie (TS)     ──OTLP──┤  OTEL_SERVICE_NAME                      ║
+║                         │  OTEL_RESOURCE_ATTRIBUTES               ║
+║  dual-header trace ctx: │  OTEL_EXPORTER_OTLP_HEADERS              ║
+║    W3C traceparent      │                                         ║
+║    + khal-os x-trace-id │  ← zero backend references in source   ║
+║  System exp.    ──Prom──┤                                         ║
+║  (node/pg×3/nats/pm2)   │                                         ║
+╚═════════════════════════╪═════════════════════════════════════════╝
                           ▼
-              ┌─────────────────────────┐
-              │  OTel Collector         │ ← PII scrub, sampling
-              │  (CT 173)               │ ← future: otlphttp/khalos
-              └─────────────────────────┘
-                          │
+╔══ VENDOR BOUNDARY (our infra — swappable) ═════════════════════════╗
+║              ┌─────────────────────────┐                          ║
+║              │  OTel Collector         │ ← PII scrub, sampling    ║
+║              │  (our CT 173)           │ ← receivers: OTLP, Prom  ║
+║              │                         │ ← exporters:             ║
+║              │                         │    [today] SigNoz         ║
+║              │                         │    [stubbed] otlphttp/khalos ║
+║              └─────────────────────────┘                          ║
+╚═════════════════════════╪═════════════════════════════════════════╝
                           ▼
-            ┌─────────────────────────────┐   ┌─────────────────────┐
-            │  SigNoz v0.119.0 EE         │──▶│  Alertmanager        │
-            │  (ClickHouse backend)       │   │  → Discord primary   │
-            │  :4317 gRPC / :4318 HTTP    │   │  → WA-via-Eugenia 2° │
-            │  :8080 UI + /api/v1/*       │   └─────────────────────┘
-            └─────────────────────────────┘
-               ▲                   ▲
-               │                   │
-    ┌──────────┘                   └──────────┐
-    │                                          │
+╔══ DEPLOYMENT TARGET (current: SigNoz — replaceable) ═══════════════╗
+║            ┌─────────────────────────────┐   ┌─────────────────┐  ║
+║            │  SigNoz v0.119.0 EE         │──▶│  Alertmanager    │  ║
+║            │  (ClickHouse backend)       │   │  → Discord (1°)  │  ║
+║            │  :4317 gRPC / :4318 HTTP    │   │  → WA-Eugenia(2°)│  ║
+║            │  :8080 UI + /api/v1/*       │   └─────────────────┘  ║
+║            └─────────────────────────────┘                        ║
+╚═════════════════════════╪═════════════════════════════════════════╝
+               ▲          ▲
+               │          │
+    ┌──────────┘          └──────────┐
+    │                                 │
 ┌──────────────────┐              ┌───────────────────────────────┐
 │  SigNoz UI       │              │  pack-observability (P3)      │
 │  LAN-only today  │              │  Next.js, GitHub App          │
-│  SIGNOZ-API-KEY  │              │  data-source abstract         │
+│  SIGNOZ-API-KEY  │              │  abstract data-source:        │
 └──────────────────┘              │    impl: signoz-api (today)   │
                                   │    impl: khalos-nats (stub)   │
                                   │  auth: basic → WorkOS → FGA   │
                                   └───────────────────────────────┘
+
+Invariant: swapping SigNoz for any OTLP-compatible backend touches
+only the Collector exporter config. Producer code never moves.
 
 P1 ✅ done (except Discord/alerts deferred)
 P2 ⏳ 7 groups, paralelizáveis
@@ -170,37 +215,40 @@ P3 ⏳ scaffold from khal-os/pack-template
 - [ ] c Dashboards Host/PG×3/NATS/PM2 populados com 7 dias de dados
 - [ ] d Alerta "NATS SYSTEM consumer drop" dispara <2min em teste (prevenção incident #445)
 - [ ] e Alerta "automation_logs zero success in business hours" dispara <16min
-- [ ] f OTel Collector config tem `otlphttp/khalos` comentado (forward-compat proof)
+- [ ] f OTel Collector config tem `otlphttp/khalos` stubbed (forward-compat proof)
+- [ ] g Producer PRs (Omni, Agno, Genie) contain ZERO references to SigNoz/any specific backend in source (grep check: `grep -ri signoz src/` returns nothing in producer code)
 
 ### P3 (`observability-hub-p3-pack-observability`)
 
 - [ ] a Deploy autenticado (WorkOS ou basic auth)
-- [ ] b UI lista traces/errors/alerts lidos via SigNoz API
+- [ ] b UI lista traces/errors/alerts lidos via data-source (today: SigNoz API impl)
 - [ ] c Erro forçado → GitHub Issue criada <60s com CODEOWNERS assignee + trace deep-link
-- [ ] d Release marker GitHub→SigNoz quando tag sai, visível no timeline
-- [ ] e Data-source abstraction valida (build passa com stub khalos-nats)
+- [ ] d Release marker GitHub→backend quando tag sai, visível no timeline
+- [ ] e Data-source abstraction valida (build passa com stub `khalos-nats` — proves swappability)
 
 ## Phase Groups (execution sequencing)
 
-### P1 — Residual SigNoz bootstrap (~30min)
+### P1 — Backend bootstrap residual (~30min)
 
-Trivial: crie Discord webhook → `POST /api/v1/channels` + create test rule → force trigger → verify Discord message. Pode rodar isolado a qualquer momento; não bloqueia P2/P3.
+Operator work on our chosen SigNoz deployment: Discord webhook → `POST /api/v1/channels` + create test rule → force trigger → verify Discord message. Pode rodar isolado; não bloqueia P2/P3.
 
 ### P2 — Producers (grosso do trabalho, paralelizável)
 
-| Group | Depende de | Local |
-|-------|:---:|---|
-| 2.1 `IAgentProvider` observability contract | P1 | Upstream `automagik-dev/omni` ou fork |
-| 2.2 Omni OTel SDK + JourneyTracker→spans + NATS dual-header | 2.1 | Omni |
-| 2.3 Agno OTLP export + FastAPI traceparent middleware | 2.1 | `~/prod/eugenia-seller/apps/agno-api` |
-| 2.4 Genie mailbox trace_id stamping + PG→OTLP tailer | 2.1 | Genie bridge |
-| 2.5 System exporters (node/pg×3/nats/pm2) → Collector | P1 | CT 173 |
-| 2.6 Collector config com `otlphttp/khalos` comentado | 2.5 | `infra-observability/` |
-| 2.7 Silent-failure rules via API | 2.3, 2.5 | SigNoz rules |
+| Group | Depende de | Layer | Local | Vendor-aware? |
+|-------|:---:|---|---|:---:|
+| 2.1 `IAgentProvider` observability contract | P1 | Producer code | Upstream `automagik-dev/omni` ou fork | ❌ |
+| 2.2 Omni OTel SDK + JourneyTracker→spans + NATS dual-header | 2.1 | Producer code | Upstream Omni | ❌ |
+| 2.3 Agno OTLP export + FastAPI traceparent middleware | 2.1 | Producer code | `~/prod/eugenia-seller/apps/agno-api` | ❌ |
+| 2.4 Genie mailbox trace_id stamping + PG→OTLP tailer | 2.1 | Producer code | Genie bridge | ❌ |
+| 2.5 System exporters (node/pg×3/nats/pm2) → Collector | P1 | Our infra | CT 173 | ❌ (Prom/OTLP standard) |
+| 2.6 Collector config with backend exporter(s) + `otlphttp/khalos` stub | 2.5 | Our infra | `infra-observability/` | ✅ |
+| 2.7 Silent-failure alert rules | 2.3, 2.5 | Operator | Backend-specific (today: SigNoz `POST /api/v1/rules`) | ✅ |
+
+**Invariant check in 2.1–2.4**: if a reviewer sees "SigNoz" anywhere in the producer PR source, flag as blocker. Vendor names live only in 2.5–2.7.
 
 ### P3 — pack-observability (pode começar em paralelo com P2)
 
-Scaffold de `namastexlabs/pack-observability` a partir de `khal-os/pack-template`, data-source abstraction, GitHub App, views básicas. Quando khal-os Platform ship FGA → mirror para `khal-os/pack-observability`.
+Scaffold de `namastexlabs/pack-observability` a partir de `khal-os/pack-template`, data-source abstraction (`signoz-api` impl + `khalos-nats` stub), GitHub App, views básicas. Quando khal-os Platform ship FGA → mirror para `khal-os/pack-observability`. Backend-specific code lives ONLY in data-source impls.
 
 ## Non-goals (explicit)
 
@@ -209,9 +257,10 @@ Scaffold de `namastexlabs/pack-observability` a partir de `khal-os/pack-template
 - Session replay
 - PR preview environments (depende FGA)
 - Mobile paging
-- Per-tenant SigNoz (depende Enterprise/FGA)
+- Per-tenant backend isolation (depende Enterprise/FGA — aplicável a qualquer backend escolhido)
 - Long-term retention > 30 dias
-- Modificar SigNoz upstream
+- Forking the chosen backend (SigNoz or otherwise) — we wrap, not fork
+- Baking any backend vendor name into Omni/Agno/Genie producer source code
 
 ## References
 
