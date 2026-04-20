@@ -256,9 +256,3 @@ export async function handleTwilioWhatsAppWebhook(
   await processInboundMessage(plugin, instanceId, params, dedupeCache);
   return new Response('OK', { status: 200 });
 }
-
-export const __test__ = {
-  paramsToObject,
-  extractContent,
-  isStatusCallback,
-};
