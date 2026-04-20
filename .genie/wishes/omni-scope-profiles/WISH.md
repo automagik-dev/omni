@@ -19,7 +19,7 @@ Introduce **profiles** as the primary abstraction for issuing omni API keys. A p
 - New `packages/api/src/lib/verbs-to-scopes.ts` resolver (buckets + overrides → flat scope list)
 - Extend `scope-enforcer.ts` middleware with `chatAllowlist`, `instanceAllowlist`, `outboundRecipientAllowlist` checks
 - New `packages/api/src/middleware/output-redactor.ts` for per-profile/per-tenant secret redaction on outbound messages, with `secret.redacted` event emission
-- Drizzle migration: add `profile`, `profile_overrides`, `chat_allowlist`, `instance_allowlist`, `outbound_recipient_allowlist` columns to `agent_keys`
+- Drizzle migration: add `profile`, `profile_overrides`, `chat_allowlist`, `instance_allowlist`, `outbound_recipient_allowlist` columns to `api_keys`
 - Extend `omni keys create` CLI with `--profile`, `--lock-chat`, `--lock-instance`, `--owner`, `--denylist-preset` flags
 - Interactive TTY confirmation for `--profile admin` (case-sensitive "I UNDERSTAND" prompt) + `key.admin_created` audit event
 - Unit tests for: resolver, every profile template, every new enforcement primitive, redactor middleware, admin TTY gate
@@ -59,7 +59,7 @@ Introduce **profiles** as the primary abstraction for issuing omni API keys. A p
 - [ ] All 5 profile templates resolve to a scope list via `verbsToScopes()` — scope set matches the documented expectation in each profile's unit test
 - [ ] Existing keys continue to work unmodified (backfill migration sets `profile = NULL`, preserves `scopes` verbatim)
 - [ ] `secret.redacted` event fires when the coworker redactor catches a pattern match on an outgoing message
-- [ ] OpenAPI docs include the new `agent_keys` fields; CLI help text documents `--profile`, `--lock-chat`, `--lock-instance`, `--owner`, `--denylist-preset`
+- [ ] OpenAPI docs include the new `api_keys` fields; CLI help text documents `--profile`, `--lock-chat`, `--lock-instance`, `--owner`, `--denylist-preset`
 - [ ] `docs/profiles.md` exists and documents every profile's verb buckets, default locks, override shape, and an example `omni keys create` invocation
 
 ## Execution Strategy
@@ -69,7 +69,7 @@ Introduce **profiles** as the primary abstraction for issuing omni API keys. A p
 | Group | Agent | Description |
 |-------|-------|-------------|
 | 1 | engineer | Verbs enum + verb-bucket groupings (`constants/verbs.ts`) |
-| 3 | engineer | Drizzle migration for `agent_keys` columns |
+| 3 | engineer | Drizzle migration for `api_keys` columns |
 
 ### Wave 2 (parallel — after Wave 1)
 
@@ -128,15 +128,20 @@ cd packages/api && bun test src/constants/__tests__/verbs.test.ts
 ---
 
 ### Group 2: verbsToScopes resolver
-**Goal:** Pure function that takes a profile shape + overrides and returns a flat deduplicated scope array.
+**Goal:** Pure function that takes a profile shape (buckets + per-verb add/remove + extra scopes) and returns a flat deduplicated scope array.
 **Deliverables:**
-1. `packages/api/src/lib/verbs-to-scopes.ts` exporting `verbsToScopes(input: { buckets: VerbBucket[]; extraScopes?: string[] }): string[]`
-2. Dedup + sort for deterministic output
+1. `packages/api/src/lib/verbs-to-scopes.ts` exporting `verbsToScopes(input: { buckets: VerbBucket[]; verbs?: { add?: Verb[]; remove?: Verb[] }; extraScopes?: string[] }): string[]`
+2. Resolver expands `buckets` → verb set, applies `verbs.add` then `verbs.remove`, maps final verb set through verb→scope table, merges `extraScopes`, dedups, sorts
+3. Throws on `verbs.add` and `verbs.remove` overlap (disjointness invariant)
 
 **Acceptance Criteria:**
 - [ ] Given `{ buckets: ['outgoing'] }` returns `['messages:send']`
 - [ ] Given `{ buckets: ['outgoing', 'multimodal_out'] }` returns the union, deduped
 - [ ] Given `{ buckets: ['outgoing'], extraScopes: ['chats:read'] }` adds the extra
+- [ ] Given `{ buckets: ['read'], verbs: { remove: ['history'] } }` omits the `chats:read` scope contribution from `history` (scout case)
+- [ ] Given `{ buckets: ['outgoing'], verbs: { add: ['where'] } }` includes scopes for `where` even though it lives in a different bucket (scout case)
+- [ ] Given `{ buckets: ['context'], verbs: { remove: ['use'] } }` omits `use`'s scope contribution (cs case)
+- [ ] `verbs.add` and `verbs.remove` sharing any verb throws at resolver call time
 - [ ] Output is sorted (deterministic snapshots)
 
 **Validation:**
@@ -148,7 +153,7 @@ cd packages/api && bun test src/lib/__tests__/verbs-to-scopes.test.ts
 
 ---
 
-### Group 3: Drizzle migration for agent_keys
+### Group 3: Drizzle migration for api_keys
 **Goal:** Add profile metadata + allowlist columns without breaking existing keys.
 **Deliverables:**
 1. Schema edit in `packages/db/src/schema.ts` adding 5 columns (`profile`, `profile_overrides`, `chat_allowlist`, `instance_allowlist`, `outbound_recipient_allowlist`)
@@ -174,7 +179,9 @@ make test-api
 **Goal:** 5 code-defined profiles consumable by the CLI and the key-creation route.
 **Deliverables:**
 1. `packages/api/src/constants/profiles.ts` exporting `PROFILES: Record<ProfileName, ProfileTemplate>`
-2. `ProfileTemplate` type: `{ buckets: VerbBucket[]; requiresLocks: LockRequirement[]; defaultOverrides?: Partial<ProfileOverrides>; adminOnlyFlag?: true }`
+2. `ProfileTemplate` type: `{ buckets: VerbBucket[]; verbs?: { add?: Verb[]; remove?: Verb[] }; requiresLocks: LockRequirement[]; defaultOverrides?: Partial<ProfileOverrides>; adminOnlyFlag?: true }`
+3. `cs` template: `buckets: ['outgoing','read','context','turn']`, `verbs: { remove: ['use'] }` (CS key is locked to one instance; `use` would defeat the lock)
+4. `scout` template: `buckets: ['outgoing','multimodal_in']`, `verbs: { add: ['where'], remove: ['history'] }` (scout can locate current chat but never ingest prior history — data-exfil prevention)
 3. Unit tests asserting each template's resolved scope list
 
 **Acceptance Criteria:**
@@ -182,6 +189,8 @@ make test-api
 - [ ] `scout` template has `outboundRecipientAllowlist` as a locked override (not tenant-editable)
 - [ ] `coworker` template defaults `outputDenylist` to a documented preset
 - [ ] `admin` template has `adminOnlyFlag: true` — rejected by non-TTY callers
+- [ ] `cs` resolved scope list does NOT include `use`'s scope contribution (bucket minus verb)
+- [ ] `scout` resolved scope list includes scopes needed for `where`, does NOT include `history`'s contribution
 - [ ] Unit test snapshot confirms resolved scope list per template
 
 **Validation:**
@@ -349,7 +358,7 @@ packages/api/src/middleware/__tests__/output-redactor.test.ts (new)
 packages/api/bench/output-redactor.bench.ts              (new)
 packages/api/src/routes/v2/keys.ts                       (edit)
 packages/db/src/schema.ts                                (edit)
-packages/db/drizzle/NNNN_agent_keys_profiles.sql         (new, generated)
+packages/db/drizzle/NNNN_api_keys_profiles.sql           (new, generated)
 packages/cli/src/commands/keys.ts                        (edit)
 packages/cli/src/commands/__tests__/keys.test.ts         (edit)
 docs/profiles.md                                         (new)

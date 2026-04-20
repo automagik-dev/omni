@@ -40,17 +40,36 @@ A new resolver `verbsToScopes(buckets)` derives the concrete scope list. No cons
 
 ### 2. Five profile templates
 
-Each profile is a verb-bucket composition plus a set of enforcement locks. Every profile is expressible as a plain TypeScript object in `constants/profiles.ts`.
+Each profile is a verb-bucket composition plus optional per-verb overrides plus a set of enforcement locks. Every profile is expressible as a plain TypeScript object in `constants/profiles.ts` of shape:
+
+```ts
+type ProfileTemplate = {
+  name: 'cs' | 'personal' | 'scout' | 'coworker' | 'admin';
+  buckets: BucketName[];                 // whole-bucket inclusion
+  verbs?: { add?: Verb[]; remove?: Verb[] };  // per-verb delta on top of buckets
+  requiresLocks: LockField[];            // which lock arrays must be non-empty at create time
+  defaultLocks?: Partial<LockFields>;    // baked-in lock values (e.g. scout's ownerJid)
+};
+```
+
+Matrix (✓ = full bucket, ⊕ = bucket + extra verbs, ⊖ = bucket minus verbs, — = excluded):
 
 | Profile | `outgoing` | `read` | `context` | `turn` | `mm_in` | `mm_out` | Default locks |
 |---|---|---|---|---|---|---|---|
-| `cs` | ✓ | ✓ | open/close | ✓ | enterprise-override | enterprise-override | **chatAllowlist + instanceAllowlist required at create time** |
+| `cs` | ✓ | ✓ | ⊖ (no `use`) | ✓ | enterprise-override | enterprise-override | **chatAllowlist + instanceAllowlist required at create time** |
 | `personal` | per-instance | ✓ | ✓ | ✓ | ✓ | ✓ | `instanceAllowlist` + per-instance `outboundRecipientAllowlist` |
-| `scout` | **owner-only** | ✓ | `where` only | — | ✓ | — | `outboundRecipientAllowlist = [ownerJid]` (absolute — cannot be widened) |
+| `scout` | **owner-only** | ⊖ (no `history`) | — | — | ✓ | — | `outboundRecipientAllowlist = [ownerJid]` (absolute — cannot be widened) |
 | `coworker` | ✓ (multi-chat) | ✓ | ✓ | ✓ | ✓ | ✓ | `instanceAllowlist` + **output denylist** (redaction middleware) |
 | `admin` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | none |
 
+Concrete per-verb overrides:
+
+- `cs`: `buckets: ['outgoing', 'read', 'context', 'turn']`, `verbs: { remove: ['use'] }` — `use` lets a key switch active instance at the CLI level, which breaks the single-customer-per-key guarantee. A CS key is pinned to one instance by lock anyway, so `use` is pointless and revoking it prevents operator error.
+- `scout`: `buckets: ['outgoing', 'multimodal_in']`, `verbs: { add: ['where'], remove: ['history'] }` — scout needs to know which chat it's looking at (`where` reads state) but must never see prior-message history (`history`), because ingesting arbitrary customer chat context into a scout's alerting logic is a data-exfil vector.
+
 The `cs` multimodal buckets default to **off** and enterprises flip them on per-tenant via `profile_overrides`. The platform does not bake multimodal in because it is a commercial / regulatory choice downstream.
+
+**Resolver semantics.** `verbsToScopes(profile)` first expands `buckets` to a verb set, then applies `verbs.add` and `verbs.remove` in order, then maps the final verb set through the verb→scope table. `remove` of a verb not present is a no-op (safe). `add` of a verb already present is a no-op. The add/remove sets must be disjoint (validated at template load time — overlap throws).
 
 ### 3. Three new enforcement primitives in the scope-enforcer
 
@@ -60,7 +79,7 @@ The `cs` multimodal buckets default to **off** and enterprises flip them on per-
 - `instanceAllowlist: string[]` — any request whose target instance is not in the allowlist is denied. Enforces per-VM / per-tenant isolation.
 - `outboundRecipientAllowlist: string[]` — any `messages:send` whose target recipient JID is not in the allowlist is denied. Enforces scout's owner-only alerting and personal's bot-number allowlist.
 
-These locks live on the `agent_keys` row alongside `scopes`, so the middleware can enforce them with a single fetch that is already happening on every request.
+These locks live on the `api_keys` row alongside `scopes`, so the middleware can enforce them with a single fetch that is already happening on every request.
 
 ### 4. Output filter middleware for coworker secret redaction
 
@@ -90,7 +109,7 @@ This ensures no AI agent running non-interactively can ever mint a god-key, even
 
 ### 6. Data model
 
-Extend the `agent_keys` table:
+Extend the `api_keys` table:
 
 | Column | Type | Purpose |
 |---|---|---|
@@ -126,7 +145,7 @@ Non-admin profile creation remains non-interactive (scriptable by automations). 
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Redactor middleware introduces send-path latency | Medium | Benchmark on CI. Denylist compiled once at startup. If latency > 10ms p99, move to async fire-and-forget with best-effort scrub |
+| Redactor middleware introduces send-path latency | Medium | Redaction stays **synchronous** — an async fire-and-forget path would leak the unredacted message into the channel's send buffer before the scrub completed, defeating the whole point. Mitigate via Aho-Corasick automaton (all literal denylist entries compiled into a single DFA, O(n) scan regardless of denylist size) + pre-compiled regex array for pattern entries. Benchmark on CI with a 1k-entry denylist over a 10KB message body; target p99 < 5ms. Cap denylist size per tenant at 10k entries with a CLI warning past that threshold. |
 | Enterprises want per-chat multimodal overrides inside a single CS tenant | Medium | `profile_overrides` is per-key already. A tenant can mint multiple CS keys with different multimodal configs per customer tier |
 | Admin TTY check breaks CI smoke tests | Low | Tests use the factory function directly with explicit "accept" flag that is not a CLI flag |
 | Scope-enforcer regression on existing keys | High | Every existing key gets a backfill migration that sets `profile = NULL`, `scopes` preserved verbatim. Enforcer reads `scopes` column regardless of profile — profile is metadata for audit |
