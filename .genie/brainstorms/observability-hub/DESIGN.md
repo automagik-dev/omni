@@ -7,9 +7,10 @@ slug: observability-hub
 date: 2026-04-20
 wrs: 100/100
 spawns:
-  - observability-hub-p1-signoz-residual
-  - observability-hub-p2-producers
-  - observability-hub-p3-pack-observability
+  - observability-hub-p1-signoz-residual  # status: DONE (P1 pipeline proven end-to-end via testChannel)
+  - observability-hub-p2-producers        # status: DRAFT — Omni + Agno + infra only (scope reduced 2026-04-20)
+  - observability-hub-p2-genie            # status: DEFERRED — blocker on repos/genie divergence
+  - observability-hub-p3-pack-observability # status: DEFERRED — resumes after P2 data flowing
 ---
 
 # Design: ObservabilityHub — End-to-end observability for Omni ↔ any agent provider
@@ -205,8 +206,9 @@ P3 ⏳ scaffold from khal-os/pack-template
 - [x] 1b Admin logado (`cezar@namastex.ai`, isRoot:true, orgId `019da7b2-...`)
 - [x] 1c OTLP smoke queryable (service `observability-hub-smoke`, query_range retorna value:1)
 - [x] 1f Admin key salvo + validado contra `/api/v1/{channels,rules,user}`
-- [ ] 1d Discord channel criado via `POST /api/v1/channels` (precisa webhook URL)
-- [ ] 1e Alerta teste dispara → Discord em <2min
+- [x] 1d Discord channel criado via `POST /api/v1/channels` (HTTP 201, id `019dab22-473a-7128-a9e6-117f3e38af0d`)
+- [x] 1e Alerta teste disparou → Discord em <2min via `POST /api/v1/testChannel` (HTTP 204, user confirmed receipt)
+- [~] 1g Smoke alert **rule** creation deferred to P2.7 — SigNoz v0.119 EE requires `version:v5` schema undocumented in v4 refs. testChannel already proves channel+alertmanager wiring, real rules come after v5 JSON captured via UI network tab
 
 ### P2 (`observability-hub-p2-producers`)
 

@@ -20,17 +20,19 @@ Instrument Omni, Agno, and Genie with vanilla OpenTelemetry SDKs so one customer
 
 ### IN
 
-7 execution groups, paralelizable where deps allow. Layer/vendor-awareness indicated:
+**Scope note (2026-04-20):** this wish now covers **Omni + Agno + infra only**. Genie (grupo 2.4 originally) is deferred to `observability-hub-p2-genie` wish pending repo-state resolution (local `repos/genie` is 3616 behind / 2962 ahead of origin/dev; fresh clone needed + audit already done, see that wish). pack-observability is deferred to `observability-hub-p3-pack-observability`.
+
+6 execution groups (originally 7; 2.4 → own wish):
 
 | Group | Layer | Vendor-aware? | Target |
 |-------|-------|:---:|--------|
 | **2.1** `IAgentProvider` observability contract | Producer code | ❌ | Upstream `automagik-dev/omni` (or fork-bridge) |
 | **2.2** Omni OTel SDK bootstrap + `JourneyTracker → spans` + dual-header NATS | Producer code | ❌ | Upstream Omni |
 | **2.3** Agno OTLP export + FastAPI `traceparent` middleware + dual-export | Producer code | ❌ | `~/prod/eugenia-seller/apps/agno-api` |
-| **2.4** Genie mailbox stamps `trace_id` from NATS header + PG→OTLP tailer | Producer code | ❌ | Genie bridge |
+| ~~**2.4**~~ ~~Genie mailbox~~ | ~~deferred~~ | — | Moved to `observability-hub-p2-genie` |
 | **2.5** System exporters (`node_exporter`, `postgres_exporter ×3`, `nats-prometheus-exporter`, `pm2-prometheus-exporter`) scraped by Collector | Our infra | ❌ (Prom/OTLP std) | CT 173 |
 | **2.6** OTel Collector config: OTLP receivers, PII scrub processor, backend exporter(s), `otlphttp/khalos` stub | Our infra | ✅ | `infra-observability/` (new repo or subdir) |
-| **2.7** Silent-failure alert rules (consumer count, business-hours zero, PM2 restart, NATS pending) | Operator | ✅ | Backend API (today SigNoz `POST /api/v1/rules`) |
+| **2.7** Silent-failure alert rules (consumer count, business-hours zero, PM2 restart, NATS pending) | Operator | ✅ | Backend API (today SigNoz `POST /api/v1/rules` — **note: v5 schema**) |
 
 Details:
 
@@ -47,9 +49,7 @@ Details:
   - Initialize `TracerProvider` + `BatchSpanProcessor` + `OTLPSpanExporter` reading `OTEL_EXPORTER_OTLP_ENDPOINT` — zero backend vendor references
   - Dual-export: existing `agno_spans` PG storage continues as-is (backwards compat, authoritative audit), OTLP fans out in parallel
   - FastAPI middleware reads incoming `traceparent` header, attaches context so OpenInference spans become children
-- **2.4 Genie**:
-  - Fix: mailbox consumer must read NATS `x-trace-id` header and stamp `genie_runtime_events.trace_id` (currently NULL for `source=mailbox` rows — root cause of broken Omni↔Genie correlation)
-  - PG→OTLP tailer: new worker that polls new rows in `genie_runtime_events` / `tool_events` and emits OTel spans with `trace_id`/`parent_event_id` mapped correctly. Vendor-neutral OTLP out.
+- **2.4 Genie** → **deferred**: see `observability-hub-p2-genie` wish. Audit completed 2026-04-20: schema already landed in origin/dev (column `trace_id` present in `src/lib/runtime-events.ts` INSERT), gap is only `src/services/omni-bridge.ts:726` not extracting `msg.headers`. Fix is ~15–30 lines. Wish separate because `repos/genie` local is 3616/2962 diverged from origin/dev — needs fresh clone workflow.
 - **2.5 System exporters**:
   - Deploy binaries on CT 173 (same box as SigNoz + OTel Collector)
   - `postgres_exporter` ×3: omni `:8432`, agno `10.114.1.135:5432`, genie `:19642`
@@ -59,7 +59,7 @@ Details:
   - Processors: `attributes/scrub` (PII redactor — explicit allowlist), `batch`, `resource` (tag `deployment.environment`)
   - Exporters: `otlphttp/signoz` (live), `otlphttp/khalos` (stubbed, commented with placeholder URL + header)
   - Pipelines: traces/metrics/logs each fan to live exporter(s)
-- **2.7 Alert rules** via backend API (SigNoz today):
+- **2.7 Alert rules** via backend API (SigNoz today — uses **`version:v5`** rule schema in v0.119 EE; P1 attempts with v4 format returned `bad_data`. First step of 2.7 is to capture canonical v5 JSON via UI network-tab inspection, then parameterize):
   - `nats_system_consumer_count < 5 for 2min` → incident-#445 class guard
   - `sum(automation_logs success) == 0 during 09:00–21:00 BRT for 16min` → business heartbeat
   - `rate(pm2_restart) > 0 for 5min` → process instability
@@ -89,38 +89,40 @@ Details:
 
 ## Success Criteria
 
-- [ ] **a** One real production message traces Gupshup → Omni → NATS → Agno → NATS → Omni → Gupshup with a single `trace_id`, visible in the backend UI, queryable by `chat_id`
-- [ ] **b** One Genie session appears as a trace with tool calls + cost attributes + `claude_session_id` linkable
+- [ ] **a** One real production message traces Gupshup → Omni → HTTP/`traceparent` → Agno → response → Omni → Gupshup with a single `trace_id`, visible in the backend UI, queryable by `chat_id` (NATS leg to Genie intentionally not traced in this wish — Genie deferred)
 - [ ] **c** Dashboards for Host / PG×3 / NATS / PM2 populated with 7 days of data
 - [ ] **d** Alert "NATS SYSTEM consumer drop" fires <2min in test (prevention for incident #445 class)
 - [ ] **e** Alert "automation_logs zero success in business hours" fires <16min
 - [ ] **f** Collector config has `otlphttp/khalos` exporter stub (commented, valid YAML) — forward-compat proof
-- [ ] **g** Grep check in Omni/Agno/Genie PRs: `grep -ri signoz packages/ src/ apps/` returns nothing in producer source (only in infra/operator-level artifacts)
-- [ ] **h** `genie_runtime_events.trace_id IS NOT NULL` for rows with `source='mailbox'` after fix deploys (proves grupo 2.4 closed the gap)
+- [ ] **g** Grep check in Omni & Agno PRs: `grep -ri signoz packages/ src/ apps/` returns nothing in producer source (only in infra/operator-level artifacts)
+- [ ] **i** Canonical v5 rule JSON schema captured from UI network tab, committed to `infra-observability/rules/_schema-reference.json` — unblocks programmatic rule creation
+
+(DoD `b` and `h` moved to `observability-hub-p2-genie` wish.)
 
 ## Risks
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | Upstream PR review latency on omni | Medium | Fork-build bridge per workspace convention; open discussion issue first |
-| PII in trace attributes (Hapvida compliance) | **High** | 2.6 `attributes/scrub` processor is mandatory blocker before 2.2/2.3/2.4 deploy; security review of config |
+| PII in trace attributes (Hapvida compliance) | **High** | 2.6 `attributes/scrub` processor is mandatory blocker before 2.2/2.3 deploy; security review of config |
 | `IAgentProvider` contract breaks other providers | Medium | `observability` key is optional; providers without impl fallback noop |
-| UUID (Genie) vs hex (W3C) traceId | Low | Canonical conversion: UUID-no-hyphens = 32 hex = W3C trace-id |
 | Agno OTLP export increases latency | Low | `BatchSpanProcessor` is async; monitored via 2.5 metrics |
 | Alert rule storm during cutover | Medium | Initial thresholds conservative; tune after 7 days of baseline data |
+| SigNoz v0.119 EE `version:v5` rule schema undocumented in v4 references | Medium | 2.7 first step = capture canonical JSON from UI network tab; falls-back to manual rule creation if API friction persists |
 
 ## Execution Groups dependency graph
 
 ```
-P1 (backend live)
+P1 (backend live) ✅
  └─▶ 2.1 IAgentProvider contract
       ├─▶ 2.2 Omni SDK + JourneyTracker
-      ├─▶ 2.3 Agno OTLP
-      └─▶ 2.4 Genie mailbox + tailer
- └─▶ 2.5 System exporters ─▶ 2.6 Collector config ─▶ 2.7 Alert rules
+      └─▶ 2.3 Agno OTLP
+ └─▶ 2.5 System exporters ─▶ 2.6 Collector config ─▶ 2.7 Alert rules (v5 schema capture)
+
+(2.4 Genie → separate wish `observability-hub-p2-genie`)
 ```
 
-2.1 gates 2.2/2.3/2.4 (contract must exist first). 2.5/2.6 can run in parallel with 2.2-2.4. 2.7 depends on real signals flowing from 2.3 + 2.5.
+2.1 gates 2.2/2.3 (contract must exist first). 2.5/2.6 can run in parallel with 2.2-2.3. 2.7 depends on real signals flowing from 2.3 + 2.5.
 
 ## References
 

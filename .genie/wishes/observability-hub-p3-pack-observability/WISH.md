@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | DEFERRED — resumes after `observability-hub-p2-producers` ships and real trace data is flowing. Building UI against empty backend is waste. |
 | **Slug** | `observability-hub-p3-pack-observability` |
 | **Date** | 2026-04-20 |
 | **Parent design** | [observability-hub DESIGN.md](../../brainstorms/observability-hub/DESIGN.md) |

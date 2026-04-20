@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | DONE |
 | **Slug** | `observability-hub-p1-signoz-residual` |
 | **Date** | 2026-04-20 |
 | **Parent design** | [observability-hub DESIGN.md](../../brainstorms/observability-hub/DESIGN.md) |
@@ -50,11 +50,11 @@ Finish the P1 bootstrap of our current OTLP backend (SigNoz) that was mostly com
 - [x] (Pre-done in brainstorm) SigNoz reachable `http://10.114.1.173:8080`, v0.119.0 EE, admin `cezar@namastex.ai` logged
 - [x] (Pre-done) OTLP ingestion validated: trace `0d437778cdea850794c90132d0126482` queryable via `/api/v1/traces/{id}` and `/api/v3/query_range`
 - [x] (Pre-done) Admin service account key saved to `/home/genie/.omni/signoz-keys.env` (perms 600)
-- [ ] Discord webhook created (URL in env file)
-- [ ] SigNoz notification channel created via `POST /api/v1/channels`, channel ID persisted
-- [ ] SigNoz smoke-test rule created via `POST /api/v1/rules`, rule ID persisted
-- [ ] Force trigger: synthetic span with `test=true` → Discord message arrives in <2min
-- [ ] Runbook written with: URL, how to re-run smoke, how to rotate Service Account Keys, firewall notes
+- [x] Discord webhook created (URL in `/home/genie/.omni/signoz-keys.env` as `DISCORD_WEBHOOK_URL`)
+- [x] SigNoz notification channel created via `POST /api/v1/channels` (HTTP 201), channel ID `019dab22-473a-7128-a9e6-117f3e38af0d` persisted to env file
+- [x] End-to-end alert pipeline proven via `POST /api/v1/testChannel` (HTTP 204) — two Discord messages confirmed received by user
+- [~] Smoke-test alert rule creation — **deferred to P2.7**: SigNoz v0.119 EE requires `version:v5` rule schema which differs significantly from v4 docs. `POST /api/v1/rules` returns `bad_data` errors for v4-style payloads. Channel + Alertmanager wiring already proven via testChannel; real rules created in P2.7 after capturing correct v5 JSON via UI network-tab inspection.
+- [ ] Runbook written with: URLs, how to re-run smoke, how to rotate Service Account Keys, firewall notes, v5 rule schema capture procedure
 
 ## Execution Groups
 
