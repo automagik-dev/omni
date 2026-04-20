@@ -18,7 +18,14 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
-const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
+const VALID_CHANNELS: Channel[] = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'twilio-whatsapp',
+];
 
 /** Build a map of instanceId → instance name for display */
 async function buildInstanceNameMap(client: OmniClient): Promise<Map<string, string>> {

@@ -13,6 +13,7 @@ describe('Plugin validation', () => {
       expect(isValidChannelType('discord')).toBe(true);
       expect(isValidChannelType('slack')).toBe(true);
       expect(isValidChannelType('telegram')).toBe(true);
+      expect(isValidChannelType('twilio-whatsapp')).toBe(true);
     });
 
     it('should reject invalid channel types', () => {

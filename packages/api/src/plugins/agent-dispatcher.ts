@@ -343,7 +343,12 @@ function determineChatType(
   channel: string,
   rawPayload?: Record<string, unknown>,
 ): 'dm' | 'group' | 'channel' {
-  if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
+  if (
+    channel === 'whatsapp' ||
+    channel === 'whatsapp-baileys' ||
+    channel === 'whatsapp-cloud' ||
+    channel === 'twilio-whatsapp'
+  ) {
     return whatsappChatType(chatId);
   }
   if (channel === 'telegram') {
@@ -427,6 +432,7 @@ const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
   discord: 2000,
   'whatsapp-baileys': 65536,
   'whatsapp-cloud': 65536,
+  'twilio-whatsapp': 1600,
   slack: 40000,
   telegram: 4096,
 };

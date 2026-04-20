@@ -123,6 +123,13 @@ function buildInstanceConnectOptions(instance: {
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
   webhookVerifyToken?: string | null;
+  twilioAccountSid?: string | null;
+  twilioAuthToken?: string | null;
+  twilioFrom?: string | null;
+  twilioMessagingServiceSid?: string | null;
+  twilioStatusCallbackUrl?: string | null;
+  twilioWebhookUrl?: string | null;
+  twilioValidateSignature?: boolean | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -136,6 +143,9 @@ function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'gupshup') {
     applyGupshupOptions(options, instance);
+  }
+  if (instance.channel === 'twilio-whatsapp') {
+    applyTwilioWhatsAppOptions(options, instance);
   }
   return options;
 }
@@ -161,6 +171,29 @@ function applyGupshupOptions(
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
+function applyTwilioWhatsAppOptions(
+  options: Record<string, unknown>,
+  instance: {
+    twilioAccountSid?: string | null;
+    twilioAuthToken?: string | null;
+    twilioFrom?: string | null;
+    twilioMessagingServiceSid?: string | null;
+    twilioStatusCallbackUrl?: string | null;
+    twilioWebhookUrl?: string | null;
+    twilioValidateSignature?: boolean | null;
+  },
+): void {
+  if (instance.twilioAccountSid) options.twilioAccountSid = instance.twilioAccountSid;
+  if (instance.twilioAuthToken) options.twilioAuthToken = instance.twilioAuthToken;
+  if (instance.twilioFrom) options.twilioFrom = instance.twilioFrom;
+  if (instance.twilioMessagingServiceSid) options.twilioMessagingServiceSid = instance.twilioMessagingServiceSid;
+  if (instance.twilioStatusCallbackUrl) options.twilioStatusCallbackUrl = instance.twilioStatusCallbackUrl;
+  if (instance.twilioWebhookUrl) options.twilioWebhookUrl = instance.twilioWebhookUrl;
+  if (instance.twilioValidateSignature !== undefined && instance.twilioValidateSignature !== null) {
+    options.twilioValidateSignature = instance.twilioValidateSignature;
+  }
+}
+
 /**
  * Connect a single instance via its plugin
  */
@@ -184,6 +217,13 @@ async function connectInstance(
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
     webhookVerifyToken?: string | null;
+    twilioAccountSid?: string | null;
+    twilioAuthToken?: string | null;
+    twilioFrom?: string | null;
+    twilioMessagingServiceSid?: string | null;
+    twilioStatusCallbackUrl?: string | null;
+    twilioWebhookUrl?: string | null;
+    twilioValidateSignature?: boolean | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -539,6 +579,13 @@ export class InstanceMonitor {
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
     webhookVerifyToken?: string | null;
+    twilioAccountSid?: string | null;
+    twilioAuthToken?: string | null;
+    twilioFrom?: string | null;
+    twilioMessagingServiceSid?: string | null;
+    twilioStatusCallbackUrl?: string | null;
+    twilioWebhookUrl?: string | null;
+    twilioValidateSignature?: boolean | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;

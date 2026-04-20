@@ -47,11 +47,14 @@ export const DEFAULT_TYPING_INDICATOR_MS = 2500;
 
 /**
  * Channels that enforce a 24h messaging window after the last inbound
- * customer message. Currently only WhatsApp Cloud (Meta BSP). Baileys
+ * customer message. WhatsApp BSPs enforce this window. Baileys
  * (personal WhatsApp) has no such restriction imposed by Meta — the account
  * can message freely.
  */
-const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>(['whatsapp-cloud']);
+const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
+  'whatsapp-cloud',
+  'twilio-whatsapp',
+]);
 
 /**
  * Channels that can produce a "typing…" or analogous presence indicator
@@ -61,6 +64,7 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
 const CHANNELS_WITH_TYPING_INDICATOR: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
   'whatsapp-cloud',
+  'twilio-whatsapp',
   'discord',
   'slack',
   'telegram',

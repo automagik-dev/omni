@@ -10,6 +10,7 @@ export const CHANNEL_TYPES = [
   'telegram',
   'a2a',
   'gupshup',
+  'twilio-whatsapp',
   'internal',
 ] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];

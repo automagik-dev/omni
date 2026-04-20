@@ -93,6 +93,7 @@ export type Channel =
   | 'telegram'
   | 'a2a'
   | 'gupshup'
+  | 'twilio-whatsapp'
   | 'internal';
 
 // Paginated response helper
@@ -254,6 +255,13 @@ export interface CreateInstanceBody {
   channel: Channel;
   agentProviderId?: string;
   agentId?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFrom?: string;
+  twilioMessagingServiceSid?: string;
+  twilioStatusCallbackUrl?: string;
+  twilioWebhookUrl?: string;
+  twilioValidateSignature?: boolean;
 }
 
 /**
@@ -815,6 +823,13 @@ export interface SendEmbedBody {
 export interface ConnectInstanceBody {
   token?: string;
   forceNewQr?: boolean;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFrom?: string;
+  twilioMessagingServiceSid?: string;
+  twilioStatusCallbackUrl?: string;
+  twilioWebhookUrl?: string;
+  twilioValidateSignature?: boolean;
   /** WhatsApp-specific connection options */
   whatsapp?: {
     /** Sync full message history on connect (default: true) */
