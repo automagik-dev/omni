@@ -23,6 +23,7 @@ import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createEventsCommand } from './commands/events.js';
+import { createFollowUpCommand } from './commands/follow-up.js';
 import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
 import { createJourneyCommand } from './commands/journey.js';
@@ -127,6 +128,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Event-driven workflows',
+  },
+  {
+    create: createFollowUpCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Idle-chat follow-up config (agents/instances/chats)',
   },
   {
     create: createAgentsCommand,

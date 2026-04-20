@@ -1988,6 +1988,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/follow-up/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an agent
+         * @description Returns the `followUpConfig` stored at the agent scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForAgent"];
+        /**
+         * Set follow-up config for an agent
+         * @description Replaces the `followUpConfig` stored at the agent scope.
+         */
+        put: operations["setFollowUpConfigForAgent"];
+        post?: never;
+        /**
+         * Clear follow-up config for an agent
+         * @description Removes the override at the agent scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForAgent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follow-up/instances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an instance
+         * @description Returns the `followUpConfig` stored at the instance scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForInstance"];
+        /**
+         * Set follow-up config for an instance
+         * @description Replaces the `followUpConfig` stored at the instance scope.
+         */
+        put: operations["setFollowUpConfigForInstance"];
+        post?: never;
+        /**
+         * Clear follow-up config for an instance
+         * @description Removes the override at the instance scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/follow-up/chats/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get follow-up config for an chat
+         * @description Returns the `followUpConfig` stored at the chat scope, or null if unset.
+         */
+        get: operations["getFollowUpConfigForChat"];
+        /**
+         * Set follow-up config for an chat
+         * @description Replaces the `followUpConfig` stored at the chat scope.
+         */
+        put: operations["setFollowUpConfigForChat"];
+        post?: never;
+        /**
+         * Clear follow-up config for an chat
+         * @description Removes the override at the chat scope so broader scopes apply.
+         */
+        delete: operations["unsetFollowUpConfigForChat"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3406,10 +3490,9 @@ export interface components {
              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
              *     - **webhook**: `{ mode?, retries? }`
-             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-             *       - `targetAgent`: which team member inbox to deliver to
-             *       - Optional: `teamName` (default "genie")
+             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+             *       - `agentName`: genie agent name (from genie directory)
+             *       - Optional: `natsUrl` (default "localhost:4222")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -3476,10 +3559,9 @@ export interface components {
              *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
              *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
              *     - **webhook**: optional `{ mode, retries }`
-             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-             *       - `targetAgent`: which team member inbox to deliver to
-             *       - Optional: `teamName` (default "genie")
+             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+             *       - `agentName`: genie agent name (from genie directory)
+             *       - Optional: `natsUrl` (default "localhost:4222")
              * @example {
              *       "projectPath": "/home/user/my-project",
              *       "model": "claude-haiku-4-5-20251001",
@@ -3504,11 +3586,8 @@ export interface components {
              * @default true
              */
             supportsStreaming: boolean;
-            /**
-             * @description Supports images
-             * @default false
-             */
-            supportsImages: boolean;
+            /** @description Supports images (defaults to true for claude-code, false otherwise) */
+            supportsImages?: boolean;
             /**
              * @description Supports audio
              * @default false
@@ -3604,6 +3683,45 @@ export interface components {
             agentGateModel: string | null;
             /** @description Response gate prompt override */
             agentGatePrompt: string | null;
+            /**
+             * @description Debounce mode override
+             * @enum {string|null}
+             */
+            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+            /** @description Debounce min delay (ms) override */
+            messageDebounceMinMs: number | null;
+            /** @description Debounce max delay (ms) override */
+            messageDebounceMaxMs: number | null;
+            /** @description Debounce group chat delay (ms) override */
+            messageDebounceGroupMs: number | null;
+            /** @description Restart debounce on typing override */
+            messageDebounceRestartOnTyping: boolean | null;
+            /**
+             * @description Split delay mode override
+             * @enum {string|null}
+             */
+            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+            /** @description Split delay fixed (ms) override */
+            messageSplitDelayFixedMs: number | null;
+            /** @description Split delay min (ms) override */
+            messageSplitDelayMinMs: number | null;
+            /** @description Split delay max (ms) override */
+            messageSplitDelayMaxMs: number | null;
+            /** @description Auto-split messages override */
+            enableAutoSplit: boolean | null;
+            /**
+             * @description Reaction ack toggle override
+             * @enum {string|null}
+             */
+            reactionAck: "off" | "on" | null;
+            /** @description Reaction ack emoji per-channel override */
+            reactionAckEmoji: {
+                [key: string]: string;
+            } | null;
+            /** @description Ack timeout (ms) override */
+            ackTimeoutMs: number | null;
+            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+            agentAckMessage: string | null;
             /** @description Human-readable label for this route (e.g., "VIP Support") */
             label: string | null;
             /** @description Priority (higher = higher priority, default: 0) */
@@ -3683,6 +3801,45 @@ export interface components {
             agentGateModel?: string;
             /** @description Response gate prompt */
             agentGatePrompt?: string;
+            /**
+             * @description Debounce mode
+             * @enum {string}
+             */
+            messageDebounceMode?: "disabled" | "fixed" | "randomized";
+            /** @description Debounce min delay (ms) */
+            messageDebounceMinMs?: number;
+            /** @description Debounce max delay (ms) */
+            messageDebounceMaxMs?: number;
+            /** @description Debounce group chat delay (ms) */
+            messageDebounceGroupMs?: number;
+            /** @description Restart debounce on typing */
+            messageDebounceRestartOnTyping?: boolean;
+            /**
+             * @description Split delay mode
+             * @enum {string}
+             */
+            messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+            /** @description Split delay fixed (ms) */
+            messageSplitDelayFixedMs?: number;
+            /** @description Split delay min (ms) */
+            messageSplitDelayMinMs?: number;
+            /** @description Split delay max (ms) */
+            messageSplitDelayMaxMs?: number;
+            /** @description Auto-split messages */
+            enableAutoSplit?: boolean;
+            /**
+             * @description Reaction ack toggle
+             * @enum {string}
+             */
+            reactionAck?: "off" | "on";
+            /** @description Reaction ack emoji per-channel */
+            reactionAckEmoji?: {
+                [key: string]: string;
+            };
+            /** @description Ack timeout (ms) */
+            ackTimeoutMs?: number;
+            /** @description Agent ack message (omit = inherit from instance, empty string = disabled) */
+            agentAckMessage?: string;
             /** @description Human-readable label */
             label?: string;
             /**
@@ -3743,6 +3900,45 @@ export interface components {
             agentGateModel?: string | null;
             /** @description Response gate prompt */
             agentGatePrompt?: string | null;
+            /**
+             * @description Debounce mode
+             * @enum {string|null}
+             */
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+            /** @description Debounce min delay (ms) */
+            messageDebounceMinMs?: number | null;
+            /** @description Debounce max delay (ms) */
+            messageDebounceMaxMs?: number | null;
+            /** @description Debounce group chat delay (ms) */
+            messageDebounceGroupMs?: number | null;
+            /** @description Restart debounce on typing */
+            messageDebounceRestartOnTyping?: boolean | null;
+            /**
+             * @description Split delay mode
+             * @enum {string|null}
+             */
+            messageSplitDelayMode?: "disabled" | "fixed" | "randomized" | null;
+            /** @description Split delay fixed (ms) */
+            messageSplitDelayFixedMs?: number | null;
+            /** @description Split delay min (ms) */
+            messageSplitDelayMinMs?: number | null;
+            /** @description Split delay max (ms) */
+            messageSplitDelayMaxMs?: number | null;
+            /** @description Auto-split messages */
+            enableAutoSplit?: boolean | null;
+            /**
+             * @description Reaction ack toggle
+             * @enum {string|null}
+             */
+            reactionAck?: "off" | "on" | null;
+            /** @description Reaction ack emoji per-channel */
+            reactionAckEmoji?: {
+                [key: string]: string;
+            } | null;
+            /** @description Ack timeout (ms) */
+            ackTimeoutMs?: number | null;
+            /** @description Agent ack message (null = inherit from instance, empty string = disabled) */
+            agentAckMessage?: string | null;
             /** @description Human-readable label */
             label?: string | null;
             /** @description Priority (higher = higher priority) */
@@ -4533,6 +4729,34 @@ export interface components {
             state?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** @description Follow-up sequence configuration. */
+        FollowUpSequenceConfig: {
+            /** @description Master switch — false turns off follow-ups at this scope. */
+            enabled: boolean;
+            schedule: {
+                /** @enum {string} */
+                kind: "fixed";
+                /** @description Minutes between successive follow-ups, in order. */
+                intervalsMinutes: number[];
+            } | {
+                /** @enum {string} */
+                kind: "exponential";
+                /** @description First interval (minutes). */
+                initialMinutes: number;
+                /** @description Multiplier applied each iteration. */
+                factor: number;
+                /** @description Upper bound on any single interval. */
+                maxMinutes: number;
+            };
+            /** @description Hard cap on follow-ups fired per sequence. */
+            maxFollowUps: number;
+            /** @description Template rendered into the synthetic prompt sent to the agent. */
+            promptTemplate: string;
+            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+            stopOutsideMessagingWindow: boolean;
+            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+            showTypingIndicator: boolean;
         };
     };
     responses: never;
@@ -10390,10 +10614,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10474,10 +10697,9 @@ export interface operations {
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
-                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                     *       - `targetAgent`: which team member inbox to deliver to
-                     *       - Optional: `teamName` (default "genie")
+                     *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                     *       - `agentName`: genie agent name (from genie directory)
+                     *       - Optional: `natsUrl` (default "localhost:4222")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -10502,10 +10724,7 @@ export interface operations {
                      * @default true
                      */
                     supportsStreaming?: boolean;
-                    /**
-                     * @description Supports images
-                     * @default false
-                     */
+                    /** @description Supports images (defaults to true for claude-code, false otherwise) */
                     supportsImages?: boolean;
                     /**
                      * @description Supports audio
@@ -10563,10 +10782,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10680,10 +10898,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -10835,10 +11052,9 @@ export interface operations {
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
-                     *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                     *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                     *       - `targetAgent`: which team member inbox to deliver to
-                     *       - Optional: `teamName` (default "genie")
+                     *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                     *       - `agentName`: genie agent name (from genie directory)
+                     *       - Optional: `natsUrl` (default "localhost:4222")
                      * @example {
                      *       "projectPath": "/home/user/my-project",
                      *       "model": "claude-haiku-4-5-20251001",
@@ -10863,10 +11079,7 @@ export interface operations {
                      * @default true
                      */
                     supportsStreaming?: boolean;
-                    /**
-                     * @description Supports images
-                     * @default false
-                     */
+                    /** @description Supports images (defaults to true for claude-code, false otherwise) */
                     supportsImages?: boolean;
                     /**
                      * @description Supports audio
@@ -10924,10 +11137,9 @@ export interface operations {
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
-                             *     - **genie**: `{ agentName, targetAgent }` (required) — fire-and-forget delivery to Claude Code team inbox
-                             *       - `agentName`: identity of the omni agent in the team (used as `from` field)
-                             *       - `targetAgent`: which team member inbox to deliver to
-                             *       - Optional: `teamName` (default "genie")
+                             *     - **nats-genie**: `{ agentName }` (required) — fire-and-forget delivery via NATS pub/sub
+                             *       - `agentName`: genie agent name (from genie directory)
+                             *       - Optional: `natsUrl` (default "localhost:4222")
                              * @example {
                              *       "projectPath": "/home/user/my-project",
                              *       "model": "claude-haiku-4-5-20251001",
@@ -11181,6 +11393,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11297,6 +11548,45 @@ export interface operations {
                     agentGateModel?: string;
                     /** @description Response gate prompt */
                     agentGatePrompt?: string;
+                    /**
+                     * @description Debounce mode
+                     * @enum {string}
+                     */
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Debounce min delay (ms) */
+                    messageDebounceMinMs?: number;
+                    /** @description Debounce max delay (ms) */
+                    messageDebounceMaxMs?: number;
+                    /** @description Debounce group chat delay (ms) */
+                    messageDebounceGroupMs?: number;
+                    /** @description Restart debounce on typing */
+                    messageDebounceRestartOnTyping?: boolean;
+                    /**
+                     * @description Split delay mode
+                     * @enum {string}
+                     */
+                    messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+                    /** @description Split delay fixed (ms) */
+                    messageSplitDelayFixedMs?: number;
+                    /** @description Split delay min (ms) */
+                    messageSplitDelayMinMs?: number;
+                    /** @description Split delay max (ms) */
+                    messageSplitDelayMaxMs?: number;
+                    /** @description Auto-split messages */
+                    enableAutoSplit?: boolean;
+                    /**
+                     * @description Reaction ack toggle
+                     * @enum {string}
+                     */
+                    reactionAck?: "off" | "on";
+                    /** @description Reaction ack emoji per-channel */
+                    reactionAckEmoji?: {
+                        [key: string]: string;
+                    };
+                    /** @description Ack timeout (ms) */
+                    ackTimeoutMs?: number;
+                    /** @description Agent ack message (omit = inherit from instance, empty string = disabled) */
+                    agentAckMessage?: string;
                     /** @description Human-readable label */
                     label?: string;
                     /**
@@ -11392,6 +11682,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11568,6 +11897,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -11758,6 +12126,45 @@ export interface operations {
                     agentGateModel?: string | null;
                     /** @description Response gate prompt */
                     agentGatePrompt?: string | null;
+                    /**
+                     * @description Debounce mode
+                     * @enum {string|null}
+                     */
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+                    /** @description Debounce min delay (ms) */
+                    messageDebounceMinMs?: number | null;
+                    /** @description Debounce max delay (ms) */
+                    messageDebounceMaxMs?: number | null;
+                    /** @description Debounce group chat delay (ms) */
+                    messageDebounceGroupMs?: number | null;
+                    /** @description Restart debounce on typing */
+                    messageDebounceRestartOnTyping?: boolean | null;
+                    /**
+                     * @description Split delay mode
+                     * @enum {string|null}
+                     */
+                    messageSplitDelayMode?: "disabled" | "fixed" | "randomized" | null;
+                    /** @description Split delay fixed (ms) */
+                    messageSplitDelayFixedMs?: number | null;
+                    /** @description Split delay min (ms) */
+                    messageSplitDelayMinMs?: number | null;
+                    /** @description Split delay max (ms) */
+                    messageSplitDelayMaxMs?: number | null;
+                    /** @description Auto-split messages */
+                    enableAutoSplit?: boolean | null;
+                    /**
+                     * @description Reaction ack toggle
+                     * @enum {string|null}
+                     */
+                    reactionAck?: "off" | "on" | null;
+                    /** @description Reaction ack emoji per-channel */
+                    reactionAckEmoji?: {
+                        [key: string]: string;
+                    } | null;
+                    /** @description Ack timeout (ms) */
+                    ackTimeoutMs?: number | null;
+                    /** @description Agent ack message (null = inherit from instance, empty string = disabled) */
+                    agentAckMessage?: string | null;
                     /** @description Human-readable label */
                     label?: string | null;
                     /** @description Priority (higher = higher priority) */
@@ -11847,6 +12254,45 @@ export interface operations {
                             agentGateModel: string | null;
                             /** @description Response gate prompt override */
                             agentGatePrompt: string | null;
+                            /**
+                             * @description Debounce mode override
+                             * @enum {string|null}
+                             */
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Debounce min delay (ms) override */
+                            messageDebounceMinMs: number | null;
+                            /** @description Debounce max delay (ms) override */
+                            messageDebounceMaxMs: number | null;
+                            /** @description Debounce group chat delay (ms) override */
+                            messageDebounceGroupMs: number | null;
+                            /** @description Restart debounce on typing override */
+                            messageDebounceRestartOnTyping: boolean | null;
+                            /**
+                             * @description Split delay mode override
+                             * @enum {string|null}
+                             */
+                            messageSplitDelayMode: "disabled" | "fixed" | "randomized" | null;
+                            /** @description Split delay fixed (ms) override */
+                            messageSplitDelayFixedMs: number | null;
+                            /** @description Split delay min (ms) override */
+                            messageSplitDelayMinMs: number | null;
+                            /** @description Split delay max (ms) override */
+                            messageSplitDelayMaxMs: number | null;
+                            /** @description Auto-split messages override */
+                            enableAutoSplit: boolean | null;
+                            /**
+                             * @description Reaction ack toggle override
+                             * @enum {string|null}
+                             */
+                            reactionAck: "off" | "on" | null;
+                            /** @description Reaction ack emoji per-channel override */
+                            reactionAckEmoji: {
+                                [key: string]: string;
+                            } | null;
+                            /** @description Ack timeout (ms) override */
+                            ackTimeoutMs: number | null;
+                            /** @description Agent ack message override (null = inherit from instance, empty string = disabled) */
+                            agentAckMessage: string | null;
                             /** @description Human-readable label for this route (e.g., "VIP Support") */
                             label: string | null;
                             /** @description Priority (higher = higher priority, default: 0) */
@@ -15457,6 +15903,735 @@ export interface operations {
                 };
             };
             /** @description Conversation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current config */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Master switch — false turns off follow-ups at this scope. */
+                    enabled: boolean;
+                    schedule: {
+                        /** @enum {string} */
+                        kind: "fixed";
+                        /** @description Minutes between successive follow-ups, in order. */
+                        intervalsMinutes: number[];
+                    } | {
+                        /** @enum {string} */
+                        kind: "exponential";
+                        /** @description First interval (minutes). */
+                        initialMinutes: number;
+                        /** @description Multiplier applied each iteration. */
+                        factor: number;
+                        /** @description Upper bound on any single interval. */
+                        maxMinutes: number;
+                    };
+                    /** @description Hard cap on follow-ups fired per sequence. */
+                    maxFollowUps: number;
+                    /** @description Template rendered into the synthetic prompt sent to the agent. */
+                    promptTemplate: string;
+                    /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                    stopOutsideMessagingWindow: boolean;
+                    /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                    showTypingIndicator: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Config updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The stored config at this scope, or null if unset. */
+                        data: {
+                            /** @description Master switch — false turns off follow-ups at this scope. */
+                            enabled: boolean;
+                            schedule: {
+                                /** @enum {string} */
+                                kind: "fixed";
+                                /** @description Minutes between successive follow-ups, in order. */
+                                intervalsMinutes: number[];
+                            } | {
+                                /** @enum {string} */
+                                kind: "exponential";
+                                /** @description First interval (minutes). */
+                                initialMinutes: number;
+                                /** @description Multiplier applied each iteration. */
+                                factor: number;
+                                /** @description Upper bound on any single interval. */
+                                maxMinutes: number;
+                            };
+                            /** @description Hard cap on follow-ups fired per sequence. */
+                            maxFollowUps: number;
+                            /** @description Template rendered into the synthetic prompt sent to the agent. */
+                            promptTemplate: string;
+                            /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                            stopOutsideMessagingWindow: boolean;
+                            /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                            showTypingIndicator: boolean;
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    unsetFollowUpConfigForChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description chat not found */
             404: {
                 headers: {
                     [name: string]: unknown;

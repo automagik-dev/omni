@@ -23,6 +23,8 @@ import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
 import { EventService } from './events';
+import { FollowUpLifecycleService } from './follow-up-lifecycle';
+import { FollowUpSweeperService } from './follow-up-sweeper';
 import { InstanceService } from './instances';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -65,6 +67,8 @@ export interface Services {
   agentRunner: AgentRunnerService;
   tts: TTSService;
   consumerOffsets: ConsumerOffsetService;
+  followUpLifecycle: FollowUpLifecycleService;
+  followUpSweeper: FollowUpSweeperService;
 }
 
 /**
@@ -105,6 +109,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     agentRunner: new AgentRunnerService(db),
     tts: new TTSService(settings),
     consumerOffsets: new ConsumerOffsetService(db),
+    followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
+    followUpSweeper: new FollowUpSweeperService(db, eventBus),
   };
 }
 

@@ -214,6 +214,32 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     },
   });
 
+  // Idle-chat follow-up sweeper — every 15 seconds.
+  // Fires `chat.idle_timeout` for due rows and advances the sequence.
+  // See issue #404 and .genie/wishes/idle-chat-follow-up/WISH.md.
+  scheduler.register({
+    name: 'follow-up-sweeper',
+    cron: '*/15 * * * * *',
+    runOnStart: false,
+    handler: async () => {
+      await withCronMonitor('follow-up-sweeper', '*/15 * * * * *', 1, 1, async () => {
+        const startTime = Date.now();
+        try {
+          const stats = await services.followUpSweeper.sweep();
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('follow-up-sweeper', 'success', durationSec);
+          if (stats.scanned > 0) {
+            log.debug('Follow-up sweep tick', stats);
+          }
+        } catch (err) {
+          const durationSec = (Date.now() - startTime) / 1000;
+          recordScheduledJob('follow-up-sweeper', 'failure', durationSec);
+          throw err;
+        }
+      });
+    },
+  });
+
   // Unread count refresh — hourly
   // Re-emits cached unread counts from WhatsApp plugin to DB so stale counts get corrected.
   // Without this, counts only update on connection (chats.upsert) or real-time read events.

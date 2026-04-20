@@ -92,6 +92,20 @@
       "when": 1774721939291,
       "tag": "0012_large_wendell_rand",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1776142006728,
+      "tag": "0013_idle_chat_follow_up",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1776145233954,
+      "tag": "0014_lush_tempest",
+      "breakpoints": true
     }
   ]
 }

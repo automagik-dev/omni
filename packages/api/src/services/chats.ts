@@ -563,6 +563,16 @@ export class ChatService {
     if (data.name) data.name = sanitizeText(data.name) ?? data.name;
     if (data.lastMessagePreview)
       data.lastMessagePreview = sanitizeText(data.lastMessagePreview) ?? data.lastMessagePreview;
+
+    // Snapshot the prior settings so we can detect a handoff (agentPaused
+    // flipping from false → true). Only needed when `settings` is part of the
+    // patch, so avoid an extra query otherwise.
+    let priorAgentPaused = false;
+    if (data.settings !== undefined) {
+      const [prior] = await this.db.select().from(chats).where(eq(chats.id, id)).limit(1);
+      priorAgentPaused = (prior?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+    }
+
     const [updated] = await this.db
       .update(chats)
       .set({ ...data, updatedAt: new Date() })
@@ -571,6 +581,25 @@ export class ChatService {
 
     if (!updated) {
       throw new NotFoundError('Chat', id);
+    }
+
+    // Follow-up sequences disarm on handoff activation — emit only on the
+    // false → true transition so idempotent settings writes don't replay.
+    const nextAgentPaused = (updated.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+    if (this.eventBus && updated.instanceId && data.settings !== undefined && !priorAgentPaused && nextAgentPaused) {
+      const instanceId = updated.instanceId;
+      this.eventBus
+        .publish(
+          'chat.handoff_activated',
+          {
+            chatId: updated.id,
+            instanceId,
+            agentId: null,
+            reason: 'agentPaused',
+          },
+          { instanceId },
+        )
+        .catch((err) => log.debug('Failed to publish chat.handoff_activated', { error: String(err) }));
     }
 
     return updated;
@@ -612,6 +641,15 @@ export class ChatService {
 
     if (!updated) {
       throw new NotFoundError('Chat', id);
+    }
+
+    // Follow-up sequences treat archive as a terminal state — emit so the
+    // lifecycle hook disarms any active row. See issue #404.
+    if (this.eventBus && updated.instanceId) {
+      const instanceId = updated.instanceId;
+      this.eventBus
+        .publish('chat.archived', { chatId: updated.id, instanceId, source: 'archive' }, { instanceId })
+        .catch((err) => log.debug('Failed to publish chat.archived', { error: String(err) }));
     }
 
     return updated;
