@@ -382,7 +382,7 @@ export async function resolveAgentId(input: string): Promise<string> {
   if (UUID_RE.test(input)) return input;
 
   const client = getClient();
-  const { items: agents } = await client.agents.list({ limit: 100 });
+  const { items: agents } = await client.agents.list({});
 
   // Partial UUID prefix (at least 2 chars, looks hex-ish)
   if (/^[0-9a-f]{2,}$/i.test(input)) {
