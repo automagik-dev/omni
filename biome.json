@@ -58,7 +58,8 @@
       "*.generated.ts",
       "omni-*",
       ".worktrees",
-      ".genie"
+      ".genie",
+      "repos"
     ]
   },
   "overrides": [
