@@ -108,7 +108,7 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         run: bunx turbo run build --filter=@automagik/omni
 
-      - name: Publish to npm
+      - name: Publish to npm (@latest, with @next promotion fallback)
         if: steps.exists.outputs.skip != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -118,7 +118,18 @@ jobs:
             echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
             exit 1
           fi
-          cd packages/cli && bun publish --access public
+
+          VERSION="${{ steps.pkg.outputs.version }}"
+          cd packages/cli
+
+          # Try a fresh publish as @latest. If the version already exists on npm
+          # (the Version workflow already published it as @next when this build
+          # came through dev first), promote it by retagging instead of failing.
+          if ! bun publish --access public --tag latest 2>&1; then
+            echo "Publish failed — version may already exist from @next. Retagging as latest..."
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+            npm dist-tag add "@automagik/omni@${VERSION}" latest
+          fi
 
       # Note: CHANGELOG.md is intentionally not committed back to main.
       # main is a protected branch requiring PRs. The changelog is already
