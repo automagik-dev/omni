@@ -179,15 +179,21 @@ describe('handleCreate — admin profile', () => {
   test('refuses when stdin is not a TTY', async () => {
     stdinStub = stubStdin({ isTTY: false });
     const fakeClient = {} as OmniClient;
-    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(/__exit_1/);
-    expect(exitStub?.calls).toContain(1);
+    // Accepts either the real-output path (__exit_1 via stubbed process.exit)
+    // or the mock-module path (throws the error message) — other test files
+    // call `mock.module('../output.js', …)` process-wide, so the behavior
+    // depends on suite ordering. Either way, creation must be refused.
+    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(
+      /__exit_1|admin keys require a TTY/,
+    );
   });
 
   test('refuses on a TTY with the wrong confirmation phrase', async () => {
     stdinStub = stubStdin({ isTTY: true, answer: 'no thanks' });
     const fakeClient = {} as OmniClient;
-    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(/__exit_1/);
-    expect(exitStub?.calls).toContain(1);
+    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(
+      /__exit_1|admin confirmation failed/,
+    );
   });
 });
 
@@ -236,8 +242,11 @@ describe('handleCreate — scout profile body shape', () => {
     const stdoutStub = stubStdout();
     try {
       const fakeClient = { keys: { create: async () => ({ plainTextKey: 'x' }) } } as unknown as OmniClient;
-      await expect(handleCreate(fakeClient, { name: 'nope' })).rejects.toThrow(/__exit_1/);
-      expect(exitStub.calls).toContain(1);
+      // See admin-profile suite: assertion tolerates both the real-output
+      // and mock.module-patched variants of `output.error`.
+      await expect(handleCreate(fakeClient, { name: 'nope' })).rejects.toThrow(
+        /__exit_1|Either --profile or --scopes is required/,
+      );
     } finally {
       stdoutStub.restore();
       exitStub.restore();
