@@ -53,6 +53,7 @@ export const REDACTION_MARKER = '[redacted]';
  * Audit event name emitted on every redaction hit. Not in CORE_EVENT_TYPES —
  * `publishGeneric` is the right call for runtime-validated audit events.
  * Cast at the call site; the runtime name is the contract.
+ * @public
  */
 export const SECRET_REDACTED_EVENT = 'secret.redacted' as EventType;
 
@@ -120,6 +121,7 @@ export function parsePresetMap(raw: string | null | undefined): Map<string, Comp
 /**
  * Load the preset registry once. Subsequent calls return the memoized map.
  * Tests can reset via `resetPresetRegistryForTests()`.
+ * @public
  */
 export function loadPresetRegistry(): Map<string, CompiledPattern[]> {
   if (presetRegistry) return presetRegistry;
