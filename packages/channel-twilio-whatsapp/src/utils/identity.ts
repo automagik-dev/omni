@@ -20,9 +20,7 @@ export function normalizeE164Phone(value: string): string {
 }
 
 export function toTwilioWhatsAppAddress(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith(WHATSAPP_PREFIX)) return `${WHATSAPP_PREFIX}${normalizeE164Phone(trimmed)}`;
-  return `${WHATSAPP_PREFIX}${normalizeE164Phone(trimmed)}`;
+  return `${WHATSAPP_PREFIX}${normalizeE164Phone(value)}`;
 }
 
 export function normalizeTwilioWhatsAppAddress(value: string): string {

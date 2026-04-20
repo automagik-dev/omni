@@ -78,11 +78,34 @@ function buildConfig(config: InstanceConfig): TwilioWhatsAppConfig {
 }
 
 function canAttachBodyWithMedia(contentType: string | undefined): boolean {
+  // Twilio WhatsApp ignores Body when paired with video, audio, document,
+  // contact, or location media. Image is the only media caption we can deliver.
   return contentType === 'image' || contentType === undefined;
 }
 
 function lastInboundMessageStorageKey(instanceId: string, chatId: string): string {
   return `last-inbound-message:${instanceId}:${chatId}`;
+}
+
+function buildLocationText(location: NonNullable<OutgoingMessage['content']['location']>): string {
+  const { latitude, longitude, name, address } = location;
+  return [name, address, `${latitude},${longitude}`].filter(Boolean).join('\n');
+}
+
+function getDeliveredTextContent(content: OutgoingMessage['content']): string | undefined {
+  if (content.type === 'text') return content.text;
+
+  if (content.type === 'location' && content.location) {
+    return buildLocationText(content.location);
+  }
+
+  if (canAttachBodyWithMedia(content.type)) {
+    return content.caption ?? content.text;
+  }
+
+  if (content.text && !content.mediaUrl) return content.text;
+
+  return undefined;
 }
 
 async function dispatchContent(
@@ -106,20 +129,19 @@ async function dispatchContent(
       throw new TwilioWhatsAppError(TwilioWhatsAppErrorCode.BAD_REQUEST, 'mediaUrl is required for media messages');
     }
     const caption = content.caption ?? content.text;
+    const canAttachCaption = canAttachBodyWithMedia(content.type);
     return client.sendMessage({
       to: message.to,
-      body: caption && canAttachBodyWithMedia(content.type) ? caption : undefined,
+      body: caption && canAttachCaption ? caption : undefined,
       mediaUrl: content.mediaUrl,
       statusCallbackUrl: config.twilioStatusCallbackUrl,
     });
   }
 
   if (content.type === 'location' && content.location) {
-    const { latitude, longitude, name, address } = content.location;
-    const locationText = [name, address, `${latitude},${longitude}`].filter(Boolean).join('\n');
     return client.sendMessage({
       to: message.to,
-      body: locationText,
+      body: buildLocationText(content.location),
       statusCallbackUrl: config.twilioStatusCallbackUrl,
     });
   }
@@ -225,7 +247,7 @@ export class TwilioWhatsAppPlugin extends BaseChannelPlugin {
         to: chatId,
         content: {
           type: content.type as import('@omni/core/types').ContentType,
-          text: content.text,
+          text: getDeliveredTextContent(content),
           mediaUrl: content.mediaUrl,
         },
         replyToId: message.replyTo,
@@ -346,6 +368,9 @@ export class TwilioWhatsAppPlugin extends BaseChannelPlugin {
       new Set(messageIdsToMark.filter((messageId): messageId is string => Boolean(messageId))),
     );
 
+    // Twilio does not expose a standalone API to mark inbound user messages as
+    // read. The WhatsApp typing-indicator endpoint is the documented read path:
+    // referencing an inbound MessageSid marks it read and briefly shows typing.
     for (const messageId of uniqueMessageIds) {
       await state.client.sendTypingIndicator(messageId);
     }
