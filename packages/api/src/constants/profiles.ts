@@ -16,7 +16,7 @@
  * recipient allowlist is the canonical case).
  */
 
-import type { VerbBucket } from './verbs';
+import type { Verb, VerbBucket } from './verbs';
 
 export type ProfileName = 'cs' | 'personal' | 'scout' | 'coworker' | 'admin';
 
@@ -43,6 +43,15 @@ export interface ProfileOverrides {
 export interface ProfileTemplate {
   /** Verb buckets this profile enables by default. */
   buckets: VerbBucket[];
+  /**
+   * Per-verb overrides layered on top of `buckets`. `add` pulls in extra
+   * verbs that the bucket composition alone would miss; `remove` strips
+   * individual verbs so a profile can enable a bucket minus one verb
+   * without dropping the whole bucket (canonical case: CS keeps the
+   * `context` bucket but removes `use` so the key cannot switch
+   * instances). `add` and `remove` MUST be disjoint.
+   */
+  verbs?: { add?: Verb[]; remove?: Verb[] };
   /** Locks the CLI / route MUST require at key-creation time. */
   requiresLocks: LockRequirement[];
   /**
@@ -77,6 +86,10 @@ export const PROFILES: Record<ProfileName, ProfileTemplate> = {
    */
   cs: {
     buckets: ['outgoing', 'read', 'context', 'turn'],
+    // CS keys are locked to one instance via instanceAllowlist. The `use`
+    // verb would let the key switch active instance at runtime and defeat
+    // that lock, so it is surgically removed from the `context` bucket.
+    verbs: { remove: ['use'] },
     requiresLocks: ['chatAllowlist', 'instanceAllowlist'],
   },
 
@@ -96,6 +109,12 @@ export const PROFILES: Record<ProfileName, ProfileTemplate> = {
    */
   scout: {
     buckets: ['read', 'context', 'multimodal_in'],
+    // Scout must locate the current chat (`where`) but must NEVER ingest
+    // prior conversation history — data-exfil prevention per DESIGN.
+    // `where` and `history` both map to `chats:read` today, so the
+    // resolved scope set is identical by count, but the structural
+    // commitment survives a future split (e.g. `chats:history:read`).
+    verbs: { add: ['where'], remove: ['history'] },
     requiresLocks: ['outboundRecipientAllowlist'],
     defaultOverrides: {
       extraScopes: ['messages:send'],

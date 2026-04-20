@@ -126,6 +126,7 @@ export function resolveProfile(input: ResolveProfileInput): ResolvedProfileColum
 
   const scopes = verbsToScopes({
     buckets: template.buckets,
+    verbs: template.verbs,
     extraScopes: defaults.extraScopes ?? [],
   });
 

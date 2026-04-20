@@ -63,4 +63,52 @@ describe('verbsToScopes', () => {
       'turns:close',
     ]);
   });
+
+  test('verbs.remove drops a single verb without collapsing its bucket', () => {
+    // `read` bucket contains history + where, both → chats:read.
+    // Removing history keeps chats:read (still contributed by where).
+    const scopes = verbsToScopes({ buckets: ['read'], verbs: { remove: ['history'] } });
+    expect(scopes).toEqual(['chats:read']);
+  });
+
+  test('verbs.add unions an extra verb into the resolved scope set', () => {
+    // outgoing alone → messages:send. Adding `where` pulls in chats:read
+    // even though the `read` bucket is not enabled.
+    const scopes = verbsToScopes({ buckets: ['outgoing'], verbs: { add: ['where'] } });
+    expect(scopes).toEqual(['chats:read', 'messages:send']);
+  });
+
+  test('verbs.remove on `use` drops instances:read while keeping context:write', () => {
+    // context bucket = open + close + use. Removing use drops only its
+    // instances:read contribution; context:write (from open/close) remains.
+    const scopes = verbsToScopes({ buckets: ['context'], verbs: { remove: ['use'] } });
+    expect(scopes).toEqual(['context:write']);
+    expect(scopes).not.toContain('instances:read');
+  });
+
+  test('verbs.add and verbs.remove overlapping throws with both verbs in the message', () => {
+    expect(() =>
+      verbsToScopes({ buckets: ['outgoing'], verbs: { add: ['where', 'see'], remove: ['where', 'see'] } }),
+    ).toThrow(/verbs\.add and verbs\.remove cannot overlap/);
+    expect(() => verbsToScopes({ buckets: ['outgoing'], verbs: { add: ['where'], remove: ['where'] } })).toThrow(
+      /where/,
+    );
+  });
+
+  test('multi-bucket output is sorted deterministically', () => {
+    const result = verbsToScopes({
+      buckets: ['multimodal_out', 'outgoing', 'read', 'turn', 'context', 'multimodal_in'],
+    });
+    expect(result).toEqual([...result].sort());
+    expect(result).toEqual([
+      'chats:read',
+      'context:write',
+      'instances:read',
+      'media:read',
+      'media:write',
+      'messages:send',
+      'tts:synthesize',
+      'turns:close',
+    ]);
+  });
 });

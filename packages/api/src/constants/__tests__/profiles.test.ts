@@ -16,6 +16,7 @@ function resolveTemplateScopes(name: ProfileName): string[] {
   const template = PROFILES[name];
   return verbsToScopes({
     buckets: [...template.buckets, ...(template.defaultOverrides?.extraBuckets ?? [])],
+    verbs: template.verbs,
     extraScopes: template.defaultOverrides?.extraScopes,
   });
 }
@@ -43,14 +44,12 @@ describe('cs profile', () => {
     expect(template.adminOnlyFlag).toBeUndefined();
   });
 
-  test('resolves to the documented scope set', () => {
-    expect(resolveTemplateScopes('cs')).toEqual([
-      'chats:read',
-      'context:write',
-      'instances:read',
-      'messages:send',
-      'turns:close',
-    ]);
+  test('resolves to the documented scope set (no instances:read — use is removed)', () => {
+    expect(resolveTemplateScopes('cs')).toEqual(['chats:read', 'context:write', 'messages:send', 'turns:close']);
+  });
+
+  test('does NOT grant instances:read — `use` verb is stripped from the context bucket', () => {
+    expect(resolveTemplateScopes('cs')).not.toContain('instances:read');
   });
 });
 
@@ -103,6 +102,18 @@ describe('scout profile', () => {
       'media:read',
       'messages:send',
     ]);
+  });
+
+  test('keeps chats:read (from `where`) even though `history` is removed', () => {
+    // `where` and `history` both map to `chats:read` today, so the set is
+    // identical by count. The structural commitment — scout may locate the
+    // current chat but NEVER ingest prior history — is encoded in the
+    // template's verbs.add/remove and survives a future scope split such
+    // as `chats:history:read`.
+    const scopes = resolveTemplateScopes('scout');
+    expect(scopes).toContain('chats:read');
+    expect(PROFILES.scout.verbs?.add).toContain('where');
+    expect(PROFILES.scout.verbs?.remove).toContain('history');
   });
 });
 
