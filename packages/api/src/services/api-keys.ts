@@ -13,7 +13,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { ApiKeyProfileOverrides, Database } from '@omni/db';
+import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache } from '../cache';
@@ -57,6 +57,11 @@ export interface CreateApiKeyOptions {
   rateLimit?: number;
   expiresAt?: Date;
   createdBy?: string;
+  profile?: ApiKeyProfile | null;
+  profileOverrides?: ApiKeyProfileOverrides;
+  chatAllowlist?: string[];
+  instanceAllowlist?: string[];
+  outboundRecipientAllowlist?: string[];
 }
 
 /**
@@ -271,6 +276,13 @@ export class ApiKeyService {
       rateLimit: options.rateLimit,
       expiresAt: options.expiresAt,
       createdBy: options.createdBy,
+      profile: options.profile ?? null,
+      ...(options.profileOverrides !== undefined ? { profileOverrides: options.profileOverrides } : {}),
+      ...(options.chatAllowlist !== undefined ? { chatAllowlist: options.chatAllowlist } : {}),
+      ...(options.instanceAllowlist !== undefined ? { instanceAllowlist: options.instanceAllowlist } : {}),
+      ...(options.outboundRecipientAllowlist !== undefined
+        ? { outboundRecipientAllowlist: options.outboundRecipientAllowlist }
+        : {}),
     };
 
     const [created] = await this.db.insert(apiKeys).values(data).returning();
