@@ -5,6 +5,7 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
+import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
 import type { Services } from './services';
 
 /**
@@ -16,6 +17,24 @@ export interface ApiKeyData {
   scopes: string[];
   instanceIds: string[] | null;
   expiresAt: Date | null;
+  /**
+   * Profile template applied at key-creation time. `null` for pre-profile
+   * (legacy) keys — they keep their hand-authored scopes and treat empty
+   * allowlists as "no lock". Profile keys whose template declares a lock in
+   * `requiresLocks` treat an empty allowlist as "deny all" instead.
+   */
+  profile?: ApiKeyProfile | null;
+  /** Chats (external ids / JIDs) this key may target. See empty-array semantics above. */
+  chatAllowlist?: string[];
+  /** Instances this key may target. Separate from `instanceIds` legacy restriction. */
+  instanceAllowlist?: string[];
+  /** Outbound recipients (platform ids / JIDs) this key may send to. */
+  outboundRecipientAllowlist?: string[];
+  /**
+   * Tenant overrides persisted on the row. Consumed by the output-redactor to
+   * resolve the effective denylist preset key and per-key extra patterns.
+   */
+  profileOverrides?: ApiKeyProfileOverrides | null;
 }
 
 /**

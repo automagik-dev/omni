@@ -14,6 +14,10 @@
     "./trpc": {
       "types": "./src/trpc/index.ts",
       "default": "./src/trpc/index.ts"
+    },
+    "./admin": {
+      "types": "./src/admin.ts",
+      "default": "./src/admin.ts"
     }
   },
   "scripts": {
