@@ -341,6 +341,11 @@ export function createInstancesCommand(): Command {
     .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
     .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
+    // Bridge tmux session override (parity with `update`; propagated via NATS env)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
