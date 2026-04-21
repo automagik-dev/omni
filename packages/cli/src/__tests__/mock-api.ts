@@ -365,6 +365,7 @@ interface StreamEventRow {
 }
 
 let streamedEvents: StreamEventRow[] = [];
+let lastSendReactionBody: unknown = null;
 
 export function seedStreamEvent(overrides: Partial<StreamEventRow> = {}): StreamEventRow {
   const now = new Date().toISOString();
@@ -391,6 +392,19 @@ export function seedStreamEvent(overrides: Partial<StreamEventRow> = {}): Stream
 
 export function clearStreamedEvents(): void {
   streamedEvents = [];
+}
+
+export function getLastSendReactionBody<T = unknown>(): T | null {
+  return lastSendReactionBody as T | null;
+}
+
+export function clearLastSendReactionBody(): void {
+  lastSendReactionBody = null;
+}
+
+async function handleSendReaction(req: Request): Promise<Response> {
+  lastSendReactionBody = await req.json();
+  return json({ data: { messageId: 'mock-reaction-msg', success: true } });
 }
 
 function handleListEvents(req: Request): Response {
@@ -487,7 +501,7 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'GET /api/v2/access/rules': () => json(EMPTY_ITEMS),
   'GET /api/v2/context': () => json({ instanceId: null, chatId: null, messageId: null }),
   'POST /api/v2/messages/send': () => json({ data: { messageId: 'mock-msg-id' } }),
-  'POST /api/v2/messages/send/reaction': () => json({ data: { messageId: 'mock-reaction-msg', success: true } }),
+  'POST /api/v2/messages/send/reaction': handleSendReaction,
   'GET /api/v2/agents': () => json({ items: dynamicAgents }),
   'POST /api/v2/agents': handleCreateAgent,
   'GET /api/v2/logs/recent': handleRecentLogs,

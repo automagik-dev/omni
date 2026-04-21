@@ -73,6 +73,12 @@ function isUUID(value: string): boolean {
   return UUID_REGEX.test(value);
 }
 
+function extractReactionTargetParticipant(rawPayload: Record<string, unknown> | null | undefined): string | undefined {
+  const key = rawPayload?.key as Record<string, unknown> | undefined;
+  const participant = key?.participant;
+  return typeof participant === 'string' && participant.length > 0 ? participant : undefined;
+}
+
 /**
  * Resolve recipient - handles Omni person IDs, Omni chat IDs, and platform IDs (WA JID etc.)
  *
@@ -1123,12 +1129,18 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // is silently dropped by WhatsApp. When the target isn't in our DB (history gap
   // or unsynced chat), we leave fromMe undefined and let the channel plugin's
   // heuristic decide — forcing false here breaks bot-to-own-message reactions (#386).
-  let fromMe: boolean | undefined;
+  const reactionMetadata: Record<string, unknown> = {};
   const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
   if (chat) {
     const target = await services.messages.getByExternalId(chat.id, messageId);
     if (target) {
-      fromMe = target.isFromMe === true;
+      reactionMetadata.fromMe = target.isFromMe === true;
+      if (target.isFromMe !== true) {
+        const participant = extractReactionTargetParticipant(
+          target.rawPayload as Record<string, unknown> | null | undefined,
+        );
+        if (participant) reactionMetadata.targetParticipant = participant;
+      }
     } else {
       log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
         instanceId,
@@ -1146,7 +1158,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
     });
   }
 
-  // Build outgoing message for reaction. When fromMe is undefined, omit it from
+  // Build outgoing message for reaction. When the target is unknown, omit
   // metadata so the plugin applies its own fallback (defaults to true for Baileys).
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1155,7 +1167,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
       emoji,
       targetMessageId: messageId,
     } as OutgoingContent,
-    metadata: fromMe === undefined ? {} : { fromMe },
+    metadata: reactionMetadata,
   };
 
   // Send via channel plugin

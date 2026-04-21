@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { resolveContext, resolveReplyTo } from '../context.js';
 import * as output from '../output.js';
+import { resolveInstanceId, resolveRecipient } from '../resolve.js';
 
 interface ReactOptions {
   message?: string;
@@ -42,18 +43,21 @@ export function createReactCommand(): Command {
         return output.error('No chat in context. Set OMNI_CHAT, use --chat, or run: omni open <contact>');
       }
 
-      // Resolve message to react to
-      const messageId = await resolveReplyTo(options.message);
-      if (!messageId) {
-        return output.error(
-          'No message to react to. Set OMNI_MESSAGE, use --message <id>, or ensure context has a trigger message.',
-        );
-      }
-
       try {
+        const instanceId = await resolveInstanceId(ctx.instanceId);
+        const chatId = await resolveRecipient(ctx.chatId);
+
+        // Resolve message to react to
+        const messageId = await resolveReplyTo(options.message);
+        if (!messageId) {
+          return output.error(
+            'No message to react to. Set OMNI_MESSAGE, use --message <id>, or ensure context has a trigger message.',
+          );
+        }
+
         const result = await client.messages.sendReaction({
-          instanceId: ctx.instanceId,
-          to: ctx.chatId,
+          instanceId,
+          to: chatId,
           messageId,
           emoji,
         });
