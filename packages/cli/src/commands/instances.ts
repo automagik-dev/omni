@@ -117,6 +117,7 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
   setVal(body, 'gupshupEventId', opts.gupshupEventId);
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -818,6 +819,11 @@ export function createInstancesCommand(): Command {
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    // Bridge tmux session override (per-instance routing for genie nats-genie provider)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
