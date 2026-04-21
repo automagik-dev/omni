@@ -840,6 +840,23 @@ export const instances = pgTable(
     /** @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
 
+    // ---- Bridge Tmux Session (per-instance override for genie NATS provider) ----
+    /**
+     * Optional tmux session name the genie bridge will spawn into when this
+     * instance dispatches. When set, the `nats-genie` provider propagates this
+     * value via the NATS message env as `GENIE_TMUX_SESSION`; the consumer
+     * genie bridge uses it as the highest-priority override in its three-layer
+     * tmux-session resolution chain. When null, no override is emitted and
+     * genie falls back to its agent-level or name-based default.
+     *
+     * Enables one-agent-many-instances fan-out: a single "scout" agent hooked
+     * to N inbound numbers can land each instance's dispatches in its own
+     * tmux session for isolation and live-intelligence observability.
+     *
+     * Consumer: `automagik/genie` commit 78027707 (`resolveBridgeTmuxSession`).
+     */
+    bridgeTmuxSession: text('bridge_tmux_session'),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),

@@ -187,6 +187,14 @@ const createInstanceSchema = z.object({
     .min(0)
     .default(600_000)
     .describe('Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)'),
+  bridgeTmuxSession: z
+    .string()
+    .min(1)
+    .optional()
+    .nullable()
+    .describe(
+      'Tmux session name the genie bridge will spawn into for this instance. Propagated via NATS env as GENIE_TMUX_SESSION. Null clears the override (genie falls back to its agent-level or name-based default).',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)

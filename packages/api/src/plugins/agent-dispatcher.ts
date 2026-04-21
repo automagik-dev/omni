@@ -1740,12 +1740,20 @@ async function dispatchViaTurnBasedProvider(
 
   // Inject env vars into trigger for the agent bridge.
   // OMNI_TURN_ID allows the agent to close the correct turn via POST /v2/turns/close.
-  trigger.env = {
+  // GENIE_TMUX_SESSION is the per-instance override for the consumer genie bridge's
+  // tmux-session resolution chain — see automagik/genie `resolveBridgeTmuxSession`.
+  // Only emit the key when the instance has the override set, so older genie
+  // consumers (or default routing) remain unaffected.
+  const envPayload: Record<string, string> = {
     OMNI_INSTANCE: instance.id,
     OMNI_CHAT: chatId,
     OMNI_MESSAGE: messageId,
     OMNI_TURN_ID: turn.id,
   };
+  if (instance.bridgeTmuxSession) {
+    envPayload.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
+  }
+  trigger.env = envPayload;
 
   // Dispatch (fire-and-forget — agent uses verb commands + omni done)
   const dispatchStart = Date.now();
