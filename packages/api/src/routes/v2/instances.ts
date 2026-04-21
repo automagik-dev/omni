@@ -190,10 +190,20 @@ const createInstanceSchema = z.object({
   bridgeTmuxSession: z
     .string()
     .min(1)
+    .max(64)
+    // Allow tmux-safe chars only: alphanumerics, `_`, `-`, `.`. Tmux reserves
+    // `/` and `:` as target separators; other punctuation can break shell
+    // quoting in downstream invocations. The consumer genie bridge also
+    // normalises `/` and `:` to `-`, but we reject them at the API boundary
+    // so users see the error early instead of surprise mutation.
+    .regex(
+      /^[a-zA-Z0-9_.-]+$/,
+      'Tmux session name must be alphanumeric with `_`, `-`, or `.` (no `/`, `:`, or whitespace).',
+    )
     .optional()
     .nullable()
     .describe(
-      'Tmux session name the genie bridge will spawn into for this instance. Propagated via NATS env as GENIE_TMUX_SESSION. Null clears the override (genie falls back to its agent-level or name-based default).',
+      'Tmux session name the genie bridge will spawn into for this instance. Propagated via NATS env as GENIE_TMUX_SESSION. Null clears the override (genie falls back to its agent-level or name-based default). Max 64 chars, `[A-Za-z0-9_.-]` only.',
     ),
 });
 

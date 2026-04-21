@@ -1357,6 +1357,14 @@ function buildMessageTrigger(
   allContextMessages: string[],
 ): AgentTrigger {
   const threadId = extractThreadId(messages);
+  // Instance-scoped env that any provider/bridge path should see, regardless
+  // of turn-based vs fire-and-forget. The turn-based helper layers
+  // OMNI_TURN_ID on top after opening the turn; that extension merges with
+  // whatever we set here, never replaces it.
+  const env: Record<string, string> = {};
+  if (instance.bridgeTmuxSession) {
+    env.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
+  }
   return {
     traceId,
     type: triggerType,
@@ -1380,6 +1388,7 @@ function buildMessageTrigger(
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
+    env: Object.keys(env).length > 0 ? env : undefined,
   };
 }
 
@@ -1738,22 +1747,18 @@ async function dispatchViaTurnBasedProvider(
     timestamp: new Date().toISOString(),
   });
 
-  // Inject env vars into trigger for the agent bridge.
-  // OMNI_TURN_ID allows the agent to close the correct turn via POST /v2/turns/close.
-  // GENIE_TMUX_SESSION is the per-instance override for the consumer genie bridge's
-  // tmux-session resolution chain — see automagik/genie `resolveBridgeTmuxSession`.
-  // Only emit the key when the instance has the override set, so older genie
-  // consumers (or default routing) remain unaffected.
-  const envPayload: Record<string, string> = {
+  // Inject turn-based env vars. OMNI_TURN_ID lets the agent close the correct
+  // turn via POST /v2/turns/close. Instance-scoped env keys (e.g.
+  // GENIE_TMUX_SESSION for per-instance tmux routing) are populated by
+  // buildMessageTrigger already — merge instead of replace so both layers
+  // reach the bridge.
+  trigger.env = {
+    ...(trigger.env ?? {}),
     OMNI_INSTANCE: instance.id,
     OMNI_CHAT: chatId,
     OMNI_MESSAGE: messageId,
     OMNI_TURN_ID: turn.id,
   };
-  if (instance.bridgeTmuxSession) {
-    envPayload.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
-  }
-  trigger.env = envPayload;
 
   // Dispatch (fire-and-forget — agent uses verb commands + omni done)
   const dispatchStart = Date.now();
