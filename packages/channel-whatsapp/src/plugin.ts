@@ -1371,8 +1371,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
     }
 
-    // Determine fromMe: metadata can override, default true
+    // Determine target key fields: metadata comes from the persisted target message.
     const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+    const targetParticipant =
+      typeof message.metadata?.targetParticipant === 'string' ? message.metadata.targetParticipant : undefined;
 
     // Minimal delay for reactions (shorter than full humanDelay)
     await this.humanDelay(instanceId);
@@ -1382,12 +1384,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       targetMessageId,
       emoji: reactionEmoji || '(remove)',
       fromMe,
+      targetParticipant,
     });
 
     const correlationId = message.metadata?.correlationId as string | undefined;
     correlationId && this.captureT10(correlationId);
 
-    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe, targetParticipant);
 
     // Track sent reaction ID so shouldProcessMessage can filter the echo (#336)
     if (reactionMsgId) {
