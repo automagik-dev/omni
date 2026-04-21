@@ -20,7 +20,7 @@
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
-    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --target bun --external @anthropic-ai/claude-agent-sdk",
+    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
