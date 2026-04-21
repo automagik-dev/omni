@@ -1,10 +1,20 @@
 name: Version
 
 on:
+  # Fire when a PR merges to dev — the canonical "new thing shipped" event.
+  # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
+  # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
+  # produced no push-event CI run for workflow_run to observe.
+  pull_request:
+    types: [closed]
+    branches: [dev]
+  # main-side promotion still arrives via CI-on-push (main IS in CI's push
+  # branches). Keep this path so release-to-@latest continues to trigger
+  # automatically when the rolling PR dev→main merges.
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main, dev]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,29 +32,33 @@ jobs:
     timeout-minutes: 10
     if: >-
       (github.event_name == 'workflow_dispatch') ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-       (
-         (github.event.workflow_run.head_branch == 'main' &&
-          startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
-          (contains(github.event.workflow_run.head_commit.message, '/dev') ||
-           contains(github.event.workflow_run.head_commit.message, '/homolog')))
-         ||
-         (github.event.workflow_run.head_branch == 'dev')
-       ))
+       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
+       (contains(github.event.workflow_run.head_commit.message, '/dev') ||
+        contains(github.event.workflow_run.head_commit.message, '/homolog')))
 
     steps:
       - name: Determine channel and npm tag
         id: context
         run: |
-          BRANCH="${{ github.event.workflow_run.head_branch || 'dev' }}"
-          if [ "$BRANCH" = "main" ]; then
+          # Branch semantics:
+          #   - workflow_run on main → promoted release → @latest
+          #   - pull_request merged on dev → new dev build → @next
+          #   - workflow_dispatch → defaults to @next (manual dev trigger)
+          if [ "${{ github.event_name }}" = "workflow_run" ] && \
+             [ "${{ github.event.workflow_run.head_branch }}" = "main" ]; then
             echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+            echo "Triggering branch: main → npm tag: latest"
           else
             echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+            echo "Triggering event: ${{ github.event_name }} → npm tag: next"
           fi
-          echo "Triggering branch: ${BRANCH} → npm tag: (see above)"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
