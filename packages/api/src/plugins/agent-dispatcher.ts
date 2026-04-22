@@ -151,62 +151,6 @@ interface DispatchFields {
 type DispatchInstance = Instance & DispatchFields;
 
 // ============================================================================
-// Rate Limiter
-// ============================================================================
-
-/** Default rate limit: 5 triggers per 60-second window */
-const DEFAULT_RATE_LIMIT = 5;
-const DEFAULT_RATE_WINDOW_MS = 60_000;
-
-class RateLimiter {
-  /** Map of "userId:channelType:instanceId" → timestamps[] */
-  private counters: Map<string, number[]> = new Map();
-  private readonly windowMs: number;
-
-  constructor(windowMs = DEFAULT_RATE_WINDOW_MS) {
-    this.windowMs = windowMs;
-  }
-
-  /**
-   * Check if a trigger is allowed (under rate limit)
-   */
-  isAllowed(userId: string, channelType: string, instanceId: string, maxPerMinute: number): boolean {
-    const key = `${userId}:${channelType}:${instanceId}`;
-    const now = Date.now();
-
-    // Get or create counter
-    let timestamps = this.counters.get(key) ?? [];
-
-    // Remove expired entries
-    timestamps = timestamps.filter((ts) => now - ts < this.windowMs);
-
-    if (timestamps.length >= maxPerMinute) {
-      log.debug('Rate limit exceeded', { key, count: timestamps.length, limit: maxPerMinute });
-      return false;
-    }
-
-    timestamps.push(now);
-    this.counters.set(key, timestamps);
-    return true;
-  }
-
-  /**
-   * Clean up expired entries periodically
-   */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamps] of this.counters.entries()) {
-      const active = timestamps.filter((ts) => now - ts < this.windowMs);
-      if (active.length === 0) {
-        this.counters.delete(key);
-      } else {
-        this.counters.set(key, active);
-      }
-    }
-  }
-}
-
-// ============================================================================
 // Reaction Dedup
 // ============================================================================
 
@@ -3821,7 +3765,6 @@ async function checkAccessWithFallback(
 async function shouldProcessReaction(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
-  rateLimiter: RateLimiter,
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
@@ -3840,11 +3783,6 @@ async function shouldProcessReaction(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
-    return null;
-  }
 
   // Access check for reactions (reuses LID fallback logic)
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
@@ -4024,11 +3962,7 @@ export async function setupAgentDispatcher(
 ): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
-  const rateLimiter = new RateLimiter();
   const reactionDedup = new ReactionDedup();
-
-  // Periodic cleanup of rate limiter counters
-  const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
   // Periodic cleanup of leaked media promises (10min circuit breaker)
   const mediaCleanupInterval = setInterval(() => {
@@ -4074,19 +4008,10 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
-    // #384: Apply rate limit per debounced trigger (not per inbound message) so
-    // fast-typed messages queue into the debounce buffer instead of being dropped.
-    const channel = (firstMsg.metadata.channelType ?? instance.channel) as ChannelType;
-    const rateLimit = (instance as unknown as Record<string, unknown>).triggerRateLimit as number | undefined;
-    if (!rateLimiter.isAllowed(firstMsg.payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-      log.info('Rate limited (debounced trigger)', {
-        instanceId: instance.id,
-        from: firstMsg.payload.from,
-        channel,
-        bufferedCount: messages.length,
-      });
-      return;
-    }
+    // #384: No inbound rate limiter. The debouncer already collapses conversational
+    // bursts into a single trigger — capping inbound volume on top of that silently
+    // dropped real user messages and corrupted agent context. Accept any burst size;
+    // the debouncer is the single source of burst control for message triggers.
 
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
@@ -4200,14 +4125,7 @@ export async function setupAgentDispatcher(
         const metadata = event.metadata;
 
         try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-          );
+          const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
           if (!instance) return;
 
           const traceId = metadata.traceId ?? generateCorrelationId('trc');
@@ -4256,7 +4174,6 @@ export async function setupAgentDispatcher(
           const instance = await shouldProcessReaction(
             agentRunner,
             accessService,
-            rateLimiter,
             reactionDedup,
             payload,
             metadata,
@@ -4372,7 +4289,6 @@ export async function setupAgentDispatcher(
     log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
@@ -4381,7 +4297,6 @@ export async function setupAgentDispatcher(
   // Return cleanup function for graceful shutdown
   return async () => {
     log.info('Shutting down agent dispatcher');
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
 
