@@ -749,11 +749,16 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // Telegram timestamps arrive pre-normalized to ms from the handler
     const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
 
+    const senderName = typeof rawPayload.displayName === 'string' ? rawPayload.displayName : undefined;
+    const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
       from,
+      senderName,
+      chatName,
       content: {
         type: content.type as import('@omni/core/types').ContentType,
         text: content.text,

@@ -2799,6 +2799,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       externalId,
       chatId,
       from,
+      senderName: senderPushName,
+      chatName: typeof extendedPayload.chatName === 'string' ? extendedPayload.chatName : undefined,
       content: {
         type: content.type,
         text: content.text || content.caption,
@@ -3560,11 +3562,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
       this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
 
+      const historySenderName = (msg as { pushName?: string | null }).pushName ?? undefined;
+
       await this.emitMessageReceived({
         instanceId,
         externalId: msg.key.id,
         chatId,
         from: senderId,
+        senderName: historySenderName,
+        chatName: typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined,
         content: {
           type: content.type as ContentType,
           text: content.text || content.caption,
