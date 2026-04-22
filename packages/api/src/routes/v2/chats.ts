@@ -553,20 +553,55 @@ chatsRoutes.patch(
 );
 
 /**
+ * Parse an optional date query parameter, emitting a Zod issue
+ * (→ HTTP 400 via zValidator) if the value is present but not a
+ * parseable date string. Accepts any input `new Date()` resolves
+ * to a valid instant (ISO 8601 is the recommended form).
+ *
+ * Fixes: https://github.com/automagik-dev/omni/issues/462 —
+ * previously, invalid values (e.g. a UUID) flowed into `new Date(...)`
+ * producing an `Invalid Date` that surfaced as a 500 INTERNAL_ERROR
+ * from the downstream Drizzle `gte`/`lte` comparison.
+ */
+const optionalDateParam = (paramName: string) =>
+  z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v === '') return undefined;
+      const parsed = new Date(v);
+      if (Number.isNaN(parsed.getTime())) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `invalid ${paramName} parameter: expected ISO 8601 date string, got "${v}"`,
+        });
+        return z.NEVER;
+      }
+      return parsed;
+    });
+
+const listMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  before: optionalDateParam('before'),
+  after: optionalDateParam('after'),
+  mediaOnly: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+});
+
+/**
  * GET /chats/:id/messages - Get messages for a chat
  */
-chatsRoutes.get('/:id/messages', async (c) => {
+chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), async (c) => {
   const chatId = c.req.param('id');
-  const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
-  const before = c.req.query('before');
-  const after = c.req.query('after');
-  const mediaOnly = c.req.query('mediaOnly') === 'true';
+  const { limit, before, after, mediaOnly } = c.req.valid('query');
   const services = c.get('services');
 
   const messages = await services.messages.getChatMessages(chatId, {
     limit,
-    before: before ? new Date(before) : undefined,
-    after: after ? new Date(after) : undefined,
+    before,
+    after,
     mediaOnly,
   });
 
