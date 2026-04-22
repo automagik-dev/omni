@@ -1,6 +1,6 @@
 {
   "name": "@omni/voice-client",
-  "version": "2.260422.6",
+  "version": "2.260422.7",
   "type": "module",
   "exports": {
     ".": {
