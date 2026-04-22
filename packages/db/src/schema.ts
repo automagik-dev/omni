@@ -701,8 +701,6 @@ export const instances = pgTable(
     triggerMentionPatterns: jsonb('trigger_mention_patterns').$type<string[]>(),
     /** Agent trigger mode: round-trip (wait for response) or fire-and-forget */
     triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
-    /** Max triggers per user per channel per minute (rate limiting) */
-    triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
     /**
      * Drop inbound `message.received` events when the platform-native timestamp
      * (e.g. WhatsApp `messageTimestamp`) is older than this many minutes.

@@ -9,6 +9,7 @@ import { zValidator } from '@hono/zod-validator';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
@@ -80,18 +81,8 @@ const listQuerySchema = z.object({
 });
 
 const auditQuerySchema = z.object({
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Filter logs from this timestamp'),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Filter logs until this timestamp'),
+  since: optionalDateParam('since').describe('Filter logs from this timestamp'),
+  until: optionalDateParam('until').describe('Filter logs until this timestamp'),
   path: z.string().optional().describe('Filter by request path (partial match)'),
   statusCode: z.coerce.number().int().optional().describe('Filter by HTTP status code'),
   limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'),

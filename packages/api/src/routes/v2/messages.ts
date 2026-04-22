@@ -47,6 +47,7 @@ import * as Sentry from '@sentry/bun';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
@@ -286,16 +287,8 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof MessageStatusSchema>[] | undefined),
   hasMedia: z.coerce.boolean().optional(),
   senderPersonId: z.string().uuid().optional(),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   search: z.string().optional(),
   includeHidden: z.coerce.boolean().default(false),
   limit: z.coerce.number().int().min(1).max(100).default(50),

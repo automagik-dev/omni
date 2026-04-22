@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import { RuleTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 const accessRoutes = new Hono<{ Variables: AppVariables }>();
@@ -26,12 +27,7 @@ const createRuleSchema = z.object({
   priority: z.number().int().default(0).describe('Rule priority (higher = checked first)'),
   enabled: z.boolean().default(true).describe('Whether rule is active'),
   reason: z.string().optional().describe('Human-readable reason'),
-  expiresAt: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Optional expiration'),
+  expiresAt: optionalDateParam('expiresAt').describe('Optional expiration (ISO 8601 date string)'),
   action: z.enum(['block', 'allow', 'silent_block']).default('block').describe('Action to take'),
   blockMessage: z.string().optional().describe('Custom block message'),
 });

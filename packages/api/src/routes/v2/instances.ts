@@ -226,7 +226,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   webhookVerifyToken: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
-  // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
+  // triggerMode, messageDebounce* all have NOT NULL constraints
 
   // Override fields with .default() to strip the default — omitted keys must stay undefined
   // so PATCH only updates what is explicitly sent (not reset to defaults)

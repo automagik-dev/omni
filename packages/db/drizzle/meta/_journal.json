@@ -201,8 +201,15 @@
     {
       "idx": 28,
       "version": "7",
+      "when": 1777000000000,
+      "tag": "0028_drop_trigger_rate_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
       "when": 1777200000000,
-      "tag": "0028_processed_events",
+      "tag": "0029_processed_events",
       "breakpoints": true
     }
   ]

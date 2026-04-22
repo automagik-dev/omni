@@ -2,13 +2,15 @@
  * Agent Dispatcher Plugin Tests
  *
  * Tests for:
- * - RateLimiter: per-user-per-channel-per-instance rate limiting
  * - ReactionDedup: LRU dedup for emoji+messageId+userId
  * - MessageDebouncer: tested separately in message-debouncer.test.ts
  * - resolveProvider / getAgentProvider: provider resolution from DB
  * - setupAgentDispatcher: integration with EventBus subscriptions + cleanup
  * - Text chunking and split point logic
  * - Helper functions: instanceTriggersOnEvent, isReactionTrigger, classifyMessageTrigger
+ *
+ * #384: Inbound rate limiter removed. The debouncer is the single source of
+ * burst control for message triggers — no cap on inbound volume.
  */
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
@@ -18,9 +20,9 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // Strategy: re-export internals via a test-only module, or inline-test the
 // exported setupAgentDispatcher by capturing EventBus handler callbacks.
 //
-// RateLimiter and ReactionDedup are still internal to agent-dispatcher.
-// MessageDebouncer is now exported from message-debouncer.ts and tested
-// separately in message-debouncer.test.ts.
+// ReactionDedup is still internal to agent-dispatcher. MessageDebouncer is now
+// exported from message-debouncer.ts and tested separately in
+// message-debouncer.test.ts.
 // ---------------------------------------------------------------------------
 
 // Import exported symbols
@@ -164,7 +166,6 @@ function createMockInstance(overrides: Record<string, unknown> = {}) {
     triggerReactions: null,
     triggerMentionPatterns: null,
     triggerMode: 'round-trip',
-    triggerRateLimit: 5,
     ownerIdentifier: 'bot-jid@s.whatsapp.net',
     enableAutoSplit: true,
     messageDebounceMode: 'disabled',
@@ -611,11 +612,17 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
-    it('rate limits debounced triggers, not individual messages (#384)', async () => {
+    // ======================================================================
+    // #384: inbound rate limiter REMOVED. Debouncer is the only burst gate.
+    // Acceptance criteria:
+    //   - 10-msg burst → exactly 1 dispatch carrying all 10
+    //   - 50-msg burst → exactly 1 dispatch, zero drops
+    //   - No "Rate limited" log line ever emitted for inbound messages
+    // ======================================================================
+    it('#384: 10-message burst produces exactly 1 dispatch with all messages', async () => {
       const eventBus = createMockEventBus();
-      // Instance with rate limit of 2 triggers per window
       const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ triggerRateLimit: 2 })),
+        getInstanceWithProvider: mock(async () => createMockInstance()),
         getSenderName: mock(async () => 'User'),
         run: mock(async () => ({
           parts: ['resp'],
@@ -626,46 +633,13 @@ describe('agent-dispatcher', () => {
 
       cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
-      // #384: Fast burst of 3 messages to the same chat must NOT be dropped.
-      // They all queue into the debounce buffer and flush as a single trigger.
-      for (let i = 0; i < 3; i++) {
-        await eventBus.fire('message.received', createMessageEvent());
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // All 3 messages survive the rate limiter and reach the agent in one batch.
-      // Debouncer merges same-chatKey → 1 flush → 1 agent call.
-      const senderNameCalls = agentRunner.getSenderName.mock.calls.length;
-      expect(senderNameCalls).toBeGreaterThanOrEqual(1);
-    });
-
-    it('does not drop fast-typed messages between rate limiter and debounce buffer (#384)', async () => {
-      const eventBus = createMockEventBus();
-      // triggerRateLimit is intentionally smaller than the message burst
-      const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ triggerRateLimit: 1 })),
-        getSenderName: mock(async () => 'User'),
-        run: mock(async () => ({
-          parts: ['resp'],
-          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
-        })),
-      };
-      const services = createMockServices({ agentRunner });
-
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
-
-      // 5 fast-typed messages in the same chat. Pre-fix: only the first reached
-      // the debounce buffer and the other 4 were silently dropped, corrupting
-      // agent context. Post-fix: all 5 queue into the debouncer and the agent
-      // sees every message in a single batch.
-      const events = Array.from({ length: 5 }, (_, i) =>
+      const events = Array.from({ length: 10 }, (_, i) =>
         createMessageEvent({
           payload: {
             externalId: `ext-${i}`,
-            chatId: '5511999000001@s.whatsapp.net',
-            from: '5511999000001',
-            content: { type: 'text', text: `part ${i}` },
+            chatId: '5511999000384@s.whatsapp.net',
+            from: '5511999000384',
+            content: { type: 'text', text: `msg ${i}` },
           },
         }),
       );
@@ -675,7 +649,44 @@ describe('agent-dispatcher', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Exactly one trigger (debounced batch), but carrying all 5 messages.
+      // Exactly one dispatched trigger (debounced batch). Pre-fix: the rate
+      // limiter would have capped at 5 and dropped the 5 tail messages.
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
+    });
+
+    it('#384: 50-message burst produces exactly 1 dispatch, zero drops', async () => {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () => createMockInstance()),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      const events = Array.from({ length: 50 }, (_, i) =>
+        createMessageEvent({
+          payload: {
+            externalId: `burst-${i}`,
+            chatId: '5511999000050@s.whatsapp.net',
+            from: '5511999000050',
+            content: { type: 'text', text: `chunk ${i}` },
+          },
+        }),
+      );
+      for (const event of events) {
+        await eventBus.fire('message.received', event);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Any number > 1 here would indicate the rate limiter silently dropped
+      // a subset — agent would see fewer events than the user typed. The
+      // fix removes that gate entirely, so exactly one debounced trigger fires.
       expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
     });
   });
