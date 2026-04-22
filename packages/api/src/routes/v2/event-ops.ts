@@ -9,6 +9,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam, requiredDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
@@ -16,15 +17,8 @@ const eventOpsRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Replay options schema
 const replayOptionsSchema = z.object({
-  since: z
-    .string()
-    .datetime()
-    .transform((v) => new Date(v)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: requiredDateParam('since'),
+  until: optionalDateParam('until'),
   eventTypes: z.array(z.string()).optional(),
   instanceId: z.string().uuid().optional(),
   limit: z.number().int().positive().max(100000).optional(),

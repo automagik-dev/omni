@@ -11,6 +11,7 @@ import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { clearAgentSession } from '../../plugins/session-cleaner';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
@@ -551,34 +552,6 @@ chatsRoutes.patch(
     return c.json({ data: participant });
   },
 );
-
-/**
- * Parse an optional date query parameter, emitting a Zod issue
- * (→ HTTP 400 via zValidator) if the value is present but not a
- * parseable date string. Accepts any input `new Date()` resolves
- * to a valid instant (ISO 8601 is the recommended form).
- *
- * Fixes: https://github.com/automagik-dev/omni/issues/462 —
- * previously, invalid values (e.g. a UUID) flowed into `new Date(...)`
- * producing an `Invalid Date` that surfaced as a 500 INTERNAL_ERROR
- * from the downstream Drizzle `gte`/`lte` comparison.
- */
-const optionalDateParam = (paramName: string) =>
-  z
-    .string()
-    .optional()
-    .transform((v, ctx) => {
-      if (v === undefined || v === '') return undefined;
-      const parsed = new Date(v);
-      if (Number.isNaN(parsed.getTime())) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `invalid ${paramName} parameter: expected ISO 8601 date string, got "${v}"`,
-        });
-        return z.NEVER;
-      }
-      return parsed;
-    });
 
 const listMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
