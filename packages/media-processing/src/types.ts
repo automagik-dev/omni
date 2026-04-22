@@ -117,7 +117,12 @@ export interface PricingRate {
 export interface MediaTimeoutConfig {
   /** Audio processing timeout in ms (env: MEDIA_AUDIO_TIMEOUT_MS, default 30000) */
   audioTimeoutMs: number;
-  /** Image processing timeout in ms (env: MEDIA_IMAGE_TIMEOUT_MS, default 15000) */
+  /**
+   * Image (vision) processing timeout in ms.
+   * env: MEDIA_IMAGE_TIMEOUT_MS, default 30000.
+   * On timeout, processors retry once with 2× this value (extended timeout)
+   * before falling back to the secondary provider. See issue #478.
+   */
   imageTimeoutMs: number;
   /** Video processing timeout in ms (env: MEDIA_VIDEO_TIMEOUT_MS, default 60000) */
   videoTimeoutMs: number;
@@ -126,11 +131,13 @@ export interface MediaTimeoutConfig {
 }
 
 /**
- * Default timeout values for media processors
+ * Default timeout values for media processors.
+ * imageTimeoutMs bumped 15000 → 30000 in v2.260422 to reduce
+ * Gemini Vision timeout rate on complex/large images (issue #478).
  */
 export const DEFAULT_MEDIA_TIMEOUTS: MediaTimeoutConfig = {
   audioTimeoutMs: 30_000,
-  imageTimeoutMs: 15_000,
+  imageTimeoutMs: 30_000,
   videoTimeoutMs: 60_000,
   documentTimeoutMs: 30_000,
 };
