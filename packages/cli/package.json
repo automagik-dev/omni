@@ -27,10 +27,13 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@sentry/bun": "^10.43.0",
+    "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
     "exceljs": "^4.4.0",
+    "libsodium-wrappers": "^0.7.15",
     "mammoth": "^1.8.0",
+    "opusscript": "^0.1.1",
     "ora": "^8.1.1",
     "pdf-parse": "^1.1.1",
     "qrcode-terminal": "^0.12.0"
