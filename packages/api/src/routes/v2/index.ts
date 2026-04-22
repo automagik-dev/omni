@@ -29,6 +29,7 @@ import { messagesRoutes } from './messages';
 import { metricsRoutes } from './metrics';
 import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
+import { processedEventsRoutes } from './processed-events';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
 import { webhooksRoutes } from './webhooks';
@@ -51,6 +52,7 @@ v2Routes.route('/settings', settingsRoutes);
 v2Routes.route('/providers', providersRoutes);
 v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);
+v2Routes.route('/processed-events', processedEventsRoutes); // Placeholder until #411 lands - must be before root /:id catch-all (issue #496)
 v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id

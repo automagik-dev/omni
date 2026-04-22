@@ -33,6 +33,30 @@ const replayOptionsSchema = z.object({
 });
 
 /**
+ * GET /event-ops - Describe available event-ops endpoints.
+ *
+ * Registered to prevent bare `GET /v2/event-ops` from falling through to the
+ * root-mounted `automationsRoutes./:id` catch-all, which would coerce the
+ * literal "event-ops" segment into a UUID and surface raw PG driver text in
+ * the 500 body. See issue #496.
+ *
+ * event-ops is a namespace (metrics / replay / scheduled), not a listable
+ * resource, so this returns a 404 with a pointer to the valid sub-paths.
+ */
+eventOpsRoutes.get('/', (c) => {
+  return c.json(
+    {
+      error: {
+        code: 'NOT_FOUND',
+        message:
+          'event-ops has no list endpoint. Use /v2/event-ops/metrics, /v2/event-ops/replay, or POST /v2/event-ops/scheduled.',
+      },
+    },
+    404,
+  );
+});
+
+/**
  * GET /event-ops/metrics - Get event metrics
  */
 eventOpsRoutes.get('/metrics', async (c) => {

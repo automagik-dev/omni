@@ -47,6 +47,23 @@ const checkAccessSchema = z.object({
 });
 
 /**
+ * GET /access - List access rules (bare path alias for /access/rules)
+ *
+ * Registered to prevent bare `GET /v2/access` from falling through to the
+ * root-mounted `automationsRoutes./:id` catch-all, which would coerce the
+ * literal "access" segment into a UUID and surface raw PG driver text in the
+ * 500 body. See issue #496.
+ */
+accessRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
+  const { instanceId, type } = c.req.valid('query');
+  const services = c.get('services');
+
+  const rules = await services.access.list({ instanceId, type });
+
+  return c.json({ items: rules });
+});
+
+/**
  * GET /access/rules - List access rules
  */
 accessRoutes.get('/rules', zValidator('query', listQuerySchema), async (c) => {
