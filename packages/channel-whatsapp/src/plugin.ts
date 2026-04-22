@@ -2639,6 +2639,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   handleConnectionError(instanceId: string, error: string, willRetry: boolean): void {
     this.logger.error('Connection error', { instanceId, error, willRetry });
+
+    if (!willRetry) {
+      // Baileys gave up its internal retry loop — transition to 'disconnected'
+      // so InstanceMonitor.needsReconnect() re-arms the API-level backoff.
+      // Otherwise the socket lingers in 'reconnecting' forever (issue #408).
+      const config = this.instances.get(instanceId)?.config;
+      if (config) {
+        void this.updateInstanceStatus(instanceId, config, {
+          state: 'disconnected',
+          since: new Date(),
+          message: error,
+        });
+      }
+    }
   }
 
   /**
