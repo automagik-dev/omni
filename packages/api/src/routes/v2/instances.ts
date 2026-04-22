@@ -29,9 +29,7 @@ const listQuerySchema = z.object({
   channel: z
     .string()
     .optional()
-    .transform(
-      (v) => v?.split(',') as ('whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack' | 'telegram')[] | undefined,
-    ),
+    .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
   status: z
     .string()
     .optional()
@@ -146,6 +144,17 @@ const createInstanceSchema = z.object({
   gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
   gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
+  twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
+  twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
+  twilioFrom: z.string().optional().nullable().describe('Twilio WhatsApp sender address (whatsapp:+E164)'),
+  twilioMessagingServiceSid: z.string().optional().nullable().describe('Twilio Messaging Service SID'),
+  twilioStatusCallbackUrl: z.string().optional().nullable().describe('Twilio outbound status callback URL'),
+  twilioWebhookUrl: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Public Twilio inbound webhook URL for signature validation'),
+  twilioValidateSignature: z.boolean().default(true).describe('Validate X-Twilio-Signature on webhooks'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -224,6 +233,12 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   gupshupAuthToken: z.string().nullable().optional(),
   gupshupEventId: z.string().nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
+  twilioAccountSid: z.string().nullable().optional(),
+  twilioAuthToken: z.string().nullable().optional(),
+  twilioFrom: z.string().nullable().optional(),
+  twilioMessagingServiceSid: z.string().nullable().optional(),
+  twilioStatusCallbackUrl: z.string().nullable().optional(),
+  twilioWebhookUrl: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, messageDebounce* all have NOT NULL constraints
@@ -243,6 +258,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   messageSplitDelayFixedMs: z.number().int().min(0).optional(),
   messageSplitDelayMinMs: z.number().int().min(0).optional(),
   messageSplitDelayMaxMs: z.number().int().min(0).optional(),
+  twilioValidateSignature: z.boolean().optional(),
 });
 
 /**
@@ -301,14 +317,23 @@ function resolveChannelToken(data: {
   telegramBotToken?: string | null;
   discordBotToken?: string | null;
   slackBotToken?: string | null;
+  twilioAuthToken?: string | null;
 }): string | undefined {
   // If a generic `token` was provided but no channel-specific field, persist it
-  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken) {
+  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken && !data.twilioAuthToken) {
     if (data.channel === 'telegram') data.telegramBotToken = data.token;
     else if (data.channel === 'discord') data.discordBotToken = data.token;
     else if (data.channel === 'slack') data.slackBotToken = data.token;
+    else if (data.channel === 'twilio-whatsapp') data.twilioAuthToken = data.token;
   }
-  return data.token ?? data.telegramBotToken ?? data.discordBotToken ?? data.slackBotToken ?? undefined;
+  return (
+    data.token ??
+    data.telegramBotToken ??
+    data.discordBotToken ??
+    data.slackBotToken ??
+    data.twilioAuthToken ??
+    undefined
+  );
 }
 
 function persistedTokenForChannel(instance: {
@@ -316,6 +341,7 @@ function persistedTokenForChannel(instance: {
   telegramBotToken?: string | null;
   discordBotToken?: string | null;
   slackBotToken?: string | null;
+  twilioAuthToken?: string | null;
 }): string | undefined {
   switch (instance.channel) {
     case 'telegram':
@@ -324,6 +350,8 @@ function persistedTokenForChannel(instance: {
       return instance.discordBotToken ?? undefined;
     case 'slack':
       return instance.slackBotToken ?? undefined;
+    case 'twilio-whatsapp':
+      return instance.twilioAuthToken ?? undefined;
     default:
       return undefined;
   }
@@ -338,6 +366,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'slackSigningSecret',
   'gupshupAuthToken',
   'webhookVerifyToken',
+  'twilioAuthToken',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -412,28 +441,64 @@ type InstanceConnectionOptionsInput = {
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
   webhookVerifyToken?: string | null;
+  twilioAccountSid?: string | null;
+  twilioAuthToken?: string | null;
+  twilioFrom?: string | null;
+  twilioMessagingServiceSid?: string | null;
+  twilioStatusCallbackUrl?: string | null;
+  twilioWebhookUrl?: string | null;
+  twilioValidateSignature?: boolean | null;
 };
+
+function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  options.telegramReactionLevel = input.telegramReactionLevel;
+}
+
+function applySlackConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  if (input.token) options.botToken = input.token;
+  if (input.slackAppToken) options.appToken = input.slackAppToken;
+  if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+}
+
+function applyGupshupConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
+  if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
+  if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
+function applyTwilioWhatsAppConnectionOptions(
+  options: Record<string, unknown>,
+  input: InstanceConnectionOptionsInput,
+): void {
+  if (input.twilioAccountSid) options.twilioAccountSid = input.twilioAccountSid;
+  if (input.twilioAuthToken) options.twilioAuthToken = input.twilioAuthToken;
+  if (input.twilioFrom) options.twilioFrom = input.twilioFrom;
+  if (input.twilioMessagingServiceSid) options.twilioMessagingServiceSid = input.twilioMessagingServiceSid;
+  if (input.twilioStatusCallbackUrl) options.twilioStatusCallbackUrl = input.twilioStatusCallbackUrl;
+  if (input.twilioWebhookUrl) options.twilioWebhookUrl = input.twilioWebhookUrl;
+  if (input.twilioValidateSignature !== undefined && input.twilioValidateSignature !== null) {
+    options.twilioValidateSignature = input.twilioValidateSignature;
+  }
+}
 
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
 ): void {
-  if (input.channel === 'telegram') {
-    options.telegramReactionLevel = input.telegramReactionLevel;
-    return;
-  }
-
-  if (input.channel === 'slack') {
-    if (input.token) options.botToken = input.token;
-    if (input.slackAppToken) options.appToken = input.slackAppToken;
-    if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
-  }
-
-  if (input.channel === 'gupshup') {
-    if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
-    if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
-    if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
-    if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+  switch (input.channel) {
+    case 'telegram':
+      applyTelegramConnectionOptions(options, input);
+      return;
+    case 'slack':
+      applySlackConnectionOptions(options, input);
+      return;
+    case 'gupshup':
+      applyGupshupConnectionOptions(options, input);
+      return;
+    case 'twilio-whatsapp':
+      applyTwilioWhatsAppConnectionOptions(options, input);
+      return;
   }
 }
 
@@ -497,7 +562,13 @@ async function triggerCreateConnection(
 /** Build DB update payload to persist tokens provided in a connect request */
 function buildTokenPersistUpdates(
   channel: string,
-  body: { token?: string; slackBotToken?: string; slackAppToken?: string; slackSigningSecret?: string },
+  body: {
+    token?: string;
+    slackBotToken?: string;
+    slackAppToken?: string;
+    slackSigningSecret?: string;
+    twilioAuthToken?: string;
+  },
 ): Record<string, string> {
   const updates: Record<string, string> = {};
   const tokenField = body.token ? channelTokenField(channel) : undefined;
@@ -506,6 +577,10 @@ function buildTokenPersistUpdates(
     if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
     if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
     if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
+  }
+  if (channel === 'twilio-whatsapp') {
+    if (body.twilioAuthToken) updates.twilioAuthToken = body.twilioAuthToken;
+    else if (body.token) updates.twilioAuthToken = body.token;
   }
   return updates;
 }
@@ -561,6 +636,12 @@ instancesRoutes.get('/supported-channels', async (c) => {
       id: 'whatsapp-cloud' as const,
       name: 'WhatsApp Business Cloud',
       description: 'Official WhatsApp Business API',
+      loaded: false as const,
+    },
+    {
+      id: 'twilio-whatsapp' as const,
+      name: 'Twilio WhatsApp',
+      description: 'WhatsApp via Twilio Programmable Messaging',
       loaded: false as const,
     },
     { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
@@ -631,6 +712,13 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
     webhookVerifyToken: instance.webhookVerifyToken,
+    twilioAccountSid: instance.twilioAccountSid,
+    twilioAuthToken: instance.twilioAuthToken,
+    twilioFrom: instance.twilioFrom,
+    twilioMessagingServiceSid: instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: instance.twilioWebhookUrl,
+    twilioValidateSignature: instance.twilioValidateSignature,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -955,6 +1043,13 @@ const connectInstanceSchema = z.object({
   slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
   gupshupCallbackUrl: z.string().optional().describe('Gupshup webhook callback URL (persisted for reconnection)'),
+  twilioAccountSid: z.string().optional().describe('Twilio Account SID'),
+  twilioAuthToken: z.string().optional().describe('Twilio Auth Token'),
+  twilioFrom: z.string().optional().describe('Twilio WhatsApp sender address (whatsapp:+E164)'),
+  twilioMessagingServiceSid: z.string().optional().describe('Twilio Messaging Service SID'),
+  twilioStatusCallbackUrl: z.string().optional().describe('Twilio outbound status callback URL'),
+  twilioWebhookUrl: z.string().optional().describe('Public Twilio inbound webhook URL for signature validation'),
+  twilioValidateSignature: z.boolean().optional().describe('Validate X-Twilio-Signature on webhooks'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -962,6 +1057,80 @@ const connectInstanceSchema = z.object({
     .optional()
     .describe('WhatsApp-specific connection options'),
 });
+
+type ConnectInstanceBody = z.infer<typeof connectInstanceSchema>;
+type InstanceRecord = Awaited<ReturnType<Services['instances']['getById']>>;
+
+function buildConnectConnectionOptions(
+  instance: InstanceRecord,
+  body: ConnectInstanceBody,
+  forceNewQr: boolean,
+): Record<string, unknown> {
+  const connectToken = body.token ?? persistedTokenForChannel(instance);
+  return buildInstanceConnectionOptions({
+    channel: instance.channel,
+    forceNewQr,
+    token: connectToken,
+    telegramReactionLevel: instance.telegramReactionLevel,
+    slackAppToken: body.slackAppToken ?? instance.slackAppToken,
+    slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
+    whatsapp: body.whatsapp,
+    gupshupCallbackUrl: instance.gupshupCallbackUrl,
+    gupshupAuthToken: instance.gupshupAuthToken,
+    gupshupEventId: instance.gupshupEventId,
+    webhookVerifyToken: instance.webhookVerifyToken,
+    twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
+    twilioAuthToken: body.twilioAuthToken ?? body.token ?? instance.twilioAuthToken,
+    twilioFrom: body.twilioFrom ?? instance.twilioFrom,
+    twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
+    twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+  });
+}
+
+function hydrateConnectionOptionsForInstance(
+  plugin: ChannelPlugin,
+  instance: InstanceRecord,
+  options: Record<string, unknown>,
+): void {
+  if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+    (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+      instance.id,
+      instance.guildConfigOverrides as Record<string, unknown>,
+    );
+  }
+
+  if (instance.discordPresence) {
+    options.presence = instance.discordPresence;
+  }
+
+  if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
+    options.whatsapp = {
+      ...(options.whatsapp as Record<string, unknown> | undefined),
+      markOnlineOnConnect: instance.markOnlineOnConnect,
+    };
+  }
+}
+
+function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInstanceBody): Record<string, unknown> {
+  const updates: Record<string, unknown> = {
+    isActive: true,
+    ...buildTokenPersistUpdates(instance.channel, body),
+  };
+
+  if (instance.channel !== 'twilio-whatsapp') return updates;
+
+  return {
+    ...updates,
+    twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
+    twilioFrom: body.twilioFrom ?? instance.twilioFrom,
+    twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
+    twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+  };
+}
 
 /**
  * POST /instances/:id/connect - Connect instance
@@ -986,20 +1155,7 @@ instancesRoutes.post(
 
     const instance = await services.instances.getById(id);
 
-    const connectToken = body.token ?? persistedTokenForChannel(instance);
-    const connectionOptions = buildInstanceConnectionOptions({
-      channel: instance.channel,
-      forceNewQr,
-      token: connectToken,
-      telegramReactionLevel: instance.telegramReactionLevel,
-      slackAppToken: body.slackAppToken ?? instance.slackAppToken,
-      slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
-      whatsapp: body.whatsapp,
-      gupshupCallbackUrl: instance.gupshupCallbackUrl,
-      gupshupAuthToken: instance.gupshupAuthToken,
-      gupshupEventId: instance.gupshupEventId,
-      webhookVerifyToken: instance.webhookVerifyToken,
-    });
+    const connectionOptions = buildConnectConnectionOptions(instance, body, forceNewQr);
 
     // Trigger connection via channel plugin
     if (!channelRegistry) {
@@ -1014,26 +1170,7 @@ instancesRoutes.post(
       );
     }
 
-    // Wire: load guild config overrides into plugin before connection
-    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
-      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
-        id,
-        instance.guildConfigOverrides as Record<string, unknown>,
-      );
-    }
-
-    // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
-    if (instance.discordPresence) {
-      connectionOptions.presence = instance.discordPresence;
-    }
-
-    // Pass per-instance markOnlineOnConnect to WhatsApp plugin (GH #310)
-    if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
-      connectionOptions.whatsapp = {
-        ...(connectionOptions.whatsapp as Record<string, unknown> | undefined),
-        markOnlineOnConnect: instance.markOnlineOnConnect,
-      };
-    }
+    hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
 
     const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
     if (errorMessage) {
@@ -1048,11 +1185,8 @@ instancesRoutes.post(
       );
     }
 
-    // Update database — persist tokens if new ones were provided
-    const updated = await services.instances.update(id, {
-      isActive: true,
-      ...buildTokenPersistUpdates(instance.channel, body),
-    });
+    // Update database - persist tokens if new ones were provided
+    const updated = await services.instances.update(id, buildConnectPersistUpdates(instance, body));
 
     return c.json({
       data: {
@@ -1129,6 +1263,15 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'slack') {
       applySlackConnectOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'twilio-whatsapp') {
+      restartOptions.twilioAccountSid = instance.twilioAccountSid;
+      restartOptions.twilioAuthToken = instance.twilioAuthToken;
+      restartOptions.twilioFrom = instance.twilioFrom;
+      restartOptions.twilioMessagingServiceSid = instance.twilioMessagingServiceSid;
+      restartOptions.twilioStatusCallbackUrl = instance.twilioStatusCallbackUrl;
+      restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
+      restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

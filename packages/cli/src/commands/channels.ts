@@ -125,7 +125,7 @@ export function createChannelsCommand(): Command {
     .option('--token <token>', 'Bot token (for Telegram, Discord, Slack)')
     .option('--name <name>', 'Instance name (auto-generated if not provided)')
     .action(async (type: string, options: { token?: string; name?: string }) => {
-      const validTypes = ['telegram', 'discord', 'slack', 'whatsapp-baileys', 'whatsapp-cloud'];
+      const validTypes = ['telegram', 'discord', 'slack', 'whatsapp-baileys', 'whatsapp-cloud', 'twilio-whatsapp'];
       if (!validTypes.includes(type)) {
         output.error(`Unknown channel type: ${type}. Available: ${validTypes.join(', ')}`);
       }

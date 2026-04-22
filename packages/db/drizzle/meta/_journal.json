@@ -211,6 +211,13 @@
       "when": 1777200000000,
       "tag": "0029_processed_events",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777300000000,
+      "tag": "0030_twilio_whatsapp_channel",
+      "breakpoints": true
     }
   ]
 }

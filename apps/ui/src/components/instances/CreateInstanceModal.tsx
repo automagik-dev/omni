@@ -67,6 +67,14 @@ const CHANNEL_OPTIONS: {
     disabled: true, // TODO: Implement later
   },
   {
+    value: 'twilio-whatsapp',
+    label: 'Twilio WhatsApp',
+    description: 'WhatsApp via Twilio Programmable Messaging. Configure credentials via CLI/API.',
+    icon: WhatsAppIcon,
+    color: 'bg-red-500',
+    disabled: true, // TODO: Add credential fields to the UI flow
+  },
+  {
     value: 'discord',
     label: 'Discord',
     description: 'Connect a Discord bot. Requires bot token.',

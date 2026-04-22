@@ -230,6 +230,23 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.
+  // Must be mounted before protectedApp so Twilio's servers (no x-api-key) can reach it.
+  app.post('/api/v2/channels/twilio-whatsapp/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('twilio-whatsapp');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Twilio WhatsApp plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);

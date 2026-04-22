@@ -25,7 +25,15 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
-const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram', 'gupshup'];
+const VALID_CHANNELS: Channel[] = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'gupshup',
+  'twilio-whatsapp',
+];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
 /** Set value on body, resolving "null" string to actual null */
@@ -107,6 +115,7 @@ function applyGateFields(body: Record<string, unknown>, opts: Record<string, unk
 function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setVal(body, 'ttsVoiceId', opts.ttsVoice);
   setVal(body, 'ttsModelId', opts.ttsModel);
+  setVal(body, 'readReceipts', opts.readReceipts);
   setVal(body, 'accessMode', opts.accessMode);
   setVal(body, 'token', opts.token);
   setVal(body, 'telegramBotToken', opts.telegramToken);
@@ -117,6 +126,13 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
   setVal(body, 'gupshupEventId', opts.gupshupEventId);
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
+  setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
+  setVal(body, 'twilioFrom', opts.twilioFrom);
+  setVal(body, 'twilioMessagingServiceSid', opts.twilioMessagingServiceSid);
+  setVal(body, 'twilioStatusCallbackUrl', opts.twilioStatusCallbackUrl);
+  setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
+  setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
   setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
@@ -322,6 +338,7 @@ export function createInstancesCommand(): Command {
     // TTS
     .option('--tts-voice <id>', 'ElevenLabs voice ID')
     .option('--tts-model <id>', 'ElevenLabs model ID')
+    .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
@@ -344,6 +361,15 @@ export function createInstancesCommand(): Command {
     .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
     .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
+    // Twilio WhatsApp
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (whatsapp:+E164)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
     // Bridge tmux session override (parity with `update`; propagated via NATS env)
     .option(
       '--bridge-tmux-session <name>',
@@ -574,24 +600,54 @@ export function createInstancesCommand(): Command {
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
-    .action(async (rawId: string, options: { forceNewQr?: boolean; token?: string }) => {
-      const client = getClient();
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (whatsapp:+E164)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    .action(
+      async (
+        rawId: string,
+        options: {
+          forceNewQr?: boolean;
+          token?: string;
+          twilioAccountSid?: string;
+          twilioAuthToken?: string;
+          twilioFrom?: string;
+          twilioMessagingServiceSid?: string;
+          twilioStatusCallbackUrl?: string;
+          twilioWebhookUrl?: string;
+          twilioValidateSignature?: boolean;
+        },
+      ) => {
+        const client = getClient();
 
-      try {
-        const id = await resolveInstanceId(rawId);
-        const result = await client.instances.connect(id, {
-          forceNewQr: options.forceNewQr,
-          token: options.token,
-        });
+        try {
+          const id = await resolveInstanceId(rawId);
+          const result = await client.instances.connect(id, {
+            forceNewQr: options.forceNewQr,
+            token: options.token,
+            twilioAccountSid: options.twilioAccountSid,
+            twilioAuthToken: options.twilioAuthToken,
+            twilioFrom: options.twilioFrom,
+            twilioMessagingServiceSid: options.twilioMessagingServiceSid,
+            twilioStatusCallbackUrl: options.twilioStatusCallbackUrl,
+            twilioWebhookUrl: options.twilioWebhookUrl,
+            twilioValidateSignature: options.twilioValidateSignature,
+          });
 
-        output.success(result.message, {
-          status: result.status,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to connect: ${message}`);
-      }
-    });
+          output.success(result.message, {
+            status: result.status,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to connect: ${message}`);
+        }
+      },
+    );
 
   // omni instances disconnect <id>
   instances
@@ -809,6 +865,7 @@ export function createInstancesCommand(): Command {
     // TTS
     .option('--tts-voice <id>', 'ElevenLabs voice ID (use "null" to clear)')
     .option('--tts-model <id>', 'ElevenLabs model ID (use "null" to clear)')
+    .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
@@ -826,6 +883,14 @@ export function createInstancesCommand(): Command {
     .option('--discord-token <token>', 'Discord bot token (use "null" to clear)')
     .option('--slack-bot-token <token>', 'Slack bot token (use "null" to clear)')
     .option('--slack-app-token <token>', 'Slack app token (use "null" to clear)')
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID (use "null" to clear)')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token (use "null" to clear)')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (use "null" to clear)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID (use "null" to clear)')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL (use "null" to clear)')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation (use "null" to clear)')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)

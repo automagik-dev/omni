@@ -41,6 +41,7 @@ export const channelTypes = [
   'telegram',
   'a2a',
   'gupshup',
+  'twilio-whatsapp',
   'internal',
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
@@ -674,6 +675,15 @@ export const instances = pgTable(
     gupshupAuthToken: text('gupshup_auth_token'),
     gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
     webhookVerifyToken: text('webhook_verify_token'),
+
+    // ---- Twilio WhatsApp Configuration ----
+    twilioAccountSid: varchar('twilio_account_sid', { length: 34 }),
+    twilioAuthToken: text('twilio_auth_token'),
+    twilioFrom: varchar('twilio_from', { length: 64 }),
+    twilioMessagingServiceSid: varchar('twilio_messaging_service_sid', { length: 34 }),
+    twilioStatusCallbackUrl: text('twilio_status_callback_url'),
+    twilioWebhookUrl: text('twilio_webhook_url'),
+    twilioValidateSignature: boolean('twilio_validate_signature').notNull().default(true),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */

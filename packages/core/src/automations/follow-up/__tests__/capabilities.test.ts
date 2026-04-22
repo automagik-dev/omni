@@ -2,7 +2,7 @@
  * Unit tests for channel-capability helpers used by the follow-up system.
  *
  * Covers:
- *   - `channelHasMessagingWindow` — only WhatsApp Cloud today.
+ *   - `channelHasMessagingWindow` — WhatsApp BSP channels.
  *   - `channelSupportsTypingIndicator` — the known messaging channels.
  *   - `createMessagingWindowProbe` — expired / within / unknown verdicts.
  *   - `playTypingIndicator` — silent no-ops + the happy path.
@@ -48,8 +48,9 @@ const row = (overrides: Partial<FollowUpStateRow> = {}): FollowUpStateRow => ({
 });
 
 describe('channelHasMessagingWindow', () => {
-  test('WhatsApp Cloud is the only channel with a 24h window', () => {
+  test('WhatsApp BSP channels have a 24h window', () => {
     expect(channelHasMessagingWindow('whatsapp-cloud')).toBe(true);
+    expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
     expect(channelHasMessagingWindow('telegram')).toBe(false);
@@ -68,6 +69,7 @@ describe('channelSupportsTypingIndicator', () => {
   test.each<[ChannelType, boolean]>([
     ['whatsapp-baileys', true],
     ['whatsapp-cloud', true],
+    ['twilio-whatsapp', true],
     ['discord', true],
     ['telegram', true],
     ['slack', true],

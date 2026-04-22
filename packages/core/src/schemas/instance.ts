@@ -92,6 +92,15 @@ export const InstanceSchema = z.object({
   // Telegram config
   telegramBotToken: z.string().nullable(),
 
+  // Twilio WhatsApp config
+  twilioAccountSid: z.string().nullable().optional(),
+  twilioAuthToken: z.string().nullable().optional(),
+  twilioFrom: z.string().nullable().optional(),
+  twilioMessagingServiceSid: z.string().nullable().optional(),
+  twilioStatusCallbackUrl: z.string().nullable().optional(),
+  twilioWebhookUrl: z.string().nullable().optional(),
+  twilioValidateSignature: z.boolean().optional(),
+
   // Agent config
   agentId: z.string().uuid().nullable().optional(),
   agentTimeout: z.number().int().positive(),
