@@ -269,7 +269,10 @@ export function createInstancesCommand(): Command {
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When set without --reply-filter-mode, reply filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -747,7 +750,10 @@ export function createInstancesCommand(): Command {
     .option('--is-default', 'Set as default instance for channel')
     .option('--no-is-default', 'Unset as default instance for channel')
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When assigning an agent on an instance with no reply filter, the filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
