@@ -161,6 +161,22 @@ describe('ClaudeCodeClient', () => {
       expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
     });
 
+    it('passes request env into Claude Code SDK options', () => {
+      const client = new ClaudeCodeClient({ projectPath: '/test' });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        env: {
+          OMNI_INSTANCE: 'instance-123',
+          OMNI_CHAT: 'chat-456',
+          CLAUDECODE: '1',
+        },
+      });
+
+      expect(options.env.OMNI_INSTANCE).toBe('instance-123');
+      expect(options.env.OMNI_CHAT).toBe('chat-456');
+      expect(options.env.CLAUDECODE).toBe('0');
+    });
+
     it('passes mcpServers when configured', () => {
       const mcpServers = {
         playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
@@ -169,6 +185,104 @@ describe('ClaudeCodeClient', () => {
       const options = getBuildOptions(client)(baseRequest);
 
       expect(options.mcpServers).toEqual(mcpServers);
+    });
+
+    it('appends mcpUrlParams to HTTP MCP server URLs', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '123' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1?chat_id=123');
+    });
+
+    it('skips mcpUrlParams when not provided', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)(baseRequest);
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1');
+    });
+
+    it('handles multiple MCP servers (HTTP + stdio mix)', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+        another: { type: 'http' as const, url: 'https://other.example.com/api?token=abc' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '456' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      expect(gw.url).toBe('https://mcp.example.com/v1?chat_id=456');
+
+      const another = options.mcpServers.another as { url: string };
+      expect(another.url).toBe('https://other.example.com/api?token=abc&chat_id=456');
+
+      const pw = options.mcpServers.playwright as { command: string; args: string[] };
+      expect(pw.command).toBe('npx');
+      expect(pw.args).toEqual(['@playwright/mcp@latest']);
+    });
+
+    it('ignores mcpUrlParams for stdio servers (no url field)', () => {
+      const mcpServers = {
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+        local: { command: 'node', args: ['server.js'], env: { PORT: '3000' } },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '789' },
+      });
+
+      // When no HTTP servers exist, mcpServers is passed through unchanged
+      expect(options.mcpServers).toEqual(mcpServers);
+    });
+
+    it('does not mutate original config.mcpServers', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+        playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const originalUrl = mcpServers.gateway.url;
+
+      getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: '999' },
+      });
+
+      // Original config must not be mutated
+      expect(mcpServers.gateway.url).toBe(originalUrl);
+      expect(mcpServers.gateway.url).toBe('https://mcp.example.com/v1');
+    });
+
+    it('URL-encodes param values safely', () => {
+      const mcpServers = {
+        gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },
+      };
+      const client = new ClaudeCodeClient({ ...baseConfig, mcpServers });
+      const options = getBuildOptions(client)({
+        ...baseRequest,
+        mcpUrlParams: { chat_id: 'user with spaces', tag: 'a&b=c' },
+      });
+
+      const gw = options.mcpServers.gateway as { url: string };
+      // URLSearchParams encodes spaces as + and special chars as %XX
+      expect(gw.url).toContain('chat_id=user+with+spaces');
+      expect(gw.url).toContain('tag=a%26b%3Dc');
+      expect(gw.url).toStartWith('https://mcp.example.com/v1?');
     });
   });
 
@@ -287,6 +401,47 @@ describe('ClaudeCodeAgentProvider', () => {
     );
 
     expect(provider).toBeDefined();
+  });
+
+  it('injects Omni context env into Claude Code requests', async () => {
+    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {
+      prefixSenderName: false,
+    });
+    let capturedRequest: AnyRecord | undefined;
+    (provider as unknown as AnyRecord).client.run = async (request: AnyRecord) => {
+      capturedRequest = request;
+      return {
+        content: 'ok',
+        runId: 'run-1',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        status: 'completed',
+      };
+    };
+
+    await provider.trigger({
+      type: 'dm',
+      traceId: 'trace-123',
+      sessionId: 'session-chat-456',
+      source: {
+        instanceId: 'instance-123',
+        chatId: 'chat-456',
+        messageId: 'message-789',
+        channelType: 'whatsapp-baileys',
+      },
+      sender: {
+        platformUserId: 'sender-999',
+        personId: 'person-111',
+        displayName: undefined,
+      },
+      content: { text: 'hello' },
+    } as AgentTrigger);
+
+    expect(capturedRequest?.env.OMNI_INSTANCE).toBe('instance-123');
+    expect(capturedRequest?.env.OMNI_CHAT).toBe('chat-456');
+    expect(capturedRequest?.env.OMNI_MESSAGE).toBe('message-789');
+    expect(capturedRequest?.env.OMNI_SESSION).toBe('session-chat-456');
+    expect(capturedRequest?.env.OMNI_SENDER).toBe('sender-999');
+    expect(capturedRequest?.mcpUrlParams).toEqual({ chat_id: 'chat-456' });
   });
 
   it('includes attached file paths in message for image forwarding', () => {

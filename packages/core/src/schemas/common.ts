@@ -71,7 +71,14 @@ export const MetadataSchema = z.record(z.string(), z.unknown());
 /**
  * Channel type enum
  */
-export const ChannelTypeSchema = z.enum(['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram']);
+export const ChannelTypeSchema = z.enum([
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'gupshup',
+]);
 
 /**
  * Content type enum

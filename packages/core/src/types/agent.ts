@@ -51,10 +51,16 @@ export interface OpenClawConfig {
 export interface NatsGenieConfig {
   /** Genie agent name (from genie directory) */
   agentName: string;
+  /** Target agent inbox to deliver to (e.g. 'team-lead') */
+  targetAgent?: string;
+  /** Team name template, supports {chat_id}, {thread_id}, {sender_id} */
+  teamName?: string;
   /** Agent directory path */
   agentDir?: string;
   /** NATS server URL (default: localhost:4222) */
   natsUrl?: string;
+  /** Execution mode: 'fire-and-forget' (default) or 'turn-based' */
+  mode?: 'fire-and-forget' | 'turn-based';
 }
 
 /**

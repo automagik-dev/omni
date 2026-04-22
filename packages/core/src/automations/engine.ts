@@ -94,6 +94,7 @@ export class AutomationEngine {
     this.deps = {
       eventBus: null,
       sendMessage: undefined,
+      callAgent: undefined,
     };
   }
 
@@ -105,6 +106,7 @@ export class AutomationEngine {
     this.deps = {
       eventBus,
       sendMessage: deps.sendMessage,
+      callAgent: deps.callAgent,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -112,11 +114,25 @@ export class AutomationEngine {
     const triggerTypes = new Set(this.automations.map((a) => a.triggerEventType));
 
     for (const eventType of triggerTypes) {
-      const subscription = await eventBus.subscribePattern(`${eventType}.>`, async (event) => {
-        await this.handleEvent(event);
-      });
+      // Durable consumer name — ephemeral consumers are GC'd by NATS after 5s
+      // idle, which silently stops automations with low-frequency triggers
+      // (chat.idle_timeout, chat.archived, handoff, etc.). See #445.
+      const durable = `automation-engine-${eventType.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      const subscription = await eventBus.subscribePattern(
+        `${eventType}.>`,
+        async (event) => {
+          await this.handleEvent(event);
+        },
+        {
+          durable,
+          queue: 'automation-engine',
+          startFrom: 'new',
+          maxRetries: 3,
+          retryDelayMs: 1000,
+        },
+      );
       this.subscriptions.push(subscription);
-      logger.info(`Subscribed to ${eventType}.*`);
+      logger.info(`Subscribed to ${eventType}.*`, { durable });
     }
 
     // Set up debounce managers for automations that have debounce config

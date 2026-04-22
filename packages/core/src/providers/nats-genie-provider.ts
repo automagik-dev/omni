@@ -4,7 +4,10 @@
  * Replaces the filesystem-based GenieClient + GenieAgentProvider with
  * native NATS pub/sub transport:
  *   - Publishes inbound messages to omni.message.{instance}.{chat_id}
- *   - Subscribes to omni.reply.{instance}.* for agent responses
+ *   - Subscribes to omni.reply.{instance}.> for agent responses (recursive
+ *     wildcard is mandatory — WhatsApp chat IDs contain dots, e.g.
+ *     5511999999999@s.whatsapp.net, which tokenize as multiple NATS segments)
+ *   - Publishes session-reset intents to omni.session.reset.{instance}.{chat_id}
  *   - No filesystem. No execFile. No polling.
  *
  * Fire-and-forget: Omni publishes to NATS and returns immediately.
@@ -36,6 +39,8 @@ export interface NatsGenieProviderConfig {
   onReply?: (chatId: string, content: string, metadata: Record<string, unknown>) => Promise<void>;
   /** Prefix sender name to messages (default: true) */
   prefixSenderName?: boolean;
+  /** Execution mode: 'fire-and-forget' (default) or 'turn-based' */
+  mode?: 'fire-and-forget' | 'turn-based';
 }
 
 /** NATS message payload published to omni.message.{instance}.{chat_id} */
@@ -49,6 +54,8 @@ interface NatsOutboundMessage {
   traceId: string;
   messageId?: string;
   files?: ProviderFile[];
+  /** Environment variables for turn-based agents (OMNI_INSTANCE, OMNI_CHAT, etc.) */
+  env?: Record<string, string>;
 }
 
 /** NATS reply payload received from omni.reply.{instance}.{chat_id} */
@@ -61,13 +68,23 @@ interface NatsReplyMessage {
   auto_reply?: boolean;
 }
 
+/** NATS session-reset payload published to omni.session.reset.{instance}.{chat_id} */
+interface NatsSessionResetMessage {
+  action: 'kill';
+  sessionKey: string;
+  agent: string;
+  instance_id: string;
+  chat_id: string;
+  timestamp: string;
+}
+
 // ============================================================================
 // Provider
 // ============================================================================
 
 export class NatsGenieProvider implements IAgentProvider {
   readonly schema = 'nats-genie' as const;
-  readonly mode = 'fire-and-forget' as const;
+  readonly mode: 'fire-and-forget' | 'turn-based';
 
   private nc: NatsConnection | null = null;
   private sc = StringCodec();
@@ -77,7 +94,9 @@ export class NatsGenieProvider implements IAgentProvider {
     readonly id: string,
     readonly name: string,
     private config: NatsGenieProviderConfig,
-  ) {}
+  ) {
+    this.mode = config.mode ?? 'fire-and-forget';
+  }
 
   canHandle(_trigger: AgentTrigger): boolean {
     return true;
@@ -110,6 +129,7 @@ export class NatsGenieProvider implements IAgentProvider {
       traceId: context.traceId,
       messageId: context.source.messageId,
       files: context.content.files,
+      env: context.env,
     };
 
     try {
@@ -146,7 +166,14 @@ export class NatsGenieProvider implements IAgentProvider {
 
   /**
    * Start the reply subscription for this instance.
-   * Listens on omni.reply.{instance}.* and forwards to the onReply callback.
+   * Listens on omni.reply.{instance}.> and forwards to the onReply callback.
+   *
+   * NOTE: The recursive wildcard `>` is mandatory here. WhatsApp chat_ids
+   * contain dots (e.g. `5511999999999@s.whatsapp.net`), which NATS tokenizes
+   * as multiple subject segments. A single-token wildcard `*` would silently
+   * miss every WhatsApp reply — historically masked in production by the
+   * external `nats-reply-sidecar.mjs` which used `omni.reply.>`.
+   * See automagik-dev/omni#361.
    */
   async startReplySubscription(): Promise<void> {
     if (!this.config.onReply) return;
@@ -155,18 +182,25 @@ export class NatsGenieProvider implements IAgentProvider {
     await this.ensureConnected();
     if (!this.nc) return;
 
-    const topic = `omni.reply.${this.config.instanceId}.*`;
+    const topic = `omni.reply.${this.config.instanceId}.>`;
     const sub = this.nc.subscribe(topic);
     this.replySubscription = sub;
 
     log.info('Subscribed to agent replies', { topic });
 
     // Process replies in background
+    const subjectPrefix = `omni.reply.${this.config.instanceId}.`;
     (async () => {
       for await (const msg of sub) {
         try {
           const data: NatsReplyMessage = JSON.parse(this.sc.decode(msg.data));
-          const chatId = data.chat_id || msg.subject.split('.').pop() || '';
+          // Prefer the explicit chat_id in the payload; fall back to the
+          // subject suffix (which may itself contain dots for WhatsApp).
+          const chatId =
+            data.chat_id ||
+            (msg.subject.startsWith(subjectPrefix)
+              ? msg.subject.slice(subjectPrefix.length)
+              : msg.subject.split('.').pop() || '');
 
           if (data.content && this.config.onReply) {
             await this.config.onReply(chatId, data.content, {
@@ -196,6 +230,56 @@ export class NatsGenieProvider implements IAgentProvider {
         latencyMs: Date.now() - startMs,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  /**
+   * Propagate a session reset to the genie-side bridge.
+   *
+   * Publishes `{ action: 'kill' }` on
+   * `omni.session.reset.{instanceId}.{chatId}` so the genie omni-bridge can
+   * tear down the corresponding agent session (mirror of
+   * `executeProviderSessionReset()` in agent-dispatcher.ts).
+   *
+   * Cross-repo dependency: requires the genie omni-bridge to subscribe to
+   * this subject. Tracked in automagik-dev/genie#1089 — until that ships,
+   * this publish is a durable no-op (fire-and-forget, no subscriber error).
+   */
+  async resetSession(sessionKey: string, chatId?: string, instanceId?: string): Promise<void> {
+    const resolvedInstanceId = instanceId ?? this.config.instanceId;
+    if (!chatId) {
+      log.warn('NATS session reset skipped: missing chatId', {
+        providerId: this.id,
+        sessionKey,
+      });
+      throw new Error('chatId is required to reset NATS Genie session');
+    }
+
+    const topic = `omni.session.reset.${resolvedInstanceId}.${chatId}`;
+    const payload: NatsSessionResetMessage = {
+      action: 'kill',
+      sessionKey,
+      agent: this.config.agentName,
+      instance_id: resolvedInstanceId,
+      chat_id: chatId,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await this.ensureConnected();
+      this.nc?.publish(topic, this.sc.encode(JSON.stringify(payload)));
+      log.info('Published session reset to NATS', {
+        topic,
+        providerId: this.id,
+        sessionKey,
+        chatId,
+      });
+    } catch (error) {
+      log.error('Failed to publish NATS session reset', {
+        topic,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
   }
 

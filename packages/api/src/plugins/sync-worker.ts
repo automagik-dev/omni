@@ -11,10 +11,11 @@ import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@
 import type { EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import type { Database, SyncJobConfig, SyncJobType } from '@omni/db';
+import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
+import { validateContactPhone } from '../utils/phone';
 
 const log = createLogger('sync-worker');
 
@@ -614,7 +615,7 @@ async function processContactsSync(
             profileData: c.metadata,
           },
           {
-            matchByPhone: c.phone,
+            matchByPhone: validateContactPhone(c.phone, c.platformUserId),
             createPerson: true,
             displayName: c.name,
           },
@@ -888,6 +889,16 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
         const { instanceId, channelType } = event.payload;
 
         try {
+          // Reuse an already-running history-push job for this instance instead of
+          // creating a duplicate on every reconnect.
+          if (await services.syncJobs.hasActiveJob(instanceId, 'history-push')) {
+            historyPushLog.debug('Active history-push job already exists — skipping create', {
+              instanceId,
+              channel: channelType,
+            });
+            return;
+          }
+
           // Create a running history-push sync job
           const job = await services.syncJobs.create({
             instanceId,
@@ -942,16 +953,17 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
             return;
           }
 
-          await services.syncJobs.updateProgress(historyPushJob.id, {
+          // Only update counters we actually have from Baileys. Never reset
+          // stored/duplicates/mediaDownloaded to 0 — ingestion updates them
+          // separately and they must not be clobbered by a progress event.
+          const update: Partial<SyncJobProgress> = {
             fetched: payload.fetched ?? 0,
-            stored: 0,
-            duplicates: 0,
-            mediaDownloaded: 0,
-            totalEstimated:
-              payload.progress && payload.progress > 0
-                ? Math.round((payload.fetched ?? 0) / (payload.progress / 100))
-                : 0,
-          });
+          };
+          if (typeof payload.progress === 'number' && payload.progress > 0) {
+            update.totalEstimated = Math.round((payload.fetched ?? 0) / (payload.progress / 100));
+          }
+
+          await services.syncJobs.updateProgress(historyPushJob.id, update);
 
           historyPushLog.debug('Updated history-push progress', {
             jobId: historyPushJob.id,

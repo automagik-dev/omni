@@ -13,7 +13,7 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
+import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache } from '../cache';
@@ -39,6 +39,11 @@ export interface ValidatedApiKey {
   scopes: string[];
   instanceIds: string[] | null;
   rateLimit: number | null;
+  profile: string | null;
+  chatAllowlist: string[];
+  instanceAllowlist: string[];
+  outboundRecipientAllowlist: string[];
+  profileOverrides: ApiKeyProfileOverrides | null;
 }
 
 /**
@@ -52,6 +57,11 @@ export interface CreateApiKeyOptions {
   rateLimit?: number;
   expiresAt?: Date;
   createdBy?: string;
+  profile?: ApiKeyProfile | null;
+  profileOverrides?: ApiKeyProfileOverrides;
+  chatAllowlist?: string[];
+  instanceAllowlist?: string[];
+  outboundRecipientAllowlist?: string[];
 }
 
 /**
@@ -72,6 +82,12 @@ export interface UpdateApiKeyOptions {
   instanceIds?: string[] | null;
   rateLimit?: number | null;
   expiresAt?: Date | null;
+  /** Context: active instance for turn-based agents */
+  contextInstanceId?: string | null;
+  /** Context: active chat for turn-based agents */
+  contextChatId?: string | null;
+  /** Context: trigger message ID for turn-based agents */
+  contextMessageId?: string | null;
 }
 
 export class ApiKeyService {
@@ -147,6 +163,11 @@ export class ApiKeyService {
         scopes: cached.scopes,
         instanceIds: cached.instanceIds,
         rateLimit: null, // Rate limit checked separately
+        profile: cached.profile ?? null,
+        chatAllowlist: cached.chatAllowlist ?? [],
+        instanceAllowlist: cached.instanceAllowlist ?? [],
+        outboundRecipientAllowlist: cached.outboundRecipientAllowlist ?? [],
+        profileOverrides: (cached.profileOverrides as ApiKeyProfileOverrides | null | undefined) ?? null,
       };
     }
 
@@ -176,6 +197,11 @@ export class ApiKeyService {
       expiresAt: apiKey.expiresAt,
       scopes: apiKey.scopes,
       instanceIds: apiKey.instanceIds,
+      profile: apiKey.profile,
+      chatAllowlist: apiKey.chatAllowlist,
+      instanceAllowlist: apiKey.instanceAllowlist,
+      outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
+      profileOverrides: apiKey.profileOverrides ?? null,
     };
     await apiKeyCache.set(cacheKey, cachedData, CacheTTL.API_KEY);
 
@@ -188,6 +214,11 @@ export class ApiKeyService {
       scopes: apiKey.scopes,
       instanceIds: apiKey.instanceIds,
       rateLimit: apiKey.rateLimit,
+      profile: apiKey.profile,
+      chatAllowlist: apiKey.chatAllowlist ?? [],
+      instanceAllowlist: apiKey.instanceAllowlist ?? [],
+      outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist ?? [],
+      profileOverrides: apiKey.profileOverrides ?? null,
     };
   }
 
@@ -245,6 +276,13 @@ export class ApiKeyService {
       rateLimit: options.rateLimit,
       expiresAt: options.expiresAt,
       createdBy: options.createdBy,
+      profile: options.profile ?? null,
+      ...(options.profileOverrides !== undefined ? { profileOverrides: options.profileOverrides } : {}),
+      ...(options.chatAllowlist !== undefined ? { chatAllowlist: options.chatAllowlist } : {}),
+      ...(options.instanceAllowlist !== undefined ? { instanceAllowlist: options.instanceAllowlist } : {}),
+      ...(options.outboundRecipientAllowlist !== undefined
+        ? { outboundRecipientAllowlist: options.outboundRecipientAllowlist }
+        : {}),
     };
 
     const [created] = await this.db.insert(apiKeys).values(data).returning();
@@ -277,6 +315,16 @@ export class ApiKeyService {
     if (options.instanceIds !== undefined) updates.instanceIds = options.instanceIds;
     if (options.rateLimit !== undefined) updates.rateLimit = options.rateLimit;
     if (options.expiresAt !== undefined) updates.expiresAt = options.expiresAt;
+    if (options.contextInstanceId !== undefined) updates.contextInstanceId = options.contextInstanceId;
+    if (options.contextChatId !== undefined) updates.contextChatId = options.contextChatId;
+    if (options.contextMessageId !== undefined) updates.contextMessageId = options.contextMessageId;
+    if (
+      options.contextInstanceId !== undefined ||
+      options.contextChatId !== undefined ||
+      options.contextMessageId !== undefined
+    ) {
+      updates.contextUpdatedAt = new Date();
+    }
 
     const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
 
@@ -300,6 +348,14 @@ export class ApiKeyService {
    */
   async getById(id: string): Promise<ApiKey | null> {
     const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+    return result ?? null;
+  }
+
+  /**
+   * Find an API key by name
+   */
+  async findByName(name: string): Promise<ApiKey | null> {
+    const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1);
     return result ?? null;
   }
 

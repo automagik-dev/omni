@@ -98,6 +98,7 @@ const CLI_COMMANDS: Record<string, string> = {
   // EVENTS
   // ============================================================================
   'events.list': 'events list',
+  'events.get': 'events get <id>',
   'events.analytics': 'events analytics',
 
   // ============================================================================
@@ -106,6 +107,10 @@ const CLI_COMMANDS: Record<string, string> = {
   'persons.search': 'persons search',
   'persons.get': 'persons get',
   'persons.presence': 'persons presence',
+  'persons.update': 'persons update <id>',
+  'persons.link': 'persons link <id>',
+  'persons.unlink': 'persons unlink <id>',
+  'persons.merge': 'persons merge <a> <b>',
 
   // ============================================================================
   // ACCESS CONTROL
@@ -226,11 +231,39 @@ const CLI_COMMANDS: Record<string, string> = {
   'keys.delete': 'keys delete',
 
   // ============================================================================
+  // CONTEXT
+  // ============================================================================
+  'context.get': 'where',
+  'context.set': 'open <contact>',
+  'context.use': 'use <instance>',
+  'context.clear': 'close',
+
+  // ============================================================================
+  // TURNS
+  // ============================================================================
+  'turns.close': 'done "text" / done --react / done --skip',
+  'turns.list': 'turns list',
+  'turns.get': 'turns get <id>',
+  'turns.forceClose': 'turns close <id>',
+  'turns.bulkClose': 'turns close-all --confirm',
+  'turns.stats': 'turns stats',
+
+  // ============================================================================
+  // MEDIA (multimodal verbs — tts/stt/vision/imagegen/videogen)
+  // ============================================================================
+  'media.tts': 'speak <text>',
+  'media.stt': 'listen <file>',
+  'media.vision': 'see <file> [prompt]',
+  'media.imagine': 'imagine <prompt...>',
+  'media.film': 'film <prompt>',
+
+  // ============================================================================
   // AGENTS
   // ============================================================================
   'agents.list': 'agents list',
   'agents.get': 'agents get <id>',
   'agents.create': 'agents create --name <name> --provider <id> --instance <id>',
+  'agents.update': 'agents update <id> [--name <name>] [--model <model>] [--provider <p>] [--active|--inactive]',
   'agents.delete': 'agents delete <id>',
 
   // ============================================================================

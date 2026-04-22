@@ -18,34 +18,50 @@ import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
 import { createChannelsCommand } from './commands/channels.js';
 import { createChatsCommand } from './commands/chats.js';
+import { createCloseCommand } from './commands/close.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
+import { createDoctorCommand } from './commands/doctor.js';
+import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
+import { createFilmCommand } from './commands/film.js';
 import { createFollowUpCommand } from './commands/follow-up.js';
+import { createHistoryCommand } from './commands/history.js';
+import { createImagineCommand } from './commands/imagine.js';
 import { createInstallCommand } from './commands/install.js';
 import { createInstancesCommand } from './commands/instances.js';
 import { createJourneyCommand } from './commands/journey.js';
 import { createKeysCommand } from './commands/keys.js';
+import { createListenCommand } from './commands/listen.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
+import { createOpenCommand } from './commands/open.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
+import { createReactCommand } from './commands/react.js';
 import { createReplayCommand } from './commands/replay.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
+import { createSayCommand } from './commands/say.js';
+import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
 import { createTtsCommand } from './commands/tts.js';
+import { createTurnsCommand } from './commands/turns.js';
 import { createUpdateCommand } from './commands/update.js';
+import { createUseCommand } from './commands/use.js';
+import { createVoiceCommand } from './commands/voice.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
+import { createWhereCommand } from './commands/where.js';
 import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
 import { areColorsEnabled, disableColors, flushStdout } from './output.js';
@@ -95,6 +111,54 @@ const COMMANDS: CommandDef[] = [
     helpGroup: 'Core',
     helpDescription: 'Send message (text, media, location, poll)',
   },
+  {
+    create: createSayCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Send text to open chat (verb command)',
+  },
+  {
+    create: createReactCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'React to a message with emoji (verb command)',
+  },
+  {
+    create: createListenCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Transcribe audio to text (verb command)',
+  },
+  {
+    create: createImagineCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Generate an image from a prompt (Gemini Nano Banana, verb command)',
+  },
+  {
+    create: createFilmCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Generate a video from a prompt (Gemini Veo 3.1, verb command)',
+  },
+  {
+    create: createSpeakCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Synthesize text to speech and send as voice note (verb command)',
+  },
+  {
+    create: createSeeCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Describe an image or video via Gemini Vision (verb command)',
+  },
+  {
+    create: createHistoryCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Show recent messages in the open chat (verb command)',
+  },
   { create: createChatsCommand, category: 'core', helpGroup: 'Core', helpDescription: 'List and manage conversations' },
   {
     create: createMessagesCommand,
@@ -107,6 +171,42 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Core',
     helpDescription: 'Text-to-speech operations',
+  },
+  {
+    create: createOpenCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Open conversation context (set active chat)',
+  },
+  {
+    create: createCloseCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Clear active conversation context',
+  },
+  {
+    create: createUseCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Set active instance for verb commands',
+  },
+  {
+    create: createWhereCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Show current context (instance, chat)',
+  },
+  {
+    create: createDoneCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Close turn (send final message + emit turn.done)',
+  },
+  {
+    create: createVoiceCommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'Voice channel operations (join, stream, sessions)',
   },
 
   // Management group - Configuration and setup
@@ -177,6 +277,12 @@ const COMMANDS: CommandDef[] = [
     helpGroup: 'Management',
     helpDescription: 'Webhook management',
   },
+  {
+    create: createTurnsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Admin turn management (list, close, stats)',
+  },
 
   // System group - Status and configuration
   {
@@ -224,6 +330,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
+  },
+  {
+    create: createDoctorCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Diagnose and repair the embedded omni runtime',
   },
   {
     create: createMediaCommand,

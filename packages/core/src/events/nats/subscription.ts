@@ -83,6 +83,19 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
       while (activeCount > 0) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
+
+      // If the iterator exited while we still considered the subscription
+      // active, the server-side consumer was deleted (inactive_threshold GC,
+      // stream deleted, client disconnect). Previously this returned silently
+      // and the caller had no idea their subscription was dead — see #445.
+      if (isActive) {
+        log.error('Consumer iterator exited unexpectedly — subscription is dead', {
+          subscriptionId,
+          pattern,
+          reason: 'consumer_gone',
+        });
+        isActive = false;
+      }
     } catch (error) {
       if (isActive) {
         log.error('Consumer error', { subscriptionId, error: String(error) });

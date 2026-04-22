@@ -92,29 +92,52 @@ describe('renderSyntheticPrompt', () => {
     const result = renderSyntheticPrompt('hi {{chatName}} — {{minutes}}m since msg #{{sequenceIndex}}', {
       minutes: 5,
       sequenceIndex: 2,
+      totalAttempts: 3,
       chatName: 'Bob',
     });
     expect(result).toBe('hi Bob — 5m since msg #2');
+  });
+
+  test('substitutes attemptNumber (1-based) and totalAttempts', () => {
+    const result = renderSyntheticPrompt('Attempt {{attemptNumber}} of {{totalAttempts}}', {
+      minutes: 5,
+      sequenceIndex: 0,
+      totalAttempts: 3,
+      chatName: null,
+    });
+    expect(result).toBe('Attempt 1 of 3');
+  });
+
+  test('attemptNumber increments with sequenceIndex', () => {
+    expect(
+      renderSyntheticPrompt('#{{attemptNumber}}/{{totalAttempts}}', {
+        minutes: 0,
+        sequenceIndex: 2,
+        totalAttempts: 3,
+        chatName: null,
+      }),
+    ).toBe('#3/3');
   });
 
   test('handles whitespace inside braces', () => {
     const result = renderSyntheticPrompt('{{ chatName }} {{ minutes }}', {
       minutes: 7,
       sequenceIndex: 0,
+      totalAttempts: 3,
       chatName: 'Carol',
     });
     expect(result).toBe('Carol 7');
   });
 
   test('empty chatName renders as empty string', () => {
-    expect(renderSyntheticPrompt('Hello {{chatName}}!', { minutes: 1, sequenceIndex: 0, chatName: null })).toBe(
-      'Hello !',
-    );
+    expect(
+      renderSyntheticPrompt('Hello {{chatName}}!', { minutes: 1, sequenceIndex: 0, totalAttempts: 3, chatName: null }),
+    ).toBe('Hello !');
   });
 
   test('leaves {{syntheticPrompt}} literal so downstream templates can substitute', () => {
     const tmpl = 'Please follow up: {{syntheticPrompt}}';
-    expect(renderSyntheticPrompt(tmpl, { minutes: 1, sequenceIndex: 0, chatName: 'X' })).toBe(tmpl);
+    expect(renderSyntheticPrompt(tmpl, { minutes: 1, sequenceIndex: 0, totalAttempts: 3, chatName: 'X' })).toBe(tmpl);
   });
 });
 
@@ -162,6 +185,8 @@ describe('sweepFollowUps', () => {
       instanceId: 'inst-1',
       agentId: 'agent-1',
       sequenceIndex: 0,
+      attemptNumber: 1,
+      totalAttempts: 3,
       minutesSinceLastAgentReply: 3,
       chatName: 'Alice',
     });

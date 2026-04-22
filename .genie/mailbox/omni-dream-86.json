@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-dream-86",
+  "messages": [
+    {
+      "id": "msg-6f56c794-9d18-4aa4-b0ab-8bde7072cd7b",
+      "from": "team-lead",
+      "to": "omni-dream-86",
+      "body": "DREAM WORKER — Issue #86: Standardize sendTyping\n\n## Instructions\n1. Read the wish file: .genie/wishes/standardize-sendtyping/WISH.md\n2. Branch from dev: git checkout dev && git pull origin dev && git checkout -b fix/standardize-sendtyping\n3. Execute ALL execution groups. Groups 1-3 are independent, Group 4 depends on all:\n   - Group 1: Delete WhatsApp dead code — typing.ts, its exports from index.ts, typing.test.ts\n   - Group 2: Discord auto-refresh — implement setInterval every 8s in sendTyping, cleanup on disconnect/destroy, 60s failsafe. Use channelId (not chatId) for the interval Map key\n   - Group 3: Telegram auto-refresh — implement setInterval every 4s in sendTyping, cleanup on disconnect/destroy, 60s failsafe\n   - Group 4: Document Slack no-op in capabilities.ts, run full make check\n4. Run validation commands from the wish after each group\n5. Run make check — if it fails, fix and retry (max 3 attempts)\n6. Once CI green, create PR: gh pr create --base dev --title \"fix(channel-sdk): standardize sendTyping across channels (GH#86)\" --body \"...\"\n7. Report back: DONE with PR URL, or BLOCKED with reason\n\nIMPORTANT: Do NOT push to main. PR must target dev.",
+      "createdAt": "2026-03-11T06:58:59.473Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:58:59.476Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:58:59.476Z"
+}

@@ -10,6 +10,7 @@ import { zValidator } from '@hono/zod-validator';
 import { PAYLOAD_STAGES } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
 const payloadsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -38,6 +39,19 @@ const configUpdateSchema = z.object({
 payloadsRoutes.get('/events/:eventId/payloads', async (c) => {
   const eventId = c.req.param('eventId');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // Check instance access via the parent event
+  if (apiKey?.instanceIds) {
+    try {
+      const event = await services.events.getById(eventId);
+      if (event.instanceId && !ApiKeyService.instanceAllowed(apiKey.instanceIds, event.instanceId)) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+      }
+    } catch {
+      // Event not found — let the payload service handle it
+    }
+  }
 
   const payloads = await services.payloadStore.getByEventId(eventId);
 
@@ -56,6 +70,20 @@ payloadsRoutes.get('/events/:eventId/payloads', async (c) => {
 payloadsRoutes.get('/events/:eventId/payloads/:stage', async (c) => {
   const eventId = c.req.param('eventId');
   const stage = c.req.param('stage');
+  const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // Check instance access via the parent event
+  if (apiKey?.instanceIds) {
+    try {
+      const event = await services.events.getById(eventId);
+      if (event.instanceId && !ApiKeyService.instanceAllowed(apiKey.instanceIds, event.instanceId)) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+      }
+    } catch {
+      // Event not found — let the payload service handle it
+    }
+  }
 
   // Validate stage
   const stageResult = stageSchema.safeParse(stage);
@@ -63,7 +91,6 @@ payloadsRoutes.get('/events/:eventId/payloads/:stage', async (c) => {
     return c.json({ error: 'Invalid stage' }, 400);
   }
 
-  const services = c.get('services');
   const payload = await services.payloadStore.getByStage(eventId, stageResult.data);
 
   if (!payload) {
@@ -80,6 +107,19 @@ payloadsRoutes.delete('/events/:eventId/payloads', zValidator('json', deleteBody
   const eventId = c.req.param('eventId');
   const { reason } = c.req.valid('json');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // Check instance access via the parent event
+  if (apiKey?.instanceIds) {
+    try {
+      const event = await services.events.getById(eventId);
+      if (event.instanceId && !ApiKeyService.instanceAllowed(apiKey.instanceIds, event.instanceId)) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+      }
+    } catch {
+      // Event not found — let the payload service handle it
+    }
+  }
 
   // TODO: Get current user from auth context
   const deletedBy = 'api-user';

@@ -123,10 +123,19 @@ logsRoutes.get('/recent', zValidator('query', recentLogsQuerySchema), async (c) 
     limit,
   });
 
+  // Reshape each entry to {time, level, module, msg, data: <rest>} so extra
+  // contextual fields (stack traces, agent/chat IDs, error details) survive
+  // JSON serialization under a single, typed `data` key.
+  const items = entries.map((entry) => {
+    const { time, level: entryLevel, module, msg, ...rest } = entry;
+    const hasData = Object.keys(rest).length > 0;
+    return hasData ? { time, level: entryLevel, module, msg, data: rest } : { time, level: entryLevel, module, msg };
+  });
+
   return c.json({
-    items: entries,
+    items,
     meta: {
-      total: entries.length,
+      total: items.length,
       bufferSize: buffer.maxSize,
       limit,
     },

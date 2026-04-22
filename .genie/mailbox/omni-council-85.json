@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-council-85",
+  "messages": [
+    {
+      "id": "msg-bfba1cac-3a7d-4fa8-a0bc-f677a3ae073e",
+      "from": "team-lead",
+      "to": "omni-council-85",
+      "body": "RELEVANCE REVIEW — Issue #85: Replace 13 emit* methods with generic publishEvent in BaseChannelPlugin\n\nYou must determine if this issue STILL MAKES SENSE against the current dev branch.\n\n1. Read the wish file: .wishes/085-replace-emit-with-publishevent-wish.md\n2. Check the CURRENT state of the codebase on dev branch:\n   - How many emit* methods still exist in BaseChannelPlugin?\n   - Are the dead _subject variables still there?\n   - Do EmitXxxParams types still duplicate EventPayloadMap?\n3. Run /council with this question: \"Issue #85 proposes replacing 14 emit* methods with a single publishEvent<K>. Given current dev state, is this still relevant? Should we PROCEED, DEFER, MODIFY scope, or CLOSE? Consider: is the boilerplate actually causing problems, or is it stable and working fine?\"\n\nYour final answer must be one of: PROCEED / DEFER / MODIFY / CLOSE — with clear reasoning.\nDone when council verdict is delivered.",
+      "createdAt": "2026-03-11T05:27:47.039Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:27:47.041Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:27:47.042Z"
+}

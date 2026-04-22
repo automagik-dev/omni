@@ -126,27 +126,32 @@ const MINUTES_PER_MS = 1 / 60_000;
 /**
  * Render the synthetic prompt from `sequenceConfig.promptTemplate`.
  *
- * The four supported placeholders are substituted by simple string
- * replacement:
- *   - `{{syntheticPrompt}}` — a self-reference; left as the literal template
- *     so that downstream `call_agent.promptOverride` templates can still
- *     inject the rendered prompt.
+ * Supported placeholders (simple string replacement):
  *   - `{{minutes}}` — minutes since the agent's last reply
  *   - `{{sequenceIndex}}` — zero-based index of the follow-up about to fire
+ *   - `{{attemptNumber}}` — one-based attempt number (`sequenceIndex + 1`)
+ *   - `{{totalAttempts}}` — total attempts configured (`maxFollowUps`)
  *   - `{{chatName}}` — chat display name, or an empty string if unknown
  *
- * This is a deliberately minimal renderer for the v1 cut of the feature —
- * Group 4 owns the unified template renderer that `call_agent.promptOverride`
- * uses. Keeping the sweeper's prompt-render concrete and local avoids a
- * cross-wave coupling.
+ * `attemptNumber` / `totalAttempts` exist so prompts can read naturally
+ * ("Attempt 2 of 3") instead of exposing the zero-based index to the LLM,
+ * which was shown to confuse agents into hallucinating a stop condition
+ * from their own session memory.
  */
 export function renderSyntheticPrompt(
   template: string,
-  context: { minutes: number; sequenceIndex: number; chatName: string | null },
+  context: {
+    minutes: number;
+    sequenceIndex: number;
+    totalAttempts: number;
+    chatName: string | null;
+  },
 ): string {
   return template
     .replace(/\{\{\s*minutes\s*\}\}/g, String(context.minutes))
     .replace(/\{\{\s*sequenceIndex\s*\}\}/g, String(context.sequenceIndex))
+    .replace(/\{\{\s*attemptNumber\s*\}\}/g, String(context.sequenceIndex + 1))
+    .replace(/\{\{\s*totalAttempts\s*\}\}/g, String(context.totalAttempts))
     .replace(/\{\{\s*chatName\s*\}\}/g, context.chatName ?? '');
 }
 
@@ -208,9 +213,11 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
   }
 
   const minutesSince = Math.max(0, Math.round((now.getTime() - row.lastAgentMessageAt.getTime()) * MINUTES_PER_MS));
+  const totalAttempts = row.sequenceConfig.maxFollowUps;
   const syntheticPrompt = renderSyntheticPrompt(row.sequenceConfig.promptTemplate, {
     minutes: minutesSince,
     sequenceIndex: row.sequenceIndex,
+    totalAttempts,
     chatName: row.chatName,
   });
 
@@ -219,6 +226,8 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
     instanceId: row.instanceId,
     agentId: row.agentId,
     sequenceIndex: row.sequenceIndex,
+    attemptNumber: row.sequenceIndex + 1,
+    totalAttempts,
     minutesSinceLastAgentReply: minutesSince,
     syntheticPrompt,
     ...(row.chatName ? { chatName: row.chatName } : {}),

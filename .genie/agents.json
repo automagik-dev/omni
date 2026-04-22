@@ -1,0 +1,11 @@
+{
+  "entries": {
+    "omni-qa": {
+      "name": "omni-qa",
+      "dir": "/home/genie/agents/namastexlabs/omni/omni-qa-engineer",
+      "promptMode": "append",
+      "registeredAt": "2026-03-20T12:19:42.948Z"
+    }
+  },
+  "lastUpdated": "2026-03-20T12:19:42.959Z"
+}

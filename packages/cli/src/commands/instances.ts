@@ -25,7 +25,7 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
 
-const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram'];
+const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram', 'gupshup'];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
 /** Set value on body, resolving "null" string to actual null */
@@ -88,6 +88,14 @@ function applyDebounceFields(body: Record<string, unknown>, opts: Record<string,
   if (opts.debounceGroup !== undefined) body.messageDebounceGroupMs = opts.debounceGroup;
 }
 
+/** Extract split-delay fields from CLI options into body */
+function applySplitDelayFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'messageSplitDelayMode', opts.splitDelayMode);
+  if (opts.splitDelayFixed !== undefined) body.messageSplitDelayFixedMs = opts.splitDelayFixed;
+  if (opts.splitDelayMin !== undefined) body.messageSplitDelayMinMs = opts.splitDelayMin;
+  if (opts.splitDelayMax !== undefined) body.messageSplitDelayMaxMs = opts.splitDelayMax;
+}
+
 /** Extract agent gate fields from CLI options into body */
 function applyGateFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setBool(body, 'agentGateEnabled', opts.agentGate);
@@ -105,6 +113,11 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'discordBotToken', opts.discordToken);
   setVal(body, 'slackBotToken', opts.slackBotToken);
   setVal(body, 'slackAppToken', opts.slackAppToken);
+  setVal(body, 'gupshupCallbackUrl', opts.gupshupCallbackUrl);
+  setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
+  setVal(body, 'gupshupEventId', opts.gupshupEventId);
+  setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -126,6 +139,13 @@ function applyAckFields(body: Record<string, unknown>, opts: Record<string, unkn
   }
 }
 
+/** Extract stalled-turn threshold (turn-monitor internal event) */
+function applyStalledFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  if (opts.agentStalledTimeoutMs !== undefined) {
+    body.agentStalledTimeoutMs = Number(opts.agentStalledTimeoutMs);
+  }
+}
+
 /** Build instance body from all CLI options */
 function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -133,9 +153,11 @@ function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknow
   applyReplyFilter(body, opts);
   applyFormatFields(body, opts);
   applyDebounceFields(body, opts);
+  applySplitDelayFields(body, opts);
   applyGateFields(body, opts);
   applyMiscFields(body, opts);
   applyAckFields(body, opts);
+  applyStalledFields(body, opts);
   return body;
 }
 
@@ -247,7 +269,10 @@ export function createInstancesCommand(): Command {
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When set without --reply-filter-mode, reply filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -285,6 +310,11 @@ export function createInstancesCommand(): Command {
     .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
     .option('--debounce-group <ms>', 'Group chat debounce in ms', (v) => Number.parseInt(v, 10))
+    // Split delay (between agent-reply chunks)
+    .option('--split-delay-mode <mode>', 'Split delay mode: disabled, fixed, or randomized')
+    .option('--split-delay-fixed <ms>', 'Fixed delay between split chunks in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-min <ms>', 'Minimum delay between split chunks in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-max <ms>', 'Maximum delay between split chunks in ms', (v) => Number.parseInt(v, 10))
     // Agent gate
     .option('--agent-gate', 'Enable LLM response gate')
     .option('--agent-gate-model <model>', 'Model for response gate')
@@ -298,12 +328,27 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
+    )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token')
     .option('--discord-token <token>', 'Discord bot token')
     .option('--slack-bot-token <token>', 'Slack bot token')
     .option('--slack-app-token <token>', 'Slack app token')
+    // Gupshup
+    .option('--gupshup-callback-url <url>', 'Gupshup Custom Integration callback URL')
+    .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
+    .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
+    .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
+    // Bridge tmux session override (parity with `update`; propagated via NATS env)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -705,7 +750,10 @@ export function createInstancesCommand(): Command {
     .option('--is-default', 'Set as default instance for channel')
     .option('--no-is-default', 'Unset as default instance for channel')
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When assigning an agent on an instance with no reply filter, the filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -748,6 +796,11 @@ export function createInstancesCommand(): Command {
     .option('--debounce-group <ms>', 'Group chat debounce in ms (use "null" to inherit)', (v) =>
       v === 'null' ? null : Number.parseInt(v, 10),
     )
+    // Split delay (between agent-reply chunks)
+    .option('--split-delay-mode <mode>', 'Split delay mode: disabled, fixed, or randomized')
+    .option('--split-delay-fixed <ms>', 'Fixed delay between split chunks in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-min <ms>', 'Minimum delay between split chunks in ms', (v) => Number.parseInt(v, 10))
+    .option('--split-delay-max <ms>', 'Maximum delay between split chunks in ms', (v) => Number.parseInt(v, 10))
     // Agent gate
     .option('--agent-gate', 'Enable LLM response gate')
     .option('--no-agent-gate', 'Disable LLM response gate')
@@ -762,6 +815,11 @@ export function createInstancesCommand(): Command {
     .option('--reaction-ack <mode>', 'Reaction ack mode (on|off)')
     .option('--reaction-ack-emoji <json>', 'Per-channel emoji map as JSON')
     .option('--ack-timeout <ms>', 'Ack timeout in milliseconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-stalled-timeout-ms <ms>',
+      'Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)',
+      (v) => Number.parseInt(v, 10),
+    )
     // Channel tokens
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')
@@ -772,6 +830,11 @@ export function createInstancesCommand(): Command {
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    // Bridge tmux session override (per-instance routing for genie nats-genie provider)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 

@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-wish-87",
+  "messages": [
+    {
+      "id": "msg-738983e1-19f1-49d4-b543-3114cb59876c",
+      "from": "team-lead",
+      "to": "omni-wish-87",
+      "body": "You are working on GitHub issue #87: \"[P2][task] Add missing T0/T1 journey timing in inbound message paths\"\n\n## Issue Details\nBaseChannelPlugin defines journey timing checkpoints (T0-T11) for end-to-end latency measurement, but T0 and T1 are inconsistently captured:\n\n| Checkpoint | Method | WhatsApp | Discord | Slack | Telegram | A2A |\n|------------|--------|----------|---------|-------|----------|-----|\n| T0 | captureT0() | YES | YES | YES | NO | NO |\n| T1 | captureInboundTimings() | YES | YES | YES | NO | NO |\n| T2 | captureT2() | YES | YES | YES | YES | YES |\n\n### Impact\nInbound latency (platform → SDK → event bus) is invisible for Telegram and A2A. Can measure outbound (T10→T11) but not inbound (T0→T2) for those channels.\n\n### Fix\nIn each channels inbound message handler, call captureT0(platformTimestamp) and captureInboundTimings().\n\n### Acceptance Criteria\n- All channels capture T0 from platform timestamps (Telegram and A2A need adding)\n- All channels call captureInboundTimings() in message handlers\n- Inbound latency (T0→T2) visible in event metadata\n- make check green\n\n## YOUR TASK\n1. First run /council to analyze this issue — get architectural review and recommendations\n2. Then run /wish to generate a structured wish plan file with scope, acceptance criteria, and execution groups\n3. You are DONE when the wish file is written to disk",
+      "createdAt": "2026-03-11T05:11:06.138Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T05:11:06.141Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T05:11:06.141Z"
+}

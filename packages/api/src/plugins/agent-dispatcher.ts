@@ -68,6 +68,7 @@ import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import {
@@ -80,6 +81,7 @@ import {
 } from '../services/agent-runner';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
+import { publishTurnOpen } from '../services/turn-events';
 import { getPlugin } from './loader';
 import {
   type BufferedMessage,
@@ -87,9 +89,18 @@ import {
   type DispatchMetadata,
   MessageDebouncer,
 } from './message-debouncer';
+import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
+
+/**
+ * Test-only DI hook for NatsGenieProvider constructor. In production this is
+ * always the real class imported above. Tests can override via __test__ to
+ * avoid `mock.module('@omni/core')` which poisons the barrel-resolved module
+ * cache and contaminates nats-genie-provider.test.ts (Bun test-ordering flake).
+ */
+let _natsGenieProviderCtor: typeof NatsGenieProvider | null = NatsGenieProvider;
 
 /** Maximum characters to include when quoting a replied-to message. */
 const QUOTED_MESSAGE_MAX_CHARS = 4000;
@@ -139,62 +150,6 @@ interface DispatchFields {
 
 /** Instance extended with transient dispatch fields for in-process agent resolution. */
 type DispatchInstance = Instance & DispatchFields;
-
-// ============================================================================
-// Rate Limiter
-// ============================================================================
-
-/** Default rate limit: 5 triggers per 60-second window */
-const DEFAULT_RATE_LIMIT = 5;
-const DEFAULT_RATE_WINDOW_MS = 60_000;
-
-class RateLimiter {
-  /** Map of "userId:channelType:instanceId" → timestamps[] */
-  private counters: Map<string, number[]> = new Map();
-  private readonly windowMs: number;
-
-  constructor(windowMs = DEFAULT_RATE_WINDOW_MS) {
-    this.windowMs = windowMs;
-  }
-
-  /**
-   * Check if a trigger is allowed (under rate limit)
-   */
-  isAllowed(userId: string, channelType: string, instanceId: string, maxPerMinute: number): boolean {
-    const key = `${userId}:${channelType}:${instanceId}`;
-    const now = Date.now();
-
-    // Get or create counter
-    let timestamps = this.counters.get(key) ?? [];
-
-    // Remove expired entries
-    timestamps = timestamps.filter((ts) => now - ts < this.windowMs);
-
-    if (timestamps.length >= maxPerMinute) {
-      log.debug('Rate limit exceeded', { key, count: timestamps.length, limit: maxPerMinute });
-      return false;
-    }
-
-    timestamps.push(now);
-    this.counters.set(key, timestamps);
-    return true;
-  }
-
-  /**
-   * Clean up expired entries periodically
-   */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamps] of this.counters.entries()) {
-      const active = timestamps.filter((ts) => now - ts < this.windowMs);
-      if (active.length === 0) {
-        this.counters.delete(key);
-      } else {
-        this.counters.set(key, active);
-      }
-    }
-  }
-}
 
 // ============================================================================
 // Reaction Dedup
@@ -1347,6 +1302,14 @@ function buildMessageTrigger(
   allContextMessages: string[],
 ): AgentTrigger {
   const threadId = extractThreadId(messages);
+  // Instance-scoped env that any provider/bridge path should see, regardless
+  // of turn-based vs fire-and-forget. The turn-based helper layers
+  // OMNI_TURN_ID on top after opening the turn; that extension merges with
+  // whatever we set here, never replaces it.
+  const env: Record<string, string> = {};
+  if (instance.bridgeTmuxSession) {
+    env.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
+  }
   return {
     traceId,
     type: triggerType,
@@ -1370,6 +1333,7 @@ function buildMessageTrigger(
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
+    env: Object.keys(env).length > 0 ? env : undefined,
   };
 }
 
@@ -1657,6 +1621,116 @@ async function forwardToChainedInstance(
 }
 
 /**
+ * Handle turn-based dispatch: open turn, set context, inject env vars, fire trigger.
+ * Extracted from dispatchViaProvider to keep cognitive complexity within limits.
+ */
+async function dispatchViaTurnBasedProvider(
+  services: Services,
+  instance: DispatchInstance,
+  provider: IAgentProvider,
+  trigger: AgentTrigger,
+  messages: BufferedMessage[],
+  chatId: string,
+  traceId: string,
+  db: Database,
+): Promise<boolean> {
+  const messageId = messages[0]?.payload.externalId ?? '';
+
+  // Look up agent record for scoped key name
+  let agentRecord: { id: string; name: string } | undefined;
+  if (instance.agentId) {
+    const [row] = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(eq(agents.id, instance.agentId))
+      .limit(1);
+    agentRecord = row;
+  }
+  if (!agentRecord) {
+    log.error('Turn-based dispatch: agent not found', { instanceId: instance.id, agentId: instance.agentId });
+    return false;
+  }
+
+  // Find the scoped API key (provisioned on agent-instance assignment)
+  const keyName = `agent:${agentRecord.name}`;
+  const scopedKey = await services.apiKeys.findByName(keyName);
+  if (!scopedKey) {
+    log.error('Turn-based dispatch: scoped API key not found', { keyName, instanceId: instance.id });
+    return false;
+  }
+
+  // Open turn (turns.chat_id is text, accepts external JID)
+  const turn = await services.turns.open({
+    instanceId: instance.id,
+    chatId,
+    messageId,
+    agentId: agentRecord.id,
+    apiKeyId: scopedKey.id,
+  });
+
+  // Resolve internal UUIDs for the API key context columns (uuid types).
+  // chatId is an external JID (e.g. "54958418317348@lid") and messageId is an
+  // external WhatsApp ID (e.g. "3BB06F44A03A3AE78E5B") — neither is a valid UUID.
+  // The api_keys context columns are uuid-typed, so we must resolve to internal IDs.
+  const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const contextChatId = contextChat?.id ?? null;
+  const contextMsg =
+    contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null;
+
+  // Set context on the scoped key so verb commands resolve to this chat
+  await services.apiKeys.update(scopedKey.id, {
+    contextInstanceId: instance.id,
+    contextChatId,
+    contextMessageId: contextMsg?.id ?? null,
+  });
+
+  // Publish turn.open NATS event
+  publishTurnOpen(instance.id, chatId, {
+    turnId: turn.id,
+    messageId,
+    agentId: agentRecord.id,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Inject turn-based env vars. OMNI_TURN_ID lets the agent close the correct
+  // turn via POST /v2/turns/close. Instance-scoped env keys (e.g.
+  // GENIE_TMUX_SESSION for per-instance tmux routing) are populated by
+  // buildMessageTrigger already — merge instead of replace so both layers
+  // reach the bridge.
+  trigger.env = {
+    ...(trigger.env ?? {}),
+    OMNI_INSTANCE: instance.id,
+    OMNI_CHAT: chatId,
+    OMNI_MESSAGE: messageId,
+    OMNI_TURN_ID: turn.id,
+  };
+
+  // Dispatch (fire-and-forget — agent uses verb commands + omni done)
+  const dispatchStart = Date.now();
+  await provider.trigger(trigger);
+  const dispatchDurationMs = Date.now() - dispatchStart;
+
+  if (sentryEnabled()) {
+    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema, mode: 'turn-based' } });
+    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+      unit: 'millisecond',
+      attributes: { provider_type: provider.schema, mode: 'turn-based' },
+    });
+  }
+
+  log.info('Turn-based dispatch: turn opened', {
+    turnId: turn.id,
+    instanceId: instance.id,
+    chatId,
+    agentId: agentRecord.id,
+    providerId: provider.id,
+    traceId,
+  });
+
+  return true;
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -1730,6 +1804,12 @@ async function dispatchViaProvider(
     allContextMessages,
   );
 
+  // ── Turn-based mode: delegate to extracted helper ──
+  if (provider.mode === 'turn-based') {
+    return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
+  }
+
+  // ── Standard (round-trip / fire-and-forget) dispatch ──
   const correlationId = messages[0]?.metadata.correlationId;
   const dispatchStart = Date.now();
   const result = await provider.trigger(trigger);
@@ -1744,7 +1824,12 @@ async function dispatchViaProvider(
     });
   }
 
-  if (result && result.parts.length > 0) {
+  // If the agent triggered a handoff during this run (agentPaused: true),
+  // suppress the response — the handoff message already notified the user.
+  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+
+  if (result && result.parts.length > 0 && !handoffTriggered) {
     const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
     const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
     // Apply before_message_write hooks to each response part before sending
@@ -1772,6 +1857,11 @@ async function dispatchViaProvider(
 
     // T10: Agent chaining — forward response to chained instance if configured
     await forwardToChainedInstance(instance, parts, correlationId, messages);
+  } else if (handoffTriggered) {
+    log.info('Agent response suppressed — handoff triggered during run', {
+      instanceId: instance.id,
+      chatId,
+    });
   }
 
   log.info('Agent response via IAgentProvider', {
@@ -2441,7 +2531,7 @@ async function processAgentResponse(
 
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
-  const channel = (firstMessage.metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (firstMessage.metadata.channelType ?? instance.channel) as ChannelType;
   const traceId = firstMessage.metadata.traceId ?? '';
 
   // ── Reaction Ack (pre-processing, fire-and-forget) ──
@@ -2466,11 +2556,43 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
+  // Also drop messages received before the agent was last resumed (NATS redelivery
+  // of pre-handoff messages that queue up while agentPaused=true).
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
+  const isAgentPaused = chatSettings?.agentPaused === true;
+  if (isAgentPaused) {
+    log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
+    ackHandle.remove();
+    return;
+  }
+  // Drop messages older than agentResumedAt — these are NATS redeliveries of
+  // messages that arrived during the handoff window and should not be processed.
+  if (chatSettings?.agentResumedAt) {
+    const resumedAt = new Date(chatSettings.agentResumedAt).getTime();
+    const msgTimestamp = extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()).getTime();
+    if (msgTimestamp < resumedAt) {
+      log.debug('Dropping pre-resume message (arrived during handoff window)', {
+        instanceId: instance.id,
+        chatId,
+        msgTimestamp: new Date(msgTimestamp).toISOString(),
+        resumedAt: chatSettings.agentResumedAt,
+      });
+      ackHandle.remove();
+      return;
+    }
+  }
+
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
-  const pushName = (rawPayload.pushName as string) ?? (rawPayload.displayName as string);
+  const pushName =
+    (rawPayload.pushName as string | undefined) ??
+    (rawPayload.displayName as string | undefined) ??
+    (rawPayload.senderobj as { display?: string } | undefined)?.display ??
+    (rawPayload.contextobj as { senderName?: string } | undefined)?.senderName;
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
@@ -2546,6 +2668,29 @@ const providerCache = new Map<string, IAgentProvider>();
 /** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
 const openclawClientPool = new Map<string, OpenClawClient>();
 
+/**
+ * Pick the first non-empty agentId from instance → provider schemaConfig.
+ * Throws when neither is set so downstream code never hits upstream APIs
+ * with the literal string "default". The previous silent fallback could
+ * mask a mis-seeded instance as 404s on the upstream provider.
+ */
+function resolveRequiredAgentId(
+  instance: DispatchInstance,
+  schemaConfig: Record<string, unknown>,
+  providerId: string,
+  fieldName: 'agentId' | 'defaultAgentId' = 'agentId',
+): string {
+  const fromInstance = instance.agentInternalId;
+  const fromSchema = schemaConfig[fieldName];
+  const resolved = (fromInstance ?? fromSchema) as string | undefined | null;
+  if (!resolved || typeof resolved !== 'string' || resolved.trim() === '') {
+    throw new Error(
+      `agent-dispatcher: cannot resolve agentId for provider ${providerId} (instance.agentInternalId and schemaConfig.${fieldName} are both empty)`,
+    );
+  }
+  return resolved;
+}
+
 /** Create an OpenClaw-based agent provider */
 function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
   // DEC-3: Reuse shared WS client per provider ID
@@ -2579,7 +2724,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
-    defaultAgentId: (instance.agentInternalId ?? (schemaConfig.defaultAgentId as string) ?? 'default') as string,
+    defaultAgentId: resolveRequiredAgentId(instance, schemaConfig, provider.id, 'defaultAgentId'),
     agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2605,7 +2750,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
 
   return new AgnoAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -2693,7 +2838,7 @@ function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchI
   });
 
   return new AgUiAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2716,7 +2861,7 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
   });
 
   return new A2AAgentProvider(provider.id, provider.name, client, {
-    agentId: (instance.agentInternalId ?? schemaConfig.agentId ?? 'default') as string,
+    agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
@@ -2736,13 +2881,63 @@ function createNatsGenieProviderInstance(provider: AgentProvider, instance: Disp
   }
 
   const natsUrl = typeof schemaConfig.natsUrl === 'string' ? schemaConfig.natsUrl : 'localhost:4222';
+  const providerMode = schemaConfig.mode === 'turn-based' ? ('turn-based' as const) : ('fire-and-forget' as const);
+  const channel = instance.channel as ChannelType;
 
-  return new NatsGenieProvider(provider.id, provider.name, {
+  // biome-ignore lint/style/noNonNullAssertion: test-only DI hook, always NatsGenieProvider in production
+  const Ctor = _natsGenieProviderCtor!;
+  const natsProvider = new Ctor(provider.id, provider.name, {
     agentName,
     natsUrl,
     instanceId: instance.id,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
+    mode: providerMode,
+    onReply: async (chatId, content, metadata) => {
+      try {
+        await sendTextMessage(channel, instance.id, chatId, content);
+      } catch (error) {
+        log.error('Failed to deliver agent reply', {
+          chatId,
+          instanceId: instance.id,
+          providerId: provider.id,
+          agent: (metadata as Record<string, unknown>)?.agent,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
   });
+
+  // Fire subscription as a side effect — do not block provider resolution.
+  // providerCache below caches by `${provider.id}:${instance.id}`, so this
+  // only runs once per (provider, instance) pair.
+  // Retries with exponential backoff (2s → 4s → 8s → … → 60s cap, max 10 attempts).
+  const startWithRetry = async (attempt = 1): Promise<void> => {
+    try {
+      await natsProvider.startReplySubscription();
+      log.info('NATS reply subscription started', { instanceId: instance.id, attempt });
+    } catch (err) {
+      const delay = Math.min(2000 * 2 ** (attempt - 1), 60_000);
+      if (attempt < 10) {
+        log.warn('NATS reply subscription failed, retrying', {
+          instanceId: instance.id,
+          providerId: provider.id,
+          attempt,
+          nextRetryMs: delay,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        setTimeout(() => startWithRetry(attempt + 1), delay);
+      } else {
+        log.error('NATS reply subscription permanently failed', {
+          instanceId: instance.id,
+          providerId: provider.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  };
+  startWithRetry();
+
+  return natsProvider;
 }
 
 /**
@@ -2799,6 +2994,45 @@ export function resolveProvider(
 }
 
 /**
+ * Invalidate cached IAgentProvider instances for a specific provider.
+ *
+ * Call after provider schemaConfig / baseUrl / apiKey updates so the next
+ * dispatch rebuilds from fresh DB state instead of returning the stale
+ * cached instance. Also stops and removes the shared OpenClaw WS client
+ * for this provider since connection-level config may have changed.
+ */
+export function invalidateProviderCache(providerId: string): void {
+  const prefix = `${providerId}:`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  const openclawClient = openclawClientPool.get(providerId);
+  if (openclawClient) {
+    try {
+      openclawClient.stop();
+    } catch (err) {
+      log.warn('Error stopping OpenClaw client on cache invalidation', {
+        providerId,
+        error: String(err),
+      });
+    }
+    openclawClientPool.delete(providerId);
+  }
+
+  log.debug('Provider cache invalidated', { providerId, removed });
+}
+
+/**
  * Look up provider from DB and resolve to IAgentProvider.
  * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */
@@ -2838,6 +3072,7 @@ async function applyAgentFkOverrides(
   const [agentRow] = await db
     .select({
       id: agents.id,
+      name: agents.name,
       agentProviderId: agents.agentProviderId,
       agentType: agents.agentType,
       metadata: agents.metadata,
@@ -2856,8 +3091,11 @@ async function applyAgentFkOverrides(
   const typeMap: Record<string, string> = { assistant: 'agent', tool: 'agent', workflow: 'workflow', team: 'team' };
   effectiveInstance.agentType = (typeMap[agentRow.agentType] ??
     effectiveInstance.agentType) as DispatchFields['agentType'];
-  // Provider-internal agent name from metadata or configPath
-  const providerAgentId = (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath;
+  // Provider-internal agent name from metadata, configPath, or agent name as last resort.
+  // agent.name is used as fallback because for agno providers it typically matches
+  // the agentId registered in the provider (e.g. "eugenia-seller").
+  const providerAgentId =
+    (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath ?? agentRow.name;
   if (providerAgentId) effectiveInstance.agentInternalId = providerAgentId as string;
 }
 
@@ -2977,12 +3215,15 @@ async function processReactionTrigger(
   rawEvent: AgentTrigger['event'],
   db: Database,
 ): Promise<void> {
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const channel = (metadata.channelType ?? baseInstance.channel) as ChannelType;
   const externalChatId = payload.chatId;
 
   // Look up internal chat UUID for route resolution
   const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
   const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
+
+  // Resolve person ID for route matching (metadata.personId may not be set yet)
+  const reactionPersonId = await resolvePersonId(services, channel, baseInstance.id, payload.from, metadata.personId);
 
   // Resolve agent route and merge with instance defaults
   const { instance, routeId: _routeId } = await resolveEffectiveInstance(
@@ -2990,7 +3231,7 @@ async function processReactionTrigger(
     db,
     baseInstance,
     internalChatId,
-    metadata.personId,
+    reactionPersonId,
   );
 
   log.info('Dispatching reaction trigger', {
@@ -3010,7 +3251,8 @@ async function processReactionTrigger(
 
     if (provider) {
       // Build AgentTrigger for the provider
-      const senderName = await services.agentRunner.getSenderName(metadata.personId, undefined);
+      const effectivePersonId = reactionPersonId ?? metadata.personId;
+      const senderName = await services.agentRunner.getSenderName(effectivePersonId, undefined);
       const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
 
       const trigger: AgentTrigger = {
@@ -3025,7 +3267,7 @@ async function processReactionTrigger(
         },
         sender: {
           platformUserId: payload.from,
-          personId: metadata.personId,
+          personId: effectivePersonId,
           displayName: senderName,
         },
         content: {
@@ -3257,6 +3499,10 @@ async function resolveEffectiveReplyFilter(
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
+// Tracks instances we've already logged a "no reply filter configured" warning for,
+// so operators see the notice once per process lifetime instead of per message.
+const nullFilterWarnedInstances = new Set<string>();
+
 /** Slack: resolve isReplyToBot by checking if the bot has sent a message in this thread */
 async function resolveSlackThreadReply(
   chatsService: Services['chats'],
@@ -3283,13 +3529,35 @@ function needsLidMentionCheck(messageContext: MessageContext, instance: Instance
   return !messageContext.mentionsBot && !messageContext.isDirectMessage && !!instance.ownerIdentifier;
 }
 
+/**
+ * True when the inbound message's platform-native timestamp
+ * (e.g. WhatsApp `messageTimestamp`) is older than `maxAgeMinutes`.
+ *
+ * Exported so unit tests can exercise the threshold boundary without
+ * wiring up the full dispatcher pipeline. `maxAgeMinutes <= 0` disables
+ * the guard entirely (useful for instances that genuinely want to replay
+ * backlog after a long outage).
+ */
+export function isInboundTooStale(
+  rawPayload: Record<string, unknown> | undefined,
+  maxAgeMinutes: number,
+  now: number = Date.now(),
+): { stale: boolean; ageMs: number; maxAgeMs: number } {
+  const maxAgeMs = maxAgeMinutes * 60_000;
+  if (maxAgeMinutes <= 0) {
+    return { stale: false, ageMs: 0, maxAgeMs };
+  }
+  const platformTs = extractPlatformTimestamp(rawPayload, now);
+  const ageMs = now - platformTs.getTime();
+  return { stale: ageMs > maxAgeMs, ageMs, maxAgeMs };
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
-  rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3324,10 +3592,33 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Drop events whose platform-native timestamp is older than the instance's
+  // configured threshold. Defends against Baileys history-sync replays and
+  // NATS redelivery resurrecting stale conversations after reconnect/restart.
+  const staleness = isInboundTooStale(payload.rawPayload, instance.inboundMaxAgeMinutes);
+  if (staleness.stale) {
+    log.warn('Dropping stale inbound message', {
+      instanceId: instance.id,
+      chatId: payload.chatId,
+      externalId: payload.externalId,
+      ageMs: staleness.ageMs,
+      maxAgeMs: staleness.maxAgeMs,
+      maxAgeMinutes: instance.inboundMaxAgeMinutes,
+    });
+    return null;
+  }
+
   if (!instanceTriggersOnEvent(instance, 'message.received')) {
     log.debug('Instance does not trigger on message.received', { instanceId: instance.id });
     return null;
   }
+
+  // Layer 3 JID self-filter removed (#344). It was intended to block bot reaction
+  // echoes (#336) but was dead code for that purpose: reaction dual-emits with
+  // isFromMe=true are already blocked at the plugin level (layer 1: !isFromMe check
+  // in handleReactionReceived) and by the sentMessageIds cache (layer 2). The filter
+  // only caught legitimate owner phone messages (multi-device sync), dropping them
+  // silently. See https://github.com/automagik-dev/omni/issues/344.
 
   const messageContext = buildMessageContext(payload, instance);
   const rawPayloadWithMentions = payload.rawPayload as Record<string, unknown> | undefined;
@@ -3365,8 +3656,18 @@ async function shouldProcessMessage(
     instance.agentReplyFilter,
   );
 
+  // #371: null filter now means "allow all" instead of silently dropping every
+  // message. Surface a one-time warning so operators know they're running without
+  // explicit gating and can configure a filter if that's not what they want.
+  if (!effectiveReplyFilter && !nullFilterWarnedInstances.has(instance.id)) {
+    nullFilterWarnedInstances.add(instance.id);
+    log.warn('instance has no agent_reply_filter configured — allowing all inbound messages', {
+      instanceId: instance.id,
+    });
+  }
+
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
-    log.debug('Message did not pass reply filter', {
+    log.info('Message did not pass reply filter', {
       instanceId: instance.id,
       chatId: payload.chatId,
       messageContext,
@@ -3375,12 +3676,11 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
-    return null;
-  }
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
+
+  // #384: Rate limiting is deferred to the debounced flush so fast-typed
+  // messages still reach the debounce buffer. Counting per-inbound-message
+  // silently dropped mid-thought messages and corrupted the agent context.
 
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
   if (accessDenied) return null;
@@ -3466,7 +3766,6 @@ async function checkAccessWithFallback(
 async function shouldProcessReaction(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
-  rateLimiter: RateLimiter,
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
@@ -3484,12 +3783,7 @@ async function shouldProcessReaction(
     return null;
   }
 
-  const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
-    return null;
-  }
+  const channel = (metadata.channelType ?? instance.channel) as ChannelType;
 
   // Access check for reactions (reuses LID fallback logic)
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
@@ -3642,7 +3936,7 @@ async function shouldSkipViaGate(
   if (triggerType === 'mention' || triggerType === 'reply') return false;
   const chatType = determineChatType(
     firstMsg.payload.chatId,
-    firstMsg.metadata.channelType ?? 'whatsapp',
+    firstMsg.metadata.channelType ?? instance.channel,
     (firstMsg.payload.rawPayload ?? {}) as Record<string, unknown>,
   );
   const shouldRespond = await shouldRespondViaGate(instance, messages, chatType, services.settings);
@@ -3669,11 +3963,7 @@ export async function setupAgentDispatcher(
 ): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
-  const rateLimiter = new RateLimiter();
   const reactionDedup = new ReactionDedup();
-
-  // Periodic cleanup of rate limiter counters
-  const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
   // Periodic cleanup of leaked media promises (10min circuit breaker)
   const mediaCleanupInterval = setInterval(() => {
@@ -3719,6 +4009,11 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
+    // #384: No inbound rate limiter. The debouncer already collapses conversational
+    // bursts into a single trigger — capping inbound volume on top of that silently
+    // dropped real user messages and corrupted agent context. Accept any burst size;
+    // the debouncer is the single source of burst control for message triggers.
+
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
       const tracker = getJourneyTracker();
@@ -3738,80 +4033,99 @@ export async function setupAgentDispatcher(
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessMessage(
-            agentRunner,
-            accessService,
-            services.chats,
-            services.messages,
-            services.routeResolver,
-            rateLimiter,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
-
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
-
-          // Early route resolution: resolve route BEFORE debounce so per-user
-          // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
-          const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
-          const { instance: resolved, routeId } = await resolveEffectiveInstance(
-            services,
-            db,
-            instance,
-            chat?.id,
-            metadata.personId,
-          );
-
-          const debounceConfig = getDebounceConfig(resolved);
-
-          // Group chats (WhatsApp: @g.us) can use a different debounce window.
-          // If configured, use groupMs instead of minMs for the timer delay.
-          const isGroupChat = payload.chatId.includes('@g.us');
-          const effectiveDebounceConfig: DebounceConfig =
-            isGroupChat && debounceConfig.groupMs != null
-              ? {
-                  ...debounceConfig,
-                  minMs: debounceConfig.groupMs,
-                  // Safety: keep randomized ranges non-negative if maxMs < groupMs
-                  maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
-                }
-              : debounceConfig;
-
-          debouncer.buffer(
-            instance.id,
-            payload.chatId,
-            {
+        // Idempotency guard (#411): NATS at-least-once + PM2 SIGKILL caused
+        // the same message.received to be re-buffered, producing duplicate
+        // agent dispatches on the customer side.
+        await withIdempotency(db, event.id, 'agent-dispatcher-msg', async () => {
+          try {
+            const instance = await shouldProcessMessage(
+              agentRunner,
+              accessService,
+              services.chats,
+              services.messages,
+              services.routeResolver,
               payload,
-              metadata: {
-                instanceId: instance.id,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-                traceId,
-                correlationId: metadata.correlationId,
-                journeyTracked: metadata.timings != null,
-                resolvedInstance: resolved,
-                routeId,
+              metadata,
+            );
+            if (!instance) return;
+
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
+
+            // Early route resolution: resolve route BEFORE debounce so per-user
+            // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
+            const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+
+            // Resolve person ID for route matching. metadata.personId may not be set yet
+            // (message-persistence runs in parallel), so fall back to identity lookup.
+            const channel = (metadata.channelType ?? instance.channel) as ChannelType;
+            const earlyPersonId = await resolvePersonId(
+              services,
+              channel,
+              instance.id,
+              payload.from,
+              metadata.personId,
+            );
+
+            const { instance: resolved, routeId } = await resolveEffectiveInstance(
+              services,
+              db,
+              instance,
+              chat?.id,
+              earlyPersonId,
+            );
+
+            const debounceConfig = getDebounceConfig(resolved);
+
+            // Group chats (WhatsApp: @g.us) can use a different debounce window.
+            // If configured, use groupMs instead of minMs for the timer delay.
+            const isGroupChat = payload.chatId.includes('@g.us');
+            const effectiveDebounceConfig: DebounceConfig =
+              isGroupChat && debounceConfig.groupMs != null
+                ? {
+                    ...debounceConfig,
+                    minMs: debounceConfig.groupMs,
+                    // Safety: keep randomized ranges non-negative if maxMs < groupMs
+                    maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
+                  }
+                : debounceConfig;
+
+            debouncer.buffer(
+              instance.id,
+              payload.chatId,
+              {
+                payload,
+                metadata: {
+                  instanceId: instance.id,
+                  channelType: metadata.channelType,
+                  personId: metadata.personId,
+                  platformIdentityId: metadata.platformIdentityId,
+                  traceId,
+                  correlationId: metadata.correlationId,
+                  journeyTracked: metadata.timings != null,
+                  resolvedInstance: resolved,
+                  routeId,
+                },
+                timestamp: event.timestamp,
               },
-              timestamp: event.timestamp,
-            },
-            effectiveDebounceConfig,
-          );
-        } catch (error) {
-          log.error('Error processing message for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+              effectiveDebounceConfig,
+            );
+          } catch (error) {
+            log.error('Error processing message for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-msg',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411. For an existing durable this is
+        // ignored (last-ack position wins); for a recreated durable it
+        // prevents arbitrary-time replay of an old event.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -3825,46 +4139,44 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
+        // Idempotency guard (#411): replay would re-dispatch the agent turn
+        // for the same reaction event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction', async () => {
+          try {
+            const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -3878,47 +4190,50 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-            'reaction.removed',
-          );
-          if (!instance) return;
+        // Idempotency guard (#411).
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction-removed', async () => {
+          try {
+            const instance = await shouldProcessReaction(
+              agentRunner,
+              accessService,
+              reactionDedup,
+              payload,
+              metadata,
+              'reaction.removed',
+            );
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction removal for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction removal for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction-removed',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -3934,33 +4249,40 @@ export async function setupAgentDispatcher(
 
         if (!metadata.instanceId) return;
 
-        try {
-          const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!baseInstance?.agentId) return;
+        // Idempotency guard (#411): replay would re-restart the debounce
+        // timer on a stale typing event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-typing', async () => {
+          try {
+            const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            if (!baseInstance?.agentId) return;
 
-          // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
-          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          const { instance: resolved } = await resolveEffectiveInstance(
-            services,
-            db,
-            baseInstance,
-            chat?.id,
-            metadata.personId,
-          );
+            // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+            // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
+            const chat = await services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId);
+            const typingPersonId = metadata.personId;
+            const { instance: resolved } = await resolveEffectiveInstance(
+              services,
+              db,
+              baseInstance,
+              chat?.id,
+              typingPersonId,
+            );
 
-          const debounceConfig = getDebounceConfig(resolved);
-          if (debounceConfig.restartOnTyping) {
-            debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
+            const debounceConfig = getDebounceConfig(resolved);
+            if (debounceConfig.restartOnTyping) {
+              debouncer.onUserTyping(metadata.instanceId as string, payload.chatId, debounceConfig);
+            }
+          } catch (error) {
+            log.debug('Error handling typing event', { error: String(error) });
           }
-        } catch (error) {
-          log.debug('Error handling typing event', { error: String(error) });
-        }
+        });
       },
       {
         durable: 'agent-dispatcher-typing',
         queue: 'agent-dispatcher',
         maxRetries: 1,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 10,
       },
     );
@@ -3971,20 +4293,25 @@ export async function setupAgentDispatcher(
     await eventBus.subscribe(
       'media.processed',
       async (event) => {
-        const payload = event.payload as MediaProcessedPayload;
-        const { mediaId, content, error } = payload;
+        // Idempotency guard (#411): replay would re-cache stale media or
+        // resolve a stale promise. The in-memory state already TTLs cleanly
+        // but the durable replay still pollutes the cache for 5min.
+        await withIdempotency(db, event.id, 'agent-dispatcher-media', async () => {
+          const payload = event.payload as MediaProcessedPayload;
+          const { mediaId, content, error } = payload;
 
-        // If dispatcher is already waiting → resolve the promise
-        const pending = mediaCompletions.get(mediaId);
-        if (pending) {
-          pending.resolve({ content, error });
-          mediaCompletions.delete(mediaId);
-          return;
-        }
+          // If dispatcher is already waiting → resolve the promise
+          const pending = mediaCompletions.get(mediaId);
+          if (pending) {
+            pending.resolve({ content, error });
+            mediaCompletions.delete(mediaId);
+            return;
+          }
 
-        // If dispatcher hasn't asked yet → cache the result (TTL 5min)
-        mediaResultCache.set(mediaId, { content, error });
-        setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+          // If dispatcher hasn't asked yet → cache the result (TTL 5min)
+          mediaResultCache.set(mediaId, { content, error });
+          setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+        });
       },
       {
         durable: 'agent-dispatcher-media',
@@ -3996,7 +4323,6 @@ export async function setupAgentDispatcher(
     log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
@@ -4005,7 +4331,6 @@ export async function setupAgentDispatcher(
   // Return cleanup function for graceful shutdown
   return async () => {
     log.info('Shutting down agent dispatcher');
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
 
@@ -4085,4 +4410,13 @@ export const __test__ = {
   MEDIA_WAIT_NULL,
   mergeRouteOverrides,
   getDebounceConfig,
+  createNatsGenieProviderInstance,
+  /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */
+  set NatsGenieProviderClass(cls: typeof NatsGenieProvider) {
+    _natsGenieProviderCtor = cls;
+  },
+  /** Reset to the real NatsGenieProvider (call in afterEach). */
+  resetNatsGenieProviderClass() {
+    _natsGenieProviderCtor = NatsGenieProvider;
+  },
 };

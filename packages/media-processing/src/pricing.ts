@@ -196,7 +196,7 @@ export function calculateCost(
     }
   }
 
-  // Return cost in fractional cents (NOT rounded) for sub-cent precision.
-  // Callers accumulate float values; only round at final persistence/display.
+  // Return cost in fractional cents for sub-cent precision.
+  // Callers that persist to integer DB columns must round before insert.
   return costUsd * 100;
 }

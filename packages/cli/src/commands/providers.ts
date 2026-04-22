@@ -6,7 +6,7 @@
  * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
  *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
  *   OpenClaw: --default-agent-id <id>
- *   Genie: --agent-name <name> --target-agent <name> [--team-name <template>]
+ *   nats-genie: --agent-name <name> --target-agent <name> [--team-name <template>]
  * omni providers update <id> [--name <name>] [--base-url <url>] [--api-key <key>] [--schema-config <json>]
  * omni providers setup openclaw --gateway-url <url> --gateway-token <token> --agent-id <id>
  * omni providers agents <id>
@@ -20,6 +20,7 @@ import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveProviderId } from '../resolve.js';
 import { createSetupCommand } from './providers-setup.js';
 
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
@@ -61,8 +62,8 @@ function validateCreateOptions(options: {
   if (options.schema === 'claude-code' && !options.projectPath) {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
   }
-  if (options.schema === 'genie' && (!options.agentName || !options.targetAgent)) {
-    return 'Genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Genie" --schema genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
+  if (options.schema === 'nats-genie' && (!options.agentName || !options.targetAgent)) {
+    return 'nats-genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Nats Genie" --schema nats-genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
   }
   return null;
 }
@@ -98,6 +99,8 @@ function buildClaudeCodeConfig(options: SchemaConfigOptions): Record<string, unk
 function buildNatsGenieConfig(options: SchemaConfigOptions): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   if (options.agentName) config.agentName = options.agentName;
+  if (options.targetAgent) config.targetAgent = options.targetAgent;
+  if (options.teamName) config.teamName = options.teamName;
   return config;
 }
 
@@ -209,9 +212,10 @@ async function handleList(options: { active?: boolean }): Promise<void> {
 }
 
 async function handleGet(id: string): Promise<void> {
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    const provider = await client.providers.get(id);
+    const provider = await client.providers.get(resolvedId);
     output.data(provider);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -270,9 +274,10 @@ async function handleCreate(options: {
 }
 
 async function handleTest(id: string): Promise<void> {
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    const result = await client.providers.checkHealth(id);
+    const result = await client.providers.checkHealth(resolvedId);
     if (result.healthy) {
       output.success(`Provider is healthy (latency: ${result.latency}ms)`);
     } else {
@@ -297,17 +302,18 @@ async function handleUpdate(id: string, options: Record<string, unknown>): Promi
     return;
   }
 
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
     // If updating individual schemaConfig fields (not raw --schema-config JSON),
     // merge with the existing config to avoid dropping required fields.
     if (body.schemaConfig && !options.schemaConfig) {
-      const existing = await client.providers.get(id);
+      const existing = await client.providers.get(resolvedId);
       const existingConfig = (existing.schemaConfig as Record<string, unknown>) ?? {};
       body.schemaConfig = { ...existingConfig, ...(body.schemaConfig as Record<string, unknown>) };
     }
 
-    const provider = await client.providers.update(id, body);
+    const provider = await client.providers.update(resolvedId, body);
     output.success(`Updated provider: ${provider.id}`);
     output.data(provider);
   } catch (err) {
@@ -321,10 +327,11 @@ async function handleDelete(id: string, options: { force?: boolean }): Promise<v
     output.warn(`This will delete provider ${id}. Use --force to confirm.`);
     return;
   }
+  const resolvedId = await resolveProviderId(id);
   const client = getClient();
   try {
-    await client.providers.delete(id);
-    output.success(`Deleted provider: ${id}`);
+    await client.providers.delete(resolvedId);
+    output.success(`Deleted provider: ${resolvedId}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     output.error(`Failed to delete provider: ${message}`);
@@ -366,12 +373,12 @@ export function createProvidersCommand(): Command {
     .option('--permission-mode <mode>', 'Permission mode: default, acceptEdits, bypassPermissions, plan (claude-code)')
     .option('--model <model>', 'Model override (claude-code)')
     .option('--system-prompt <prompt>', 'System prompt prepended to agent (claude-code)')
-    // Genie options
-    .option('--agent-name <name>', 'Agent identity / "from" field (required for genie)')
-    .option('--target-agent <name>', 'Target agent inbox to deliver to (required for genie)')
+    // nats-genie options
+    .option('--agent-name <name>', 'Agent identity / "from" field (required for nats-genie)')
+    .option('--target-agent <name>', 'Target agent inbox to deliver to (required for nats-genie)')
     .option(
       '--team-name <template>',
-      'Team name template, supports {chat_id}, {thread_id}, {sender_id} (genie, default: omni-{chat_id})',
+      'Team name template, supports {chat_id}, {thread_id}, {sender_id} (nats-genie, default: omni-{chat_id})',
     )
     .action(handleCreate);
 
@@ -383,10 +390,11 @@ export function createProvidersCommand(): Command {
     .command('agents <id>')
     .description('List agents from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const agents = await client.providers.listAgents(id);
+        const agents = await client.providers.listAgents(resolvedId);
 
         const items = agents.map((a) => ({
           id: a.agent_id,
@@ -407,10 +415,11 @@ export function createProvidersCommand(): Command {
     .command('teams <id>')
     .description('List teams from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const teams = await client.providers.listTeams(id);
+        const teams = await client.providers.listTeams(resolvedId);
 
         const items = teams.map((t) => ({
           id: t.team_id,
@@ -432,10 +441,11 @@ export function createProvidersCommand(): Command {
     .command('workflows <id>')
     .description('List workflows from provider (Agno)')
     .action(async (id: string) => {
+      const resolvedId = await resolveProviderId(id);
       const client = getClient();
 
       try {
-        const workflows = await client.providers.listWorkflows(id);
+        const workflows = await client.providers.listWorkflows(resolvedId);
 
         const items = workflows.map((w) => ({
           id: w.workflow_id,
@@ -463,10 +473,10 @@ export function createProvidersCommand(): Command {
     .option('--no-stream', 'Disable streaming by default')
     .option('--active', 'Set provider active')
     .option('--no-active', 'Set provider inactive')
-    // Schema-specific options (genie)
-    .option('--agent-name <name>', 'Agent identity (genie)')
-    .option('--target-agent <name>', 'Target agent inbox (genie)')
-    .option('--team-name <template>', 'Team name template (genie)')
+    // Schema-specific options (nats-genie)
+    .option('--agent-name <name>', 'Agent identity (nats-genie)')
+    .option('--target-agent <name>', 'Target agent inbox (nats-genie)')
+    .option('--team-name <template>', 'Team name template (nats-genie)')
     // Schema-specific options (claude-code)
     .option('--project-path <path>', 'Project directory path (claude-code)')
     .option('--max-turns <number>', 'Max conversation turns (claude-code)', Number.parseInt)

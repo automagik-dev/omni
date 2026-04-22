@@ -5,6 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 const settingsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -29,11 +30,7 @@ const bulkUpdateSchema = z.object({
 // History query schema
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
 });
 
 /**

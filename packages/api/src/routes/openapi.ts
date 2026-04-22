@@ -42,6 +42,7 @@ import { registerPayloadSchemas } from '../schemas/openapi/payloads';
 import { registerPersonSchemas } from '../schemas/openapi/persons';
 import { registerProviderSchemas } from '../schemas/openapi/providers';
 import { registerSettingsSchemas } from '../schemas/openapi/settings';
+import { registerVoiceSchemas } from '../schemas/openapi/voice';
 import { registerWebhookSchemas } from '../schemas/openapi/webhooks';
 
 // Register all schemas
@@ -67,6 +68,7 @@ registerPayloadSchemas(registry);
 registerJourneySchemas(registry);
 registerConversationSchemas(registry);
 registerFollowUpSchemas(registry);
+registerVoiceSchemas(registry);
 
 const openapiRoutes = new Hono<{ Variables: AppVariables }>();
 

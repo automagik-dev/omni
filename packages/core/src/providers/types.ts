@@ -78,10 +78,18 @@ export interface ProviderRequest {
   files?: ProviderFile[];
   /** Request timeout in milliseconds */
   timeoutMs?: number;
+  /** Dynamic URL params to append to HTTP MCP server URLs (e.g. { chat_id: "123" }) */
+  mcpUrlParams?: Record<string, string>;
+
+  /** Environment variables to expose to provider subprocesses/SDK runtimes. */
+  env?: Record<string, string>;
 }
 
 export interface ProviderFile {
-  path: string;
+  /** Local file path (mutually exclusive with url) */
+  path?: string;
+  /** Remote URL to fetch the file from (mutually exclusive with path) */
+  url?: string;
   mimeType: string;
   filename?: string;
 }
@@ -270,7 +278,7 @@ export interface IAgentProvider {
   readonly id: string;
   readonly name: string;
   readonly schema: ProviderSchema;
-  readonly mode: 'round-trip' | 'fire-and-forget';
+  readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
@@ -339,6 +347,12 @@ export interface AgentTrigger {
    * as soon as possible. Set by the dispatcher when stream-recovery fires on reconnect.
    */
   abortSignal?: AbortSignal;
+  /**
+   * Environment variables for turn-based agents.
+   * Set by the dispatcher when provider.mode is 'turn-based'.
+   * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
+   */
+  env?: Record<string, string>;
 }
 
 /**

@@ -75,6 +75,13 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
 // ============================================================================
 
 /**
+ * Maximum age (ms) for an in-flight 'reconnecting' or 'connecting' state
+ * before the monitor assumes the plugin-level retry loop has silently died
+ * and takes over the reconnect itself (issue #408).
+ */
+const STALE_TRANSITION_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
  * Check if an instance needs reconnection based on its status.
  *
  * IMPORTANT: Do NOT reconnect instances in 'reconnecting' state — the
@@ -82,9 +89,24 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
  * own exponential backoff. Having two systems reconnect the same instance
  * creates duplicate sockets and rapid connect/disconnect churn that
  * WhatsApp interprets as bot activity (leading to temp bans).
+ *
+ * EXCEPTION: If the transition state is older than
+ * STALE_TRANSITION_MAX_AGE_MS, the plugin-side loop has likely died
+ * without transitioning us out. Fall through to reconnect anyway.
  */
-function needsReconnect(state: string): boolean {
-  return state === 'disconnected' || state === 'error';
+function needsReconnect(status: { state: string; since?: Date }): boolean {
+  if (status.state === 'disconnected' || status.state === 'error') {
+    return true;
+  }
+
+  if (status.state === 'reconnecting' || status.state === 'connecting') {
+    const since = status.since instanceof Date ? status.since.getTime() : Number.NaN;
+    if (Number.isFinite(since) && Date.now() - since > STALE_TRANSITION_MAX_AGE_MS) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -116,6 +138,13 @@ function buildInstanceConnectOptions(instance: {
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   profileMetadata?: Record<string, unknown> | null;
+  gupshupApiKey?: string | null;
+  gupshupAppName?: string | null;
+  gupshupSourcePhone?: string | null;
+  gupshupCallbackUrl?: string | null;
+  gupshupAuthToken?: string | null;
+  gupshupEventId?: string | null;
+  webhookVerifyToken?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -127,7 +156,31 @@ function buildInstanceConnectOptions(instance: {
     if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
     applySlackMetadata(options, instance.profileMetadata);
   }
+  if (instance.channel === 'gupshup') {
+    applyGupshupOptions(options, instance);
+  }
   return options;
+}
+
+function applyGupshupOptions(
+  options: Record<string, unknown>,
+  instance: {
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.gupshupCallbackUrl) options.gupshupCallbackUrl = instance.gupshupCallbackUrl;
+  if (instance.gupshupAuthToken) options.gupshupAuthToken = instance.gupshupAuthToken;
+  if (instance.gupshupEventId) options.gupshupEventId = instance.gupshupEventId;
+  if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
+  if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
+  if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 /**
@@ -146,6 +199,13 @@ async function connectInstance(
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
+    webhookVerifyToken?: string | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -312,7 +372,7 @@ export class InstanceMonitor {
     try {
       const status = await plugin.getStatus(instance.id);
 
-      if (needsReconnect(status.state)) {
+      if (needsReconnect(status)) {
         this.handleUnhealthyInstance(instance, status.state, status.message);
       }
     } catch (error) {
@@ -494,6 +554,13 @@ export class InstanceMonitor {
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
+    gupshupApiKey?: string | null;
+    gupshupAppName?: string | null;
+    gupshupSourcePhone?: string | null;
+    gupshupCallbackUrl?: string | null;
+    gupshupAuthToken?: string | null;
+    gupshupEventId?: string | null;
+    webhookVerifyToken?: string | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
     return instance ?? null;

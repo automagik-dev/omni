@@ -15,11 +15,13 @@ import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
 import { chatsRoutes } from './chats';
+import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
 import { eventsRoutes } from './events';
 import { followUpRoutes } from './follow-up';
+import { handoffsRoutes } from './handoffs';
 import { instancesRoutes } from './instances';
 import { journeysRoutes } from './journeys';
 import { keysRoutes } from './keys';
@@ -32,6 +34,8 @@ import { personsRoutes } from './persons';
 import { processedEventsRoutes } from './processed-events';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
+import { turnsRoutes } from './turns';
+import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -59,9 +63,13 @@ v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before ro
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
 v2Routes.route('/keys', keysRoutes); // API key management
+v2Routes.route('/context', contextRoutes); // Conversation context for turn-based agents
+v2Routes.route('/turns', turnsRoutes); // Turn lifecycle for turn-based agents
 v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/payloads and /api/v2/payload-config
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
+v2Routes.route('/voice', voiceRoutes); // Voice session management
 v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404)
+v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs

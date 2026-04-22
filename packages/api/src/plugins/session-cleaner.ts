@@ -12,6 +12,7 @@ import { createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
 import { agents } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { withIdempotency } from '../lib/idempotency';
 import type { Services } from '../services';
 import { computeSessionId } from '../services/agent-runner';
 import { resolveProvider } from './agent-dispatcher';
@@ -54,7 +55,7 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
  * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
  * falls back to direct AgnoOS client for legacy.
  */
-async function clearAgentSession(
+export async function clearAgentSession(
   services: Services,
   db: Database,
   instanceId: string,
@@ -118,7 +119,12 @@ async function clearAgentSession(
  * Set up session cleaner - subscribes to message.received and clears sessions on trash emoji
  */
 /**
- * Handle trash emoji message event
+ * Handle trash emoji message event.
+ *
+ * Idempotency (#411): the actual cleanup work is wrapped in `withIdempotency`
+ * so PM2-restart redeliveries do not re-fire DELETE-session + send-confirmation.
+ * The previous in-memory `Set<externalId>` dedupe only worked within one
+ * process — incident showed duplicates spanning two restarts (26s apart).
  */
 async function handleTrashEmojiMessage(
   services: Services,
@@ -131,12 +137,65 @@ async function handleTrashEmojiMessage(
   if (!instanceId || !content?.text) return;
   if (!isTrashEmojiOnly(content.text)) return;
 
+  const result = await withIdempotency(db, event.id, 'session-cleaner', async () => {
+    await runTrashEmojiCleanup(services, db, instanceId, chatId, from);
+  });
+
+  if (!result.executed) {
+    log.debug('Trash emoji event already processed (NATS redelivery skipped)', {
+      eventId: event.id,
+      instanceId,
+      chatId,
+    });
+  }
+}
+
+async function runTrashEmojiCleanup(
+  services: Services,
+  db: Database,
+  instanceId: string,
+  chatId: string,
+  from: string,
+): Promise<void> {
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
 
   try {
     const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, from, chatId);
 
     log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
+
+    // Disarm any active follow-up sequence — clearing the session means the
+    // user has explicitly reset the conversation; queued follow-ups referencing
+    // the cleared context should not fire.
+    // Also resume agent if paused (handoff active) — trash emoji from dev/QA
+    // is the explicit signal to re-enable the agent and start fresh.
+    try {
+      const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      if (dbChat?.id) {
+        await services.followUpLifecycle.disarm({
+          chatId: dbChat.id,
+          instanceId,
+          reason: 'session_cleared',
+        });
+
+        // Resume agent if handoff had paused it.
+        // Also record agentResumedAt so the dispatcher can drop messages that
+        // arrived before the resume (NATS redelivery of pre-handoff messages).
+        const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+        if (isAgentPaused) {
+          await services.chats.update(dbChat.id, {
+            settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+          });
+          log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
+        }
+      }
+    } catch (disarmError) {
+      log.warn('Failed to disarm follow-up after session clear', {
+        instanceId,
+        chatId,
+        error: String(disarmError),
+      });
+    }
 
     // Send confirmation message
     try {
@@ -181,7 +240,10 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
       queue: 'session-cleaner',
       maxRetries: 2,
       retryDelayMs: 1000,
-      startFrom: 'last',
+      // 'new' (was 'last') — for an existing durable this is a no-op (the
+      // last-ack position wins); for a recreated durable it prevents
+      // arbitrary-time replay of an old side-effect event. See #411.
+      startFrom: 'new',
       concurrency: 5,
     });
 

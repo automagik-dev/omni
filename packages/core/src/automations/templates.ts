@@ -11,6 +11,8 @@
  * - {{syntheticPrompt}} - Special: synthetic idle-follow-up prompt (follow-up)
  * - {{minutes}} - Special: minutes since last agent reply (follow-up)
  * - {{sequenceIndex}} - Special: zero-based follow-up index (follow-up)
+ * - {{attemptNumber}} - Special: one-based attempt number (follow-up)
+ * - {{totalAttempts}} - Special: total attempts configured (follow-up)
  * - {{chatName}} - Special: chat display name (follow-up)
  */
 
@@ -32,6 +34,10 @@ export interface TemplateFollowUpContext {
   minutes: number;
   /** Zero-based index of the follow-up about to fire. */
   sequenceIndex: number;
+  /** One-based attempt number (`sequenceIndex + 1`) — prefer this in LLM prompts. */
+  attemptNumber: number;
+  /** Total attempts configured (`maxFollowUps`) — prefer this in LLM prompts. */
+  totalAttempts: number;
   /** Chat display name when known; null otherwise. */
   chatName: string | null;
 }
@@ -96,6 +102,10 @@ function resolveFollowUpValue(trimmed: string, followUp: TemplateFollowUpContext
       return followUp.minutes;
     case 'sequenceIndex':
       return followUp.sequenceIndex;
+    case 'attemptNumber':
+      return followUp.attemptNumber;
+    case 'totalAttempts':
+      return followUp.totalAttempts;
     case 'chatName':
       return followUp.chatName;
     default:
@@ -239,10 +249,17 @@ export function deriveFollowUpFromPayload(payload: Record<string, unknown>): Tem
   }
 
   const chatName = typeof payload.chatName === 'string' ? payload.chatName : null;
+  // Prefer payload-provided values when the sweeper emits them; fall back to
+  // derivation for older events that predate the attemptNumber/totalAttempts
+  // fields (totalAttempts has no sensible default, so 0 signals "unknown").
+  const attemptNumber = typeof payload.attemptNumber === 'number' ? payload.attemptNumber : sequenceIndex + 1;
+  const totalAttempts = typeof payload.totalAttempts === 'number' ? payload.totalAttempts : 0;
 
   return {
     syntheticPrompt,
     sequenceIndex,
+    attemptNumber,
+    totalAttempts,
     minutes,
     chatName,
   };

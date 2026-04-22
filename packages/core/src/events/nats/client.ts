@@ -210,13 +210,17 @@ export class NatsEventBus implements EventBus {
       },
     };
 
-    // Build subject with hierarchy if instance info available
+    // Build subject with hierarchy if instance info available.
+    // Subscribe patterns always append `.>`, so the subject must have >= 3
+    // tokens for them to match. When only instanceId is known, synthesize a
+    // channelType placeholder so `{type}.>` patterns still fire.
     let subject: string;
     if (metadata?.channelType && metadata?.instanceId) {
       subject = buildSubject(type, metadata.channelType, metadata.instanceId);
+    } else if (metadata?.instanceId) {
+      subject = buildSubject(type, 'internal' as never, metadata.instanceId);
     } else {
-      // Simple subject for events without instance context
-      subject = type;
+      subject = `${type}.internal.global`;
     }
 
     // Encode and publish

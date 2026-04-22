@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { CustomEventType } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
 const webhooksRoutes = new Hono<{ Variables: AppVariables }>();
@@ -149,6 +150,12 @@ const triggerEventSchema = z.object({
 webhooksRoutes.post('/events/trigger', zValidator('json', triggerEventSchema), async (c) => {
   const { eventType, payload, correlationId, instanceId } = c.req.valid('json');
   const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  // Enforce instance access on trigger
+  if (instanceId && apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
 
   const result = await services.webhooks.trigger(eventType as CustomEventType, payload, {
     correlationId,

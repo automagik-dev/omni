@@ -11,7 +11,8 @@ import { Command } from 'commander';
 import { loadConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import * as output from '../output.js';
-import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
+import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
+import { buildRuntimeEnv } from '../runtime-env.js';
 import { bundleNotFoundError, getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 
 // ============================================================================
@@ -20,31 +21,6 @@ import { bundleNotFoundError, getServerBundlePath, getServerLauncherPath } from 
 
 /** Start command uses a shorter health-check timeout than install */
 const START_HEALTH_TIMEOUT_MS = 10_000;
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/**
- * Build complete runtime environment for the API process from config.
- * All values come from loadServerConfig() / loadConfig() — never from process.env.
- */
-function buildApiRuntimeEnv(): Record<string, string> {
-  const serverConfig = loadServerConfig();
-  const config = loadConfig();
-  return {
-    API_PORT: String(serverConfig.port),
-    DATABASE_URL: serverConfig.databaseUrl,
-    OMNI_API_KEY: config.apiKey ?? '',
-    MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
-    OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
-    NATS_URL: 'nats://localhost:4222',
-    NODE_ENV: serverConfig.nodeEnv,
-    LOG_LEVEL: serverConfig.logLevel,
-  };
-}
 
 // ============================================================================
 // ACTION
@@ -65,11 +41,21 @@ async function runStart(): Promise<void> {
   const serverConfig = loadServerConfig();
   const apiPort = serverConfig.port;
 
-  // 3. Start omni-api via PM2 with complete env from config
+  // Ensure hardened log directory exists before pm2 spawns.
+  mkdirSync(getPm2LogDir(), { recursive: true });
+
+  // 3. Start omni-api via PM2 with complete env from config and hardened flags
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
-  const env = buildApiRuntimeEnv();
+  const cliConfig = loadConfig();
+  const env = buildRuntimeEnv(serverConfig, cliConfig);
   const launcherPath = getServerLauncherPath();
-  const apiCode = await runPm2(['start', launcherPath, '--name', PM2_PROCESSES.api, '--interpreter', 'bash'], env);
+  const apiArgs = buildPm2StartArgs({
+    kind: 'api',
+    script: launcherPath,
+    name: PM2_PROCESSES.api,
+    interpreter: 'bash',
+  });
+  const apiCode = await runPm2(apiArgs, env);
   if (apiCode !== 0) {
     output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
     return;
@@ -81,7 +67,13 @@ async function runStart(): Promise<void> {
     output.info(`Starting ${PM2_PROCESSES.nats}...`);
     const natsDataDir = join(serverConfig.dataDir, 'nats');
     mkdirSync(natsDataDir, { recursive: true });
-    const natsCode = await runPm2(['start', natsPath, '--name', PM2_PROCESSES.nats, '--', '-js', '-sd', natsDataDir]);
+    const natsArgs = buildPm2StartArgs({
+      kind: 'nats',
+      script: natsPath,
+      name: PM2_PROCESSES.nats,
+      scriptArgs: ['-js', '-sd', natsDataDir],
+    });
+    const natsCode = await runPm2(natsArgs);
     if (natsCode !== 0) {
       output.warn(`${PM2_PROCESSES.nats} failed to start — run 'omni install' to download NATS first`);
     }

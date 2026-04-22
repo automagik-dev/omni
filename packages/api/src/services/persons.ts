@@ -11,10 +11,11 @@ import {
   type NewPlatformIdentity,
   type Person,
   type PlatformIdentity,
+  chatIdMappings,
   persons,
   platformIdentities,
 } from '@omni/db';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, ne, or, sql } from 'drizzle-orm';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -206,6 +207,19 @@ export class PersonService {
   }
 
   /**
+   * Look up a @lid→phone JID mapping from the chatIdMappings table.
+   * Returns the phone JID if found, null otherwise.
+   */
+  private async resolvePhoneFromLid(instanceId: string, lidId: string): Promise<string | null> {
+    const [mapping] = await this.db
+      .select({ phoneId: chatIdMappings.phoneId })
+      .from(chatIdMappings)
+      .where(and(eq(chatIdMappings.instanceId, instanceId), eq(chatIdMappings.lidId, lidId)))
+      .limit(1);
+    return mapping?.phoneId ?? null;
+  }
+
+  /**
    * Find existing person by phone (used for conflict resolution)
    */
   private async findPersonByPhone(phone: string): Promise<{ personId: string; wasLinked: true } | null> {
@@ -219,6 +233,9 @@ export class PersonService {
   private async findPersonToLink(linkOptions: {
     matchByPhone?: string;
     matchByEmail?: string;
+    matchByPlatformUserId?: string;
+    matchByChannel?: ChannelType;
+    instanceId?: string;
     createPerson?: boolean;
     displayName?: string;
   }): Promise<{ personId?: string; wasLinked: boolean }> {
@@ -237,6 +254,26 @@ export class PersonService {
         .limit(1);
       if (matchedPerson) {
         return { personId: matchedPerson.id, wasLinked: true };
+      }
+    }
+
+    // Try cross-instance matching by platformUserId + channel
+    if (linkOptions.matchByPlatformUserId && linkOptions.matchByChannel) {
+      const conditions = [
+        eq(platformIdentities.channel, linkOptions.matchByChannel),
+        eq(platformIdentities.platformUserId, linkOptions.matchByPlatformUserId),
+        isNotNull(platformIdentities.personId),
+      ];
+      if (linkOptions.instanceId) {
+        conditions.push(ne(platformIdentities.instanceId, linkOptions.instanceId));
+      }
+      const [crossMatch] = await this.db
+        .select({ personId: platformIdentities.personId })
+        .from(platformIdentities)
+        .where(and(...conditions))
+        .limit(1);
+      if (crossMatch?.personId) {
+        return { personId: crossMatch.personId, wasLinked: true };
       }
     }
 
@@ -329,6 +366,8 @@ export class PersonService {
     linkOptions?: {
       matchByPhone?: string;
       matchByEmail?: string;
+      matchByPlatformUserId?: string;
+      matchByChannel?: ChannelType;
       createPerson?: boolean;
       displayName?: string;
     },
@@ -360,14 +399,27 @@ export class PersonService {
     let wasLinked = false;
 
     if (!personId && linkOptions) {
-      const linkResult = await this.findPersonToLink(linkOptions);
+      // Smart @lid→phone resolution: if this is a @lid identity with no phone match,
+      // check chatIdMappings for a known phone JID and use it for person matching
+      let resolvedLinkOptions = linkOptions;
+      if (!linkOptions.matchByPhone && data.platformUserId.endsWith('@lid') && instanceId) {
+        const phoneFromLid = await this.resolvePhoneFromLid(instanceId, data.platformUserId);
+        if (phoneFromLid) {
+          // Extract phone number from JID (e.g. "5511999999999@s.whatsapp.net" → "+5511999999999")
+          const phoneNumber = `+${phoneFromLid.replace(/@s\.whatsapp\.net$/, '')}`;
+          resolvedLinkOptions = { ...linkOptions, matchByPhone: phoneNumber };
+        }
+      }
+
+      const linkResult = await this.findPersonToLink({ ...resolvedLinkOptions, instanceId });
       personId = linkResult.personId;
       wasLinked = linkResult.wasLinked;
     }
 
     // Create the identity
-    const linkedBy = wasLinked ? 'phone_match' : personId ? 'initial' : undefined;
-    const linkReason = wasLinked ? `Matched by ${linkOptions?.matchByPhone ? 'phone' : 'email'}` : undefined;
+    const matchType = linkOptions?.matchByPhone ? 'phone' : linkOptions?.matchByEmail ? 'email' : 'platform_id';
+    const linkedBy = wasLinked ? `${matchType}_match` : personId ? 'initial' : undefined;
+    const linkReason = wasLinked ? `Matched by ${matchType}` : undefined;
 
     const [created] = await this.db
       .insert(platformIdentities)

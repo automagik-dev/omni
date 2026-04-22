@@ -13,29 +13,20 @@
         "scripts/verify-*.ts",
         "scripts/redownload-*.ts",
         "scripts/test-pgboss.ts",
-        "scripts/inbox-bridge.ts",
         "scripts/perf/**"
       ],
-      "ignoreDependencies": ["@openapitools/openapi-generator-cli"]
+      "ignoreDependencies": ["@openapitools/openapi-generator-cli", "@embedded-postgres/linux-x64"]
     },
     "packages/api": {
       "entry": ["src/schemas/openapi/*.ts"],
       "project": ["src/**/*.ts"],
-      "ignore": ["src/plugins/agent-responder.ts", "src/trpc/**"],
-      "ignoreDependencies": ["@trpc/server"]
+      "ignore": ["src/plugins/agent-responder.ts"]
     },
     "packages/core": {
       "project": ["src/**/*.ts"]
     },
     "packages/channel-sdk": {
-      "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"],
-      "ignoreDependencies": [
-        "@omni/channel-discord",
-        "@omni/channel-slack",
-        "@omni/channel-telegram",
-        "@omni/channel-whatsapp"
-      ]
+      "project": ["src/**/*.ts"]
     },
     "packages/channel-discord": {
       "project": ["src/**/*.ts"]
@@ -49,10 +40,17 @@
     "packages/channel-whatsapp": {
       "project": ["src/**/*.ts"]
     },
-    "packages/cli": {
-      "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts", "src/index.ts"],
+    "packages/channel-gupshup": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/voice-client": {
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk"]
+      "ignoreDependencies": ["@types/libsodium-wrappers"]
+    },
+    "packages/cli": {
+      "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk", "exceljs", "mammoth", "pdf-parse"]
     },
     "packages/db": {
       "project": ["src/**/*.ts"]

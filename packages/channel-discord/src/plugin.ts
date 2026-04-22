@@ -23,6 +23,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { ActivityType } from 'discord.js';
 import type { Client, Message, PresenceStatusData, TextBasedChannel } from 'discord.js';
 
+import type { VoiceSession as IVoiceSession } from '@omni/channel-sdk';
 import { clearToken, loadToken, saveToken } from './auth';
 import type { InteractionAuthConfig } from './auth/interaction-auth';
 import { DISCORD_CAPABILITIES } from './capabilities';
@@ -52,6 +53,7 @@ import type {
   SlashCommandPayload,
 } from './types';
 import { DiscordError, ErrorCode, mapDiscordError } from './utils/errors';
+import { type AudioStreamSink, VoiceManager } from './voice/manager';
 
 // ============================================================================
 // Send Message Helpers
@@ -349,6 +351,128 @@ export class DiscordPlugin extends BaseChannelPlugin {
   /** Active Discord clients per instance */
   private clients = new Map<string, Client>();
 
+  /** Voice managers per instance (exposed for voice REST routes) */
+  public voiceManagers = new Map<string, VoiceManager>();
+
+  /** Optional audio stream sink for WebSocket forwarding */
+  public voiceStreamSink: AudioStreamSink | null = null;
+
+  /** Legacy single voiceManager accessor — returns the first available for now */
+  public get voiceManager(): VoiceManager | undefined {
+    return this.voiceManagers.values().next().value;
+  }
+
+  // ─── VoiceCapable implementation ─────────────────────────
+
+  async voiceJoin(channelId: string, opts?: Record<string, unknown>): Promise<IVoiceSession> {
+    const instanceId = (opts?.instanceId as string) ?? '';
+    const guildId = (opts?.guildId as string) ?? '';
+    const vm = this.voiceManagers.get(instanceId);
+    if (!vm) throw new Error(`No voice manager for instance ${instanceId}`);
+    const info = await vm.joinChannel(guildId, channelId);
+    const session = vm.getVoiceSession(info.sessionId);
+    if (!session) throw new Error('Voice session created but not found');
+    return {
+      get id() {
+        return info.sessionId;
+      },
+      get state() {
+        return info.state as IVoiceSession['state'];
+      },
+      get channelId() {
+        return info.channelId;
+      },
+      get instanceId() {
+        return info.instanceId;
+      },
+      get participants() {
+        return session.listParticipants();
+      },
+      get createdAt() {
+        return info.createdAt;
+      },
+      onAudio: (cb) => session.onAudio(cb),
+      offAudio: (cb) => session.offAudio(cb),
+      sendAudio: (frame) => session.sendAudio(frame),
+    };
+  }
+
+  async voiceLeave(sessionId: string): Promise<void> {
+    for (const vm of this.voiceManagers.values()) {
+      if (vm.getSession(sessionId)) {
+        await vm.leaveChannel(sessionId);
+        return;
+      }
+    }
+  }
+
+  voiceSessions(): IVoiceSession[] {
+    const sessions: IVoiceSession[] = [];
+    for (const vm of this.voiceManagers.values()) {
+      for (const info of vm.getSessions()) {
+        const session = vm.getVoiceSession(info.sessionId);
+        if (!session) continue;
+        sessions.push({
+          get id() {
+            return info.sessionId;
+          },
+          get state() {
+            return info.state as IVoiceSession['state'];
+          },
+          get channelId() {
+            return info.channelId;
+          },
+          get instanceId() {
+            return info.instanceId;
+          },
+          get participants() {
+            return session.listParticipants();
+          },
+          get createdAt() {
+            return info.createdAt;
+          },
+          onAudio: (cb) => session.onAudio(cb),
+          offAudio: (cb) => session.offAudio(cb),
+          sendAudio: (frame) => session.sendAudio(frame),
+        });
+      }
+    }
+    return sessions;
+  }
+
+  voiceSession(sessionId: string): IVoiceSession | undefined {
+    for (const vm of this.voiceManagers.values()) {
+      const info = vm.getSession(sessionId);
+      if (!info) continue;
+      const session = vm.getVoiceSession(info.sessionId);
+      if (!session) continue;
+      return {
+        get id() {
+          return info.sessionId;
+        },
+        get state() {
+          return info.state as IVoiceSession['state'];
+        },
+        get channelId() {
+          return info.channelId;
+        },
+        get instanceId() {
+          return info.instanceId;
+        },
+        get participants() {
+          return session.listParticipants();
+        },
+        get createdAt() {
+          return info.createdAt;
+        },
+        onAudio: (cb) => session.onAudio(cb),
+        offAudio: (cb) => session.offAudio(cb),
+        sendAudio: (frame) => session.sendAudio(frame),
+      };
+    }
+    return undefined;
+  }
+
   /** Per-instance inbound dedup caches */
   private dedupeCaches = new Map<string, DedupeCache>();
 
@@ -380,15 +504,15 @@ export class DiscordPlugin extends BaseChannelPlugin {
   protected override async onDestroy(): Promise<void> {
     // Clear all typing refresh intervals
     this.clearAllTypingIntervals();
-    // Destroy all clients
-    for (const [instanceId, client] of this.clients) {
-      this.logger.info('Destroying client', { instanceId });
-      await destroyClient(client);
+    const instanceIds = new Set([
+      ...this.clients.keys(),
+      ...this.voiceManagers.keys(),
+      ...this.dedupeCaches.keys(),
+      ...this.instanceAuthConfigs.keys(),
+    ]);
+    for (const instanceId of instanceIds) {
+      await this.cleanupInstanceResources(instanceId);
     }
-    this.clients.clear();
-    // Dispose all per-instance dedup caches
-    for (const cache of this.dedupeCaches.values()) cache.dispose();
-    this.dedupeCaches.clear();
   }
 
   /**
@@ -405,8 +529,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
         return;
       }
       // Client exists but not ready, destroy and reconnect
-      await destroyClient(existingClient);
-      this.clients.delete(instanceId);
+      await this.cleanupInstanceResources(instanceId);
     }
 
     // Update status to connecting
@@ -473,11 +596,15 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Store client before login (so handlers can access it)
     this.clients.set(instanceId, client);
 
+    // Create voice manager for this instance
+    const voiceManager = new VoiceManager(instanceId, client, this.voiceStreamSink ?? undefined, this.eventBus);
+    this.voiceManagers.set(instanceId, voiceManager);
+
     // Login
     try {
       await client.login(token);
     } catch (error) {
-      this.clients.delete(instanceId);
+      await this.cleanupInstanceResources(instanceId);
       throw mapDiscordError(error);
     }
   }
@@ -488,32 +615,16 @@ export class DiscordPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
-    const client = this.clients.get(instanceId);
-    if (!client) {
+    if (
+      !this.clients.has(instanceId) &&
+      !this.voiceManagers.has(instanceId) &&
+      !this.dedupeCaches.has(instanceId) &&
+      !this.instanceAuthConfigs.has(instanceId)
+    ) {
       return;
     }
 
-    // Clear typing intervals for this instance
-    for (const key of [...this.typingIntervals.keys()]) {
-      if (key.startsWith(`${instanceId}:`)) {
-        this.clearTypingInterval(key);
-      }
-    }
-
-    // Reset connection state
-    resetConnectionState(instanceId);
-
-    // Destroy client
-    await destroyClient(client);
-    this.clients.delete(instanceId);
-    this.instanceAuthConfigs.delete(instanceId);
-
-    // Dispose per-instance dedup cache
-    this.dedupeCaches.get(instanceId)?.dispose();
-    this.dedupeCaches.delete(instanceId);
-
-    // Emit disconnected event
-    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    await this.cleanupInstanceResources(instanceId, { emitDisconnected: true });
   }
 
   /**
@@ -525,6 +636,43 @@ export class DiscordPlugin extends BaseChannelPlugin {
     await this.disconnect(instanceId);
     await clearToken(this.storage, instanceId);
     this.logger.info('Instance logged out and token cleared', { instanceId });
+  }
+
+  private async cleanupInstanceResources(
+    instanceId: string,
+    opts: {
+      emitDisconnected?: boolean;
+    } = {},
+  ): Promise<void> {
+    for (const key of [...this.typingIntervals.keys()]) {
+      if (key.startsWith(`${instanceId}:`)) {
+        this.clearTypingInterval(key);
+      }
+    }
+
+    resetConnectionState(instanceId);
+
+    const voiceManager = this.voiceManagers.get(instanceId);
+    if (voiceManager) {
+      this.logger.info('Destroying voice manager', { instanceId });
+      await voiceManager.destroy();
+      this.voiceManagers.delete(instanceId);
+    }
+
+    const client = this.clients.get(instanceId);
+    if (client) {
+      this.logger.info('Destroying client', { instanceId });
+      await destroyClient(client);
+      this.clients.delete(instanceId);
+    }
+
+    this.instanceAuthConfigs.delete(instanceId);
+    this.dedupeCaches.get(instanceId)?.dispose();
+    this.dedupeCaches.delete(instanceId);
+
+    if (opts.emitDisconnected) {
+      await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    }
   }
 
   /**
@@ -565,6 +713,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
         to: message.to,
         content: { type: message.content.type, text: message.content.text },
         replyToId: message.replyTo,
+        senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };
@@ -1392,11 +1541,16 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // Discord timestamps are already in milliseconds
     const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
 
+    const senderName = typeof rawPayload.displayName === 'string' ? rawPayload.displayName : undefined;
+    const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
       from,
+      senderName,
+      chatName,
       content,
       replyToId,
       rawPayload,

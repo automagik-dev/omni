@@ -11,6 +11,44 @@ import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../message-con
 import { MessageService } from '../messages';
 
 // ============================================================================
+// shouldAgentReply – null filter default (#371)
+// ============================================================================
+
+describe('shouldAgentReply – null filter', () => {
+  const baseContext: MessageContext = {
+    isDirectMessage: false,
+    mentionsBot: false,
+    isReplyToBot: false,
+    text: 'hello',
+  };
+
+  test('returns true when filter is null (allow-all default)', () => {
+    expect(shouldAgentReply(null, baseContext)).toBe(true);
+  });
+
+  test('returns true when filter is undefined (allow-all default)', () => {
+    expect(shouldAgentReply(undefined, baseContext)).toBe(true);
+  });
+
+  test("returns true when filter.mode is 'all' regardless of context", () => {
+    const allFilter = {
+      mode: 'all' as const,
+      conditions: { onDm: false, onMention: false, onReply: false, onNameMatch: false },
+    };
+    expect(shouldAgentReply(allFilter, baseContext)).toBe(true);
+  });
+
+  test("'filtered' mode still enforces conditions (unchanged)", () => {
+    const dmOnly = {
+      mode: 'filtered' as const,
+      conditions: { onDm: true, onMention: false, onReply: false, onNameMatch: false },
+    };
+    expect(shouldAgentReply(dmOnly, { ...baseContext, isDirectMessage: false })).toBe(false);
+    expect(shouldAgentReply(dmOnly, { ...baseContext, isDirectMessage: true })).toBe(true);
+  });
+});
+
+// ============================================================================
 // shouldAgentReply – onReply condition
 // ============================================================================
 

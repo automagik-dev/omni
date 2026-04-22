@@ -4,6 +4,8 @@
  * Shared helpers for running PM2 commands across server, install, and update.
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import * as output from './output.js';
 
 /** PM2 process names managed by omni */
@@ -11,6 +13,95 @@ export const PM2_PROCESSES = {
   api: 'omni-api',
   nats: 'omni-nats',
 } as const;
+
+/**
+ * Hardened PM2 launch flags for `omni-api` and `omni-nats`.
+ *
+ * Shared by install and start so both paths use identical restart/memory/log
+ * throttling. This is the fix for the 2026-04-09 incident where a crash loop
+ * grew `omni-api-error.log` to 283 GB because pm2 had no `--max-restarts` or
+ * log rotation configured. See WISH: omni-install-resilience.
+ */
+export const PM2_HARDENED_DEFAULTS = {
+  maxRestarts: 10,
+  restartDelayMs: 5000,
+  apiMaxMemory: '2G',
+  natsMaxMemory: '1G',
+  logDateFormat: 'YYYY-MM-DD HH:mm:ss.SSS',
+} as const;
+
+/** Directory where hardened pm2 logs are written. */
+export function getPm2LogDir(): string {
+  return join(homedir(), '.omni', 'logs');
+}
+
+/** Hardened log path for a given pm2 process name. */
+export function getPm2LogPaths(processName: string): { out: string; error: string } {
+  const dir = getPm2LogDir();
+  return {
+    out: join(dir, `${processName}-out.log`),
+    error: join(dir, `${processName}-error.log`),
+  };
+}
+
+/**
+ * Options for `buildPm2StartArgs`. Either an `api` or `nats` launch.
+ */
+export interface Pm2StartArgsOptions {
+  /** Target process kind — controls memory limit and log paths. */
+  kind: 'api' | 'nats';
+  /** Script/binary to launch (e.g. the server launcher shell or the nats binary). */
+  script: string;
+  /** pm2 process name (`omni-api` or `omni-nats`). */
+  name: string;
+  /**
+   * Optional `--interpreter <name>` value. API launches via `bash` to hit the
+   * shell launcher; NATS runs as a native binary and should pass `'none'`.
+   */
+  interpreter?: string;
+  /** Arguments forwarded after `--` to the spawned process. */
+  scriptArgs?: string[];
+}
+
+/**
+ * Build the full `pm2 start ...` argv for hardened launches. Both install and
+ * start consume this so the restart/memory/log flags live in exactly one
+ * place.
+ */
+export function buildPm2StartArgs(options: Pm2StartArgsOptions): string[] {
+  const { kind, script, name, interpreter, scriptArgs } = options;
+  const logs = getPm2LogPaths(name);
+  const maxMemory = kind === 'api' ? PM2_HARDENED_DEFAULTS.apiMaxMemory : PM2_HARDENED_DEFAULTS.natsMaxMemory;
+
+  const args: string[] = [
+    'start',
+    script,
+    '--name',
+    name,
+    '--max-restarts',
+    String(PM2_HARDENED_DEFAULTS.maxRestarts),
+    '--restart-delay',
+    String(PM2_HARDENED_DEFAULTS.restartDelayMs),
+    '--max-memory-restart',
+    maxMemory,
+    '--log-date-format',
+    PM2_HARDENED_DEFAULTS.logDateFormat,
+    '--output',
+    logs.out,
+    '--error',
+    logs.error,
+  ];
+
+  if (interpreter) {
+    args.push('--interpreter', interpreter);
+  }
+
+  if (scriptArgs && scriptArgs.length > 0) {
+    args.push('--', ...scriptArgs);
+  }
+
+  return args;
+}
 
 /** Map CLI service arg to PM2 process name */
 export function resolveProcessName(service: string): string {

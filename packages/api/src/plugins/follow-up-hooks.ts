@@ -39,7 +39,10 @@ async function resolveChatId(services: Services, instanceId: string, externalId:
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
     return chat?.id ?? null;
   } catch (err) {
-    log.debug('follow-up-hooks: failed to resolve chatId', { instanceId, externalId, error: String(err) });
+    // findByExternalIdSmart returns null for not-found, so anything thrown
+    // here is an unexpected infrastructure error (DB connectivity, query
+    // failure, etc.) — log at warn so it doesn't get silently buried.
+    log.warn('follow-up-hooks: failed to resolve chatId', { instanceId, externalId, error: String(err) });
     return null;
   }
 }
@@ -93,11 +96,21 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services)
         const chatId = await resolveChatId(services, instanceId, payload.chatId);
         if (!chatId) return;
 
+        const at = new Date(event.timestamp);
+
+        // Touch the inbound timestamp unconditionally — the disarm below is
+        // a no-op when the row is already terminally disarmed (e.g. by
+        // session_cleared), so without this the row's
+        // `lastInboundCustomerMessageAt` would never advance and the
+        // terminal-disarm guard in `armForOutbound` would refuse to re-arm
+        // even after the customer genuinely returns. See #419.
+        await services.followUpLifecycle.touchInboundTimestamp({ chatId, instanceId, at });
+
         await services.followUpLifecycle.disarm({
           chatId,
           instanceId,
           reason: 'customer_replied',
-          lastInboundCustomerMessageAt: new Date(event.timestamp),
+          lastInboundCustomerMessageAt: at,
         });
       },
       {

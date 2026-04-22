@@ -201,9 +201,15 @@ export class AgnoClient implements IAgentClient {
     if (request.files?.length) {
       for (const file of request.files) {
         try {
-          const fileData = await Bun.file(file.path).arrayBuffer();
-          const blob = new Blob([fileData], { type: file.mimeType });
-          formData.append('files', blob, file.filename ?? file.path.split('/').pop() ?? 'file');
+          if (file.url) {
+            const res = await fetch(file.url);
+            const blob = new Blob([await res.arrayBuffer()], { type: file.mimeType });
+            formData.append('files', blob, file.filename ?? file.url.split('/').pop() ?? 'file');
+          } else if (file.path) {
+            const fileData = await Bun.file(file.path).arrayBuffer();
+            const blob = new Blob([fileData], { type: file.mimeType });
+            formData.append('files', blob, file.filename ?? file.path.split('/').pop() ?? 'file');
+          }
         } catch {
           // Skip files that can't be read
         }

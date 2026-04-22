@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260404.1",
+  "version": "2.260422.9",
   "type": "module",
   "exports": {
     ".": {
@@ -14,28 +14,36 @@
     "./trpc": {
       "types": "./src/trpc/index.ts",
       "default": "./src/trpc/index.ts"
+    },
+    "./admin": {
+      "types": "./src/admin.ts",
+      "default": "./src/admin.ts"
     }
   },
   "scripts": {
     "dev": "bun --watch --env-file=../../.env src/index.ts",
     "start": "bun --env-file=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "fix-persons": "bun run scripts/fix-person-duplicates.ts",
+    "postinstall": "node ../../scripts/ensure-libicu-symlinks.cjs"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
+    "@google/genai": "^1.0.0",
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
+    "@omni/voice-client": "workspace:*",
     "@sentry/bun": "^10.43.0",
     "@trpc/server": "^11.0.0-rc.608",
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.3",
-    "pgserve": "^1.1.6",
+    "pgserve": "^1.1.10",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -43,7 +43,7 @@ export interface Config {
   format?: 'human' | 'json';
   showCommands?: string; // 'all' or comma-separated categories
   telemetry?: string; // 'true' or 'false' — error telemetry via Sentry
-  updateChannel?: 'main' | 'dev';
+  updateChannel?: 'latest' | 'next';
   server?: Partial<ServerConfig>;
 }
 
@@ -77,8 +77,8 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
     values: ['true', 'false'],
   },
   updateChannel: {
-    description: 'Update track for omni update',
-    values: ['main', 'dev'],
+    description: 'Update track for omni update (latest=stable, next=dev builds)',
+    values: ['latest', 'next'],
   },
   'server.port': { description: 'Server port (default: 8882)' },
   'server.databaseUrl': { description: 'PostgreSQL connection URL' },
@@ -95,7 +95,7 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
 
 /** Get config directory path */
 export function getConfigDir(): string {
-  return join(homedir(), '.omni');
+  return process.env.OMNI_CONFIG_DIR ?? join(homedir(), '.omni');
 }
 
 /** Get config file path */

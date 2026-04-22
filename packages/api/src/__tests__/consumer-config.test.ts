@@ -67,20 +67,51 @@ describe('Consumer startFrom Configuration', () => {
     expect(values[0]?.value).toBe('first');
   });
 
-  test('agent-responder: main consumer uses startFrom: first', () => {
+  test('agent-responder: main consumer uses startFrom: new (#411)', () => {
+    // Was 'first' — but for a side-effect handler that's catastrophic on a
+    // recreated durable (replays the entire stream → N agent dispatches).
+    // See #411 fix plan: switch all side-effect durables to 'new'.
     const values = extractStartFromValues(join(PLUGINS_DIR, 'agent-responder.ts'));
     const main = values.find((v) => v.context === 'agent-responder');
 
     expect(main).toBeDefined();
-    expect(main?.value).toBe('first');
+    expect(main?.value).toBe('new');
   });
 
-  test('agent-responder: typing consumer uses startFrom: last (ephemeral OK)', () => {
+  test('agent-responder: typing consumer uses startFrom: new (#411)', () => {
+    // Was 'last' — for a fresh durable that fires the most recent typing
+    // event, restarting the debounce on a stale chat. 'new' is safer.
     const values = extractStartFromValues(join(PLUGINS_DIR, 'agent-responder.ts'));
     const typing = values.find((v) => v.context === 'agent-responder-typing');
 
     expect(typing).toBeDefined();
-    expect(typing?.value).toBe('last');
+    expect(typing?.value).toBe('new');
+  });
+
+  test('agent-dispatcher: all side-effect consumers use startFrom: new (#411)', () => {
+    // Issue #411: side-effect handlers (sends, dispatches) must NOT replay on
+    // recreated durable. The 5 consumers below own customer-visible work.
+    const values = extractStartFromValues(join(PLUGINS_DIR, 'agent-dispatcher.ts'));
+    const sideEffectConsumers = [
+      'agent-dispatcher-msg',
+      'agent-dispatcher-reaction',
+      'agent-dispatcher-reaction-removed',
+      'agent-dispatcher-typing',
+      'agent-dispatcher-media',
+    ];
+    for (const name of sideEffectConsumers) {
+      const entry = values.find((v) => v.context === name);
+      expect(entry, `expected ${name} to be present in agent-dispatcher.ts`).toBeDefined();
+      expect(entry?.value, `${name} must use startFrom: 'new'`).toBe('new');
+    }
+  });
+
+  test('session-cleaner: uses startFrom: new (#411)', () => {
+    const values = extractStartFromValues(join(PLUGINS_DIR, 'session-cleaner.ts'));
+    const main = values.find((v) => v.context === 'session-cleaner');
+
+    expect(main).toBeDefined();
+    expect(main?.value).toBe('new');
   });
 
   test('event-persistence: all consumers use startFrom: first', () => {

@@ -251,6 +251,67 @@ describe('MessageDebouncer', () => {
     });
   });
 
+  describe('typing resets timer in fixed mode', () => {
+    it('onUserTyping force-restarts the fixed-mode timer', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+
+      const typingFixedConfig: DebounceConfig = {
+        mode: 'fixed',
+        minMs: 100,
+        maxMs: 100,
+        restartOnTyping: true,
+        groupMs: null,
+      };
+
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+      });
+
+      // Buffer a message — starts a 100ms fixed timer
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), typingFixedConfig);
+
+      // At 60ms, user starts typing — should reset the 100ms timer
+      await wait(60);
+      debouncer.onUserTyping('inst-1', 'chat-1', typingFixedConfig);
+
+      // At 110ms from start (50ms after typing reset), the ORIGINAL timer
+      // would have fired. If the reset worked, it should NOT have flushed yet.
+      await wait(50);
+      expect(flushCalls.length).toBe(0);
+
+      // Wait for the restarted timer to fire (100ms from the typing event)
+      await wait(80);
+      expect(flushCalls.length).toBe(1);
+      expect(flushCalls[0]!.length).toBe(1);
+    });
+
+    it('typing does NOT reset timer when restartOnTyping is false', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+
+      const noTypingConfig: DebounceConfig = {
+        mode: 'fixed',
+        minMs: 100,
+        maxMs: 100,
+        restartOnTyping: false,
+        groupMs: null,
+      };
+
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), noTypingConfig);
+
+      // Typing event should be ignored when restartOnTyping is false
+      await wait(60);
+      debouncer.onUserTyping('inst-1', 'chat-1', noTypingConfig);
+
+      // Original timer fires at 100ms — should flush normally
+      await wait(80);
+      expect(flushCalls.length).toBe(1);
+    });
+  });
+
   describe('clear()', () => {
     it('clears all internal state including inFlight', async () => {
       debouncer = new MessageDebouncer(async () => {

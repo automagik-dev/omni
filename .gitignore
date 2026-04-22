@@ -48,8 +48,6 @@ coverage/
 # Python
 __pycache__/
 *.pyc
-# Genie workspace (lives at ../../.genie, not in repo)
-.genie/
 .research/
 *.egg-info/
 
@@ -72,3 +70,5 @@ memory/
 
 version.json
 .beads/*.log.gz
+.rlmx/
+/core

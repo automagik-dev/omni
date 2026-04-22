@@ -2,11 +2,12 @@
  * Event Commands
  *
  * omni events list --instance <id>
+ * omni events stream [flags]
  * omni events search <query>
  * omni events timeline <person-id>
  */
 
-import type { OmniClient } from '@omni/sdk';
+import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';
@@ -201,6 +202,191 @@ function displayRecordBreakdown(title: string, record: Record<string, number>, k
   output.list(items);
 }
 
+// ============================================================================
+// STREAM
+// ============================================================================
+
+/**
+ * High-frequency event types hidden by default on `omni events stream`.
+ * `--all` surfaces them. Mirrors `genie events stream --all`.
+ */
+const NOISY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'presence.typing',
+  'presence.online',
+  'presence.offline',
+  'message.delivered',
+  'message.read',
+  'sync.progress',
+  'batch-job.progress',
+]);
+
+/** True when event_type denotes a failure/denial — used by --errors-only. */
+export function isErrorEvent(eventType: string): boolean {
+  return eventType.endsWith('.failed') || eventType === 'access.denied' || eventType.endsWith('.processing.failed');
+}
+
+/** True when event_type is considered noisy and should be hidden unless --all is set. */
+export function isNoisyEvent(eventType: string): boolean {
+  return NOISY_EVENT_TYPES.has(eventType);
+}
+
+/** Filter predicate matrix for `omni events stream`. Exported for unit tests. */
+export interface StreamFilterOptions {
+  instanceId?: string;
+  channel?: string;
+  type?: string;
+  chatId?: string;
+  personId?: string;
+  errorsOnly?: boolean;
+  all?: boolean;
+}
+
+/**
+ * Return true when event should be emitted given the filter options.
+ * The API pre-filters by instanceId / channel / eventType / since, so this
+ * is primarily a post-fetch sieve for filters the list API does not support
+ * (chat-id, person-id, errors-only, noise suppression).
+ */
+export function passesStreamFilters(event: Event, options: StreamFilterOptions): boolean {
+  if (options.instanceId && event.instanceId !== options.instanceId) return false;
+  if (options.type && event.eventType !== options.type) return false;
+  if (options.chatId && event.chatUuid !== options.chatId) return false;
+  if (options.personId && event.personId !== options.personId) return false;
+  if (options.errorsOnly && !isErrorEvent(event.eventType)) return false;
+  if (!options.all && isNoisyEvent(event.eventType)) return false;
+  return true;
+}
+
+/** Format an event as a single human-readable line. */
+export function formatEventLine(event: Event): string {
+  const time = new Date(event.receivedAt).toISOString().slice(11, 19);
+  const instance = event.instanceId?.slice(0, 8) ?? '--------';
+  const chat = event.chatUuid?.slice(0, 8) ?? '--------';
+  const summary = event.textContent ?? event.transcription ?? event.imageDescription ?? '';
+  const trimmed = summary.length > 80 ? `${summary.slice(0, 77)}...` : summary;
+  return `${time}  ${event.eventType.padEnd(28)}  ${instance}/${chat}  ${event.direction.padEnd(8)}  ${trimmed}`.trimEnd();
+}
+
+/** Emit an event through the drain-safe stdout helper — never raw console.log. */
+function emitStreamEvent(event: Event, ndjson: boolean): void {
+  if (ndjson) {
+    output.raw(JSON.stringify(event));
+  } else {
+    output.raw(formatEventLine(event));
+  }
+}
+
+interface StreamOptions {
+  instance?: string;
+  channel?: string;
+  type?: string;
+  chatId?: string;
+  personId?: string;
+  since?: string;
+  errorsOnly?: boolean;
+  all?: boolean;
+  ndjson?: boolean;
+  pollMs?: number;
+}
+
+/**
+ * Poll `/events` and emit new rows as they arrive.
+ *
+ * Transport: polls `client.events.list({ since })` because the API does not
+ * currently expose an SSE/WS stream for events. Polling keeps the CLI thin,
+ * reuses the list query path (zero schema/regression risk), and mirrors
+ * `genie events stream`'s internal follower cadence. An SSE/WS endpoint is
+ * a follow-up (see issue #415 non-goals).
+ */
+interface StreamState {
+  sinceIso: string;
+  seen: Set<string>;
+}
+
+async function fetchStreamBatch(
+  client: OmniClient,
+  filters: StreamFilterOptions,
+  channel: string | undefined,
+  type: string | undefined,
+  sinceIso: string,
+): Promise<Event[]> {
+  try {
+    const result = await client.events.list({
+      instanceId: filters.instanceId,
+      channel,
+      eventType: type,
+      since: sinceIso,
+      limit: 100,
+    });
+    return result.items;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    output.warn(`events stream: ${message}`);
+    return [];
+  }
+}
+
+function processStreamBatch(items: Event[], filters: StreamFilterOptions, state: StreamState, ndjson: boolean): void {
+  const ascending = [...items].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+  for (const ev of ascending) {
+    if (state.seen.has(ev.id)) continue;
+    state.seen.add(ev.id);
+    if (!passesStreamFilters(ev, filters)) continue;
+    emitStreamEvent(ev, ndjson);
+    if (ev.receivedAt > state.sinceIso) state.sinceIso = ev.receivedAt;
+  }
+  // Bound the dedupe set — once the cursor moves past events we cannot
+  // re-observe them, so a periodic flush keeps memory O(poll window).
+  // Keep the most recent batch's IDs to avoid re-emitting events returned
+  // again by an inclusive `since: state.sinceIso` query on the next poll.
+  if (state.seen.size > 5000 && items.length > 0) {
+    state.seen = new Set(items.map((ev) => ev.id));
+  }
+}
+
+async function streamEvents(client: OmniClient, options: StreamOptions): Promise<void> {
+  const ndjson = options.ndjson === true || getOutputFormat() === 'json';
+  const pollMs = Math.max(250, options.pollMs ?? 2000);
+  const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+  const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
+
+  const state: StreamState = {
+    sinceIso: options.since ? parseSinceTime(options.since) : new Date().toISOString(),
+    seen: new Set<string>(),
+  };
+  const filters: StreamFilterOptions = {
+    instanceId,
+    channel: options.channel,
+    type: options.type,
+    chatId,
+    personId: options.personId,
+    errorsOnly: options.errorsOnly,
+    all: options.all,
+  };
+
+  let stopped = false;
+  const shutdown = (): void => {
+    stopped = true;
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  if (!ndjson) output.dim(`Streaming events (poll=${pollMs}ms). Ctrl+C to stop.`);
+
+  try {
+    while (!stopped) {
+      const items = await fetchStreamBatch(client, filters, options.channel, options.type, state.sinceIso);
+      processStreamBatch(items, filters, state, ndjson);
+      if (stopped) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    }
+  } finally {
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
+    await output.flushStdout();
+  }
+}
+
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
 
@@ -260,6 +446,59 @@ export function createEventsCommand(): Command {
         }
       },
     );
+
+  // omni events stream
+  events
+    .command('stream')
+    .description('Stream events in real-time (tail -f style). Ctrl+C to stop.')
+    .option('--instance <id>', 'Filter by instance ID')
+    .option('--channel <type>', 'Filter by channel type')
+    .option('--type <type>', 'Filter by event type')
+    .option('--chat-id <id>', 'Filter by chat ID')
+    .option('--person-id <id>', 'Filter by person ID')
+    .option('--since <time>', 'Start cursor (e.g., 5min, 24h, 7d, or ISO timestamp)')
+    .option('--errors-only', 'Show only error/failure events')
+    .option('--all', 'Include noisy event types (presence, delivered, read, progress)')
+    .option('--ndjson', 'Emit JSON Lines (one event per line) — same as global --json in stream mode')
+    .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
+    .action(
+      async (options: {
+        instance?: string;
+        channel?: string;
+        type?: string;
+        chatId?: string;
+        personId?: string;
+        since?: string;
+        errorsOnly?: boolean;
+        all?: boolean;
+        ndjson?: boolean;
+        pollMs?: number;
+      }) => {
+        const client = getClient();
+        try {
+          await streamEvents(client, options);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to stream events: ${message}`);
+        }
+      },
+    );
+
+  // omni events get <id>
+  events
+    .command('get <id>')
+    .description('Get full details for a single event by ID')
+    .action(async (id: string) => {
+      const client = getClient();
+
+      try {
+        const event = await client.events.get(id);
+        output.data(event);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get event: ${message}`);
+      }
+    });
 
   // omni events search <query>
   events

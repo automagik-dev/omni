@@ -21,6 +21,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -39,6 +40,7 @@ export const channelTypes = [
   'slack',
   'telegram',
   'a2a',
+  'gupshup',
   'internal',
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
@@ -100,6 +102,22 @@ export type SettingValueType = (typeof settingValueTypes)[number];
 
 export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
 export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
+
+// Profile templates that compose verb buckets + enforcement locks for API keys.
+// `null` keeps pre-profile keys working with legacy empty-allowlist-as-no-lock semantics.
+export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] as const;
+export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
+
+// Tenant-editable overrides applied on top of a profile's bucket resolution.
+// `add` / `remove` take verb names; `denylistPresetKey` swaps the outbound redactor
+// preset; `denylistExtras` appends tenant-specific literal patterns on top of the
+// resolved preset (no preset change required — the extras merge with the preset list).
+export type ApiKeyProfileOverrides = {
+  add?: string[];
+  remove?: string[];
+  denylistPresetKey?: string;
+  denylistExtras?: string[];
+};
 
 export const eventTypes = CORE_EVENT_TYPES;
 export type EventType = CoreEventType;
@@ -503,6 +521,22 @@ export const apiKeys = pgTable(
     // Examples: ['*'], ['messages:read', 'messages:write'], ['instances:read']
     scopes: text('scopes').array().notNull(),
 
+    // Profile template used at key-creation time to resolve `scopes` and enforcement
+    // locks. `null` for legacy / pre-profile keys — they keep their hand-authored scopes
+    // and treat the allowlist columns as "no lock" instead of "deny all".
+    profile: varchar('profile', { length: 32 }).$type<ApiKeyProfile>(),
+
+    // Tenant-level overrides that add/remove verbs or swap the denylist preset on top
+    // of the profile's bucket resolution. Empty `{}` means "profile defaults".
+    profileOverrides: jsonb('profile_overrides').$type<ApiKeyProfileOverrides>().notNull().default(sql`'{}'::jsonb`),
+
+    // Enforcement locks consumed by the scope-enforcer middleware.
+    // Empty `[]` semantics depend on `profile`: NULL profile = "no lock" (backward
+    // compat); profile that declares `requiresLocks` = "deny all".
+    chatAllowlist: text('chat_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
+    instanceAllowlist: uuid('instance_allowlist').array().notNull().default(sql`ARRAY[]::uuid[]`),
+    outboundRecipientAllowlist: text('outbound_recipient_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
+
     // Instance restrictions (null = all instances)
     instanceIds: uuid('instance_ids').array(),
 
@@ -524,6 +558,13 @@ export const apiKeys = pgTable(
     revokedAt: timestamp('revoked_at'),
     revokedBy: varchar('revoked_by', { length: 255 }),
     revokeReason: text('revoke_reason'),
+
+    // Conversation context (for turn-based agents and CLI)
+    activeInstanceId: uuid('active_instance_id'),
+    contextInstanceId: uuid('context_instance_id'),
+    contextChatId: uuid('context_chat_id'),
+    contextMessageId: uuid('context_message_id'),
+    contextUpdatedAt: timestamp('context_updated_at'),
 
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -628,6 +669,12 @@ export const instances = pgTable(
     /** Telegram reaction level: off (default), ack, minimal, extensive */
     telegramReactionLevel: varchar('telegram_reaction_level', { length: 20 }).notNull().default('off'),
 
+    // ---- Gupshup Configuration ----
+    gupshupCallbackUrl: text('gupshup_callback_url'),
+    gupshupAuthToken: text('gupshup_auth_token'),
+    gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
+    webhookVerifyToken: text('webhook_verify_token'),
+
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
@@ -654,8 +701,13 @@ export const instances = pgTable(
     triggerMentionPatterns: jsonb('trigger_mention_patterns').$type<string[]>(),
     /** Agent trigger mode: round-trip (wait for response) or fire-and-forget */
     triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
-    /** Max triggers per user per channel per minute (rate limiting) */
-    triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
+    /**
+     * Drop inbound `message.received` events when the platform-native timestamp
+     * (e.g. WhatsApp `messageTimestamp`) is older than this many minutes.
+     * Guards the agent dispatcher against history-sync replays and NATS
+     * redelivery of stale messages after reconnect/restart. Default: 10.
+     */
+    inboundMaxAgeMinutes: integer('inbound_max_age_minutes').notNull().default(10),
 
     // ---- Profile Information (populated from channel) ----
     profileName: varchar('profile_name', { length: 255 }),
@@ -771,6 +823,10 @@ export const instances = pgTable(
     /** Timestamp of when the instance was last seen connected (used as replay window start) */
     lastSeenAt: timestamp('last_seen_at'),
 
+    // ---- Agent Stalled-Turn Detection (internal event only — no channel message) ----
+    /** Idle threshold in ms before a stalled turn emits the internal turn.stalled event */
+    agentStalledTimeoutMs: integer('agent_stalled_timeout_ms').notNull().default(600000),
+
     // ---- Agent Chaining ----
     /** Target instance for agent-to-agent chaining */
     agentChainToInstanceId: uuid('agent_chain_to_instance_id').references((): AnyPgColumn => instances.id, {
@@ -782,6 +838,23 @@ export const instances = pgTable(
     // ---- Idle-chat follow-up config (instance scope, beats agent scope) ----
     /** @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
+
+    // ---- Bridge Tmux Session (per-instance override for genie NATS provider) ----
+    /**
+     * Optional tmux session name the genie bridge will spawn into when this
+     * instance dispatches. When set, the `nats-genie` provider propagates this
+     * value via the NATS message env as `GENIE_TMUX_SESSION`; the consumer
+     * genie bridge uses it as the highest-priority override in its three-layer
+     * tmux-session resolution chain. When null, no override is emitted and
+     * genie falls back to its agent-level or name-based default.
+     *
+     * Enables one-agent-many-instances fan-out: a single "scout" agent hooked
+     * to N inbound numbers can land each instance's dispatches in its own
+     * tmux session for isolation and live-intelligence observability.
+     *
+     * Consumer: `automagik/genie` commit 78027707 (`resolveBridgeTmuxSession`).
+     */
+    bridgeTmuxSession: text('bridge_tmux_session'),
 
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -1305,6 +1378,39 @@ export const omniEvents = pgTable(
 );
 
 // ============================================================================
+// HANDOFF LOGS
+// ============================================================================
+
+/**
+ * Records every agent→human handoff with full payload.
+ * Written synchronously in the /send/handoff route so no data is lost.
+ */
+export const handoffLogs = pgTable(
+  'handoff_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'set null' }),
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    chatId: varchar('chat_id', { length: 255 }).notNull(), // raw JID / phone used as chatId
+    toPhone: varchar('to_phone', { length: 100 }).notNull(), // recipient phone
+    text: text('text').notNull(), // handoff message shown to user
+    extraInfo: text('extra_info'), // optional metadata string from agent (e.g. summary)
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
+    sentAt: timestamp('sent_at').notNull().defaultNow(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+  },
+  (table) => ({
+    instanceIdx: index('handoff_logs_instance_idx').on(table.instanceId),
+    chatUuidIdx: index('handoff_logs_chat_uuid_idx').on(table.chatUuid),
+    chatIdIdx: index('handoff_logs_chat_id_idx').on(table.chatId),
+    sentAtIdx: index('handoff_logs_sent_at_idx').on(table.sentAt),
+    agentIdx: index('handoff_logs_agent_idx').on(table.agentId),
+  }),
+);
+
+// ============================================================================
 // ACCESS RULES
 // ============================================================================
 
@@ -1478,6 +1584,12 @@ export interface SyncJobProgress {
   duplicates: number;
   mediaDownloaded: number;
   totalEstimated?: number;
+  /**
+   * ISO-8601 timestamp of the last `updateProgress` call. Lets clients
+   * distinguish "running slowly" from "stuck" when `progressPercent` cannot
+   * be computed (e.g. Baileys never reports a denominator). See issue #398.
+   */
+  lastProgressAt?: string;
 }
 
 /**
@@ -2507,6 +2619,87 @@ export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
 }));
 
 // ============================================================================
+// TURNS (Turn-Based Agent Execution)
+// ============================================================================
+
+export const turnStatuses = ['open', 'done', 'timeout'] as const;
+export type TurnStatus = (typeof turnStatuses)[number];
+
+export const turnActions = ['message', 'react', 'skip', 'timeout'] as const;
+export type TurnAction = (typeof turnActions)[number];
+
+/**
+ * Turn state for turn-based agent execution.
+ * Each turn represents a single agent work session triggered by an inbound message.
+ * The agent gets a sandboxed environment and communicates via verb commands.
+ * Turn lifecycle: open → (agent works, sends intermediate messages) → done/timeout.
+ *
+ * @see WISH.md — Turn-Based Execution Mode
+ */
+export const turns = pgTable(
+  'turns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    chatId: text('chat_id').notNull(),
+    messageId: text('message_id').notNull(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    apiKeyId: uuid('api_key_id')
+      .notNull()
+      .references(() => apiKeys.id, { onDelete: 'cascade' }),
+
+    // ---- Lifecycle ----
+    status: varchar('status', { length: 20 }).notNull().default('open').$type<TurnStatus>(),
+    action: varchar('action', { length: 20 }).$type<TurnAction>(),
+
+    // ---- Counters ----
+    nudgeCount: integer('nudge_count').notNull().default(0),
+    messagesSent: integer('messages_sent').notNull().default(0),
+
+    // ---- Timestamps ----
+    startedAt: timestamp('started_at').notNull().defaultNow(),
+    lastActivityAt: timestamp('last_activity_at').notNull().defaultNow(),
+    closedAt: timestamp('closed_at'),
+
+    // ---- Close info ----
+    closedReason: text('closed_reason'),
+
+    // ---- Extensibility ----
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  },
+  (table) => ({
+    instanceChatIdx: index('turns_instance_chat_idx').on(table.instanceId, table.chatId),
+    statusIdx: index('turns_status_idx').on(table.status),
+    apiKeyIdx: index('turns_api_key_idx').on(table.apiKeyId),
+    agentIdx: index('turns_agent_idx').on(table.agentId),
+    lastActivityIdx: index('turns_last_activity_idx').on(table.lastActivityAt),
+    openTurnsIdx: index('turns_open_idx').on(table.status, table.lastActivityAt).where(sql`${table.status} = 'open'`),
+  }),
+);
+
+export type Turn = typeof turns.$inferSelect;
+export type NewTurn = typeof turns.$inferInsert;
+
+export const turnsRelations = relations(turns, ({ one }) => ({
+  instance: one(instances, {
+    fields: [turns.instanceId],
+    references: [instances.id],
+  }),
+  agent: one(agents, {
+    fields: [turns.agentId],
+    references: [agents.id],
+  }),
+  apiKey: one(apiKeys, {
+    fields: [turns.apiKeyId],
+    references: [apiKeys.id],
+  }),
+}));
+
+// ============================================================================
 // CHAT FOLLOW-UP STATE (Idle-chat follow-up sequences)
 // ============================================================================
 
@@ -2518,6 +2711,7 @@ export const followUpDisarmReasons = [
   'sequence_complete',
   'agent_error',
   'send_failed',
+  'session_cleared',
 ] as const;
 export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
 
@@ -2595,3 +2789,38 @@ export const chatFollowUpStateRelations = relations(chatFollowUpState, ({ one })
     references: [agents.id],
   }),
 }));
+
+// ============================================================================
+// PROCESSED EVENTS — durable subscriber idempotency (#411)
+// ============================================================================
+
+/**
+ * Tracks which (event_id, handler_name) pairs a durable NATS subscriber has
+ * already processed. Used by `withIdempotency()` to make customer-visible
+ * side-effects (sends, deletes, agent dispatches) safe under NATS redelivery
+ * — the at-least-once delivery contract caused duplicates after PM2 restart
+ * (see issue #411).
+ *
+ * Composite primary key (event_id, handler) allows multiple handlers to
+ * independently mark the same event as processed (e.g. session-cleaner AND
+ * agent-dispatcher both see message.received).
+ *
+ * Rows are kept indefinitely for now; a periodic GC sweep can prune rows
+ * older than the longest reasonable redelivery window (e.g. 24h) once the
+ * fix has soaked.
+ */
+export const processedEvents = pgTable(
+  'processed_events',
+  {
+    eventId: varchar('event_id', { length: 255 }).notNull(),
+    handler: varchar('handler', { length: 100 }).notNull(),
+    processedAt: timestamp('processed_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.eventId, table.handler], name: 'processed_events_pk' }),
+    processedAtIdx: index('processed_events_processed_at_idx').on(table.processedAt),
+  }),
+);
+
+export type ProcessedEvent = typeof processedEvents.$inferSelect;
+export type NewProcessedEvent = typeof processedEvents.$inferInsert;

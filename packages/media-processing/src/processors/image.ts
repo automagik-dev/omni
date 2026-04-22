@@ -18,6 +18,22 @@ import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
 
 /**
+ * Multiplier applied to the per-attempt timeout when we do the
+ * one-shot extended retry after a timeout failure. See issue #478.
+ */
+const EXTENDED_TIMEOUT_MULTIPLIER = 2;
+
+/**
+ * Check if an error's message indicates a timeout (as opposed to
+ * rate limits, network errors, or circuit-open).
+ */
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return msg.includes('timed out') || msg.includes('timeout');
+}
+
+/**
  * Image processor using Gemini Vision with OpenAI fallback
  */
 export class ImageProcessor extends BaseProcessor {
@@ -101,7 +117,12 @@ export class ImageProcessor extends BaseProcessor {
   }
 
   /**
-   * Describe image using Gemini Vision API with retry + circuit breaker
+   * Describe image using Gemini Vision API with retry + circuit breaker.
+   *
+   * On timeout, makes ONE additional attempt with an extended timeout
+   * (EXTENDED_TIMEOUT_MULTIPLIER × the configured per-attempt timeout)
+   * before giving up. This catches the long-tail of complex/large images
+   * that need >30s to describe (issue #478).
    */
   private async describeWithGemini(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
@@ -111,8 +132,8 @@ export class ImageProcessor extends BaseProcessor {
 
     const timeouts = getMediaTimeouts();
 
-    try {
-      const { text, inputTokens, outputTokens } = await this.executeWithResilience(
+    const runGemini = async (timeoutMs: number) =>
+      this.executeWithResilience(
         'gemini',
         async () => {
           const result = await model.generateContent([
@@ -134,8 +155,29 @@ export class ImageProcessor extends BaseProcessor {
             outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
           };
         },
-        { timeoutMs: timeouts.imageTimeoutMs },
+        { timeoutMs },
       );
+
+    try {
+      let callResult: Awaited<ReturnType<typeof runGemini>>;
+      try {
+        callResult = await runGemini(timeouts.imageTimeoutMs);
+      } catch (firstError) {
+        // One-shot extended-timeout retry on timeout failures only.
+        // Circuit-open errors short-circuit — no point extending.
+        if (isTimeoutError(firstError) && !this.isCircuitOpen(firstError)) {
+          const extendedMs = timeouts.imageTimeoutMs * EXTENDED_TIMEOUT_MULTIPLIER;
+          this.log.warn('Gemini vision timed out, retrying with extended timeout', {
+            initialTimeoutMs: timeouts.imageTimeoutMs,
+            extendedTimeoutMs: extendedMs,
+          });
+          callResult = await runGemini(extendedMs);
+        } else {
+          throw firstError;
+        }
+      }
+
+      const { text, inputTokens, outputTokens } = callResult;
 
       const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
         inputTokens,

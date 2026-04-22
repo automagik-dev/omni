@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import { ProviderSchemaEnum, createAgnoClient } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { invalidateProviderCache } from '../../plugins/agent-dispatcher';
 import type { AppVariables } from '../../types';
 
 const providersRoutes = new Hono<{ Variables: AppVariables }>();
@@ -149,6 +150,8 @@ providersRoutes.patch('/:id', zValidator('json', updateProviderSchema), async (c
 
   const provider = await services.providers.update(id, data);
 
+  invalidateProviderCache(id);
+
   return c.json({
     data: {
       ...provider,
@@ -166,6 +169,8 @@ providersRoutes.delete('/:id', async (c) => {
   const services = c.get('services');
 
   await services.providers.delete(id);
+
+  invalidateProviderCache(id);
 
   return c.json({ success: true });
 });

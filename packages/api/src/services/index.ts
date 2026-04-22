@@ -8,6 +8,14 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
+import { ElevenLabsTtsProvider } from '../providers/elevenlabs/tts';
+import { GeminiImageGenProvider } from '../providers/gemini/imagegen';
+import { GeminiSttProvider } from '../providers/gemini/stt';
+import { GeminiTtsProvider } from '../providers/gemini/tts';
+import { GeminiVideoGenProvider } from '../providers/gemini/videogen';
+import { GeminiVisionProvider } from '../providers/gemini/vision';
+import { GroqSttProvider } from '../providers/groq/stt';
+import { providerRegistry } from '../providers/registry';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { AgentStateService } from './agent-state';
@@ -35,6 +43,7 @@ import { RouteService } from './routes';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
 import { TTSService } from './tts';
+import { TurnService } from './turns';
 import { WebhookService } from './webhooks';
 
 /**
@@ -66,6 +75,7 @@ export interface Services {
   batchJobs: BatchJobService;
   agentRunner: AgentRunnerService;
   tts: TTSService;
+  turns: TurnService;
   consumerOffsets: ConsumerOffsetService;
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
@@ -81,6 +91,21 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
 
   const settings = new SettingsService(db);
   const routeResolver = new RouteResolver(db);
+
+  // Wire provider registry to settings for config-based default resolution
+  providerRegistry.setSettings(settings);
+
+  // Register multimodal providers against the registry. Verb commands
+  // (speak, listen, imagine, film, see) resolve providers by capability
+  // via `providerRegistry.resolve('<capability>', name?)`.
+  const tts = new TTSService(settings);
+  providerRegistry.register('tts', 'elevenlabs', new ElevenLabsTtsProvider(tts));
+  providerRegistry.register('tts', 'gemini', new GeminiTtsProvider(settings));
+  providerRegistry.register('stt', 'gemini', new GeminiSttProvider(settings));
+  providerRegistry.register('stt', 'groq', new GroqSttProvider(settings));
+  providerRegistry.register('imagegen', 'gemini', new GeminiImageGenProvider(settings));
+  providerRegistry.register('videogen', 'gemini', new GeminiVideoGenProvider(settings));
+  providerRegistry.register('vision', 'gemini', new GeminiVisionProvider(settings));
 
   return {
     agents: new AgentService(db, eventBus),
@@ -107,7 +132,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     syncJobs: new SyncJobService(db, eventBus),
     batchJobs: new BatchJobService(db, eventBus),
     agentRunner: new AgentRunnerService(db),
-    tts: new TTSService(settings),
+    tts,
+    turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
     followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
     followUpSweeper: new FollowUpSweeperService(db, eventBus),

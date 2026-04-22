@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveAgentId, resolveChatId, resolveInstanceId } from '../resolve.js';
 
 type Scope = 'agents' | 'instances' | 'chats';
 
@@ -22,6 +23,12 @@ function assertScope(scope: string): asserts scope is Scope {
   if (!VALID_SCOPES.includes(scope as Scope)) {
     output.error(`Invalid scope: ${scope}. Expected one of: ${VALID_SCOPES.join(', ')}`);
   }
+}
+
+async function resolveScopedId(scope: Scope, id: string): Promise<string> {
+  if (scope === 'agents') return resolveAgentId(id);
+  if (scope === 'instances') return resolveInstanceId(id);
+  return resolveChatId(id);
 }
 
 function readJsonArg(raw: string): unknown {
@@ -49,14 +56,15 @@ export function createFollowUpCommand(): Command {
     .description('Read follow-up config at a scope (agents|instances|chats).')
     .action(async (scope: string, id: string) => {
       assertScope(scope);
+      const resolvedId = await resolveScopedId(scope, id);
       const client = getClient();
       try {
         const data =
           scope === 'agents'
-            ? await client.followUp.getAgent(id)
+            ? await client.followUp.getAgent(resolvedId)
             : scope === 'instances'
-              ? await client.followUp.getInstance(id)
-              : await client.followUp.getChat(id);
+              ? await client.followUp.getInstance(resolvedId)
+              : await client.followUp.getChat(resolvedId);
         output.data(data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -70,15 +78,16 @@ export function createFollowUpCommand(): Command {
     .action(async (scope: string, id: string, json: string) => {
       assertScope(scope);
       const config = readJsonArg(json);
+      const resolvedId = await resolveScopedId(scope, id);
       const client = getClient();
       try {
         const data =
           scope === 'agents'
-            ? await client.followUp.setAgent(id, config as never)
+            ? await client.followUp.setAgent(resolvedId, config as never)
             : scope === 'instances'
-              ? await client.followUp.setInstance(id, config as never)
-              : await client.followUp.setChat(id, config as never);
-        output.success(`Follow-up config set on ${scope.slice(0, -1)} ${id}.`, data);
+              ? await client.followUp.setInstance(resolvedId, config as never)
+              : await client.followUp.setChat(resolvedId, config as never);
+        output.success(`Follow-up config set on ${scope.slice(0, -1)} ${resolvedId}.`, data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to set ${scope} follow-up: ${message}`, undefined, 3);
@@ -90,12 +99,13 @@ export function createFollowUpCommand(): Command {
     .description('Clear the override at a scope so broader scopes apply.')
     .action(async (scope: string, id: string) => {
       assertScope(scope);
+      const resolvedId = await resolveScopedId(scope, id);
       const client = getClient();
       try {
-        if (scope === 'agents') await client.followUp.unsetAgent(id);
-        else if (scope === 'instances') await client.followUp.unsetInstance(id);
-        else await client.followUp.unsetChat(id);
-        output.success(`Follow-up config cleared on ${scope.slice(0, -1)} ${id}.`);
+        if (scope === 'agents') await client.followUp.unsetAgent(resolvedId);
+        else if (scope === 'instances') await client.followUp.unsetInstance(resolvedId);
+        else await client.followUp.unsetChat(resolvedId);
+        output.success(`Follow-up config cleared on ${scope.slice(0, -1)} ${resolvedId}.`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to unset ${scope} follow-up: ${message}`, undefined, 3);

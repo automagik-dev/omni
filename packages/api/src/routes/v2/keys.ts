@@ -6,25 +6,60 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { requireScope } from '../../middleware/auth';
+import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Non-admin profiles — `admin` is explicitly excluded at the route layer so
+ * HTTP callers can never mint a god-key regardless of scope grants. Admin
+ * keys are only mintable via the CLI's TTY-gated path.
+ */
+const NON_ADMIN_PROFILES = ['cs', 'personal', 'scout', 'coworker'] as const;
+type NonAdminProfile = (typeof NON_ADMIN_PROFILES)[number];
 
 // ============================================================================
 // SCHEMAS
 // ============================================================================
 
-const createKeySchema = z.object({
-  name: z.string().min(1).max(255).describe('Human-readable key name'),
-  description: z.string().optional().describe('Key description'),
-  scopes: z.array(z.string()).min(1).describe('Permission scopes (e.g. messages:read, instances:write)'),
-  instanceIds: z.array(z.string().uuid()).optional().describe('Restrict key to specific instance IDs'),
-  rateLimit: z.number().int().positive().optional().describe('Rate limit in requests per minute'),
-  expiresAt: z.string().datetime().optional().describe('Expiration timestamp (ISO 8601)'),
-});
+const profileOverridesSchema = z
+  .object({
+    add: z.array(z.string()).optional(),
+    remove: z.array(z.string()).optional(),
+    denylistPresetKey: z.string().nullable().optional(),
+    denylistExtras: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const createKeySchema = z
+  .object({
+    name: z.string().min(1).max(255).describe('Human-readable key name'),
+    description: z.string().optional().describe('Key description'),
+    scopes: z
+      .array(z.string())
+      .min(1)
+      .optional()
+      .describe('Permission scopes (ignored when a profile is supplied — scopes derive from the profile)'),
+    instanceIds: z.array(z.string().uuid()).optional().describe('Restrict key to specific instance IDs'),
+    rateLimit: z.number().int().positive().optional().describe('Rate limit in requests per minute'),
+    expiresAt: z.string().datetime().optional().describe('Expiration timestamp (ISO 8601)'),
+    // Profile-based key creation. `admin` is rejected unconditionally below.
+    profile: z
+      .enum(NON_ADMIN_PROFILES)
+      .optional()
+      .describe('Profile template: cs, personal, scout, coworker. admin is CLI-only and rejected here.'),
+    overrides: profileOverridesSchema.optional().describe('Tenant overrides merged on top of the profile template'),
+    chatAllowlist: z.array(z.string()).optional().describe('Chats this key may target (profile-aware semantics)'),
+    instanceAllowlist: z.array(z.string().uuid()).optional().describe('Instances this key may target'),
+    outboundRecipientAllowlist: z.array(z.string()).optional().describe('Outbound recipients this key may send to'),
+    owner: z.string().optional().describe('Scout owner JID — forced into outboundRecipientAllowlist'),
+    denylistPresetKey: z.string().optional().describe('Denylist preset key override for coworker'),
+  })
+  .passthrough();
 
 const updateKeySchema = z.object({
   name: z.string().min(1).max(255).optional().describe('Human-readable key name'),
@@ -46,18 +81,8 @@ const listQuerySchema = z.object({
 });
 
 const auditQuerySchema = z.object({
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Filter logs from this timestamp'),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Filter logs until this timestamp'),
+  since: optionalDateParam('since').describe('Filter logs from this timestamp'),
+  until: optionalDateParam('until').describe('Filter logs until this timestamp'),
   path: z.string().optional().describe('Filter by request path (partial match)'),
   statusCode: z.coerce.number().int().optional().describe('Filter by HTTP status code'),
   limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'),
@@ -70,11 +95,118 @@ const auditQuerySchema = z.object({
 
 /**
  * POST /keys - Create a new API key
- * Returns the plaintext key ONLY in this response.
+ *
+ * Admin-profile guard (runs BEFORE zod validation): rejects any body whose
+ * `profile` is literally `"admin"` with 403 — regardless of `keys:write`
+ * scope, regardless of any `operator_confirmed`-style bypass field.
+ * Admin-key minting is CLI-only and human-gated; this route must never
+ * mint one even for a fully privileged caller.
  */
-keysRoutes.post('/', requireScope('keys:write'), zValidator('json', createKeySchema), async (c) => {
-  const data = c.req.valid('json');
-  const services = c.get('services');
+keysRoutes.post(
+  '/',
+  async (c, next) => {
+    // Intentionally peek the raw body before zod so `profile: "admin"` is
+    // refused even if other fields would fail validation (e.g. missing name).
+    const raw = await c.req.raw
+      .clone()
+      .json()
+      .catch(() => null);
+    if (raw && typeof raw === 'object' && (raw as { profile?: unknown }).profile === 'admin') {
+      return c.json(
+        {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'admin keys cannot be created via HTTP — use the omni CLI on a TTY',
+          },
+        },
+        403,
+      );
+    }
+    await next();
+  },
+  zValidator('json', createKeySchema),
+  async (c) => {
+    const data = c.req.valid('json');
+    const services = c.get('services');
+
+    if (data.profile) {
+      return handleProfileCreate(c, data, services);
+    }
+    return handleLegacyCreate(c, data, services);
+  },
+);
+
+type CreateKeyData = z.infer<typeof createKeySchema>;
+type CreateServices = AppVariables['services'];
+
+function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfileInput['overrides'] {
+  if (!overrides) return undefined;
+  return {
+    ...overrides,
+    denylistPresetKey: overrides.denylistPresetKey === null ? undefined : overrides.denylistPresetKey,
+  };
+}
+
+async function handleProfileCreate(
+  c: Context<{ Variables: AppVariables }>,
+  data: CreateKeyData,
+  services: CreateServices,
+) {
+  try {
+    const resolved = resolveProfile({
+      profile: data.profile as NonAdminProfile,
+      chatAllowlist: data.chatAllowlist,
+      instanceAllowlist: data.instanceAllowlist,
+      outboundRecipientAllowlist: data.outboundRecipientAllowlist,
+      owner: data.owner,
+      overrides: normalizeOverrides(data.overrides),
+      denylistPresetKey: data.denylistPresetKey,
+    });
+
+    const result = await services.apiKeys.create({
+      name: data.name,
+      description: data.description,
+      scopes: resolved.scopes,
+      instanceIds: data.instanceIds,
+      rateLimit: data.rateLimit,
+      expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
+      createdBy: c.get('apiKey')?.name,
+      profile: resolved.profile,
+      profileOverrides: resolved.profileOverrides,
+      chatAllowlist: resolved.chatAllowlist,
+      instanceAllowlist: resolved.instanceAllowlist,
+      outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
+    });
+
+    return c.json({ data: { ...result.key, plainTextKey: result.plainTextKey } }, 201);
+  } catch (err) {
+    if (err instanceof ProfileResolutionError) {
+      return c.json(
+        {
+          error: {
+            code: err.code,
+            message: err.message,
+            ...(err.lock ? { details: { lock: err.lock } } : {}),
+          },
+        },
+        400,
+      );
+    }
+    throw err;
+  }
+}
+
+async function handleLegacyCreate(
+  c: Context<{ Variables: AppVariables }>,
+  data: CreateKeyData,
+  services: CreateServices,
+) {
+  if (!data.scopes || data.scopes.length === 0) {
+    return c.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'scopes is required when no profile is supplied' } },
+      400,
+    );
+  }
 
   const result = await services.apiKeys.create({
     name: data.name,
@@ -86,21 +218,13 @@ keysRoutes.post('/', requireScope('keys:write'), zValidator('json', createKeySch
     createdBy: c.get('apiKey')?.name,
   });
 
-  return c.json(
-    {
-      data: {
-        ...result.key,
-        plainTextKey: result.plainTextKey,
-      },
-    },
-    201,
-  );
-});
+  return c.json({ data: { ...result.key, plainTextKey: result.plainTextKey } }, 201);
+}
 
 /**
  * GET /keys - List all API keys
  */
-keysRoutes.get('/', requireScope('keys:read'), zValidator('query', listQuerySchema), async (c) => {
+keysRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const { status, limit } = c.req.valid('query');
   const services = c.get('services');
 
@@ -123,7 +247,7 @@ keysRoutes.get('/', requireScope('keys:read'), zValidator('query', listQuerySche
 /**
  * GET /keys/:id - Get a single API key
  */
-keysRoutes.get('/:id', requireScope('keys:read'), async (c) => {
+keysRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -138,7 +262,7 @@ keysRoutes.get('/:id', requireScope('keys:read'), async (c) => {
 /**
  * PATCH /keys/:id - Update an API key
  */
-keysRoutes.patch('/:id', requireScope('keys:write'), zValidator('json', updateKeySchema), async (c) => {
+keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
@@ -166,7 +290,7 @@ keysRoutes.patch('/:id', requireScope('keys:write'), zValidator('json', updateKe
 /**
  * POST /keys/:id/revoke - Revoke an API key
  */
-keysRoutes.post('/:id/revoke', requireScope('keys:write'), zValidator('json', revokeKeySchema), async (c) => {
+keysRoutes.post('/:id/revoke', zValidator('json', revokeKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
@@ -183,7 +307,7 @@ keysRoutes.post('/:id/revoke', requireScope('keys:write'), zValidator('json', re
 /**
  * DELETE /keys/:id - Permanently delete an API key
  */
-keysRoutes.delete('/:id', requireScope('keys:write'), async (c) => {
+keysRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
@@ -205,7 +329,7 @@ keysRoutes.delete('/:id', requireScope('keys:write'), async (c) => {
 /**
  * GET /keys/:id/audit - Get audit logs for an API key
  */
-keysRoutes.get('/:id/audit', requireScope('keys:read'), zValidator('query', auditQuerySchema), async (c) => {
+keysRoutes.get('/:id/audit', zValidator('query', auditQuerySchema), async (c) => {
   const id = c.req.param('id');
   const { since, until, path, statusCode, limit, cursor } = c.req.valid('query');
   const services = c.get('services');

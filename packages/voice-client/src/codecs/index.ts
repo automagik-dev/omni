@@ -1,0 +1,1 @@
+export { OpusCodec } from './opus';

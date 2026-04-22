@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-discord",
-  "version": "2.260404.1",
+  "version": "2.260422.9",
   "description": "Discord channel plugin for Omni using discord.js",
   "type": "module",
   "main": "src/index.ts",
@@ -16,6 +16,7 @@
   "dependencies": {
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
+    "@omni/voice-client": "workspace:*",
     "discord.js": "^14.18.0"
   },
   "devDependencies": {

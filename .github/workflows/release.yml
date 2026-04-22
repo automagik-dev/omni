@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["Version"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +12,10 @@ permissions:
 jobs:
   release:
     name: Create Release
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # Run when Version succeeded (automatic) or on manual dispatch
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
@@ -19,19 +23,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read version from package.json
+      - name: Resolve release tag
         id: pkg
         run: |
-          VERSION=$(jq -r '.version' package.json)
+          # Ensure all tags are fetched (actions/checkout may skip them)
+          git fetch --tags --force
+
+          # Latest v* tag — the one the Version workflow just created
+          # Use creatordate sort (not version:refname) because the calver format
+          # changed from v2.YYYYMMDD.N to v2.YYMMDD.N — old tags sort higher
+          # numerically but are older chronologically.
+          TAG=$(git tag --list 'v*' --sort=-creatordate | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::No v* tags found — cannot release."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version from package.json: ${VERSION}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: ${TAG} (version: ${VERSION})"
 
       - name: Check if release already exists
         id: exists
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
 
           if gh release view "${TAG}" > /dev/null 2>&1; then
             echo "Release ${TAG} already exists — skipping."
@@ -40,13 +58,17 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout release tag
+        if: steps.exists.outputs.skip != 'true'
+        run: git checkout "${{ steps.pkg.outputs.tag }}"
+
       - name: Find previous release tag
         id: prev
         if: steps.exists.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
           PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREV:-none}"
@@ -57,7 +79,7 @@ jobs:
         with:
           config: cliff.toml
           args: >-
-            ${{ steps.prev.outputs.tag && format('{0}..HEAD', steps.prev.outputs.tag) || '' }}
+            ${{ steps.prev.outputs.tag && format('{0}..{1}', steps.prev.outputs.tag, steps.pkg.outputs.tag) || '' }}
             --output /tmp/release-notes.md
         env:
           GITHUB_REPO: ${{ github.repository }}
@@ -67,9 +89,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.version }}"
+          TAG="${{ steps.pkg.outputs.tag }}"
           gh release create "${TAG}" \
-            --target "${{ github.sha }}" \
             --title "${TAG}" \
             --notes-file /tmp/release-notes.md
 
@@ -87,7 +108,7 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         run: bunx turbo run build --filter=@automagik/omni
 
-      - name: Publish to npm
+      - name: Publish to npm (@latest, with @next promotion fallback)
         if: steps.exists.outputs.skip != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -97,7 +118,18 @@ jobs:
             echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
             exit 1
           fi
-          cd packages/cli && bun publish --access public
+
+          VERSION="${{ steps.pkg.outputs.version }}"
+          cd packages/cli
+
+          # Try a fresh publish as @latest. If the version already exists on npm
+          # (the Version workflow already published it as @next when this build
+          # came through dev first), promote it by retagging instead of failing.
+          if ! bun publish --access public --tag latest 2>&1; then
+            echo "Publish failed — version may already exist from @next. Retagging as latest..."
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+            npm dist-tag add "@automagik/omni@${VERSION}" latest
+          fi
 
       # Note: CHANGELOG.md is intentionally not committed back to main.
       # main is a protected branch requiring PRs. The changelog is already

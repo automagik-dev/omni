@@ -1,0 +1,15 @@
+{
+  "workerId": "omni-fix",
+  "messages": [
+    {
+      "id": "msg-d454e859-fd34-4e09-ad6e-08c263dc781a",
+      "from": "team-lead",
+      "to": "omni-fix",
+      "body": "You are fixing FIX-FIRST gaps from PR #184 review (feat/agents-subcommand branch).\n\n## Gaps to Fix\n\n### GAP 1 (HIGH): Unrelated commit bundled in PR\nThe first commit `9351d09` (fix Discord threadId plumbing, GH#161) is unrelated to the agents subcommand feature (GH#172). It must be removed from this branch.\n\n**Fix:** Rebase the branch to drop commit `9351d09bff0ae3aab759a83555ea10de959aaa47`. The branch should only contain the two agents-related commits:\n- `d7b69cc` feat(cli): add omni agents subcommand for agent CRUD (GH#172)\n- `90be1d7` fix(cli): register agents commands in SDK coverage test\n\nSteps:\n```bash\ngit checkout feat/agents-subcommand\ngit rebase --onto 9351d09^ 9351d09  # Drop the discord commit\n# Or: git rebase -r dev and drop the first commit\n```\n\n### GAP 2 (HIGH): SDK agents.list() breaks return type convention\nEvery other `list()` method in the SDK returns `PaginatedResponse<T>` with `{ items, meta }`. The new `agents.list()` returns bare `Agent[]`, dropping pagination metadata.\n\n**Fix in `packages/sdk/src/client.ts`:**\nChange the `agents.list()` method to return `PaginatedResponse<components[\"schemas\"][\"Agent\"]>` instead of `components[\"schemas\"][\"Agent\"][]`.\n\nThe return should be:\n```typescript\nreturn {\n  items: data?.items ?? [],\n  meta: data?.meta ?? { hasMore: false },\n};\n```\n\nAlso update the CLI command in `packages/cli/src/commands/agents.ts` to handle the new return type — the list action accesses the result directly as an array, but now needs to access `.items`.\n\nChange:\n```typescript\nconst items = await client.agents.list({...});\n```\nTo:\n```typescript\nconst { items } = await client.agents.list({...});\n```\n\n### GAP 3 (MEDIUM): PR description says --active but code implements --inactive\nThis is just a doc mismatch, no code fix needed. We will update the PR description separately.\n\n## After fixing\n1. Run `bun run check` from the repo root to verify typecheck + lint pass\n2. Commit the changes with descriptive messages\n3. Report back what was done",
+      "createdAt": "2026-03-11T00:40:13.396Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T00:40:13.399Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T00:40:13.399Z"
+}

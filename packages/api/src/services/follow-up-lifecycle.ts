@@ -38,9 +38,29 @@ import {
   chats,
   instances,
 } from '@omni/db';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 
 const log = createLogger('follow-up-lifecycle');
+
+/**
+ * Disarm reasons that represent a terminal user/operator intent to stop the
+ * conversation. An agent-origin message received after one of these should
+ * NOT resurrect the sequence unless a customer message arrived in between
+ * (see `armForOutbound` re-arm guard). Tail-stream chunks, NATS redeliveries,
+ * or any agent activity that predates the disarm would otherwise re-arm a
+ * sequence the user explicitly terminated — that was #419.
+ *
+ * `customer_replied`, `sequence_complete`, `agent_error`, `send_failed` are
+ * *not* terminal intent: the former resumes on the very next agent reply
+ * (normal flow), the latter three mean the sequence ran its course or
+ * errored out and a brand-new agent reply can legitimately arm afresh.
+ */
+const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<FollowUpDisarmReason>([
+  'session_cleared',
+  'handoff',
+  'archived',
+  'window_expired',
+]);
 
 /**
  * Typed reads across the three storage locations — the resolver is DB-agnostic,
@@ -106,6 +126,51 @@ export class FollowUpLifecycleService {
     const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
     if (!config || config.enabled === false) return;
 
+    // Refuse to arm when the triggering message is already older than the
+    // first follow-up interval — the initial wait window has elapsed, so
+    // the sequence would fire immediately. Guards against NATS redelivery
+    // re-arming chats whose outbound happened long ago.
+    const firstIntervalMinutes =
+      config.schedule.kind === 'fixed' ? config.schedule.intervalsMinutes[0] : config.schedule.initialMinutes;
+    if (typeof firstIntervalMinutes === 'number' && firstIntervalMinutes > 0) {
+      const maxAgeMs = firstIntervalMinutes * 60_000;
+      const ageMs = Date.now() - input.lastAgentMessageAt.getTime();
+      if (ageMs > maxAgeMs) {
+        this.logger.warn('follow-up lifecycle: refusing to arm on stale message', {
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          ageMs,
+          maxAgeMs,
+          firstIntervalMinutes,
+        });
+        return;
+      }
+    }
+
+    // Terminal-disarm guard (#419): if the chat was disarmed with a terminal
+    // intent (user cleared the session, operator took handoff, chat archived,
+    // or the messaging window expired), refuse to re-arm unless the customer
+    // has actually sent a new message since the disarm. Without this check,
+    // any agent-origin `message.sent` that lands after the disarm (tail stream
+    // chunks, split-message tails, NATS redelivery of in-flight events) will
+    // resurrect a sequence the user explicitly terminated.
+    const existing = await this.readExistingRow(input.chatId, input.instanceId);
+    if (existing?.disarmReason && TERMINAL_DISARM_REASONS.has(existing.disarmReason) && existing.disarmedAt) {
+      const lastInbound = existing.lastInboundCustomerMessageAt?.getTime() ?? 0;
+      const disarmedAt = existing.disarmedAt.getTime();
+      if (lastInbound <= disarmedAt) {
+        this.logger.info('follow-up lifecycle: refusing to arm — terminal disarm awaiting customer return', {
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          disarmReason: existing.disarmReason,
+          disarmedAt: existing.disarmedAt.toISOString(),
+          lastAgentMessageAt: input.lastAgentMessageAt.toISOString(),
+          lastInboundCustomerMessageAt: existing.lastInboundCustomerMessageAt?.toISOString() ?? null,
+        });
+        return;
+      }
+    }
+
     try {
       await armSequence(
         { repo: this.repo, eventBus: this.eventBus, logger: this.logger },
@@ -119,6 +184,29 @@ export class FollowUpLifecycleService {
       );
     } catch (err) {
       this.logger.error('follow-up lifecycle: arm failed', {
+        chatId: input.chatId,
+        instanceId: input.instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Record an inbound customer message timestamp on an existing row
+   * regardless of its disarm state. Used by the inbound hook so a
+   * terminally-disarmed row can be "reactivated" for arming when the
+   * customer genuinely returns (see `armForOutbound` terminal-disarm guard).
+   * No-op when no row exists yet — the first outbound agent message will
+   * create one.
+   */
+  async touchInboundTimestamp(input: { chatId: string; instanceId: string; at: Date }): Promise<void> {
+    try {
+      await this.db
+        .update(chatFollowUpState)
+        .set({ lastInboundCustomerMessageAt: input.at, updatedAt: input.at })
+        .where(and(eq(chatFollowUpState.chatId, input.chatId), eq(chatFollowUpState.instanceId, input.instanceId)));
+    } catch (err) {
+      this.logger.warn('follow-up lifecycle: touchInboundTimestamp failed', {
         chatId: input.chatId,
         instanceId: input.instanceId,
         error: err instanceof Error ? err.message : String(err),
@@ -183,17 +271,46 @@ export class FollowUpLifecycleService {
         },
       })
       .returning({
-        // `xmax = 0` on Postgres returning rows means INSERT; non-zero means
-        // the row already existed and was updated. Drizzle doesn't expose
-        // `xmax`, but we can infer from `createdAt === updatedAt` — if they
-        // differ, the row existed before this call.
-        createdAt: chatFollowUpState.createdAt,
-        updatedAt: chatFollowUpState.updatedAt,
+        // Postgres sets `xmax = 0` on rows produced by INSERT and a non-zero
+        // xid on rows produced by UPDATE inside an INSERT ... ON CONFLICT.
+        // This is the canonical way to distinguish the two — more reliable
+        // than comparing timestamps, which can collide within a single ms.
+        xmax: sql<string>`xmax::text`,
       });
 
     const row = result[0];
-    const created = row ? row.createdAt.getTime() === row.updatedAt.getTime() : false;
+    const created = row?.xmax === '0';
     return { created };
+  }
+
+  /**
+   * Read the minimum fields required by the terminal-disarm guard in
+   * `armForOutbound`. Returns `null` when no row exists yet.
+   */
+  private async readExistingRow(
+    chatId: string,
+    instanceId: string,
+  ): Promise<{
+    disarmReason: FollowUpDisarmReason | null;
+    disarmedAt: Date | null;
+    lastInboundCustomerMessageAt: Date | null;
+  } | null> {
+    const [row] = await this.db
+      .select({
+        disarmReason: chatFollowUpState.disarmReason,
+        disarmedAt: chatFollowUpState.disarmedAt,
+        lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
+      })
+      .from(chatFollowUpState)
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)))
+      .limit(1);
+
+    if (!row) return null;
+    return {
+      disarmReason: (row.disarmReason ?? null) as FollowUpDisarmReason | null,
+      disarmedAt: row.disarmedAt ?? null,
+      lastInboundCustomerMessageAt: row.lastInboundCustomerMessageAt ?? null,
+    };
   }
 
   private async disarmActive(

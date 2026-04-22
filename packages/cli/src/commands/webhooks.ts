@@ -12,6 +12,7 @@
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveWebhookId } from '../resolve.js';
 
 export function createWebhooksCommand(): Command {
   const webhooks = new Command('webhooks').description('Manage webhook sources');
@@ -53,10 +54,11 @@ export function createWebhooksCommand(): Command {
     .command('get <id>')
     .description('Get webhook source details')
     .action(async (id: string) => {
+      const resolvedId = await resolveWebhookId(id);
       const client = getClient();
 
       try {
-        const source = await client.webhooks.getSource(id);
+        const source = await client.webhooks.getSource(resolvedId);
         output.data(source);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -113,6 +115,7 @@ export function createWebhooksCommand(): Command {
     .option('--disable', 'Disable the webhook')
     .action(
       async (id: string, options: { name?: string; description?: string; enable?: boolean; disable?: boolean }) => {
+        const resolvedId = await resolveWebhookId(id);
         const client = getClient();
 
         try {
@@ -122,7 +125,7 @@ export function createWebhooksCommand(): Command {
           if (options.enable) updates.enabled = true;
           if (options.disable) updates.enabled = false;
 
-          const source = await client.webhooks.updateSource(id, updates);
+          const source = await client.webhooks.updateSource(resolvedId, updates);
           output.success(`Webhook source updated: ${source.id}`, {
             id: source.id,
             name: source.name,
@@ -140,11 +143,12 @@ export function createWebhooksCommand(): Command {
     .command('delete <id>')
     .description('Delete a webhook source')
     .action(async (id: string) => {
+      const resolvedId = await resolveWebhookId(id);
       const client = getClient();
 
       try {
-        await client.webhooks.deleteSource(id);
-        output.success(`Webhook source deleted: ${id}`);
+        await client.webhooks.deleteSource(resolvedId);
+        output.success(`Webhook source deleted: ${resolvedId}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete webhook source: ${message}`);

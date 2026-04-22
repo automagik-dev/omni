@@ -43,6 +43,8 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { outputRedactorMiddleware } from './middleware/output-redactor';
+import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
@@ -120,6 +122,9 @@ export function createApp(
 
   // Error handler - must be registered with onError, not as middleware
   app.onError(errorHandler);
+
+  // Root-level health redirect for external checkers (k8s probes, genie providers)
+  app.get('/health', (c) => c.redirect('/api/v2/health', 307));
 
   // Health routes (no auth required)
   app.route('/api/v2', healthRoutes);
@@ -208,9 +213,28 @@ export function createApp(
     return c.json({ ok: true });
   });
 
+  // Public Gupshup webhook endpoint — auth-exempt, verified by optional ?token= query param.
+  // Must be mounted before protectedApp so Gupshup's servers (no x-api-key) can reach it.
+  app.post('/api/v2/channels/gupshup/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('gupshup');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Gupshup plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
+  protectedApp.use('*', scopeEnforcerMiddleware);
+  protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
   // Mount v2 routes

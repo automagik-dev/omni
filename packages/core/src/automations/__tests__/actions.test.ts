@@ -165,6 +165,8 @@ describe('call_agent — promptOverride', () => {
         syntheticPrompt: 'User has been idle',
         minutes: 5,
         sequenceIndex: 1,
+        attemptNumber: 2,
+        totalAttempts: 3,
         chatName: 'Alice',
       },
     });

@@ -1,0 +1,15 @@
+{
+  "workerId": "genie-review-81-v2",
+  "messages": [
+    {
+      "id": "msg-6c45196a-f4c1-4a00-a0b9-85ae9254d9d2",
+      "from": "fix-81",
+      "to": "genie-review-81-v2",
+      "body": "You are a Plan Reviewer. Review the wish at .genie/wishes/channel-error-migration/WISH.md using the Plan Review checklist:\n\n- [ ] Problem statement is one sentence and testable\n- [ ] Scope IN has concrete deliverables\n- [ ] Scope OUT is explicit — boundaries stated\n- [ ] Every task has testable acceptance criteria\n- [ ] Tasks are bite-sized and independently shippable\n- [ ] Dependencies tagged (depends-on / blocks)\n- [ ] Validation commands exist for each execution group\n\nSeverity levels: CRITICAL (blocks), HIGH (blocks), MEDIUM (no block), LOW (no block)\nVerdicts: SHIP (zero CRITICAL/HIGH), FIX-FIRST (any CRITICAL/HIGH), BLOCKED (scope/arch issue)\n\nRead the wish file, evaluate each criterion with evidence, and return your verdict. Do NOT implement any fixes — only review.",
+      "createdAt": "2026-03-11T06:42:32.333Z",
+      "read": false,
+      "deliveredAt": "2026-03-11T06:42:32.335Z"
+    }
+  ],
+  "lastUpdated": "2026-03-11T06:42:32.335Z"
+}

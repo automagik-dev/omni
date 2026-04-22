@@ -2,14 +2,21 @@
  * Restart Command
  *
  * omni restart — Restart omni PM2 processes and wait for health check
+ *
+ * IMPORTANT: This command does NOT ask pm2 to re-read the shell environment
+ * on restart. Doing so would re-introduce env-pollution bugs (e.g. stray
+ * `DATABASE_URL` from a parent tmux session leaking into omni-api). Instead,
+ * we rely on the env that was captured at original `pm2 start` time (built
+ * by `buildRuntimeEnv` from config). If the stored env is stale, use
+ * `omni doctor --fix` to rebuild it deterministically.
  */
 
-import { join } from 'node:path';
 import { Command } from 'commander';
 import { loadConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
+import { buildRuntimeEnv } from '../runtime-env.js';
 
 // ============================================================================
 // CONSTANTS
@@ -17,30 +24,6 @@ import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.
 
 /** Restart command uses a shorter health-check timeout than install */
 const RESTART_HEALTH_TIMEOUT_MS = 10_000;
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/**
- * Build complete runtime environment for the API process from config.
- * Used with --update-env to ensure restarted processes pick up config changes.
- */
-function buildApiRuntimeEnv(): Record<string, string> {
-  const serverConfig = loadServerConfig();
-  const config = loadConfig();
-  return {
-    API_PORT: String(serverConfig.port),
-    DATABASE_URL: serverConfig.databaseUrl,
-    OMNI_API_KEY: config.apiKey ?? '',
-    MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
-    PGSERVE_EMBEDDED: 'true',
-    PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
-    NATS_URL: 'nats://localhost:4222',
-    NODE_ENV: serverConfig.nodeEnv,
-    LOG_LEVEL: serverConfig.logLevel,
-  };
-}
 
 // ============================================================================
 // ACTION
@@ -52,11 +35,15 @@ async function runRestart(): Promise<void> {
   }
 
   const serverConfig = loadServerConfig();
+  const cliConfig = loadConfig();
   const apiPort = serverConfig.port;
 
   output.info('Restarting omni services...');
-  const env = buildApiRuntimeEnv();
-  const code = await runPm2(['restart', PM2_PROCESSES.api, PM2_PROCESSES.nats, '--update-env'], env);
+  // Build a hermetic env from config. We pass this so the pm2 CLI itself
+  // runs in a sanitized environment (no leakage from the parent shell's
+  // DATABASE_URL / OMNI_API_KEY).
+  const env = buildRuntimeEnv(serverConfig, cliConfig);
+  const code = await runPm2(['restart', PM2_PROCESSES.api, PM2_PROCESSES.nats], env);
   if (code !== 0) {
     output.warn('Some services may not have restarted cleanly — check pm2 status');
   }

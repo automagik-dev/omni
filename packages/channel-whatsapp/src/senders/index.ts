@@ -38,6 +38,7 @@ export {
 
 // Contact
 export {
+  computeWaid,
   buildVCard,
   buildContactContent,
   buildMultiContactContent,

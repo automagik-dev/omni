@@ -10,6 +10,8 @@
  * - Status: status@broadcast
  */
 
+import { computeWaid } from './senders/contact';
+
 /**
  * WhatsApp JID suffixes
  */
@@ -44,9 +46,10 @@ export function toJid(identifier: string, lidCache?: Map<string, string>): strin
     return identifier;
   }
 
-  // Clean phone number: remove all non-digits
+  // Clean phone number: remove all non-digits, normalize BR 9th digit
   const cleaned = identifier.replace(/\D/g, '');
-  const phoneJid = `${cleaned}${JID_SUFFIX.USER}`;
+  const normalized = computeWaid(cleaned);
+  const phoneJid = `${normalized}${JID_SUFFIX.USER}`;
 
   // Try LID resolution: phone→LID lookup
   if (lidCache) {
@@ -172,17 +175,27 @@ export function isLidJid(jid: string): boolean {
 }
 
 /**
- * Resolve a JID to its canonical form (LID-first).
+ * Resolve a JID to its canonical form under the LID-first model.
  *
- * In the LID-first model, LID JIDs are kept as-is (they ARE canonical).
- * Phone JIDs are also kept as-is (they're canonical when no LID is known).
- * The only resolution that happens is storing the bidirectional mapping
- * when `remoteJidAlt` provides the alternate form.
+ * The same human can be addressed by Baileys under two JIDs — `<lid>@lid`
+ * and `<phone>@s.whatsapp.net`. To stop debounce/session keys from
+ * fragmenting we collapse both forms onto the LID whenever a mapping is
+ * known. The LID is preferred because it is the default modern addressing
+ * mode, so most messages already arrive in canonical form and only the
+ * occasional phone-addressed message gets remapped.
  *
- * @param jid - The JID to resolve (may be @lid or @s.whatsapp.net)
- * @param remoteJidAlt - Alternative JID from msg.key.remoteJidAlt (if available)
- * @param lidCache - Map of LID JID → phone JID for this instance (used for mapping storage, not resolution)
- * @returns The canonical JID (unchanged — LID stays LID, phone stays phone)
+ * Resolution rules:
+ * - Empty / nullish JID         → ''
+ * - Group / broadcast / newsletter → unchanged (no canonicalization needed)
+ * - `@lid` JID                  → unchanged (already canonical)
+ * - `@s.whatsapp.net` JID       → upgrade to LID via `remoteJidAlt` first,
+ *                                 then via the bidirectional cache; fall
+ *                                 back to the original phone JID when no
+ *                                 mapping exists yet (best effort).
+ *
+ * @param jid - The JID to canonicalize (may be `@lid` or `@s.whatsapp.net`)
+ * @param remoteJidAlt - Alt JID from `msg.key.remoteJidAlt` / `participantAlt`
+ * @param lidCache - Bidirectional LID↔phone cache for this instance
  */
 export function resolveCanonicalJid(
   jid: string | undefined | null,
@@ -191,12 +204,26 @@ export function resolveCanonicalJid(
 ): string {
   if (!jid) return '';
 
-  // In LID-first model, every JID is already canonical — return as-is
-  // The remoteJidAlt and lidCache params are kept for caller convenience
-  // (callers may use them for mapping storage at the call site)
-  void remoteJidAlt;
-  void lidCache;
+  // Non-user JIDs (group / broadcast / newsletter) — already canonical.
+  if (!isCanonicalJid(jid)) return jid;
 
+  // Already a LID — canonical under LID-first.
+  if (isLidJid(jid)) return jid;
+
+  // Phone-addressed: try to upgrade to LID. Prefer the alt JID from the
+  // message key (most authoritative — it came directly from Baileys).
+  if (remoteJidAlt && isLidJid(remoteJidAlt)) {
+    return remoteJidAlt;
+  }
+
+  // Fall back to the bidirectional cache (phone→LID direction).
+  if (lidCache) {
+    const lidJid = lidCache.get(jid);
+    if (lidJid && isLidJid(lidJid)) return lidJid;
+  }
+
+  // No mapping yet — keep the phone JID. A later message from the same
+  // human will populate the cache and subsequent ones will canonicalize.
   return jid;
 }
 

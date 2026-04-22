@@ -2,10 +2,10 @@
  * Connect Command — omni connect <instance-id> <agent-name>
  *
  * One-command setup for Omni ↔ Genie NATS integration:
- *   1. Discovers agent via `genie dir get <agent-name> --json`
+ *   1. Discovers agent via `genie dir ls <agent-name> --json`
  *   2. Creates/updates Omni provider with schema `nats-genie`
  *   3. Creates Omni agent record linked to provider
- *   4. Updates instance to use the new agent
+ *   4. Updates instance with agentId (FK), agentProviderId, agentReplyFilter, and triggerMode
  */
 
 import { execFileSync } from 'node:child_process';
@@ -84,13 +84,21 @@ async function findOrCreateAgent(client: OmniClient, agentName: string, provider
   }
 }
 
+interface ConnectOptions {
+  natsUrl: string;
+  mode: 'turn-based' | 'fire-and-forget';
+  replyFilter: 'all' | 'filtered';
+}
+
 export function createConnectCommand(): Command {
   return new Command('connect')
     .description('Connect an Omni instance to a Genie agent via NATS')
     .argument('<instance-id>', 'Omni instance ID')
     .argument('<agent-name>', 'Genie agent name (from genie directory)')
     .option('--nats-url <url>', 'NATS server URL', 'localhost:4222')
-    .action(async (instanceId: string, agentName: string, options: { natsUrl: string }) => {
+    .option('--mode <mode>', 'Trigger mode: turn-based (round-trip) or fire-and-forget', 'turn-based')
+    .option('--reply-filter <filter>', 'Reply filter: all (reply to everything) or filtered', 'all')
+    .action(async (instanceId: string, agentName: string, options: ConnectOptions) => {
       const client = getClient();
 
       // 1. Discover agent from genie directory
@@ -98,7 +106,7 @@ export function createConnectCommand(): Command {
 
       let agentEntry: GenieDirectoryEntry;
       try {
-        const stdout = execFileSync('genie', ['dir', 'get', agentName, '--json'], {
+        const stdout = execFileSync('genie', ['dir', 'ls', agentName, '--json'], {
           encoding: 'utf-8',
           env: process.env,
           timeout: 10_000,
@@ -131,18 +139,44 @@ export function createConnectCommand(): Command {
       const agentId = await findOrCreateAgent(client, agentName, providerId);
       if (!agentId) return;
 
-      // 5. Update instance to use the agent
+      // 5. Resolve trigger mode
+      const triggerMode = options.mode === 'turn-based' ? 'round-trip' : 'fire-and-forget';
+
+      // 6. Build reply filter
+      const replyFilterMode = options.replyFilter;
+      const agentReplyFilter = { mode: replyFilterMode, conditions: {} };
+
+      // 7. Update instance — set agentId FK, agentProviderId, replyFilter, and triggerMode
       output.info('Updating instance agent assignment...');
       try {
-        await client.instances.update(instanceId, { agentProviderId: providerId } as Record<string, unknown>);
+        await client.instances.update(instanceId, {
+          agentId,
+          agentProviderId: providerId,
+          agentReplyFilter,
+          triggerMode,
+        } as Record<string, unknown>);
       } catch {
         output.warn('Could not update instance agent assignment automatically.');
-        output.info(`Set manually: omni instances update ${instanceId} --agent-provider-id ${providerId}`);
+        output.info(
+          `Set manually: omni instances update ${instanceId} --agent-id ${agentId} --agent-provider-id ${providerId}`,
+        );
+        return;
       }
 
-      // Done
-      output.success(
-        `Connected instance "${instanceId}" to genie agent "${agentName}".\n  NATS topics:\n    Inbound:  omni.message.${instanceId}.*\n    Outbound: omni.reply.${instanceId}.*\n\n  Next: Start the genie bridge:\n    genie omni start`,
-      );
+      // Done — print summary
+      output.success(`Connected instance "${instanceId}" to genie agent "${agentName}".`);
+
+      output.header('Configuration Summary');
+      output.keyValue('Agent ID', agentId);
+      output.keyValue('Provider ID', providerId);
+      output.keyValue('Reply Filter', replyFilterMode);
+      output.keyValue('Trigger Mode', `${triggerMode} (--mode ${options.mode})`);
+
+      output.header('NATS Topics');
+      output.keyValue('Inbound', `omni.message.${instanceId}.*`);
+      output.keyValue('Outbound', `omni.reply.${instanceId}.*`);
+
+      output.header('Next Step');
+      output.info('Start the genie bridge:  genie omni start');
     });
 }

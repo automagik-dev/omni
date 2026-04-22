@@ -62,7 +62,9 @@ export async function extractForwardedAttachments(message: Message): Promise<For
  */
 export async function downloadForwardedAttachment(attachment: ForwardedAttachment): Promise<Buffer | null> {
   try {
-    const response = await fetch(attachment.url);
+    const response = await fetch(attachment.url, {
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       log.warn('Failed to download forwarded attachment', {
         url: attachment.url,
