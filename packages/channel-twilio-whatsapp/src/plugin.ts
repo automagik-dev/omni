@@ -78,9 +78,9 @@ function buildConfig(config: InstanceConfig): TwilioWhatsAppConfig {
 }
 
 function canAttachBodyWithMedia(contentType: string | undefined): boolean {
-  // Twilio WhatsApp ignores Body when paired with video, audio, document,
-  // contact, or location media. Image is the only media caption we can deliver.
-  return contentType === 'image' || contentType === undefined;
+  // Twilio WhatsApp supports captions (Body) on image, video, and document
+  // media. Audio, sticker, contact, and location ignore Body.
+  return contentType === 'image' || contentType === 'video' || contentType === 'document' || contentType === undefined;
 }
 
 function lastInboundMessageStorageKey(instanceId: string, chatId: string): string {
@@ -246,6 +246,7 @@ export class TwilioWhatsAppPlugin extends BaseChannelPlugin {
         chatId,
         to: chatId,
         content: {
+          ...content,
           type: content.type as import('@omni/core/types').ContentType,
           text: getDeliveredTextContent(content),
           mediaUrl: content.mediaUrl,
@@ -368,11 +369,11 @@ export class TwilioWhatsAppPlugin extends BaseChannelPlugin {
       new Set(messageIdsToMark.filter((messageId): messageId is string => Boolean(messageId))),
     );
 
-    // Twilio does not expose a standalone API to mark inbound user messages as
-    // read. The WhatsApp typing-indicator endpoint is the documented read path:
-    // referencing an inbound MessageSid marks it read and briefly shows typing.
+    // Mark each inbound message as read via the Twilio Messages resource.
+    // POST /2010-04-01/Accounts/{AccountSid}/Messages/{MessageSid} with
+    // `Status=read` delivers a WhatsApp read receipt for the referenced SID.
     for (const messageId of uniqueMessageIds) {
-      await state.client.sendTypingIndicator(messageId);
+      await state.client.markMessageAsRead(messageId);
     }
   }
 

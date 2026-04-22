@@ -79,6 +79,34 @@ describe('TwilioWhatsAppClient', () => {
     await expect(client.sendMessage({ to: '+15559998888', body: 'hello' })).rejects.toBeInstanceOf(TwilioWhatsAppError);
   });
 
+  test('posts Status=read to Messages resource to mark a message as read', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      okResponse({ sid: 'SMaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', status: 'read' }),
+    );
+    const client = new TwilioWhatsAppClient(config);
+
+    await client.markMessageAsRead('SMaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://api.twilio.com/2010-04-01/Accounts/ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/Messages/SMaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json',
+    );
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toStartWith('Basic ');
+
+    const body = init.body as URLSearchParams;
+    expect(body.get('Status')).toBe('read');
+  });
+
+  test('rejects markMessageAsRead without a Twilio message id', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(okResponse({ sid: 'SM123' }));
+    const client = new TwilioWhatsAppClient(config);
+
+    await expect(client.markMessageAsRead('local-message-id')).rejects.toBeInstanceOf(TwilioWhatsAppError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   test('posts typing indicators to Twilio Messaging endpoint', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(okResponse({ success: true }));
     const client = new TwilioWhatsAppClient(config);

@@ -157,14 +157,14 @@ describe('TwilioWhatsAppPlugin', () => {
     });
   });
 
-  test('does not attach document captions that Twilio WhatsApp would ignore', async () => {
+  test('attaches document captions alongside media', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(okResponse({ sid: 'SM456', status: 'queued' }));
 
     const result = await plugin.sendMessage(instanceId, {
       to: '+15559998888',
       content: {
         type: 'document',
-        caption: 'ignored document caption',
+        caption: 'document caption',
         mediaUrl: 'https://cdn.example.com/report.pdf',
       },
     });
@@ -172,17 +172,17 @@ describe('TwilioWhatsAppPlugin', () => {
     expect(result.success).toBe(true);
     const body = requestBody(fetchSpy);
     expect(body.get('MediaUrl')).toBe('https://cdn.example.com/report.pdf');
-    expect(body.get('Body')).toBeNull();
+    expect(body.get('Body')).toBe('document caption');
 
     const sent = eventBus.published.find((event) => event.type === 'message.sent');
     expect(sent?.payload).toMatchObject({
       externalId: 'SM456',
       content: {
         type: 'document',
+        text: 'document caption',
         mediaUrl: 'https://cdn.example.com/report.pdf',
       },
     });
-    expect((sent?.payload as { content?: { text?: string } }).content?.text).toBeUndefined();
   });
 
   test('preserves location body text in message.sent', async () => {

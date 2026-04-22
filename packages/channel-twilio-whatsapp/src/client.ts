@@ -80,6 +80,35 @@ export class TwilioWhatsAppClient {
     return parsed as TwilioMessageResponse;
   }
 
+  async markMessageAsRead(messageSid: string): Promise<TwilioMessageResponse> {
+    if (!/^(SM|MM)[0-9a-fA-F]{32}$/.test(messageSid)) {
+      throw new TwilioWhatsAppError(
+        TwilioWhatsAppErrorCode.BAD_REQUEST,
+        'markMessageAsRead requires a Twilio MessageSid',
+      );
+    }
+
+    const body = new URLSearchParams();
+    body.set('Status', 'read');
+
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${this.config.twilioAccountSid}/Messages/${messageSid}.json`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authorizationHeader(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+
+    const parsed = await this.parseResponse(res);
+    if (!res.ok) {
+      this.throwForError(parsed, res.status);
+    }
+
+    return parsed as TwilioMessageResponse;
+  }
+
   async sendTypingIndicator(messageId: string): Promise<TwilioTypingIndicatorResponse> {
     if (!/^(SM|MM)[0-9a-fA-F]{32}$/.test(messageId)) {
       throw new TwilioWhatsAppError(
