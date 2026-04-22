@@ -68,6 +68,7 @@ import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import {
@@ -149,62 +150,6 @@ interface DispatchFields {
 
 /** Instance extended with transient dispatch fields for in-process agent resolution. */
 type DispatchInstance = Instance & DispatchFields;
-
-// ============================================================================
-// Rate Limiter
-// ============================================================================
-
-/** Default rate limit: 5 triggers per 60-second window */
-const DEFAULT_RATE_LIMIT = 5;
-const DEFAULT_RATE_WINDOW_MS = 60_000;
-
-class RateLimiter {
-  /** Map of "userId:channelType:instanceId" → timestamps[] */
-  private counters: Map<string, number[]> = new Map();
-  private readonly windowMs: number;
-
-  constructor(windowMs = DEFAULT_RATE_WINDOW_MS) {
-    this.windowMs = windowMs;
-  }
-
-  /**
-   * Check if a trigger is allowed (under rate limit)
-   */
-  isAllowed(userId: string, channelType: string, instanceId: string, maxPerMinute: number): boolean {
-    const key = `${userId}:${channelType}:${instanceId}`;
-    const now = Date.now();
-
-    // Get or create counter
-    let timestamps = this.counters.get(key) ?? [];
-
-    // Remove expired entries
-    timestamps = timestamps.filter((ts) => now - ts < this.windowMs);
-
-    if (timestamps.length >= maxPerMinute) {
-      log.debug('Rate limit exceeded', { key, count: timestamps.length, limit: maxPerMinute });
-      return false;
-    }
-
-    timestamps.push(now);
-    this.counters.set(key, timestamps);
-    return true;
-  }
-
-  /**
-   * Clean up expired entries periodically
-   */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamps] of this.counters.entries()) {
-      const active = timestamps.filter((ts) => now - ts < this.windowMs);
-      if (active.length === 0) {
-        this.counters.delete(key);
-      } else {
-        this.counters.set(key, active);
-      }
-    }
-  }
-}
 
 // ============================================================================
 // Reaction Dedup
@@ -1363,6 +1308,14 @@ function buildMessageTrigger(
   allContextMessages: string[],
 ): AgentTrigger {
   const threadId = extractThreadId(messages);
+  // Instance-scoped env that any provider/bridge path should see, regardless
+  // of turn-based vs fire-and-forget. The turn-based helper layers
+  // OMNI_TURN_ID on top after opening the turn; that extension merges with
+  // whatever we set here, never replaces it.
+  const env: Record<string, string> = {};
+  if (instance.bridgeTmuxSession) {
+    env.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
+  }
   return {
     traceId,
     type: triggerType,
@@ -1386,6 +1339,7 @@ function buildMessageTrigger(
     },
     sessionId,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
+    env: Object.keys(env).length > 0 ? env : undefined,
   };
 }
 
@@ -1744,9 +1698,13 @@ async function dispatchViaTurnBasedProvider(
     timestamp: new Date().toISOString(),
   });
 
-  // Inject env vars into trigger for the agent bridge.
-  // OMNI_TURN_ID allows the agent to close the correct turn via POST /v2/turns/close.
+  // Inject turn-based env vars. OMNI_TURN_ID lets the agent close the correct
+  // turn via POST /v2/turns/close. Instance-scoped env keys (e.g.
+  // GENIE_TMUX_SESSION for per-instance tmux routing) are populated by
+  // buildMessageTrigger already — merge instead of replace so both layers
+  // reach the bridge.
   trigger.env = {
+    ...(trigger.env ?? {}),
     OMNI_INSTANCE: instance.id,
     OMNI_CHAT: chatId,
     OMNI_MESSAGE: messageId,
@@ -3042,6 +3000,45 @@ export function resolveProvider(
 }
 
 /**
+ * Invalidate cached IAgentProvider instances for a specific provider.
+ *
+ * Call after provider schemaConfig / baseUrl / apiKey updates so the next
+ * dispatch rebuilds from fresh DB state instead of returning the stale
+ * cached instance. Also stops and removes the shared OpenClaw WS client
+ * for this provider since connection-level config may have changed.
+ */
+export function invalidateProviderCache(providerId: string): void {
+  const prefix = `${providerId}:`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  const openclawClient = openclawClientPool.get(providerId);
+  if (openclawClient) {
+    try {
+      openclawClient.stop();
+    } catch (err) {
+      log.warn('Error stopping OpenClaw client on cache invalidation', {
+        providerId,
+        error: String(err),
+      });
+    }
+    openclawClientPool.delete(providerId);
+  }
+
+  log.debug('Provider cache invalidated', { providerId, removed });
+}
+
+/**
  * Look up provider from DB and resolve to IAgentProvider.
  * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */
@@ -3567,7 +3564,6 @@ async function shouldProcessMessage(
   chatsService: Services['chats'],
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
-  rateLimiter: RateLimiter,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3687,11 +3683,10 @@ async function shouldProcessMessage(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
-    return null;
-  }
+
+  // #384: Rate limiting is deferred to the debounced flush so fast-typed
+  // messages still reach the debounce buffer. Counting per-inbound-message
+  // silently dropped mid-thought messages and corrupted the agent context.
 
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
   if (accessDenied) return null;
@@ -3777,7 +3772,6 @@ async function checkAccessWithFallback(
 async function shouldProcessReaction(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
-  rateLimiter: RateLimiter,
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
@@ -3796,11 +3790,6 @@ async function shouldProcessReaction(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
-    return null;
-  }
 
   // Access check for reactions (reuses LID fallback logic)
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
@@ -3980,11 +3969,7 @@ export async function setupAgentDispatcher(
 ): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
-  const rateLimiter = new RateLimiter();
   const reactionDedup = new ReactionDedup();
-
-  // Periodic cleanup of rate limiter counters
-  const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
   // Periodic cleanup of leaked media promises (10min circuit breaker)
   const mediaCleanupInterval = setInterval(() => {
@@ -4030,6 +4015,11 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
+    // #384: No inbound rate limiter. The debouncer already collapses conversational
+    // bursts into a single trigger — capping inbound volume on top of that silently
+    // dropped real user messages and corrupted agent context. Accept any burst size;
+    // the debouncer is the single source of burst control for message triggers.
+
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
       const tracker = getJourneyTracker();
@@ -4049,86 +4039,99 @@ export async function setupAgentDispatcher(
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessMessage(
-            agentRunner,
-            accessService,
-            services.chats,
-            services.messages,
-            services.routeResolver,
-            rateLimiter,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
-
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
-
-          // Early route resolution: resolve route BEFORE debounce so per-user
-          // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
-          const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
-
-          // Resolve person ID for route matching. metadata.personId may not be set yet
-          // (message-persistence runs in parallel), so fall back to identity lookup.
-          const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-          const earlyPersonId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
-
-          const { instance: resolved, routeId } = await resolveEffectiveInstance(
-            services,
-            db,
-            instance,
-            chat?.id,
-            earlyPersonId,
-          );
-
-          const debounceConfig = getDebounceConfig(resolved);
-
-          // Group chats (WhatsApp: @g.us) can use a different debounce window.
-          // If configured, use groupMs instead of minMs for the timer delay.
-          const isGroupChat = payload.chatId.includes('@g.us');
-          const effectiveDebounceConfig: DebounceConfig =
-            isGroupChat && debounceConfig.groupMs != null
-              ? {
-                  ...debounceConfig,
-                  minMs: debounceConfig.groupMs,
-                  // Safety: keep randomized ranges non-negative if maxMs < groupMs
-                  maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
-                }
-              : debounceConfig;
-
-          debouncer.buffer(
-            instance.id,
-            payload.chatId,
-            {
+        // Idempotency guard (#411): NATS at-least-once + PM2 SIGKILL caused
+        // the same message.received to be re-buffered, producing duplicate
+        // agent dispatches on the customer side.
+        await withIdempotency(db, event.id, 'agent-dispatcher-msg', async () => {
+          try {
+            const instance = await shouldProcessMessage(
+              agentRunner,
+              accessService,
+              services.chats,
+              services.messages,
+              services.routeResolver,
               payload,
-              metadata: {
-                instanceId: instance.id,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-                traceId,
-                correlationId: metadata.correlationId,
-                journeyTracked: metadata.timings != null,
-                resolvedInstance: resolved,
-                routeId,
+              metadata,
+            );
+            if (!instance) return;
+
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
+
+            // Early route resolution: resolve route BEFORE debounce so per-user
+            // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
+            const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+
+            // Resolve person ID for route matching. metadata.personId may not be set yet
+            // (message-persistence runs in parallel), so fall back to identity lookup.
+            const channel = (metadata.channelType ?? instance.channel) as ChannelType;
+            const earlyPersonId = await resolvePersonId(
+              services,
+              channel,
+              instance.id,
+              payload.from,
+              metadata.personId,
+            );
+
+            const { instance: resolved, routeId } = await resolveEffectiveInstance(
+              services,
+              db,
+              instance,
+              chat?.id,
+              earlyPersonId,
+            );
+
+            const debounceConfig = getDebounceConfig(resolved);
+
+            // Group chats (WhatsApp: @g.us) can use a different debounce window.
+            // If configured, use groupMs instead of minMs for the timer delay.
+            const isGroupChat = payload.chatId.includes('@g.us');
+            const effectiveDebounceConfig: DebounceConfig =
+              isGroupChat && debounceConfig.groupMs != null
+                ? {
+                    ...debounceConfig,
+                    minMs: debounceConfig.groupMs,
+                    // Safety: keep randomized ranges non-negative if maxMs < groupMs
+                    maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
+                  }
+                : debounceConfig;
+
+            debouncer.buffer(
+              instance.id,
+              payload.chatId,
+              {
+                payload,
+                metadata: {
+                  instanceId: instance.id,
+                  channelType: metadata.channelType,
+                  personId: metadata.personId,
+                  platformIdentityId: metadata.platformIdentityId,
+                  traceId,
+                  correlationId: metadata.correlationId,
+                  journeyTracked: metadata.timings != null,
+                  resolvedInstance: resolved,
+                  routeId,
+                },
+                timestamp: event.timestamp,
               },
-              timestamp: event.timestamp,
-            },
-            effectiveDebounceConfig,
-          );
-        } catch (error) {
-          log.error('Error processing message for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+              effectiveDebounceConfig,
+            );
+          } catch (error) {
+            log.error('Error processing message for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-msg',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411. For an existing durable this is
+        // ignored (last-ack position wins); for a recreated durable it
+        // prevents arbitrary-time replay of an old event.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4142,46 +4145,44 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
+        // Idempotency guard (#411): replay would re-dispatch the agent turn
+        // for the same reaction event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction', async () => {
+          try {
+            const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4195,47 +4196,50 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-            'reaction.removed',
-          );
-          if (!instance) return;
+        // Idempotency guard (#411).
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction-removed', async () => {
+          try {
+            const instance = await shouldProcessReaction(
+              agentRunner,
+              accessService,
+              reactionDedup,
+              payload,
+              metadata,
+              'reaction.removed',
+            );
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction removal for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction removal for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction-removed',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4251,35 +4255,40 @@ export async function setupAgentDispatcher(
 
         if (!metadata.instanceId) return;
 
-        try {
-          const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!baseInstance?.agentId) return;
+        // Idempotency guard (#411): replay would re-restart the debounce
+        // timer on a stale typing event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-typing', async () => {
+          try {
+            const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            if (!baseInstance?.agentId) return;
 
-          // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
-          // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
-          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          const typingPersonId = metadata.personId;
-          const { instance: resolved } = await resolveEffectiveInstance(
-            services,
-            db,
-            baseInstance,
-            chat?.id,
-            typingPersonId,
-          );
+            // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+            // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
+            const chat = await services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId);
+            const typingPersonId = metadata.personId;
+            const { instance: resolved } = await resolveEffectiveInstance(
+              services,
+              db,
+              baseInstance,
+              chat?.id,
+              typingPersonId,
+            );
 
-          const debounceConfig = getDebounceConfig(resolved);
-          if (debounceConfig.restartOnTyping) {
-            debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
+            const debounceConfig = getDebounceConfig(resolved);
+            if (debounceConfig.restartOnTyping) {
+              debouncer.onUserTyping(metadata.instanceId as string, payload.chatId, debounceConfig);
+            }
+          } catch (error) {
+            log.debug('Error handling typing event', { error: String(error) });
           }
-        } catch (error) {
-          log.debug('Error handling typing event', { error: String(error) });
-        }
+        });
       },
       {
         durable: 'agent-dispatcher-typing',
         queue: 'agent-dispatcher',
         maxRetries: 1,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 10,
       },
     );
@@ -4290,20 +4299,25 @@ export async function setupAgentDispatcher(
     await eventBus.subscribe(
       'media.processed',
       async (event) => {
-        const payload = event.payload as MediaProcessedPayload;
-        const { mediaId, content, error } = payload;
+        // Idempotency guard (#411): replay would re-cache stale media or
+        // resolve a stale promise. The in-memory state already TTLs cleanly
+        // but the durable replay still pollutes the cache for 5min.
+        await withIdempotency(db, event.id, 'agent-dispatcher-media', async () => {
+          const payload = event.payload as MediaProcessedPayload;
+          const { mediaId, content, error } = payload;
 
-        // If dispatcher is already waiting → resolve the promise
-        const pending = mediaCompletions.get(mediaId);
-        if (pending) {
-          pending.resolve({ content, error });
-          mediaCompletions.delete(mediaId);
-          return;
-        }
+          // If dispatcher is already waiting → resolve the promise
+          const pending = mediaCompletions.get(mediaId);
+          if (pending) {
+            pending.resolve({ content, error });
+            mediaCompletions.delete(mediaId);
+            return;
+          }
 
-        // If dispatcher hasn't asked yet → cache the result (TTL 5min)
-        mediaResultCache.set(mediaId, { content, error });
-        setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+          // If dispatcher hasn't asked yet → cache the result (TTL 5min)
+          mediaResultCache.set(mediaId, { content, error });
+          setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+        });
       },
       {
         durable: 'agent-dispatcher-media',
@@ -4315,7 +4329,6 @@ export async function setupAgentDispatcher(
     log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
@@ -4324,7 +4337,6 @@ export async function setupAgentDispatcher(
   // Return cleanup function for graceful shutdown
   return async () => {
     log.info('Shutting down agent dispatcher');
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
 

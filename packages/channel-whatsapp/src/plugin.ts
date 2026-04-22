@@ -1371,8 +1371,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
     }
 
-    // Determine fromMe: metadata can override, default true
+    // Determine target key fields: metadata comes from the persisted target message.
     const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+    const targetParticipant =
+      typeof message.metadata?.targetParticipant === 'string' ? message.metadata.targetParticipant : undefined;
 
     // Minimal delay for reactions (shorter than full humanDelay)
     await this.humanDelay(instanceId);
@@ -1382,12 +1384,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       targetMessageId,
       emoji: reactionEmoji || '(remove)',
       fromMe,
+      targetParticipant,
     });
 
     const correlationId = message.metadata?.correlationId as string | undefined;
     correlationId && this.captureT10(correlationId);
 
-    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe, targetParticipant);
 
     // Track sent reaction ID so shouldProcessMessage can filter the echo (#336)
     if (reactionMsgId) {
@@ -2636,6 +2639,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   handleConnectionError(instanceId: string, error: string, willRetry: boolean): void {
     this.logger.error('Connection error', { instanceId, error, willRetry });
+
+    if (!willRetry) {
+      // Baileys gave up its internal retry loop — transition to 'disconnected'
+      // so InstanceMonitor.needsReconnect() re-arms the API-level backoff.
+      // Otherwise the socket lingers in 'reconnecting' forever (issue #408).
+      const config = this.instances.get(instanceId)?.config;
+      if (config) {
+        void this.updateInstanceStatus(instanceId, config, {
+          state: 'disconnected',
+          since: new Date(),
+          message: error,
+        });
+      }
+    }
   }
 
   /**
@@ -2796,6 +2813,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       externalId,
       chatId,
       from,
+      senderName: senderPushName,
+      chatName: typeof extendedPayload.chatName === 'string' ? extendedPayload.chatName : undefined,
       content: {
         type: content.type,
         text: content.text || content.caption,
@@ -3557,11 +3576,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
       this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
 
+      const historySenderName = (msg as { pushName?: string | null }).pushName ?? undefined;
+
       await this.emitMessageReceived({
         instanceId,
         externalId: msg.key.id,
         chatId,
         from: senderId,
+        senderName: historySenderName,
+        chatName: typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined,
         content: {
           type: content.type as ContentType,
           text: content.text || content.caption,
@@ -3633,13 +3656,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       const meta = { instanceId, channelType: this.id };
 
-      // Publish sync.progress event
+      // Publish sync.progress event — omit `progress` when Baileys didn't report one
+      // so downstream can distinguish "unknown denominator" from "0%".
+      const payload: { instanceId: string; jobType: 'history-push'; fetched: number; progress?: number } = {
+        instanceId,
+        jobType: 'history-push',
+        fetched: totalFetched,
+      };
+      if (typeof progress === 'number') {
+        payload.progress = progress;
+      }
       this.eventBus
-        .publishGeneric(
-          'sync.progress' as const,
-          { instanceId, jobType: 'history-push', fetched: totalFetched, progress: progress ?? 0 },
-          meta,
-        )
+        .publishGeneric('sync.progress' as const, payload, meta)
         .catch((err) => this.logger.warn('Failed to publish sync.progress for history-push', { error: String(err) }));
 
       // Publish sync.completed when Baileys signals completion

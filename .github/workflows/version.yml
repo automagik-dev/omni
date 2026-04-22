@@ -1,6 +1,16 @@
 name: Version
 
 on:
+  # Fire when a PR merges to dev — the canonical "new thing shipped" event.
+  # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
+  # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
+  # produced no push-event CI run for workflow_run to observe.
+  pull_request:
+    types: [closed]
+    branches: [dev]
+  # main-side promotion still arrives via CI-on-push (main IS in CI's push
+  # branches). Keep this path so release-to-@latest continues to trigger
+  # automatically when the rolling PR dev→main merges.
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -11,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  # This workflow always writes to `dev`, regardless of the trigger ref.
+  # Always writes to `dev` regardless of trigger ref. Keep a single group to serialize.
   group: version-dev
   cancel-in-progress: false
 
@@ -19,22 +29,42 @@ jobs:
   auto-version:
     name: Auto Version
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 5
+    timeout-minutes: 10
     if: >-
       (github.event_name == 'workflow_dispatch') ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
+       !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
        startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
        (contains(github.event.workflow_run.head_commit.message, '/dev') ||
-        contains(github.event.workflow_run.head_commit.message, '/homolog')) &&
-       !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
+        contains(github.event.workflow_run.head_commit.message, '/homolog')))
 
     steps:
+      - name: Determine channel and npm tag
+        id: context
+        run: |
+          # Branch semantics:
+          #   - workflow_run on main → promoted release → @latest
+          #   - pull_request merged on dev → new dev build → @next
+          #   - workflow_dispatch → defaults to @next (manual dev trigger)
+          if [ "${{ github.event_name }}" = "workflow_run" ] && \
+             [ "${{ github.event.workflow_run.head_branch }}" = "main" ]; then
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+            echo "Triggering branch: main → npm tag: latest"
+          else
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+            echo "Triggering event: ${{ github.event_name }} → npm tag: next"
+          fi
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # This workflow always writes to `dev`. Always base version bumps on the latest `dev` to avoid
-          # non-fast-forward races when triggered via workflow_run (detached HEAD by SHA).
+          # Always bump on `dev`. main-triggered runs still push to dev — the rolling dev->main PR
+          # carries the bump back to main at release time.
           ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -90,3 +120,22 @@ jobs:
           # When triggered via workflow_run we checkout by SHA (detached HEAD). Push the current commit to `dev`
           # explicitly so the version bump commit and its tag are both reachable from the branch.
           git push --atomic origin HEAD:refs/heads/dev "refs/tags/v${VERSION}"
+
+      - name: Build CLI
+        run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Publish to npm (@${{ steps.context.outputs.npm_tag }})
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          HUSKY: "0"
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "⚠️ NPM_TOKEN not set — skipping publish"
+            exit 0
+          fi
+          cd packages/cli
+          # Publish with the resolved tag. main → @latest; dev → @next.
+          # The Release workflow on main will retag as @latest if this was
+          # first published as @next, so a promoted dev build never double-publishes.
+          bun publish --access public --tag ${{ steps.context.outputs.npm_tag }}

@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import { RuleTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 const accessRoutes = new Hono<{ Variables: AppVariables }>();
@@ -26,12 +27,7 @@ const createRuleSchema = z.object({
   priority: z.number().int().default(0).describe('Rule priority (higher = checked first)'),
   enabled: z.boolean().default(true).describe('Whether rule is active'),
   reason: z.string().optional().describe('Human-readable reason'),
-  expiresAt: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined))
-    .describe('Optional expiration'),
+  expiresAt: optionalDateParam('expiresAt').describe('Optional expiration (ISO 8601 date string)'),
   action: z.enum(['block', 'allow', 'silent_block']).default('block').describe('Action to take'),
   blockMessage: z.string().optional().describe('Custom block message'),
 });
@@ -44,6 +40,23 @@ const checkAccessSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
   platformUserId: z.string().describe('Platform user ID to check'),
   channel: z.string().describe('Channel type'),
+});
+
+/**
+ * GET /access - List access rules (bare path alias for /access/rules)
+ *
+ * Registered to prevent bare `GET /v2/access` from falling through to the
+ * root-mounted `automationsRoutes./:id` catch-all, which would coerce the
+ * literal "access" segment into a UUID and surface raw PG driver text in the
+ * 500 body. See issue #496.
+ */
+accessRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
+  const { instanceId, type } = c.req.valid('query');
+  const services = c.get('services');
+
+  const rules = await services.access.list({ instanceId, type });
+
+  return c.json({ items: rules });
 });
 
 /**

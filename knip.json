@@ -50,7 +50,7 @@
     "packages/cli": {
       "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk"]
+      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk", "exceljs", "mammoth", "pdf-parse"]
     },
     "packages/db": {
       "project": ["src/**/*.ts"]

@@ -27,6 +27,12 @@ export interface EmitMessageReceivedParams {
   /** Sender identifier on the platform */
   from: string;
 
+  /** Display name of the sender (normalized across channels) */
+  senderName?: string;
+
+  /** Group/chat display name (for group chats) */
+  chatName?: string;
+
   /** Message content */
   content: {
     type: ContentType;

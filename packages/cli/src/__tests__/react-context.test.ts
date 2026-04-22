@@ -11,7 +11,13 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'bun';
-import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
+import {
+  MOCK_API_KEY,
+  clearLastSendReactionBody,
+  getLastSendReactionBody,
+  startMockApi,
+  stopMockApi,
+} from './mock-api';
 
 // ── Unit-test mocks ──
 
@@ -220,6 +226,28 @@ describe('react command — integration with env vars', () => {
       expect(result.stderr).not.toContain('No instance');
       expect(result.stderr).not.toContain('No chat');
     }
+  });
+
+  test('react resolves --instance name to UUID before calling sendReaction', async () => {
+    clearLastSendReactionBody();
+    const result = await runCli([
+      'react',
+      '👍',
+      '--instance',
+      'test-instance',
+      '--chat',
+      '5511999999999@s.whatsapp.net',
+      '--message',
+      'test-msg-id',
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(getLastSendReactionBody()).toMatchObject({
+      instanceId: '00000000-0000-0000-0000-000000000001',
+      to: '5511999999999@s.whatsapp.net',
+      messageId: 'test-msg-id',
+      emoji: '👍',
+    });
   });
 
   test('react works with ONLY env vars (no CLI flags, no stored context)', async () => {

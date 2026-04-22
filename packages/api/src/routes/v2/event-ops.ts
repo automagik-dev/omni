@@ -9,6 +9,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam, requiredDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
@@ -16,21 +17,38 @@ const eventOpsRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Replay options schema
 const replayOptionsSchema = z.object({
-  since: z
-    .string()
-    .datetime()
-    .transform((v) => new Date(v)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: requiredDateParam('since'),
+  until: optionalDateParam('until'),
   eventTypes: z.array(z.string()).optional(),
   instanceId: z.string().uuid().optional(),
   limit: z.number().int().positive().max(100000).optional(),
   speedMultiplier: z.number().min(0).max(100).optional(),
   skipProcessed: z.boolean().optional(),
   dryRun: z.boolean().optional(),
+});
+
+/**
+ * GET /event-ops - Describe available event-ops endpoints.
+ *
+ * Registered to prevent bare `GET /v2/event-ops` from falling through to the
+ * root-mounted `automationsRoutes./:id` catch-all, which would coerce the
+ * literal "event-ops" segment into a UUID and surface raw PG driver text in
+ * the 500 body. See issue #496.
+ *
+ * event-ops is a namespace (metrics / replay / scheduled), not a listable
+ * resource, so this returns a 404 with a pointer to the valid sub-paths.
+ */
+eventOpsRoutes.get('/', (c) => {
+  return c.json(
+    {
+      error: {
+        code: 'NOT_FOUND',
+        message:
+          'event-ops has no list endpoint. Use /v2/event-ops/metrics, /v2/event-ops/replay, or POST /v2/event-ops/scheduled.',
+      },
+    },
+    404,
+  );
 });
 
 /**

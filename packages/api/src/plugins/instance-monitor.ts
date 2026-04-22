@@ -75,6 +75,13 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
 // ============================================================================
 
 /**
+ * Maximum age (ms) for an in-flight 'reconnecting' or 'connecting' state
+ * before the monitor assumes the plugin-level retry loop has silently died
+ * and takes over the reconnect itself (issue #408).
+ */
+const STALE_TRANSITION_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
  * Check if an instance needs reconnection based on its status.
  *
  * IMPORTANT: Do NOT reconnect instances in 'reconnecting' state — the
@@ -82,9 +89,24 @@ const DEFAULT_CONFIG: Required<MonitorConfig> = {
  * own exponential backoff. Having two systems reconnect the same instance
  * creates duplicate sockets and rapid connect/disconnect churn that
  * WhatsApp interprets as bot activity (leading to temp bans).
+ *
+ * EXCEPTION: If the transition state is older than
+ * STALE_TRANSITION_MAX_AGE_MS, the plugin-side loop has likely died
+ * without transitioning us out. Fall through to reconnect anyway.
  */
-function needsReconnect(state: string): boolean {
-  return state === 'disconnected' || state === 'error';
+function needsReconnect(status: { state: string; since?: Date }): boolean {
+  if (status.state === 'disconnected' || status.state === 'error') {
+    return true;
+  }
+
+  if (status.state === 'reconnecting' || status.state === 'connecting') {
+    const since = status.since instanceof Date ? status.since.getTime() : Number.NaN;
+    if (Number.isFinite(since) && Date.now() - since > STALE_TRANSITION_MAX_AGE_MS) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -390,7 +412,7 @@ export class InstanceMonitor {
     try {
       const status = await plugin.getStatus(instance.id);
 
-      if (needsReconnect(status.state)) {
+      if (needsReconnect(status)) {
         this.handleUnhealthyInstance(instance, status.state, status.message);
       }
     } catch (error) {

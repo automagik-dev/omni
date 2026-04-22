@@ -275,3 +275,55 @@ describe('NatsGenieProvider.trigger() — parts: [] regression guard', () => {
     expect(result.parts).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// trigger.env → NATS payload.env pass-through (GENIE_TMUX_SESSION plumbing)
+// ---------------------------------------------------------------------------
+
+describe('NatsGenieProvider.trigger() — env pass-through', () => {
+  it('propagates GENIE_TMUX_SESSION from trigger.env into the published NATS payload', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = {
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: 'chat-42',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+      GENIE_TMUX_SESSION: 'whatsapp-scout-12',
+    };
+    await provider.trigger(trigger);
+    expect(publishCalls.length).toBeGreaterThan(0);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).toEqual({
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: 'chat-42',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+      GENIE_TMUX_SESSION: 'whatsapp-scout-12',
+    });
+  });
+
+  it('omits GENIE_TMUX_SESSION from payload.env when the dispatcher did not set it', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = {
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: 'chat-42',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+    };
+    await provider.trigger(trigger);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).not.toHaveProperty('GENIE_TMUX_SESSION');
+    expect(payload.env.OMNI_INSTANCE).toBe('inst-1');
+  });
+
+  it('preserves trigger.env untouched when it has no GENIE_ prefixed keys (backward compat)', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = { OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' };
+    await provider.trigger(trigger);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).toEqual({ OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' });
+  });
+});

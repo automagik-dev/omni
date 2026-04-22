@@ -11,6 +11,7 @@ import type { ChannelType } from '@omni/core/types';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { clearAgentSession } from '../../plugins/session-cleaner';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
@@ -552,21 +553,28 @@ chatsRoutes.patch(
   },
 );
 
+const listMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  before: optionalDateParam('before'),
+  after: optionalDateParam('after'),
+  mediaOnly: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+});
+
 /**
  * GET /chats/:id/messages - Get messages for a chat
  */
-chatsRoutes.get('/:id/messages', async (c) => {
+chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), async (c) => {
   const chatId = c.req.param('id');
-  const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
-  const before = c.req.query('before');
-  const after = c.req.query('after');
-  const mediaOnly = c.req.query('mediaOnly') === 'true';
+  const { limit, before, after, mediaOnly } = c.req.valid('query');
   const services = c.get('services');
 
   const messages = await services.messages.getChatMessages(chatId, {
     limit,
-    before: before ? new Date(before) : undefined,
-    after: after ? new Date(after) : undefined,
+    before,
+    after,
     mediaOnly,
   });
 

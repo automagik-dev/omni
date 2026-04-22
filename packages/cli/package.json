@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260418.1",
+  "version": "2.260422.12",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -20,7 +20,7 @@
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
-    "build:server": "bun build src/bundled-server-entry.ts --outfile dist/server/index.js --target bun --external @anthropic-ai/claude-agent-sdk",
+    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
@@ -29,7 +29,10 @@
     "@sentry/bun": "^10.43.0",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.8.0",
     "ora": "^8.1.1",
+    "pdf-parse": "^1.1.1",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {

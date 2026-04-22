@@ -21,6 +21,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -102,6 +103,22 @@ export type SettingValueType = (typeof settingValueTypes)[number];
 
 export const apiKeyStatuses = ['active', 'revoked', 'expired'] as const;
 export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
+
+// Profile templates that compose verb buckets + enforcement locks for API keys.
+// `null` keeps pre-profile keys working with legacy empty-allowlist-as-no-lock semantics.
+export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] as const;
+export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
+
+// Tenant-editable overrides applied on top of a profile's bucket resolution.
+// `add` / `remove` take verb names; `denylistPresetKey` swaps the outbound redactor
+// preset; `denylistExtras` appends tenant-specific literal patterns on top of the
+// resolved preset (no preset change required — the extras merge with the preset list).
+export type ApiKeyProfileOverrides = {
+  add?: string[];
+  remove?: string[];
+  denylistPresetKey?: string;
+  denylistExtras?: string[];
+};
 
 export const eventTypes = CORE_EVENT_TYPES;
 export type EventType = CoreEventType;
@@ -505,6 +522,22 @@ export const apiKeys = pgTable(
     // Examples: ['*'], ['messages:read', 'messages:write'], ['instances:read']
     scopes: text('scopes').array().notNull(),
 
+    // Profile template used at key-creation time to resolve `scopes` and enforcement
+    // locks. `null` for legacy / pre-profile keys — they keep their hand-authored scopes
+    // and treat the allowlist columns as "no lock" instead of "deny all".
+    profile: varchar('profile', { length: 32 }).$type<ApiKeyProfile>(),
+
+    // Tenant-level overrides that add/remove verbs or swap the denylist preset on top
+    // of the profile's bucket resolution. Empty `{}` means "profile defaults".
+    profileOverrides: jsonb('profile_overrides').$type<ApiKeyProfileOverrides>().notNull().default(sql`'{}'::jsonb`),
+
+    // Enforcement locks consumed by the scope-enforcer middleware.
+    // Empty `[]` semantics depend on `profile`: NULL profile = "no lock" (backward
+    // compat); profile that declares `requiresLocks` = "deny all".
+    chatAllowlist: text('chat_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
+    instanceAllowlist: uuid('instance_allowlist').array().notNull().default(sql`ARRAY[]::uuid[]`),
+    outboundRecipientAllowlist: text('outbound_recipient_allowlist').array().notNull().default(sql`ARRAY[]::text[]`),
+
     // Instance restrictions (null = all instances)
     instanceIds: uuid('instance_ids').array(),
 
@@ -678,8 +711,6 @@ export const instances = pgTable(
     triggerMentionPatterns: jsonb('trigger_mention_patterns').$type<string[]>(),
     /** Agent trigger mode: round-trip (wait for response) or fire-and-forget */
     triggerMode: varchar('trigger_mode', { length: 20 }).notNull().default('round-trip'),
-    /** Max triggers per user per channel per minute (rate limiting) */
-    triggerRateLimit: integer('trigger_rate_limit').notNull().default(5),
     /**
      * Drop inbound `message.received` events when the platform-native timestamp
      * (e.g. WhatsApp `messageTimestamp`) is older than this many minutes.
@@ -817,6 +848,23 @@ export const instances = pgTable(
     // ---- Idle-chat follow-up config (instance scope, beats agent scope) ----
     /** @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
+
+    // ---- Bridge Tmux Session (per-instance override for genie NATS provider) ----
+    /**
+     * Optional tmux session name the genie bridge will spawn into when this
+     * instance dispatches. When set, the `nats-genie` provider propagates this
+     * value via the NATS message env as `GENIE_TMUX_SESSION`; the consumer
+     * genie bridge uses it as the highest-priority override in its three-layer
+     * tmux-session resolution chain. When null, no override is emitted and
+     * genie falls back to its agent-level or name-based default.
+     *
+     * Enables one-agent-many-instances fan-out: a single "scout" agent hooked
+     * to N inbound numbers can land each instance's dispatches in its own
+     * tmux session for isolation and live-intelligence observability.
+     *
+     * Consumer: `automagik/genie` commit 78027707 (`resolveBridgeTmuxSession`).
+     */
+    bridgeTmuxSession: text('bridge_tmux_session'),
 
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -1546,6 +1594,12 @@ export interface SyncJobProgress {
   duplicates: number;
   mediaDownloaded: number;
   totalEstimated?: number;
+  /**
+   * ISO-8601 timestamp of the last `updateProgress` call. Lets clients
+   * distinguish "running slowly" from "stuck" when `progressPercent` cannot
+   * be computed (e.g. Baileys never reports a denominator). See issue #398.
+   */
+  lastProgressAt?: string;
 }
 
 /**
@@ -2745,3 +2799,38 @@ export const chatFollowUpStateRelations = relations(chatFollowUpState, ({ one })
     references: [agents.id],
   }),
 }));
+
+// ============================================================================
+// PROCESSED EVENTS — durable subscriber idempotency (#411)
+// ============================================================================
+
+/**
+ * Tracks which (event_id, handler_name) pairs a durable NATS subscriber has
+ * already processed. Used by `withIdempotency()` to make customer-visible
+ * side-effects (sends, deletes, agent dispatches) safe under NATS redelivery
+ * — the at-least-once delivery contract caused duplicates after PM2 restart
+ * (see issue #411).
+ *
+ * Composite primary key (event_id, handler) allows multiple handlers to
+ * independently mark the same event as processed (e.g. session-cleaner AND
+ * agent-dispatcher both see message.received).
+ *
+ * Rows are kept indefinitely for now; a periodic GC sweep can prune rows
+ * older than the longest reasonable redelivery window (e.g. 24h) once the
+ * fix has soaked.
+ */
+export const processedEvents = pgTable(
+  'processed_events',
+  {
+    eventId: varchar('event_id', { length: 255 }).notNull(),
+    handler: varchar('handler', { length: 100 }).notNull(),
+    processedAt: timestamp('processed_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.eventId, table.handler], name: 'processed_events_pk' }),
+    processedAtIdx: index('processed_events_processed_at_idx').on(table.processedAt),
+  }),
+);
+
+export type ProcessedEvent = typeof processedEvents.$inferSelect;
+export type NewProcessedEvent = typeof processedEvents.$inferInsert;

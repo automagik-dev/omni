@@ -15,8 +15,10 @@ import {
   UPDATE_ERROR_AUTH_INVALID,
   decideUpdateVerify,
   normalizeVersion,
+  resolveChannel,
   updateErrorVersionMismatch,
 } from '../commands/update.js';
+import type { Config } from '../config.js';
 
 describe('normalizeVersion', () => {
   test('strips a git-hash suffix', () => {
@@ -94,6 +96,33 @@ describe('decideUpdateVerify', () => {
       keyValid: false,
     });
     expect(result).toEqual({ kind: 'auth-invalid' });
+  });
+});
+
+describe('resolveChannel', () => {
+  test('--next overrides everything else', () => {
+    const config: Config = { updateChannel: 'latest' };
+    expect(resolveChannel({ next: true }, config)).toBe('next');
+  });
+
+  test('--stable overrides everything else', () => {
+    const config: Config = { updateChannel: 'next' };
+    expect(resolveChannel({ stable: true }, config)).toBe('latest');
+  });
+
+  test('uses saved updateChannel when no flag is provided', () => {
+    expect(resolveChannel({}, { updateChannel: 'next' })).toBe('next');
+    expect(resolveChannel({}, { updateChannel: 'latest' })).toBe('latest');
+  });
+
+  test('defaults to latest when no flag and no saved channel', () => {
+    expect(resolveChannel({}, {})).toBe('latest');
+  });
+
+  test('defaults to latest when saved channel is invalid', () => {
+    // Simulate a legacy 'main' value left over from before the rename.
+    const config = { updateChannel: 'main' } as unknown as Config;
+    expect(resolveChannel({}, config)).toBe('latest');
   });
 });
 

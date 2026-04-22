@@ -32,12 +32,10 @@ function makeMonitor(opts: {
       getStale: async () => opts.turns,
       incrementNudge,
       close: async () => null,
-      // biome-ignore lint/suspicious/noExplicitAny: test stub
-    } as any,
+    } as unknown as never,
     instanceService: {
       getById: async () => opts.instance,
-      // biome-ignore lint/suspicious/noExplicitAny: test stub
-    } as any,
+    } as unknown as never,
   });
 
   const tick = () => (monitor as unknown as { tick: () => Promise<void> }).tick();

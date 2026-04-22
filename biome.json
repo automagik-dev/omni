@@ -58,12 +58,13 @@
       "*.generated.ts",
       "omni-*",
       ".worktrees",
-      ".genie"
+      ".genie",
+      "repos"
     ]
   },
   "overrides": [
     {
-      "include": ["scripts/**", "packages/core/scripts/**"],
+      "include": ["scripts/**", "packages/core/scripts/**", "packages/*/bench/**"],
       "linter": {
         "rules": {
           "suspicious": {

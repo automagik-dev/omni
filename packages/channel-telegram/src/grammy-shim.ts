@@ -85,7 +85,8 @@ export interface TelegramBotLike {
   catch: (handler: (err: unknown) => unknown | Promise<unknown>) => void;
   init: () => Promise<void>;
   stop: () => void;
-  start: (options: Record<string, unknown>) => void;
+  start: (options: Record<string, unknown>) => Promise<void>;
+  isRunning?: () => boolean;
 
   token: string;
 

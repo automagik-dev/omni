@@ -960,11 +960,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): Promise<Record<string, unknown>> {
     const displayName = await this.resolveUserDisplayName(instanceId, from);
     const isDm = rawPayload.isDm as boolean;
+    const chatName = isDm ? displayName : undefined;
     return {
       ...rawPayload,
       displayName,
+      senderName: displayName,
       pushName: displayName,
-      chatName: isDm ? displayName : undefined,
+      chatName,
       isGroup: !isDm,
     };
   }
@@ -1322,11 +1324,21 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): Promise<void> {
     const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
 
+    const senderName =
+      typeof rawPayload.senderName === 'string'
+        ? rawPayload.senderName
+        : typeof rawPayload.displayName === 'string'
+          ? rawPayload.displayName
+          : undefined;
+    const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
       chatId,
       from,
+      senderName,
+      chatName,
       content,
       replyToId,
       rawPayload,

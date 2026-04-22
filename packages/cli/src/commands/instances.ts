@@ -133,6 +133,7 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'twilioStatusCallbackUrl', opts.twilioStatusCallbackUrl);
   setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
   setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
+  setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -284,7 +285,10 @@ export function createInstancesCommand(): Command {
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When set without --reply-filter-mode, reply filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -366,6 +370,11 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Bridge tmux session override (parity with `update`; propagated via NATS env)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -797,7 +806,10 @@ export function createInstancesCommand(): Command {
     .option('--is-default', 'Set as default instance for channel')
     .option('--no-is-default', 'Unset as default instance for channel')
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When assigning an agent on an instance with no reply filter, the filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -883,6 +895,11 @@ export function createInstancesCommand(): Command {
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    // Bridge tmux session override (per-instance routing for genie nats-genie provider)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 

@@ -230,4 +230,59 @@ describe('WhatsAppPlugin', () => {
       expect(logArgs[1].error).toBe('rate limit exceeded');
     });
   });
+
+  describe('reactions', () => {
+    const INSTANCE_ID = 'test-instance';
+    const GROUP_JID = '120363424772797713@g.us';
+    const MESSAGE_ID = '3AAFEE9E6DB2E7864DE2';
+    const PARTICIPANT = '178035101794451@lid';
+
+    async function withHumanDelayDisabled(run: () => Promise<void>) {
+      const previous = process.env.WHATSAPP_HUMAN_DELAY_ENABLED;
+      process.env.WHATSAPP_HUMAN_DELAY_ENABLED = 'false';
+      try {
+        await run();
+      } finally {
+        if (previous === undefined) Reflect.deleteProperty(process.env, 'WHATSAPP_HUMAN_DELAY_ENABLED');
+        else process.env.WHATSAPP_HUMAN_DELAY_ENABLED = previous;
+      }
+    }
+
+    it('passes target participant into Baileys reaction key for group messages', async () => {
+      await withHumanDelayDisabled(async () => {
+        const plugin = new WhatsAppPlugin();
+        const sendMessage = mock(() => Promise.resolve({ key: { id: 'REACTION-MSG-ID' } }));
+        const mockSocket = { sendMessage, user: { id: '5511999999999@s.whatsapp.net' } };
+        (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+        (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+        const result = await plugin.sendMessage(INSTANCE_ID, {
+          to: GROUP_JID,
+          content: {
+            type: 'reaction',
+            targetMessageId: MESSAGE_ID,
+            emoji: '👍',
+          },
+          metadata: {
+            fromMe: false,
+            targetParticipant: PARTICIPANT,
+          },
+        } as any);
+
+        expect(result.success).toBe(true);
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        const [jid, content] = sendMessage.mock.calls[0]! as unknown as [
+          string,
+          { react: { key: { id: string; remoteJid: string; fromMe: boolean; participant?: string } } },
+        ];
+        expect(jid).toBe(GROUP_JID);
+        expect(content.react.key).toEqual({
+          remoteJid: GROUP_JID,
+          id: MESSAGE_ID,
+          fromMe: false,
+          participant: PARTICIPANT,
+        });
+      });
+    });
+  });
 });

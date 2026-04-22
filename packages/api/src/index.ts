@@ -29,6 +29,7 @@ const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
 import { type App, createApp } from './app';
+import { markPluginsDegraded } from './plugin-state';
 import {
   InstanceMonitor,
   loadChannelPlugins,
@@ -658,7 +659,12 @@ async function main() {
     try {
       await initializeChannelPlugins(db, eventBus);
     } catch (error) {
-      pluginLog.error('Failed to load channel plugins', { error: String(error) });
+      const reason = String(error);
+      pluginLog.error('Failed to load channel plugins', { error: reason });
+      // Issue #408: a plugin init failure previously left the API running
+      // in a silently broken state where /health returned healthy. Flip the
+      // degraded flag so operators can detect it.
+      markPluginsDegraded(reason);
     }
   } else {
     pluginLog.warn('Skipping channel plugin loading (no event bus)');

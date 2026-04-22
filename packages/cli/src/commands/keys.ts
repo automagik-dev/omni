@@ -2,6 +2,13 @@
  * API Key Management Commands
  *
  * Create, list, update, revoke, and delete API keys.
+ *
+ * Profile-based creation (`--profile`) delegates scope resolution and lock
+ * validation to the API. The `--profile admin` path is the single exception:
+ * the API route refuses admin keys unconditionally (god-keys are human-gated
+ * by construction), so the CLI handles admin creation directly against the
+ * database and only after the operator types `I UNDERSTAND` on an
+ * interactive TTY. Any non-TTY invocation (pipe, redirect, CI) is refused.
  */
 
 import type { ApiKeyRecord, ApiKeyStatus, OmniClient } from '@omni/sdk';
@@ -14,13 +21,20 @@ import { resolveKeyId } from '../resolve.js';
 // TYPES
 // ============================================================================
 
+type ProfileFlag = 'cs' | 'personal' | 'scout' | 'coworker' | 'admin';
+
 interface CreateOptions {
   name: string;
-  scopes: string;
+  scopes?: string;
   instances?: string;
   description?: string;
   rateLimit?: number;
   expires?: string;
+  profile?: ProfileFlag;
+  lockChat?: string[];
+  lockInstance?: string[];
+  owner?: string;
+  denylistPreset?: string;
 }
 
 interface ListOptions {
@@ -40,6 +54,9 @@ interface UpdateOptions {
 interface RevokeOptions {
   reason?: string;
 }
+
+const ADMIN_CONFIRMATION_PHRASE = 'I UNDERSTAND';
+const ADMIN_PROMPT_TEXT = `\nAdmin keys grant FULL access to every instance, every chat, and every verb.\nRedaction middleware is bypassed. Revocation is manual.\n\nType "${ADMIN_CONFIRMATION_PHRASE}" (exactly, case-sensitive) to proceed, anything else to abort:\n> `;
 
 // ============================================================================
 // HELPERS
@@ -64,11 +81,167 @@ function parseCommaSeparated(value: string): string[] {
     .filter(Boolean);
 }
 
+function collectRepeated(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
+}
+
+async function readLineFromStdin(): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    let buffer = '';
+    const onData = (chunk: Buffer | string): void => {
+      buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      const newlineIdx = buffer.indexOf('\n');
+      if (newlineIdx >= 0) {
+        process.stdin.off('data', onData);
+        process.stdin.pause();
+        resolve(buffer.slice(0, newlineIdx).replace(/\r$/, ''));
+      }
+    };
+    process.stdin.on('data', onData);
+    process.stdin.resume();
+  });
+}
+
+async function promptAdminConfirmation(): Promise<boolean> {
+  process.stdout.write(ADMIN_PROMPT_TEXT);
+  const answer = await readLineFromStdin();
+  return answer === ADMIN_CONFIRMATION_PHRASE;
+}
+
 // ============================================================================
 // HANDLERS
 // ============================================================================
 
+/**
+ * Direct-to-database admin creation path. Bypasses the HTTP API because the
+ * `POST /keys` route refuses `profile: 'admin'` unconditionally — there is
+ * no HTTP surface that can mint a god-key, by design. Emits the
+ * `key.admin_created` audit event so operators have a record.
+ */
+async function handleAdminCreate(options: CreateOptions): Promise<void> {
+  if (!process.stdin.isTTY) {
+    output.error('admin keys require a TTY — run this command interactively', undefined, 1);
+    return;
+  }
+
+  const confirmed = await promptAdminConfirmation();
+  if (!confirmed) {
+    output.error('admin confirmation failed — no key created', undefined, 1);
+    return;
+  }
+
+  // Dynamic imports keep the CLI startup cold-path (SDK-only) fast. The
+  // admin path is rare and loads the DB layer lazily.
+  const [adminMod, coreMod] = await Promise.all([import('@omni/api/admin'), import('@omni/core').catch(() => null)]);
+  const { createDb, closeDb, ApiKeyService, resolveProfile } = adminMod;
+
+  const db = createDb();
+  const service = new ApiKeyService(db);
+
+  const resolved = resolveProfile({
+    profile: 'admin',
+    chatAllowlist: options.lockChat,
+    instanceAllowlist: options.lockInstance,
+    owner: options.owner,
+    denylistPresetKey: options.denylistPreset,
+  });
+
+  const createdBy = process.env.USER ?? process.env.USERNAME ?? 'cli-admin';
+  const result = await service.create({
+    name: options.name,
+    description: options.description,
+    scopes: resolved.scopes,
+    instanceIds: options.instances ? parseCommaSeparated(options.instances) : undefined,
+    rateLimit: options.rateLimit,
+    expiresAt: options.expires ? new Date(options.expires) : undefined,
+    createdBy,
+    profile: resolved.profile,
+    profileOverrides: resolved.profileOverrides,
+    chatAllowlist: resolved.chatAllowlist,
+    instanceAllowlist: resolved.instanceAllowlist,
+    outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
+  });
+
+  // Emit audit event. Best-effort: if NATS isn't reachable we warn but the
+  // key is already persisted and the success path continues.
+  if (coreMod && typeof coreMod.connectEventBus === 'function') {
+    try {
+      const bus = await coreMod.connectEventBus();
+      try {
+        await bus.publishGeneric('key.admin_created' as never, {
+          keyId: result.key.id,
+          keyName: result.key.name,
+          operator: createdBy,
+          createdAt: result.key.createdAt,
+        });
+      } finally {
+        const maybeClose = (bus as { close?: () => Promise<void> }).close;
+        if (typeof maybeClose === 'function') await maybeClose.call(bus).catch(() => {});
+      }
+    } catch (err) {
+      output.warn(`key.admin_created event emission failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  output.success(`Admin API key created: ${result.key.name}`);
+
+  // biome-ignore lint/suspicious/noConsole: CLI output — plaintext key display
+  console.log(`\n  API Key (save this — it will NOT be shown again):\n\n  ${result.plainTextKey}\n`);
+
+  output.info(`ID: ${result.key.id}`);
+  output.info('Profile: admin');
+  output.info(`Scopes: ${result.key.scopes.join(', ')}`);
+
+  await closeDb().catch(() => {});
+}
+
 async function handleCreate(client: OmniClient, options: CreateOptions): Promise<void> {
+  // Admin is a special case — handled before any HTTP call.
+  if (options.profile === 'admin') {
+    await handleAdminCreate(options);
+    return;
+  }
+
+  // Profile-based flow: the API resolves scopes + lock columns for us.
+  if (options.profile) {
+    const body: Record<string, unknown> = {
+      name: options.name,
+      description: options.description,
+      profile: options.profile,
+      rateLimit: options.rateLimit,
+      expiresAt: options.expires,
+    };
+    if (options.lockChat && options.lockChat.length > 0) body.chatAllowlist = options.lockChat;
+    if (options.lockInstance && options.lockInstance.length > 0) {
+      body.instanceAllowlist = options.lockInstance;
+      body.instanceIds = options.lockInstance;
+    }
+    if (options.owner) body.owner = options.owner;
+    if (options.denylistPreset) body.denylistPresetKey = options.denylistPreset;
+
+    // biome-ignore lint/suspicious/noExplicitAny: SDK types predate profile fields; body is validated server-side.
+    const result = await client.keys.create(body as any);
+
+    output.success(`API key created: ${result.name}`);
+
+    // biome-ignore lint/suspicious/noConsole: CLI output — plaintext key display
+    console.log(`\n  API Key (save this — it will NOT be shown again):\n\n  ${result.plainTextKey}\n`);
+
+    output.info(`ID: ${result.id}`);
+    output.info(`Profile: ${options.profile}`);
+    output.info(`Scopes: ${result.scopes.join(', ')}`);
+    if (result.instanceIds) {
+      output.info(`Instances: ${result.instanceIds.join(', ')}`);
+    }
+    return;
+  }
+
+  // Legacy path — caller supplied raw `--scopes`.
+  if (!options.scopes) {
+    output.error('Either --profile or --scopes is required', undefined, 1);
+    return;
+  }
+
   const scopes = parseCommaSeparated(options.scopes);
   const instanceIds = options.instances ? parseCommaSeparated(options.instances) : undefined;
 
@@ -165,15 +338,24 @@ export function createKeysCommand(): Command {
 
   keys
     .command('create')
-    .description('Create a new API key')
+    .description('Create a new API key (optionally from a profile template)')
     .requiredOption('--name <name>', 'Key name')
-    .requiredOption('--scopes <scopes>', 'Comma-separated scopes (e.g. messages:read,instances:write)')
-    .option('--instances <ids>', 'Comma-separated instance IDs to restrict access')
+    .option('--profile <name>', 'Profile template: cs | personal | scout | coworker | admin')
+    .option(
+      '--scopes <scopes>',
+      'Comma-separated scopes (legacy — omit when --profile is set; scopes derive from the profile)',
+    )
+    .option('--lock-chat <jid>', 'Lock this key to a chat (repeat for multiple)', collectRepeated)
+    .option('--lock-instance <id>', 'Lock this key to an instance (repeat for multiple)', collectRepeated)
+    .option('--owner <jid>', 'Scout: owner JID — populates outboundRecipientAllowlist')
+    .option('--denylist-preset <key>', 'Coworker: denylist preset key (overrides profile default)')
+    .option('--instances <ids>', 'Comma-separated instance IDs to restrict access (legacy)')
     .option('--description <desc>', 'Key description')
     .option('--rate-limit <n>', 'Rate limit (requests/minute)', Number.parseInt)
     .option('--expires <date>', 'Expiration date (ISO 8601)')
     .action(async (options: CreateOptions) => {
-      const client = getClient();
+      const needsClient = options.profile !== 'admin';
+      const client = needsClient ? getClient() : (null as unknown as OmniClient);
       try {
         await handleCreate(client, options);
       } catch (err) {
@@ -258,3 +440,15 @@ export function createKeysCommand(): Command {
 
   return keys;
 }
+
+/**
+ * Exported for tests — lets us exercise the TTY/confirmation/admin path and
+ * the profile-flag handling without reaching into Commander internals.
+ */
+export const __testables = {
+  ADMIN_CONFIRMATION_PHRASE,
+  ADMIN_PROMPT_TEXT,
+  handleCreate,
+  handleAdminCreate,
+  promptAdminConfirmation,
+};
