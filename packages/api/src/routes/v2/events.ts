@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import { ChannelTypeSchema, ContentTypeSchema, EventTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
 
@@ -61,16 +62,8 @@ const listQuerySchema = z.object({
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof ContentTypeSchema>[] | undefined),
   direction: z.enum(['inbound', 'outbound']).optional(),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().optional(),
@@ -97,16 +90,8 @@ const searchBodySchema = z.object({
 
 // Analytics query schema
 const analyticsQuerySchema = z.object({
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   instanceId: z.string().uuid().optional(),
   granularity: z.enum(['hourly', 'daily']).optional(),
   allTime: z.coerce.boolean().optional(),
@@ -118,16 +103,8 @@ const timelineQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().optional(),
 });
