@@ -34,6 +34,7 @@ import {
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { computeEstimatedCostCents } from './batch-pricing';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
@@ -357,13 +358,11 @@ export class BatchJobService {
       else if (type === 'document') counts.documentCount++;
     }
 
-    // Rough cost estimates (in cents)
-    // Audio: ~$0.04/hour = ~0.1 cents per 10-second clip
-    // Image: ~$0.01 per image (Gemini vision tokens)
-    // Video: ~$0.02 per video (Gemini)
-    // Document: ~$0.00 (local processing)
-    const estimatedCostCents =
-      counts.audioCount * 10 + counts.imageCount * 1 + counts.videoCount * 2 + counts.documentCount * 0;
+    // Cost estimate derived from the declarative provider pricing table
+    // (`batch-pricing.ts`, pinned to default Groq STT + Gemini Flash-Lite
+    // vision as of 2026-04). See issue #477: the previous hardcoded
+    // per-item cents were off by ~150× for that provider mix.
+    const estimatedCostCents = computeEstimatedCostCents(counts);
 
     // Factor in average random delay between items (midpoint of default range)
     const avgDelayMs = (BatchJobService.DEFAULT_DELAY_MIN_MS + BatchJobService.DEFAULT_DELAY_MAX_MS) / 2;
