@@ -3656,13 +3656,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       const meta = { instanceId, channelType: this.id };
 
-      // Publish sync.progress event
+      // Publish sync.progress event — omit `progress` when Baileys didn't report one
+      // so downstream can distinguish "unknown denominator" from "0%".
+      const payload: { instanceId: string; jobType: 'history-push'; fetched: number; progress?: number } = {
+        instanceId,
+        jobType: 'history-push',
+        fetched: totalFetched,
+      };
+      if (typeof progress === 'number') {
+        payload.progress = progress;
+      }
       this.eventBus
-        .publishGeneric(
-          'sync.progress' as const,
-          { instanceId, jobType: 'history-push', fetched: totalFetched, progress: progress ?? 0 },
-          meta,
-        )
+        .publishGeneric('sync.progress' as const, payload, meta)
         .catch((err) => this.logger.warn('Failed to publish sync.progress for history-push', { error: String(err) }));
 
       // Publish sync.completed when Baileys signals completion
