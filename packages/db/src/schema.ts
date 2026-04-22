@@ -21,6 +21,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -2788,3 +2789,38 @@ export const chatFollowUpStateRelations = relations(chatFollowUpState, ({ one })
     references: [agents.id],
   }),
 }));
+
+// ============================================================================
+// PROCESSED EVENTS — durable subscriber idempotency (#411)
+// ============================================================================
+
+/**
+ * Tracks which (event_id, handler_name) pairs a durable NATS subscriber has
+ * already processed. Used by `withIdempotency()` to make customer-visible
+ * side-effects (sends, deletes, agent dispatches) safe under NATS redelivery
+ * — the at-least-once delivery contract caused duplicates after PM2 restart
+ * (see issue #411).
+ *
+ * Composite primary key (event_id, handler) allows multiple handlers to
+ * independently mark the same event as processed (e.g. session-cleaner AND
+ * agent-dispatcher both see message.received).
+ *
+ * Rows are kept indefinitely for now; a periodic GC sweep can prune rows
+ * older than the longest reasonable redelivery window (e.g. 24h) once the
+ * fix has soaked.
+ */
+export const processedEvents = pgTable(
+  'processed_events',
+  {
+    eventId: varchar('event_id', { length: 255 }).notNull(),
+    handler: varchar('handler', { length: 100 }).notNull(),
+    processedAt: timestamp('processed_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.eventId, table.handler], name: 'processed_events_pk' }),
+    processedAtIdx: index('processed_events_processed_at_idx').on(table.processedAt),
+  }),
+);
+
+export type ProcessedEvent = typeof processedEvents.$inferSelect;
+export type NewProcessedEvent = typeof processedEvents.$inferInsert;
