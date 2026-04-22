@@ -34,7 +34,7 @@ import {
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
-import { computeEstimatedCostCents } from './batch-pricing';
+import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricing';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
@@ -168,6 +168,14 @@ export class BatchJobService {
       force,
       delayMinMs: delayMinMs ?? BatchJobService.DEFAULT_DELAY_MIN_MS,
       delayMaxMs: delayMaxMs ?? BatchJobService.DEFAULT_DELAY_MAX_MS,
+      // Stamp the pricing table version used to derive any cost estimate
+      // at creation time. Persisted on the batch record via the
+      // `request_params` jsonb column for audit + pricing-drift
+      // provenance (see #485, follow-up to #477). No dedicated
+      // `pricing_version` column — storing alongside requestParams keeps
+      // the fix migration-free; a schema column can be added later if
+      // filtering/indexing by version becomes useful.
+      pricingVersion: BATCH_PRICING_VERSION,
     };
 
     const jobData: NewBatchJob = {
@@ -190,7 +198,12 @@ export class BatchJobService {
       throw new Error('Failed to create batch job');
     }
 
-    log.info('Batch job created', { jobId: created.id, jobType, instanceId });
+    log.info('Batch job created', {
+      jobId: created.id,
+      jobType,
+      instanceId,
+      pricingVersion: BATCH_PRICING_VERSION,
+    });
 
     // Emit created event
     if (this.eventBus) {
@@ -363,6 +376,11 @@ export class BatchJobService {
     // vision as of 2026-04). See issue #477: the previous hardcoded
     // per-item cents were off by ~150× for that provider mix.
     const estimatedCostCents = computeEstimatedCostCents(counts);
+    log.debug('Batch cost estimated', {
+      totalItems: items.length,
+      estimatedCostCents,
+      pricingVersion: BATCH_PRICING_VERSION,
+    });
 
     // Factor in average random delay between items (midpoint of default range)
     const avgDelayMs = (BatchJobService.DEFAULT_DELAY_MIN_MS + BatchJobService.DEFAULT_DELAY_MAX_MS) / 2;
