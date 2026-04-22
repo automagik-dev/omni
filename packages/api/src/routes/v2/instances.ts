@@ -246,6 +246,52 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
 });
 
 /**
+ * Default reply filter applied when an agent is assigned without an explicit filter.
+ *
+ * Matches omni#443 acceptance criteria: assigning an agent implies the user wants
+ * responses, so an unset filter shouldn't silently drop messages. `mode: 'all'` +
+ * `onDm: true` makes the DM-first intent explicit on the stored row.
+ */
+export const DEFAULT_AGENT_REPLY_FILTER = {
+  mode: 'all' as const,
+  conditions: { onDm: true },
+};
+
+/**
+ * Decide whether to auto-set a default `agentReplyFilter` for an instance
+ * create/update request.
+ *
+ * Applies when:
+ *   - the request leaves the instance with an agent assigned
+ *     (`newAgentId` non-null, OR unchanged `currentAgentId` non-null), AND
+ *   - the caller did NOT explicitly send `agentReplyFilter` in this request
+ *     (`explicitReplyFilter === undefined`), AND
+ *   - the instance does not already have a reply filter stored
+ *     (`currentReplyFilter` is null/undefined).
+ *
+ * An explicit `null` in the request (user clearing the filter) is respected and
+ * returns `false`. Exported for unit testing.
+ *
+ * The trigger for update is "this request touches agentId" — bare field updates
+ * on an already-agent-assigned instance don't auto-populate. This matches the
+ * acceptance criteria in omni#443.
+ */
+export function shouldApplyDefaultReplyFilter(args: {
+  newAgentId: string | null | undefined;
+  currentAgentId: string | null | undefined;
+  explicitReplyFilter: unknown;
+  currentReplyFilter: unknown;
+  agentIdTouched: boolean;
+}): boolean {
+  if (!args.agentIdTouched) return false;
+  if (args.explicitReplyFilter !== undefined) return false;
+  const effectiveAgentId = args.newAgentId !== undefined ? args.newAgentId : args.currentAgentId;
+  if (!effectiveAgentId) return false;
+  if (args.currentReplyFilter != null) return false;
+  return true;
+}
+
+/**
  * Map the generic `token` field to the correct channel-specific DB column.
  * Also returns the token to use for the plugin connect call.
  */
@@ -549,6 +595,25 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  // omni#443: Auto-set reply filter when agent is assigned but no filter is set.
+  // Prevents the silent-drop bug where a newly created instance with `agentId`
+  // but `agentReplyFilter: null` receives messages but never dispatches.
+  if (
+    shouldApplyDefaultReplyFilter({
+      newAgentId: data.agentId,
+      currentAgentId: null,
+      explicitReplyFilter: data.agentReplyFilter,
+      currentReplyFilter: null,
+      agentIdTouched: data.agentId !== undefined,
+    })
+  ) {
+    (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+    log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
+      agentId: data.agentId,
+      defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
+    });
+  }
+
   // Map generic `token` → channel-specific DB column + resolve connect token
   const connectToken = resolveChannelToken(data);
 
@@ -590,15 +655,36 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  // Detect agent assignment changes for auto-key provisioning
+  // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
   let oldAgentId: string | null | undefined;
+  let currentReplyFilter: unknown = null;
   if (data.agentId !== undefined) {
     try {
       const current = await services.instances.getById(id);
       oldAgentId = current.agentId;
+      currentReplyFilter = current.agentReplyFilter;
     } catch {
       // Instance not found — update will throw
     }
+  }
+
+  // omni#443: Auto-set reply filter when an agent is being assigned to this instance
+  // and neither the request nor the existing row provides one. Prevents silent drops.
+  if (
+    shouldApplyDefaultReplyFilter({
+      newAgentId: data.agentId,
+      currentAgentId: oldAgentId,
+      explicitReplyFilter: data.agentReplyFilter,
+      currentReplyFilter,
+      agentIdTouched: data.agentId !== undefined,
+    })
+  ) {
+    (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+    log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
+      instanceId: id,
+      agentId: data.agentId,
+      defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
+    });
   }
 
   const instance = await services.instances.update(id, data);
