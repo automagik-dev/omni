@@ -20,19 +20,19 @@
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
-    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript",
+    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@sentry/bun": "^10.43.0",
-    "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
-    "libsodium-wrappers": "^0.7.15",
-    "opusscript": "^0.1.1",
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.8.0",
     "ora": "^8.1.1",
+    "pdf-parse": "^1.1.1",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
